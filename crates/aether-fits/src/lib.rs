@@ -16,7 +16,7 @@ pub use card::{Card, FitsValue};
 pub use diagnostic::{Diagnostic, DiagnosticCode, Severity, ValidationMode};
 pub use error::FitsError;
 pub use header::{Header, HeaderReport};
-pub use image_hdu::{ImageHduDescriptor, ImageHduError, StoredSampleFormat};
+pub use image_hdu::{ImageHduDescriptor, ImageHduError, ImageHduErrorCode, StoredSampleFormat};
 pub use image_reader::{ImageReadError, PrimaryImageReader, SampleStatus};
 pub use reader::{HeaderReadOptions, read_primary_header};
 

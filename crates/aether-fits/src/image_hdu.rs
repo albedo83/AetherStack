@@ -76,6 +76,7 @@ pub struct ImageHduDescriptor {
     data_offset: u64,
     data_bytes: u64,
     padded_data_bytes: u64,
+    padded_data_end: u64,
     bscale: f64,
     bzero: f64,
     blank: Option<i64>,
@@ -120,7 +121,7 @@ impl ImageHduDescriptor {
             .ok()
             .and_then(|blocks| blocks.checked_mul(BLOCK_SIZE as u64))
             .ok_or(ImageHduError::DataSizeOverflow)?;
-        data_offset
+        let padded_data_end = data_offset
             .checked_add(padded_data_bytes)
             .ok_or(ImageHduError::DataSizeOverflow)?;
 
@@ -146,6 +147,7 @@ impl ImageHduDescriptor {
             data_offset,
             data_bytes,
             padded_data_bytes,
+            padded_data_end,
             bscale,
             bzero,
             blank,
@@ -186,6 +188,14 @@ impl ImageHduDescriptor {
     #[must_use]
     pub const fn padded_data_bytes(&self) -> u64 {
         self.padded_data_bytes
+    }
+
+    /// Minimum stream length covering the padded primary image data.
+    ///
+    /// A larger stream may contain extension HDUs and is therefore valid.
+    #[must_use]
+    pub const fn padded_data_end(&self) -> u64 {
+        self.padded_data_end
     }
 
     /// Multiplicative physical-value scale, defaulting to one.
@@ -253,6 +263,64 @@ pub enum ImageHduError {
         /// Stored integer representation.
         sample_format: StoredSampleFormat,
     },
+}
+
+impl ImageHduError {
+    /// Stable category suitable for aggregate diagnostics.
+    #[must_use]
+    pub const fn code(&self) -> ImageHduErrorCode {
+        match self {
+            Self::MissingKeyword { .. } => ImageHduErrorCode::MissingKeyword,
+            Self::KeywordNotInteger { .. } => ImageHduErrorCode::KeywordNotInteger,
+            Self::KeywordNotFiniteNumber { .. } => ImageHduErrorCode::KeywordNotFiniteNumber,
+            Self::UnsupportedBitpix { .. } => ImageHduErrorCode::UnsupportedBitpix,
+            Self::InvalidAxisCount { .. } => ImageHduErrorCode::InvalidAxisCount,
+            Self::InvalidAxisLength { .. } => ImageHduErrorCode::InvalidAxisLength,
+            Self::DataSizeOverflow => ImageHduErrorCode::DataSizeOverflow,
+            Self::BlankOnFloatingPointImage => ImageHduErrorCode::BlankOnFloatingPointImage,
+            Self::BlankOutOfRange { .. } => ImageHduErrorCode::BlankOutOfRange,
+        }
+    }
+}
+
+/// Stable category of an image-HDU layout error.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ImageHduErrorCode {
+    /// A required keyword is absent.
+    MissingKeyword,
+    /// An integer keyword has another value type.
+    KeywordNotInteger,
+    /// A scaling keyword is not finite and numeric.
+    KeywordNotFiniteNumber,
+    /// `BITPIX` is not a supported standard representation.
+    UnsupportedBitpix,
+    /// `NAXIS` lies outside its standard domain.
+    InvalidAxisCount,
+    /// An axis length is negative.
+    InvalidAxisLength,
+    /// A derived size or offset overflowed.
+    DataSizeOverflow,
+    /// `BLANK` was attached to a floating-point array.
+    BlankOnFloatingPointImage,
+    /// `BLANK` lies outside the stored integer domain.
+    BlankOutOfRange,
+}
+
+impl Display for ImageHduErrorCode {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::MissingKeyword => "missing_keyword",
+            Self::KeywordNotInteger => "keyword_not_integer",
+            Self::KeywordNotFiniteNumber => "keyword_not_finite_number",
+            Self::UnsupportedBitpix => "unsupported_bitpix",
+            Self::InvalidAxisCount => "invalid_axis_count",
+            Self::InvalidAxisLength => "invalid_axis_length",
+            Self::DataSizeOverflow => "data_size_overflow",
+            Self::BlankOnFloatingPointImage => "blank_on_floating_point_image",
+            Self::BlankOutOfRange => "blank_out_of_range",
+        };
+        formatter.write_str(value)
+    }
 }
 
 impl Display for ImageHduError {
@@ -433,6 +501,10 @@ mod tests {
         assert_eq!(descriptor.data_offset(), 2_880);
         assert_eq!(descriptor.data_bytes(), 23_388_736);
         assert_eq!(descriptor.padded_data_bytes() % 2_880, 0);
+        assert_eq!(
+            descriptor.padded_data_end(),
+            descriptor.data_offset() + descriptor.padded_data_bytes()
+        );
         assert_eq!(descriptor.bscale().to_bits(), 1.0_f64.to_bits());
         assert_eq!(descriptor.bzero().to_bits(), 32_768.0_f64.to_bits());
         assert_eq!(descriptor.blank(), Some(-32_768));
@@ -542,6 +614,17 @@ mod tests {
             ImageHduDescriptor::from_header(&header),
             Err(ImageHduError::UnsupportedBitpix { value: 24 })
         );
+    }
+
+    #[test]
+    fn exposes_stable_error_codes() {
+        let error = ImageHduError::InvalidAxisLength {
+            keyword: "NAXIS2".to_owned(),
+            value: -1,
+        };
+
+        assert_eq!(error.code(), ImageHduErrorCode::InvalidAxisLength);
+        assert_eq!(error.code().to_string(), "invalid_axis_length");
     }
 
     #[test]

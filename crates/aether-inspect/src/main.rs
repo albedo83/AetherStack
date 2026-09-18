@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use aether_fits::{
-    BLOCK_SIZE, DiagnosticCode, Header, HeaderReadOptions, ValidationMode, read_primary_header,
+    BLOCK_SIZE, DiagnosticCode, Header, HeaderReadOptions, ImageHduDescriptor, ImageHduErrorCode,
+    ValidationMode, read_primary_header,
 };
 use aether_metadata::{FrameType, MetadataIssueCode, normalize_header};
 use aether_session::{ClassificationSource, FrameClassification, classify_frame};
@@ -36,6 +37,10 @@ struct Summary {
     tolerated_nonconformant: u64,
     structural_errors: u64,
     traversal_errors: u64,
+    file_size_errors: u64,
+    valid_image_layouts: u64,
+    invalid_image_layouts: u64,
+    truncated_primary_data: u64,
     missing_instrument: u64,
     bitpix: BTreeMap<String, u64>,
     dimensions: BTreeMap<String, u64>,
@@ -50,14 +55,23 @@ struct Summary {
     classification_conflict_kinds: BTreeMap<String, u64>,
     unresolved_frame_types: u64,
     diagnostics: BTreeMap<DiagnosticCode, u64>,
+    image_layout_errors: BTreeMap<ImageHduErrorCode, u64>,
     metadata_issues: BTreeMap<MetadataIssueCode, u64>,
     nonconformant_examples: Vec<PathBuf>,
     structural_error_examples: Vec<PathBuf>,
+    invalid_layout_examples: Vec<PathBuf>,
+    truncated_data_examples: Vec<PathBuf>,
     conflict_examples: Vec<PathBuf>,
 }
 
 impl Summary {
-    fn record_header(&mut self, path: &Path, report: &aether_fits::HeaderReport, config: &Config) {
+    fn record_header(
+        &mut self,
+        path: &Path,
+        file_size: Option<u64>,
+        report: &aether_fits::HeaderReport,
+        config: &Config,
+    ) {
         self.headers_read += 1;
         if report.is_conformant() {
             self.strict_conformant += 1;
@@ -71,6 +85,20 @@ impl Summary {
         }
 
         let header = report.header();
+        match ImageHduDescriptor::from_header(header) {
+            Ok(descriptor) => {
+                self.valid_image_layouts += 1;
+                if file_size.is_some_and(|size| size < descriptor.padded_data_end()) {
+                    self.truncated_primary_data += 1;
+                    push_example(&mut self.truncated_data_examples, path, config);
+                }
+            }
+            Err(error) => {
+                self.invalid_image_layouts += 1;
+                *self.image_layout_errors.entry(error.code()).or_default() += 1;
+                push_example(&mut self.invalid_layout_examples, path, config);
+            }
+        }
         let metadata = normalize_header(header);
         let classification = classify_frame(path, &metadata);
         if classification.has_conflict() {
@@ -136,6 +164,10 @@ impl Summary {
         println!("tolerated_nonconformant: {}", self.tolerated_nonconformant);
         println!("structural_errors: {}", self.structural_errors);
         println!("traversal_errors: {}", self.traversal_errors);
+        println!("file_size_errors: {}", self.file_size_errors);
+        println!("valid_image_layouts: {}", self.valid_image_layouts);
+        println!("invalid_image_layouts: {}", self.invalid_image_layouts);
+        println!("truncated_primary_data: {}", self.truncated_primary_data);
         println!("missing_instrument: {}", self.missing_instrument);
         println!(
             "classification_conflicts: {}",
@@ -156,9 +188,12 @@ impl Summary {
             &self.classification_conflict_kinds,
         );
         print_diagnostics(&self.diagnostics);
+        print_image_layout_errors(&self.image_layout_errors);
         print_metadata_issues(&self.metadata_issues);
         print_examples("nonconformant_examples", &self.nonconformant_examples);
         print_examples("structural_error_examples", &self.structural_error_examples);
+        print_examples("invalid_layout_examples", &self.invalid_layout_examples);
+        print_examples("truncated_data_examples", &self.truncated_data_examples);
         print_examples("classification_conflict_examples", &self.conflict_examples);
     }
 }
@@ -182,13 +217,21 @@ fn main() -> ExitCode {
     };
     summary.print(&config);
 
-    if config.mode == ValidationMode::Strict
-        && (summary.tolerated_nonconformant > 0 || summary.structural_errors > 0)
-    {
+    if strict_validation_failed(config.mode, &summary) {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn strict_validation_failed(mode: ValidationMode, summary: &Summary) -> bool {
+    mode == ValidationMode::Strict
+        && (summary.tolerated_nonconformant > 0
+            || summary.structural_errors > 0
+            || summary.traversal_errors > 0
+            || summary.file_size_errors > 0
+            || summary.invalid_image_layouts > 0
+            || summary.truncated_primary_data > 0)
 }
 
 fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Config, String> {
@@ -304,9 +347,16 @@ fn inspect_file(path: &Path, summary: &mut Summary, config: &Config) {
             return;
         }
     };
+    let file_size = match file.metadata() {
+        Ok(metadata) => Some(metadata.len()),
+        Err(_) => {
+            summary.file_size_errors += 1;
+            None
+        }
+    };
     let mut reader = BufReader::with_capacity(BLOCK_SIZE, file);
     match read_primary_header(&mut reader, HeaderReadOptions::default()) {
-        Ok(report) => summary.record_header(path, &report, config),
+        Ok(report) => summary.record_header(path, file_size, &report, config),
         Err(_) => {
             summary.structural_errors += 1;
             push_example(&mut summary.structural_error_examples, path, config);
@@ -381,6 +431,13 @@ fn print_diagnostics(values: &BTreeMap<DiagnosticCode, u64>) {
     println!("diagnostics:");
     for (diagnostic, count) in values {
         println!("  {count:>8}  {diagnostic}");
+    }
+}
+
+fn print_image_layout_errors(values: &BTreeMap<ImageHduErrorCode, u64>) {
+    println!("image_layout_errors:");
+    for (error, count) in values {
+        println!("  {count:>8}  {error}");
     }
 }
 
@@ -473,5 +530,50 @@ mod tests {
         assert!(is_fits_path(Path::new("light.FITS")));
         assert!(is_fits_path(Path::new("dark.fit")));
         assert!(!is_fits_path(Path::new("image.xisf")));
+    }
+
+    #[test]
+    fn strict_mode_rejects_every_integrity_failure_category() {
+        let failures = [
+            Summary {
+                tolerated_nonconformant: 1,
+                ..Summary::default()
+            },
+            Summary {
+                structural_errors: 1,
+                ..Summary::default()
+            },
+            Summary {
+                traversal_errors: 1,
+                ..Summary::default()
+            },
+            Summary {
+                file_size_errors: 1,
+                ..Summary::default()
+            },
+            Summary {
+                invalid_image_layouts: 1,
+                ..Summary::default()
+            },
+            Summary {
+                truncated_primary_data: 1,
+                ..Summary::default()
+            },
+        ];
+
+        assert!(
+            failures
+                .iter()
+                .all(|summary| strict_validation_failed(ValidationMode::Strict, summary))
+        );
+        assert!(
+            failures
+                .iter()
+                .all(|summary| !strict_validation_failed(ValidationMode::Tolerant, summary))
+        );
+        assert!(!strict_validation_failed(
+            ValidationMode::Strict,
+            &Summary::default()
+        ));
     }
 }

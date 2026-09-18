@@ -40,6 +40,8 @@ The in-tree Rust scanner processed the entire main FITS corpus:
 - 24,371 headers strictly conformant;
 - 6 interpretable but non-conformant headers;
 - 0 structural read failures and 0 traversal failures;
+- 24,377 valid checked image layouts and 0 invalid layouts;
+- 0 truncated primary arrays and 0 unavailable file sizes;
 - 10 files without an instrument identifier.
 
 ### Pixel representations and dimensions
@@ -98,6 +100,9 @@ without a CFA declaration. Acquisition software was declared as N.I.N.A. in
 
 The external library includes darks at 1, 2, 5, 10, 20, 30, 60, and 90 seconds,
 plus a 3,840 × 2,160 `float32` master dark.
+
+All 631 dark-library files also have valid image layouts and complete primary
+arrays. The library has no structural read failure or traversal failure.
 
 ### ToupTek 571M monochrome
 
