@@ -33,6 +33,8 @@ optimized CPU and GPU paths must match.
   propagation and explicit flat-divisor thresholds;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
+- strict unweighted mean integration with compensated normalized accumulation
+  and exact per-pixel support accounting;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
@@ -52,7 +54,9 @@ and memory-accounting behavior for later pipeline stages. The initial
 [calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,
 precision, and mask behavior used by the CPU vertical slice. The
 [statistics contract](docs/STATISTICS_CONTRACT.md) defines usable samples and
-the strict reference moment calculations.
+the strict reference moment calculations. The initial
+[integration contract](docs/INTEGRATION_CONTRACT.md) defines reduction order,
+sample eligibility, output masks, and support maps.
 
 ## Build and test
 

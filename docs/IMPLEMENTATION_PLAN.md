@@ -415,9 +415,9 @@ safety reasoning. They do not narrate obvious syntax.
 11. ~~Define runtime cancellation, progress, and memory-budget contracts.~~
 12. Build the first strict CPU vertical slice from tile ingestion through simple
     calibration, statistics, mean integration, and FITS output.
-    The dark-and-normalized-flat `f64` calibration kernel, mask contract, and
-    strict image statistics are complete; mean integration, orchestration, and
-    output remain.
+    The dark-and-normalized-flat `f64` calibration kernel, mask contract, strict
+    image statistics, and unweighted mean integration are complete;
+    orchestration and output remain.
 
 ## 11. Stable-release definition
 

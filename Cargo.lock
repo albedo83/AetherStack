@@ -31,6 +31,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-integration"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+]
+
+[[package]]
 name = "aether-metadata"
 version = "0.1.0"
 dependencies = [

@@ -4,6 +4,7 @@ members = [
     "crates/aether-core",
     "crates/aether-fits",
     "crates/aether-inspect",
+    "crates/aether-integration",
     "crates/aether-metadata",
     "crates/aether-runtime",
     "crates/aether-session",
