@@ -403,8 +403,8 @@ safety reasoning. They do not narrate obvious syntax.
    integer and 32-bit floating data.~~
 5. ~~Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite status into `f64`, then
    propagate unusable samples into the shared quality mask.~~
-6. Generate tiny synthetic 294MC/585C-shaped semantic fixtures, not full-size
-   camera files.
+6. ~~Generate tiny synthetic 294MC/585C-shaped semantic fixtures, not full-size
+   camera files.~~
 7. ~~Compare distributed samples and full-array summary statistics with an
    independent FITS reader.~~
 8. Add manifest serialization only after grouping types are stable.
