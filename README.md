@@ -21,7 +21,7 @@ optimized CPU and GPU paths must match.
   scientific tiles for 16-bit integer, 32-bit floating-point, and 64-bit
   floating-point data, including scaling and invalid-pixel mask propagation;
 - conformant big-endian binary64 primary-FITS stream output with deterministic
-  NaN substitution and exact block padding;
+  NaN substitution, exact block padding, and atomic create-new publication;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;

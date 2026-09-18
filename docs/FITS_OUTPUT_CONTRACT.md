@@ -31,3 +31,27 @@ generated-card overflow, and destination I/O errors. An arbitrary stream may
 contain a valid prefix after an I/O error. Flushing, durable synchronization,
 atomic filesystem publication, provenance cards, and checksums belong to the
 higher-level file publisher and are not implied by a successful stream write.
+
+## Atomic create-new publication
+
+`write_f64_primary_atomic_new` creates a unique temporary file in the output
+directory, writes through a bounded buffer, flushes it, and synchronizes its
+contents. It then creates the destination as a hard link to the complete
+temporary file. Hard-link creation fails when the destination exists, so two
+concurrent publishers cannot overwrite each other and a reader never observes a
+partial destination. The temporary link is removed after publication.
+
+This API deliberately does not replace an existing artifact. Replacement needs
+a separate policy because portable standard-library rename behavior differs
+between supported operating systems. On Unix, directory metadata is synchronized
+after publication. Other supported systems retain atomic visibility and synced
+file contents, but the Rust standard library does not expose an equivalent
+portable directory handle.
+
+Errors before publication leave no destination and the temporary guard attempts
+cleanup. Errors during temporary-link cleanup or directory synchronization
+report that the destination is already published, preventing a caller from
+mistakenly retrying under another name.
+
+Provenance cards and FITS checksums remain higher-level output work and are not
+yet claimed by this contract.

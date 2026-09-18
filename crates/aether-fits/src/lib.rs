@@ -5,6 +5,7 @@
 //! the source. Pixel access is seek-based and can materialize bounded regions in
 //! the shared scientific image representation.
 
+mod atomic_writer;
 mod card;
 mod diagnostic;
 mod error;
@@ -14,6 +15,7 @@ mod image_reader;
 mod reader;
 mod writer;
 
+pub use atomic_writer::{AtomicFitsWriteError, write_f64_primary_atomic_new};
 pub use card::{Card, FitsValue};
 pub use diagnostic::{Diagnostic, DiagnosticCode, Severity, ValidationMode};
 pub use error::FitsError;
