@@ -18,8 +18,10 @@ optimized CPU and GPU paths must match.
 - bounded FITS primary-header reading with raw 80-byte card retention;
 - strict and tolerant FITS conformance reports;
 - checked image-HDU layouts and bounded random-access decoding into `f64`
-  scientific tiles for the current 16-bit integer and 32-bit floating-point
-  corpus, including scaling and invalid-pixel mask propagation;
+  scientific tiles for 16-bit integer, 32-bit floating-point, and 64-bit
+  floating-point data, including scaling and invalid-pixel mask propagation;
+- conformant big-endian binary64 primary-FITS stream output with deterministic
+  NaN substitution and exact block padding;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;
@@ -56,7 +58,9 @@ precision, and mask behavior used by the CPU vertical slice. The
 [statistics contract](docs/STATISTICS_CONTRACT.md) defines usable samples and
 the strict reference moment calculations. The initial
 [integration contract](docs/INTEGRATION_CONTRACT.md) defines reduction order,
-sample eligibility, output masks, and support maps.
+sample eligibility, output masks, and support maps. The
+[FITS output contract](docs/FITS_OUTPUT_CONTRACT.md) defines the strict binary64
+encoding and unavailable-sample representation.
 
 ## Build and test
 

@@ -417,7 +417,8 @@ safety reasoning. They do not narrate obvious syntax.
     calibration, statistics, mean integration, and FITS output.
     The dark-and-normalized-flat `f64` calibration kernel, mask contract, strict
     image statistics, and unweighted mean integration are complete;
-    orchestration and output remain.
+    binary64 FITS stream encoding and readback are complete. Atomic publication,
+    provenance, and orchestration remain.
 
 ## 11. Stable-release definition
 

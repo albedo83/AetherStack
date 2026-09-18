@@ -79,10 +79,9 @@ impl ImageRegion {
 /// Seekable reader for the pixel array of a primary FITS image.
 ///
 /// The reader owns the stream and keeps the full header report available. The
-/// current vertical slice decodes the two representations present in the
-/// priority corpus: signed 16-bit integers and IEEE 754 binary32 values. Other
-/// standard `BITPIX` values remain describable but return an explicit error when
-/// pixel decoding is requested.
+/// current vertical slice decodes signed 16-bit integers and IEEE 754 binary32
+/// and binary64 values. Other standard `BITPIX` values remain describable but
+/// return an explicit error when pixel decoding is requested.
 pub struct PrimaryImageReader<R> {
     reader: R,
     report: HeaderReport,
@@ -183,7 +182,9 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
         let format = self.descriptor.sample_format();
         if !matches!(
             format,
-            StoredSampleFormat::Signed16 | StoredSampleFormat::Float32
+            StoredSampleFormat::Signed16
+                | StoredSampleFormat::Float32
+                | StoredSampleFormat::Float64
         ) {
             return Err(ImageReadError::UnsupportedSampleFormat { format });
         }
@@ -442,10 +443,18 @@ fn decode_supported_sample(
                 *first, *second, *third, *fourth,
             ]))))
         }
+        (
+            StoredSampleFormat::Float64,
+            [first, second, third, fourth, fifth, sixth, seventh, eighth],
+        ) => Ok(StoredSample::Float(f64::from_be_bytes([
+            *first, *second, *third, *fourth, *fifth, *sixth, *seventh, *eighth,
+        ]))),
         (format, _)
             if !matches!(
                 format,
-                StoredSampleFormat::Signed16 | StoredSampleFormat::Float32
+                StoredSampleFormat::Signed16
+                    | StoredSampleFormat::Float32
+                    | StoredSampleFormat::Float64
             ) =>
         {
             Err(ImageReadError::UnsupportedSampleFormat { format })
@@ -750,6 +759,39 @@ mod tests {
         assert_eq!(values[0].to_bits(), 1.5_f64.to_bits());
         assert!(values[1].is_nan());
         assert!(values[2].is_infinite() && values[2].is_sign_positive());
+        assert_eq!(
+            statuses,
+            [
+                SampleStatus::Valid,
+                SampleStatus::NonFinite,
+                SampleStatus::NonFinite
+            ]
+        );
+    }
+
+    #[test]
+    fn decodes_binary64_without_narrowing() {
+        let stored = [1.0_f64 / 3.0, f64::NAN, f64::NEG_INFINITY];
+        let data: Vec<u8> = stored
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect();
+        let input = fits_image(-64, stored.len(), &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+        let mut values = [0.0; 3];
+        let mut statuses = [SampleStatus::Valid; 3];
+
+        assert!(
+            reader
+                .read_physical_samples(0, &mut values, &mut statuses)
+                .is_ok()
+        );
+        assert_eq!(values[0].to_bits(), stored[0].to_bits());
+        assert!(values[1].is_nan());
+        assert!(values[2].is_infinite() && values[2].is_sign_negative());
         assert_eq!(
             statuses,
             [
