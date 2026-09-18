@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/aether-cache",
     "crates/aether-calibration",
     "crates/aether-core",
     "crates/aether-fits",

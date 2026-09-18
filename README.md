@@ -42,6 +42,9 @@ optimized CPU and GPU paths must match.
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, calculates output statistics, and
   atomically publishes a provenance-bearing binary64 FITS product;
+- immutable, sharded cache artifacts with domain-separated operation keys,
+  streaming payload digests, atomic create-new publication, collision handling,
+  and mandatory full verification on lookup;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
@@ -65,7 +68,9 @@ the strict reference moment calculations. The initial
 [integration contract](docs/INTEGRATION_CONTRACT.md) defines reduction order,
 sample eligibility, output masks, and support maps. The
 [FITS output contract](docs/FITS_OUTPUT_CONTRACT.md) defines the strict binary64
-encoding and unavailable-sample representation.
+encoding and unavailable-sample representation. The
+[cache contract](docs/CACHE_CONTRACT.md) defines immutable operation keys,
+artifact verification, and publication failure boundaries.
 
 ## Build and test
 

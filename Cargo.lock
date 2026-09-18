@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "aether-cache"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "aether-calibration"
 version = "0.1.0"
 dependencies = [
