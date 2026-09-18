@@ -27,6 +27,8 @@ optimized CPU and GPU paths must match.
   retained FITS diagnostics, and streaming SHA-256 source fingerprints;
 - bounded directory-to-manifest ingestion with explicit per-source failures,
   unassigned-source reporting, and no symbolic-link traversal;
+- cooperative cancellation, validated machine-readable progress events, and
+  atomic RAII memory reservations for future pipeline stages;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
@@ -40,7 +42,9 @@ available. DSLR-specific behavior is outside the current product scope.
 See the [implementation plan](docs/IMPLEMENTATION_PLAN.md) and the anonymized
 [corpus inventory](docs/CORPUS_INVENTORY.md) for the architectural rationale and
 the evidence driving format support. The [session manifest contract](docs/SESSION_MANIFEST.md)
-documents the current portable interchange schema and its validation rules.
+documents the current portable interchange schema and its validation rules. The
+[runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
+and memory-accounting behavior for later pipeline stages.
 
 ## Build and test
 

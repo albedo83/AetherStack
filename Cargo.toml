@@ -4,6 +4,7 @@ members = [
     "crates/aether-fits",
     "crates/aether-inspect",
     "crates/aether-metadata",
+    "crates/aether-runtime",
     "crates/aether-session",
 ]
 resolver = "3"

@@ -412,7 +412,7 @@ safety reasoning. They do not narrate obvious syntax.
    generator without retaining file payloads.~~
 10. ~~Add bounded directory-to-manifest orchestration with explicit handling for
     per-file failures and unassigned sources.~~
-11. Define runtime cancellation, progress, and memory-budget contracts.
+11. ~~Define runtime cancellation, progress, and memory-budget contracts.~~
 12. Build the first strict CPU vertical slice from tile ingestion through simple
     calibration, statistics, mean integration, and FITS output.
 
