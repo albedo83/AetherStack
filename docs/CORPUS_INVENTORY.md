@@ -157,6 +157,13 @@ The reader therefore provides both modes:
 - neither mode rewrites or silently repairs the source;
 - every original 80-byte header card remains available for auditing.
 
+The first bounded pixel-reader validation sampled both ends of three real arrays
+without retaining their paths or contents: one 4,144 × 2,822 294MC raw dark, one
+3,840 × 2,160 585C raw dark, and the 3,840 × 2,160 585C `float32` master dark.
+All 24,576 sampled physical values decoded successfully and were finite. This is
+a compatibility smoke test; synthetic and independent differential tests remain
+the release criterion.
+
 ## Implementation consequences
 
 1. Apply `BSCALE` and `BZERO` before scientific computation while retaining the

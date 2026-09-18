@@ -17,6 +17,8 @@ optimized CPU and GPU paths must match.
 - compensated double-precision summation;
 - bounded FITS primary-header reading with raw 80-byte card retention;
 - strict and tolerant FITS conformance reports;
+- checked image-HDU layouts and bounded random-access decoding for the current
+  16-bit integer and 32-bit floating-point corpus;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - streaming corpus inspection without loading pixel arrays.

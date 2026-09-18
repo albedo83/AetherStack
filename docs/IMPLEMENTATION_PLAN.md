@@ -396,11 +396,12 @@ safety reasoning. They do not narrate obvious syntax.
 
 ## 10. Immediate implementation sequence
 
-1. Finish repository publication and baseline CI.
-2. Complete explicit classification policies and session-grouping keys.
-3. Introduce a checked FITS image-HDU descriptor without allocating pixels.
-4. Implement row/tile reading for 16-bit integer and 32-bit floating data.
-5. Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite masking into `f64`.
+1. ~~Finish repository publication and baseline CI.~~
+2. Complete session-grouping keys; explicit classification policies are done.
+3. ~~Introduce a checked FITS image-HDU descriptor without allocating pixels.~~
+4. ~~Implement bounded sample-range reading for 16-bit integer and 32-bit
+   floating data.~~
+5. ~~Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite status into `f64`.~~
 6. Generate tiny synthetic 294MC/585C-shaped semantic fixtures, not full-size
    camera files.
 7. Compare samples and summary statistics with an independent FITS reader.
