@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use aether_fits::{Diagnostic, Severity, ValidationMode};
 use aether_metadata::{Binning, CanonicalMetadata};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
@@ -31,6 +32,8 @@ pub enum ManifestValidationCode {
     InvalidImageAxes,
     /// Canonical numeric metadata contains NaN or infinity.
     NonFiniteMetadata,
+    /// Error-level FITS diagnostics conflict with strict manifest policy.
+    FitsDiagnosticsRejected,
     /// Stored classification fields contradict their retained evidence.
     InconsistentClassification,
     /// A group identifier is empty or contains non-portable characters.
@@ -63,6 +66,7 @@ impl Display for ManifestValidationCode {
             Self::DuplicateFilePath => "duplicate_file_path",
             Self::InvalidImageAxes => "invalid_image_axes",
             Self::NonFiniteMetadata => "non_finite_metadata",
+            Self::FitsDiagnosticsRejected => "fits_diagnostics_rejected",
             Self::InconsistentClassification => "inconsistent_classification",
             Self::InvalidGroupId => "invalid_group_id",
             Self::DuplicateGroupId => "duplicate_group_id",
@@ -209,6 +213,7 @@ pub struct ManifestFile {
     fingerprint: SourceFingerprint,
     axes: Vec<u64>,
     metadata: CanonicalMetadata,
+    fits_diagnostics: Vec<Diagnostic>,
     classification: FrameClassification,
     resolution: Option<FrameResolution>,
 }
@@ -228,6 +233,7 @@ impl ManifestFile {
         fingerprint: SourceFingerprint,
         axes: Vec<u64>,
         metadata: CanonicalMetadata,
+        fits_diagnostics: Vec<Diagnostic>,
         classification: FrameClassification,
         policy: ClassificationPolicy,
     ) -> Result<Self, ManifestValidationError> {
@@ -237,6 +243,7 @@ impl ManifestFile {
             fingerprint,
             axes,
             metadata,
+            fits_diagnostics,
             classification,
             resolution,
         };
@@ -266,6 +273,12 @@ impl ManifestFile {
     #[must_use]
     pub const fn metadata(&self) -> &CanonicalMetadata {
         &self.metadata
+    }
+
+    /// FITS conformance diagnostics retained in detection order.
+    #[must_use]
+    pub fn fits_diagnostics(&self) -> &[Diagnostic] {
+        &self.fits_diagnostics
     }
 
     /// Retained classification evidence and conflict state.
@@ -434,6 +447,7 @@ impl ManifestGroup {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SessionManifest {
     schema_version: u32,
+    fits_validation_mode: ValidationMode,
     classification_policy: ClassificationPolicy,
     files: Vec<ManifestFile>,
     groups: Vec<ManifestGroup>,
@@ -443,6 +457,7 @@ pub struct SessionManifest {
 #[serde(deny_unknown_fields)]
 struct SessionManifestWire {
     schema_version: u32,
+    fits_validation_mode: ValidationMode,
     classification_policy: ClassificationPolicy,
     files: Vec<ManifestFile>,
     groups: Vec<ManifestGroup>,
@@ -468,8 +483,26 @@ impl SessionManifest {
         files: Vec<ManifestFile>,
         groups: Vec<ManifestGroup>,
     ) -> Result<Self, ManifestValidationError> {
+        Self::with_validation_mode(ValidationMode::Strict, classification_policy, files, groups)
+    }
+
+    /// Builds a manifest with an explicit FITS conformance policy.
+    ///
+    /// Use this constructor for tolerant imports so the relaxed acceptance
+    /// policy is persisted beside every retained FITS diagnostic.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same structured validation failures as [`Self::new`].
+    pub fn with_validation_mode(
+        fits_validation_mode: ValidationMode,
+        classification_policy: ClassificationPolicy,
+        files: Vec<ManifestFile>,
+        groups: Vec<ManifestGroup>,
+    ) -> Result<Self, ManifestValidationError> {
         let mut manifest = Self {
             schema_version: SESSION_MANIFEST_SCHEMA_VERSION,
+            fits_validation_mode,
             classification_policy,
             files,
             groups,
@@ -522,6 +555,12 @@ impl SessionManifest {
         self.schema_version
     }
 
+    /// FITS conformance policy applied to every source.
+    #[must_use]
+    pub const fn fits_validation_mode(&self) -> ValidationMode {
+        self.fits_validation_mode
+    }
+
     /// Policy used to resolve every retained classification.
     #[must_use]
     pub const fn classification_policy(&self) -> ClassificationPolicy {
@@ -543,6 +582,7 @@ impl SessionManifest {
     fn from_wire(wire: SessionManifestWire) -> Result<Self, ManifestValidationError> {
         let mut manifest = Self {
             schema_version: wire.schema_version,
+            fits_validation_mode: wire.fits_validation_mode,
             classification_policy: wire.classification_policy,
             files: wire.files,
             groups: wire.groups,
@@ -577,6 +617,17 @@ impl SessionManifest {
         let mut portable_paths = BTreeSet::new();
         for file in &self.files {
             file.validate(self.classification_policy)?;
+            if self.fits_validation_mode == ValidationMode::Strict
+                && file
+                    .fits_diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.severity() == Severity::Error)
+            {
+                return Err(ManifestValidationError::new(
+                    ManifestValidationCode::FitsDiagnosticsRejected,
+                    &file.relative_path,
+                ));
+            }
             if !portable_paths.insert(file.relative_path.to_ascii_lowercase()) {
                 return Err(ManifestValidationError::new(
                     ManifestValidationCode::DuplicateFilePath,
@@ -796,6 +847,7 @@ mod tests {
             fingerprint(digest_digit)?,
             vec![4, 3],
             metadata,
+            Vec::new(),
             classification,
             ClassificationPolicy::RequireAgreement,
         )?)
@@ -924,6 +976,7 @@ mod tests {
                 fingerprint('a')?,
                 vec![4, 3],
                 metadata,
+                Vec::new(),
                 classification,
                 ClassificationPolicy::RequireAgreement,
             ),
@@ -954,6 +1007,7 @@ mod tests {
                 fingerprint('a')?,
                 vec![4],
                 metadata,
+                Vec::new(),
                 classification,
                 ClassificationPolicy::RequireAgreement,
             ),
@@ -969,6 +1023,7 @@ mod tests {
                 fingerprint('a')?,
                 vec![4, 3],
                 metadata,
+                Vec::new(),
                 classification,
                 ClassificationPolicy::RequireAgreement,
             ),
@@ -1134,6 +1189,7 @@ mod tests {
             fingerprint('a')?,
             vec![4, 3],
             metadata.clone(),
+            Vec::new(),
             classification,
             ClassificationPolicy::RequireAgreement,
         )?;
@@ -1209,6 +1265,7 @@ mod tests {
             fingerprint('a')?,
             vec![4, 3],
             metadata,
+            Vec::new(),
             classification,
             ClassificationPolicy::RequireAgreement,
         )?;

@@ -1,7 +1,10 @@
 use std::fmt::{Display, Formatter};
 
+use serde::{Deserialize, Serialize};
+
 /// Severity of a FITS conformance diagnostic.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// Deviation that retains an unambiguous interpretation.
     Warning,
@@ -10,7 +13,8 @@ pub enum Severity {
 }
 
 /// Stable category of a conformance diagnostic.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DiagnosticCode {
     /// A card contains a byte forbidden in a FITS header.
     NonAsciiCard,
@@ -44,7 +48,8 @@ impl Display for DiagnosticCode {
 }
 
 /// Detailed diagnostic associated with a card or the complete header.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     severity: Severity,
     code: DiagnosticCode,
@@ -104,7 +109,8 @@ impl Diagnostic {
 }
 
 /// Policy for accepting deviations from the FITS standard.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ValidationMode {
     /// Rejects every error-level diagnostic.
     Strict,

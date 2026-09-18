@@ -21,12 +21,17 @@ depth bound.
 
 ## Source records
 
+The manifest also records the FITS acceptance mode (`strict` or `tolerant`) used
+for the complete session. Error-level conformance diagnostics are incompatible
+with a strict manifest even if a caller attempts to assemble one manually.
+
 Each source record contains:
 
 - a UTF-8 path relative to the session root, using `/` separators;
 - the exact file length and a lowercase SHA-256 digest;
 - two or three non-zero FITS axes in FITS order;
 - canonical metadata, including each selected source keyword and confidence;
+- every FITS conformance diagnostic in detection order;
 - all frame-classification evidence and its conflict state;
 - the resolution produced by the manifest-wide classification policy.
 
@@ -35,9 +40,11 @@ characters, drive prefixes, trailing spaces or dots, and Windows device names.
 ASCII case-insensitive collisions are rejected so a session cannot change
 meaning when moved between common filesystems.
 
-The current library validates supplied fingerprints but does not compute them.
-The session generator must hash immutable source bytes and must re-check the
-length and digest before processing if files may have changed.
+`analyze_fits_source` parses the bounded primary header, applies the selected
+acceptance policy, rewinds the source, and computes the length and SHA-256 using
+64 KiB of fixed scratch storage. It never retains the pixel payload. Processing
+stages must still re-check the length and digest if files may have changed after
+manifest generation.
 
 ## Exact groups
 
@@ -66,3 +73,8 @@ content, discovery order does not change the encoded result.
 Floating-point grouping values are finite and retain exact binary64 identity.
 Positive and negative zero are canonicalized to the same value. JSON round-trip
 tests protect that rule, while NaN and infinity are rejected before encoding.
+
+`generate_manifest` groups only resolved sources whose exact keys have no
+missing fields. It leaves unresolved or incomplete sources unassigned for
+review. Automatic group identifiers are full lowercase SHA-256 digests of the
+versioned canonical binary grouping-key representation.

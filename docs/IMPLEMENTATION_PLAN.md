@@ -408,10 +408,12 @@ safety reasoning. They do not narrate obvious syntax.
 7. ~~Compare distributed samples and full-array summary statistics with an
    independent FITS reader.~~
 8. ~~Add manifest serialization only after grouping types are stable.~~
-9. Implement streaming SHA-256 source fingerprints and a bounded manifest
-   generator without retaining file payloads.
-10. Define runtime cancellation, progress, and memory-budget contracts.
-11. Build the first strict CPU vertical slice from tile ingestion through simple
+9. ~~Implement streaming SHA-256 source fingerprints and a bounded manifest
+   generator without retaining file payloads.~~
+10. Add bounded directory-to-manifest orchestration with explicit handling for
+    per-file failures and unassigned sources.
+11. Define runtime cancellation, progress, and memory-budget contracts.
+12. Build the first strict CPU vertical slice from tile ingestion through simple
     calibration, statistics, mean integration, and FITS output.
 
 ## 11. Stable-release definition

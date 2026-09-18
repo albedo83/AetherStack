@@ -23,7 +23,8 @@ optimized CPU and GPU paths must match.
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;
-- versioned, deterministic JSON session manifests with strict validation;
+- versioned, deterministic JSON session manifests with strict validation,
+  retained FITS diagnostics, and streaming SHA-256 source fingerprints;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:

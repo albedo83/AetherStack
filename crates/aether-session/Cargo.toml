@@ -10,9 +10,11 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+aether-fits = { path = "../aether-fits" }
 aether-metadata = { path = "../aether-metadata" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

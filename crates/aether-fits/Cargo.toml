@@ -14,3 +14,4 @@ workspace = true
 
 [dependencies]
 aether-core = { path = "../aether-core" }
+serde.workspace = true
