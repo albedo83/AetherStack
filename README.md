@@ -23,6 +23,7 @@ optimized CPU and GPU paths must match.
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;
+- versioned, deterministic JSON session manifests with strict validation;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
@@ -35,7 +36,8 @@ available. DSLR-specific behavior is outside the current product scope.
 
 See the [implementation plan](docs/IMPLEMENTATION_PLAN.md) and the anonymized
 [corpus inventory](docs/CORPUS_INVENTORY.md) for the architectural rationale and
-the evidence driving format support.
+the evidence driving format support. The [session manifest contract](docs/SESSION_MANIFEST.md)
+documents the current portable interchange schema and its validation rules.
 
 ## Build and test
 

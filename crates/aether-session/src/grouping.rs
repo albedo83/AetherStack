@@ -2,9 +2,11 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use aether_metadata::{BayerPattern, Binning, CameraModel, CanonicalMetadata, FrameType};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 /// Metadata field represented in a strict session grouping key.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GroupingField {
     /// Canonical camera model.
     Camera,
@@ -37,7 +39,8 @@ pub enum GroupingField {
 /// Missing metadata remains represented as `None`. Before automatically grouping
 /// files, callers must inspect [`Self::missing_fields`] and apply a documented
 /// policy appropriate to the frame type and camera profile.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StrictGroupingKey {
     frame_type: FrameType,
     camera: Option<CameraModel>,
@@ -232,6 +235,33 @@ impl ExactFiniteF64 {
     }
 }
 
+impl Serialize for ExactFiniteF64 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(self.value())
+    }
+}
+
+impl<'de> Deserialize<'de> for ExactFiniteF64 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = f64::deserialize(deserializer)?;
+        if !value.is_finite() {
+            return Err(D::Error::custom("exact grouping values must be finite"));
+        }
+        let bits = if value == 0.0 {
+            0.0_f64.to_bits()
+        } else {
+            value.to_bits()
+        };
+        Ok(Self(bits))
+    }
+}
+
 fn exact_optional(
     value: Option<f64>,
     field: GroupingField,
@@ -329,6 +359,24 @@ mod tests {
             StrictGroupingKey::from_metadata(FrameType::Dark, &second, &[3_840, 2_160]);
 
         assert_eq!(first_key, second_key);
+    }
+
+    #[test]
+    fn json_round_trip_canonicalizes_negative_zero() -> Result<(), Box<dyn Error>> {
+        let mut negative = complete_metadata();
+        negative.offset = Some(value(-0.0, "OFFSET"));
+        let mut positive = complete_metadata();
+        positive.offset = Some(value(0.0, "OFFSET"));
+        let negative_key =
+            StrictGroupingKey::from_metadata(FrameType::Dark, &negative, &[3_840, 2_160])?;
+        let positive_key =
+            StrictGroupingKey::from_metadata(FrameType::Dark, &positive, &[3_840, 2_160])?;
+
+        let encoded = serde_json::to_vec(&negative_key)?;
+        let decoded: StrictGroupingKey = serde_json::from_slice(&encoded)?;
+
+        assert_eq!(decoded, positive_key);
+        Ok(())
     }
 
     #[test]

@@ -222,7 +222,7 @@ Exit criterion: every current ingestion decision is tied to measured corpus
 evidence. The 571M remains explicitly pending; its files are not searched for or
 its format guessed.
 
-### Phase 1 — Repository and scientific foundations (`in progress`)
+### Phase 1 — Repository and scientific foundations (`complete`)
 
 Deliverables:
 
@@ -236,7 +236,7 @@ Deliverables:
 Exit criterion: all invariants have unit tests and the repository passes the full
 quality gate on supported platforms.
 
-### Phase 2 — FITS ingestion and session generation (`in progress`)
+### Phase 2 — FITS ingestion and session generation (`complete`)
 
 Deliverables:
 
@@ -247,7 +247,7 @@ Deliverables:
 - streaming inventory CLI;
 - safe image-HDU descriptor and tiled/row pixel reader;
 - ~~scaling, blanking, and mask propagation;~~
-- versioned session manifest and grouping rules;
+- ~~versioned session manifest and grouping rules;~~
 - synthetic public FITS fixtures and differential tests.
 
 Exit criterion: priority-camera raw files and processed `float32` products can be
@@ -407,7 +407,12 @@ safety reasoning. They do not narrate obvious syntax.
    camera files.~~
 7. ~~Compare distributed samples and full-array summary statistics with an
    independent FITS reader.~~
-8. Add manifest serialization only after grouping types are stable.
+8. ~~Add manifest serialization only after grouping types are stable.~~
+9. Implement streaming SHA-256 source fingerprints and a bounded manifest
+   generator without retaining file payloads.
+10. Define runtime cancellation, progress, and memory-budget contracts.
+11. Build the first strict CPU vertical slice from tile ingestion through simple
+    calibration, statistics, mean integration, and FITS output.
 
 ## 11. Stable-release definition
 

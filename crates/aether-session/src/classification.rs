@@ -1,9 +1,11 @@
 use std::path::Path;
 
 use aether_metadata::{CanonicalMetadata, FrameType};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 /// Origin of a piece of evidence used to determine a frame type.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClassificationSource {
     /// Canonical value read from a FITS keyword.
     HeaderKeyword(String),
@@ -26,7 +28,8 @@ impl ClassificationSource {
 }
 
 /// Stable category of a classification evidence source.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClassificationSourceKind {
     /// A canonical FITS header keyword.
     HeaderKeyword,
@@ -37,7 +40,8 @@ pub enum ClassificationSourceKind {
 }
 
 /// Individual classification evidence.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClassificationEvidence {
     /// Frame type suggested by this evidence.
     pub frame_type: FrameType,
@@ -49,7 +53,8 @@ pub struct ClassificationEvidence {
 ///
 /// `RequireAgreement` is the safe default. Preference policies are intended for
 /// explicit import profiles and remain visible in the resulting audit record.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClassificationPolicy {
     /// Resolve only when all recognized evidence agrees.
     #[default]
@@ -74,7 +79,8 @@ impl ClassificationPolicy {
 }
 
 /// Auditable basis for a resolved frame type.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResolutionBasis {
     /// Every recognized piece of evidence agrees.
     Agreement,
@@ -83,7 +89,7 @@ pub enum ResolutionBasis {
 }
 
 /// Explicit, auditable resolution of a frame classification.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FrameResolution {
     frame_type: FrameType,
     basis: ResolutionBasis,
@@ -108,10 +114,44 @@ impl FrameResolution {
     pub const fn overrode_conflict(&self) -> bool {
         self.overrode_conflict
     }
+
+    fn is_consistent(&self) -> bool {
+        !matches!(self.frame_type, FrameType::Other(_))
+            && match self.basis {
+                ResolutionBasis::Agreement => !self.overrode_conflict,
+                ResolutionBasis::PreferredSource(_) => self.overrode_conflict,
+            }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameResolutionWire {
+    frame_type: FrameType,
+    basis: ResolutionBasis,
+    overrode_conflict: bool,
+}
+
+impl<'de> Deserialize<'de> for FrameResolution {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FrameResolutionWire::deserialize(deserializer)?;
+        let resolution = Self {
+            frame_type: wire.frame_type,
+            basis: wire.basis,
+            overrode_conflict: wire.overrode_conflict,
+        };
+        if !resolution.is_consistent() {
+            return Err(D::Error::custom("inconsistent frame resolution"));
+        }
+        Ok(resolution)
+    }
 }
 
 /// Explainable result of classifying one frame.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct FrameClassification {
     evidence: Vec<ClassificationEvidence>,
     resolved: Option<FrameType>,
@@ -162,6 +202,58 @@ impl FrameClassification {
             basis: ResolutionBasis::PreferredSource(preferred_source),
             overrode_conflict: true,
         })
+    }
+
+    pub(crate) fn is_consistent(&self) -> bool {
+        if self.evidence.iter().any(|evidence| {
+            matches!(evidence.frame_type, FrameType::Other(_))
+                || match &evidence.source {
+                    ClassificationSource::HeaderKeyword(value)
+                    | ClassificationSource::Directory(value)
+                    | ClassificationSource::FileName(value) => {
+                        value.is_empty() || value.chars().any(char::is_control)
+                    }
+                }
+        }) {
+            return false;
+        }
+
+        let first = self.evidence.first().map(|evidence| &evidence.frame_type);
+        let computed_conflict = first.is_some_and(|first| {
+            self.evidence
+                .iter()
+                .skip(1)
+                .any(|evidence| &evidence.frame_type != first)
+        });
+        let computed_resolution = (!computed_conflict).then_some(first).flatten();
+
+        self.has_conflict == computed_conflict && self.resolved.as_ref() == computed_resolution
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrameClassificationWire {
+    evidence: Vec<ClassificationEvidence>,
+    resolved: Option<FrameType>,
+    has_conflict: bool,
+}
+
+impl<'de> Deserialize<'de> for FrameClassification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = FrameClassificationWire::deserialize(deserializer)?;
+        let classification = Self {
+            evidence: wire.evidence,
+            resolved: wire.resolved,
+            has_conflict: wire.has_conflict,
+        };
+        if !classification.is_consistent() {
+            return Err(D::Error::custom("inconsistent frame classification"));
+        }
+        Ok(classification)
     }
 }
 
@@ -261,6 +353,8 @@ fn filename_hint(path: &Path) -> Option<(FrameType, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use aether_metadata::{CanonicalValue, Confidence};
 
     use super::*;
@@ -382,5 +476,38 @@ mod tests {
 
         assert_eq!(classification.resolved(), Some(&FrameType::Bias));
         assert_eq!(classification.evidence().len(), 1);
+    }
+
+    #[test]
+    fn deserialization_rejects_inconsistent_private_state() -> Result<(), Box<dyn Error>> {
+        let classification = classify_frame(
+            Path::new("/corpus/M51/FLATS/frame.fits"),
+            &metadata(Some(FrameType::Light)),
+        );
+        let resolution = classification
+            .resolve_with(ClassificationPolicy::PreferDirectory)
+            .ok_or_else(|| std::io::Error::other("conflict must resolve by directory"))?;
+
+        let mut encoded_resolution = serde_json::to_value(resolution)?;
+        let resolution_object = encoded_resolution
+            .as_object_mut()
+            .ok_or_else(|| std::io::Error::other("resolution must serialize as an object"))?;
+        resolution_object.insert(
+            "overrode_conflict".to_owned(),
+            serde_json::Value::Bool(false),
+        );
+        let decoded_resolution: Result<FrameResolution, _> =
+            serde_json::from_value(encoded_resolution);
+        assert!(decoded_resolution.is_err());
+
+        let mut encoded_classification = serde_json::to_value(classification)?;
+        let classification_object = encoded_classification
+            .as_object_mut()
+            .ok_or_else(|| std::io::Error::other("classification must serialize as an object"))?;
+        classification_object.insert("has_conflict".to_owned(), serde_json::Value::Bool(false));
+        let decoded_classification: Result<FrameClassification, _> =
+            serde_json::from_value(encoded_classification);
+        assert!(decoded_classification.is_err());
+        Ok(())
     }
 }

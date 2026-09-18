@@ -11,6 +11,8 @@ publish = false
 
 [dependencies]
 aether-metadata = { path = "../aether-metadata" }
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

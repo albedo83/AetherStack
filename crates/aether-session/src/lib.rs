@@ -6,9 +6,14 @@
 
 mod classification;
 mod grouping;
+mod manifest;
 
 pub use classification::{
     ClassificationEvidence, ClassificationPolicy, ClassificationSource, ClassificationSourceKind,
     FrameClassification, FrameResolution, ResolutionBasis, classify_frame,
 };
 pub use grouping::{GroupingField, GroupingKeyError, StrictGroupingKey};
+pub use manifest::{
+    MAX_SESSION_MANIFEST_BYTES, ManifestError, ManifestFile, ManifestGroup, ManifestValidationCode,
+    ManifestValidationError, SESSION_MANIFEST_SCHEMA_VERSION, SessionManifest, SourceFingerprint,
+};

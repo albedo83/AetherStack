@@ -1,5 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 /// Transformation level applied to a value read from the header.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Confidence {
     /// The value directly matches its canonical form.
     Exact,
@@ -8,7 +11,8 @@ pub enum Confidence {
 }
 
 /// Canonical value together with its provenance.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CanonicalValue<T> {
     value: T,
     source_keyword: String,
@@ -46,7 +50,8 @@ impl<T> CanonicalValue<T> {
 }
 
 /// Sensor type from the calibration pipeline's perspective.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SensorKind {
     /// Color sensor using a color filter array.
     Color,
@@ -57,7 +62,8 @@ pub enum SensorKind {
 }
 
 /// Normalized camera model.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CameraModel {
     /// ZWO ASI294MC Pro color camera.
     ZwoAsi294McPro,
@@ -95,7 +101,8 @@ impl CameraModel {
 }
 
 /// Scientific type of an acquisition.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FrameType {
     /// Electronic offset or bias frame.
     Bias,
@@ -110,7 +117,8 @@ pub enum FrameType {
 }
 
 /// Color filter array pattern at the image origin.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BayerPattern {
     /// Rouge, vert / vert, bleu.
     Rggb,
@@ -125,7 +133,8 @@ pub enum BayerPattern {
 }
 
 /// Horizontal and vertical binning.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Binning {
     /// Horizontal factor.
     pub x: u32,
@@ -134,7 +143,8 @@ pub struct Binning {
 }
 
 /// Stable category of a normalization issue.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MetadataIssueCode {
     /// No instrument identifier is present.
     MissingInstrument,
@@ -145,7 +155,8 @@ pub enum MetadataIssueCode {
 }
 
 /// Metadata issue retained for user-facing explanation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetadataIssue {
     code: MetadataIssueCode,
     keywords: Vec<String>,
@@ -187,7 +198,8 @@ impl MetadataIssue {
 }
 
 /// Canonical view of metadata used for grouping and calibration.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CanonicalMetadata {
     /// Normalized camera.
     pub camera: Option<CanonicalValue<CameraModel>>,
