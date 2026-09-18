@@ -77,6 +77,12 @@ group members by path, and accepted missing fields by their stable declaration
 order. Pretty JSON always ends with one newline. Given the same validated
 content, discovery order does not change the encoded result.
 
+`canonical_sha256` hashes exactly those pretty JSON bytes, including the final
+newline, and returns 64 lowercase hexadecimal digits. The digest is the value
+stored in an output product's `AETHMAN` provenance card. Tests compare it with a
+direct SHA-256 calculation, preserve it across decode/re-encode, and require it
+to change when serialized manifest content changes.
+
 Floating-point grouping values are finite and retain exact binary64 identity.
 Positive and negative zero are canonicalized to the same value. JSON round-trip
 tests protect that rule, while NaN and infinity are rejected before encoding.

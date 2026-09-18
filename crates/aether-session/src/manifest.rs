@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 use aether_fits::{Diagnostic, Severity, ValidationMode};
 use aether_metadata::{Binning, CanonicalMetadata};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use sha2::{Digest, Sha256};
 
 use crate::{
     ClassificationPolicy, FrameClassification, FrameResolution, GroupingField, StrictGroupingKey,
@@ -549,6 +550,23 @@ impl SessionManifest {
         Ok(output)
     }
 
+    /// Computes SHA-256 over the exact canonical JSON bytes.
+    ///
+    /// The hashed representation is exactly [`Self::to_json_pretty`], including
+    /// its terminating newline. This digest is suitable for the `AETHMAN` FITS
+    /// provenance card and changes whenever any serialized manifest content
+    /// changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation or encoding failure as
+    /// [`Self::to_json_pretty`].
+    pub fn canonical_sha256(&self) -> Result<String, ManifestError> {
+        let encoded = self.to_json_pretty()?;
+        let digest = Sha256::digest(encoded);
+        Ok(crate::fingerprint::encode_lower_hex(&digest))
+    }
+
     /// Manifest schema version.
     #[must_use]
     pub const fn schema_version(&self) -> u32 {
@@ -911,6 +929,25 @@ mod tests {
 
         let decoded = SessionManifest::from_json_slice(&encoded)?;
         assert_eq!(decoded, manifest);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_digest_hashes_the_exact_portable_bytes() -> TestResult {
+        let manifest = manifest()?;
+        let encoded = manifest.to_json_pretty()?;
+        let expected = crate::fingerprint::encode_lower_hex(&Sha256::digest(&encoded));
+
+        assert_eq!(manifest.canonical_sha256()?, expected);
+        assert_eq!(
+            SessionManifest::from_json_slice(&encoded)?.canonical_sha256()?,
+            expected
+        );
+
+        let changed =
+            String::from_utf8(encoded)?.replace("lights/frame_0001.fits", "lights/frame_0003.fits");
+        let changed = SessionManifest::from_json_slice(changed.as_bytes())?;
+        assert_ne!(changed.canonical_sha256()?, expected);
         Ok(())
     }
 

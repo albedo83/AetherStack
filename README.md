@@ -27,7 +27,8 @@ optimized CPU and GPU paths must match.
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;
 - versioned, deterministic JSON session manifests with strict validation,
-  retained FITS diagnostics, and streaming SHA-256 source fingerprints;
+  retained FITS diagnostics, canonical manifest digests, and streaming SHA-256
+  source fingerprints;
 - bounded directory-to-manifest ingestion with explicit per-source failures,
   unassigned-source reporting, and no symbolic-link traversal;
 - cooperative cancellation, validated machine-readable progress events, and
