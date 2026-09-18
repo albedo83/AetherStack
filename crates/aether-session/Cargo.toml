@@ -1,0 +1,16 @@
+[package]
+name = "aether-session"
+description = "Explainable classification and preparation of AetherStack sessions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aether-metadata = { path = "../aether-metadata" }
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+/target/
+/.idea/
+/.vscode/
+.DS_Store
+
+# Acquisition data remains outside the repository. Only small, deliberately
+# selected fixtures under tests/fixtures may be versioned.
+/data/
+/datasets/
+/cache/
+*.fits
+*.fit
+*.fts
+*.xisf
+*.ser

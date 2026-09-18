@@ -1,0 +1,18 @@
+[package]
+name = "aether-inspect"
+description = "Streaming inventory of AetherStack FITS corpora"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aether-fits = { path = "../aether-fits" }
+aether-metadata = { path = "../aether-metadata" }
+aether-session = { path = "../aether-session" }
+
+[lints]
+workspace = true

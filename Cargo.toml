@@ -1,0 +1,34 @@
+[workspace]
+members = [
+    "crates/aether-core",
+    "crates/aether-fits",
+    "crates/aether-inspect",
+    "crates/aether-metadata",
+    "crates/aether-session",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+authors = ["Sébastien Seignier"]
+license = "MIT"
+repository = "https://github.com/albedo83/AetherStack"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+expect_used = "deny"
+float_cmp = "warn"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
