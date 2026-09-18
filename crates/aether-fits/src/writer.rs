@@ -12,6 +12,8 @@ pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 1;
 /// Maximum byte length of a canonical output algorithm identifier.
 pub const MAX_FITS_ALGORITHM_ID_BYTES: usize = 32;
+/// Maximum byte length of a portable session group identifier.
+pub const MAX_FITS_GROUP_ID_BYTES: usize = 64;
 
 /// Validated provenance attached to one processed FITS product.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,9 +27,10 @@ pub struct FitsOutputProvenance {
 impl FitsOutputProvenance {
     /// Builds provenance from canonical identifiers.
     ///
-    /// The manifest digest and group identifier are full lowercase SHA-256 hex.
-    /// The algorithm identifier starts with a lowercase ASCII letter or digit
-    /// and may contain lowercase letters, digits, `.`, `_`, and `-`.
+    /// The manifest digest is full lowercase SHA-256 hex. The group identifier
+    /// uses the session manifest's portable ASCII form. The algorithm identifier
+    /// starts with a lowercase ASCII letter or digit and may contain lowercase
+    /// letters, digits, `.`, `_`, and `-`.
     ///
     /// # Errors
     ///
@@ -44,7 +47,7 @@ impl FitsOutputProvenance {
         if !is_lower_sha256(&manifest_sha256) {
             return Err(FitsProvenanceError::InvalidManifestSha256);
         }
-        if !is_lower_sha256(&group_id) {
+        if !is_group_id(&group_id) {
             return Err(FitsProvenanceError::InvalidGroupId);
         }
         if !is_algorithm_id(&algorithm_id) {
@@ -91,7 +94,7 @@ impl FitsOutputProvenance {
 pub enum FitsProvenanceError {
     /// Manifest fingerprint is not 64 lowercase hexadecimal digits.
     InvalidManifestSha256,
-    /// Group identifier is not 64 lowercase hexadecimal digits.
+    /// Group identifier is empty, oversized, or non-portable.
     InvalidGroupId,
     /// Algorithm identifier is empty, oversized, or non-canonical.
     InvalidAlgorithmId,
@@ -105,9 +108,7 @@ impl Display for FitsProvenanceError {
             Self::InvalidManifestSha256 => {
                 formatter.write_str("manifest SHA-256 must be 64 lowercase hexadecimal digits")
             }
-            Self::InvalidGroupId => {
-                formatter.write_str("group identifier must be 64 lowercase hexadecimal digits")
-            }
+            Self::InvalidGroupId => formatter.write_str("group identifier is not portable"),
             Self::InvalidAlgorithmId => {
                 formatter.write_str("algorithm identifier is not canonical")
             }
@@ -432,6 +433,14 @@ fn is_algorithm_id(value: &str) -> bool {
         })
 }
 
+fn is_group_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_FITS_GROUP_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, Write};
@@ -543,14 +552,20 @@ mod tests {
         assert_eq!(provenance.algorithm_id(), "strict-mean-v1");
         assert_eq!(provenance.source_count(), 3);
 
+        let explicit_group =
+            FitsOutputProvenance::new("a".repeat(64), "light-001", "strict-mean-v1", 3)?;
+        assert_eq!(explicit_group.group_id(), "light-001");
+
         assert!(matches!(
             FitsOutputProvenance::new("A".repeat(64), "b".repeat(64), "strict-mean-v1", 3),
             Err(FitsProvenanceError::InvalidManifestSha256)
         ));
-        assert!(matches!(
-            FitsOutputProvenance::new("a".repeat(64), "b".repeat(63), "strict-mean-v1", 3),
-            Err(FitsProvenanceError::InvalidGroupId)
-        ));
+        for invalid in ["", "bad/group", &"b".repeat(65)] {
+            assert!(matches!(
+                FitsOutputProvenance::new("a".repeat(64), invalid, "strict-mean-v1", 3),
+                Err(FitsProvenanceError::InvalidGroupId)
+            ));
+        }
         for invalid in [
             "",
             "Strict-mean-v1",

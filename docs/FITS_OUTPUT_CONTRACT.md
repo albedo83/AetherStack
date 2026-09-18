@@ -34,11 +34,12 @@ implied by a successful stream write. FITS checksums remain future work.
 
 ## Processing provenance
 
-`FitsOutputProvenance` validates identifiers before output begins. Manifest and
-group identifiers are exactly 64 lowercase hexadecimal digits. The versioned
-algorithm identifier is limited to 32 ASCII bytes and uses only lowercase
-letters, digits, `.`, `_`, and `-`. Its first byte must be a lowercase letter or
-digit. A product must represent at least one source image.
+`FitsOutputProvenance` validates identifiers before output begins. The manifest
+digest is exactly 64 lowercase hexadecimal digits. The group identifier follows
+the session manifest's portable form: one to 64 ASCII letters, digits, `.`, `_`,
+or `-`. The versioned algorithm identifier is limited to 32 ASCII bytes and uses
+only lowercase letters, digits, `.`, `_`, and `-`. Its first byte must be a
+lowercase letter or digit. A product must represent at least one source image.
 
 `write_f64_primary_with_provenance` emits these cards before `END`:
 

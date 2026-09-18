@@ -29,7 +29,7 @@ pub use reader::{HeaderReadOptions, read_primary_header};
 pub use writer::{
     CANONICAL_FITS_NAN_BITS, FITS_OUTPUT_PROVENANCE_VERSION, FitsOutputProvenance,
     FitsProvenanceError, FitsWriteError, FitsWriteSummary, MAX_FITS_ALGORITHM_ID_BYTES,
-    write_f64_primary, write_f64_primary_with_provenance,
+    MAX_FITS_GROUP_ID_BYTES, write_f64_primary, write_f64_primary_with_provenance,
 };
 
 /// Size of a FITS card in bytes.
