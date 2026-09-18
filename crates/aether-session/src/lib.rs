@@ -5,8 +5,10 @@
 //! assumption.
 
 mod classification;
+mod grouping;
 
 pub use classification::{
     ClassificationEvidence, ClassificationPolicy, ClassificationSource, ClassificationSourceKind,
     FrameClassification, FrameResolution, ResolutionBasis, classify_frame,
 };
+pub use grouping::{GroupingField, GroupingKeyError, StrictGroupingKey};

@@ -46,7 +46,7 @@ impl<T> CanonicalValue<T> {
 }
 
 /// Sensor type from the calibration pipeline's perspective.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SensorKind {
     /// Color sensor using a color filter array.
     Color,
@@ -57,7 +57,7 @@ pub enum SensorKind {
 }
 
 /// Normalized camera model.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum CameraModel {
     /// ZWO ASI294MC Pro color camera.
     ZwoAsi294McPro,
@@ -95,7 +95,7 @@ impl CameraModel {
 }
 
 /// Scientific type of an acquisition.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum FrameType {
     /// Electronic offset or bias frame.
     Bias,
@@ -110,7 +110,7 @@ pub enum FrameType {
 }
 
 /// Color filter array pattern at the image origin.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum BayerPattern {
     /// Rouge, vert / vert, bleu.
     Rggb,
@@ -125,7 +125,7 @@ pub enum BayerPattern {
 }
 
 /// Horizontal and vertical binning.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Binning {
     /// Horizontal factor.
     pub x: u32,

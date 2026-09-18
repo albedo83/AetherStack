@@ -397,7 +397,7 @@ safety reasoning. They do not narrate obvious syntax.
 ## 10. Immediate implementation sequence
 
 1. ~~Finish repository publication and baseline CI.~~
-2. Complete session-grouping keys; explicit classification policies are done.
+2. ~~Complete explicit classification policies and exact session-grouping keys.~~
 3. ~~Introduce a checked FITS image-HDU descriptor without allocating pixels.~~
 4. ~~Implement bounded sample-range reading for 16-bit integer and 32-bit
    floating data.~~

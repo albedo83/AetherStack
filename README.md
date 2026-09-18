@@ -21,6 +21,7 @@ optimized CPU and GPU paths must match.
   16-bit integer and 32-bit floating-point corpus;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
+- exact, hashable session-grouping keys with explicit missing-field reports;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
