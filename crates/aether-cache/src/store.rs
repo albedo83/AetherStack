@@ -246,6 +246,26 @@ impl ArtifactStore {
         })
     }
 
+    /// Looks up an optional artifact while retaining strict validation.
+    ///
+    /// Absence is returned as `None`. Any existing but unreadable, malformed, or
+    /// corrupt entry remains an error and must not be mistaken for a cache miss.
+    ///
+    /// # Errors
+    ///
+    /// Returns every validation error described by [`Self::open_verified`]
+    /// except a not-found operating-system result.
+    pub fn lookup_verified(
+        &self,
+        key: &CacheKey,
+    ) -> Result<Option<VerifiedArtifact>, CacheReadError> {
+        match self.open_verified(key) {
+            Ok(artifact) => Ok(Some(artifact)),
+            Err(CacheReadError::Open(error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     fn shard_path(&self, key: &CacheKey) -> PathBuf {
         self.root.join(&key.as_str()[..2])
     }
@@ -914,6 +934,25 @@ mod tests {
         assert!(matches!(
             store.open_verified(&key),
             Err(CacheReadError::NotRegularFile)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn optional_lookup_distinguishes_absence_from_invalid_content() -> Result<(), Box<dyn Error>> {
+        let (_directory, store) = store()?;
+        let key = key()?;
+        assert!(store.lookup_verified(&key)?.is_none());
+
+        store.publish(&key, &mut Cursor::new(b"payload"))?;
+        assert!(store.lookup_verified(&key)?.is_some());
+        OpenOptions::new()
+            .write(true)
+            .open(store.artifact_path(&key))?
+            .set_len(1)?;
+        assert!(matches!(
+            store.lookup_verified(&key),
+            Err(CacheReadError::ReadHeader(_))
         ));
         Ok(())
     }

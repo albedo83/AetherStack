@@ -424,8 +424,9 @@ safety reasoning. They do not narrate obvious syntax.
 13. Add verified content-addressed checkpoints, restart tests, and streaming
     output so large integrations no longer retain the complete final image.
     The immutable artifact store, operation-key derivation, streaming payload
-    digest, collision detection, and verified lookup are complete. Runtime tile
-    checkpoint selection, restart orchestration, and streaming output remain.
+    digest, collision detection, verified lookup, integrated-tile checkpointing,
+    and interruption/restart equivalence tests are complete. Streaming output
+    remains.
 
 ## 11. Stable-release definition
 

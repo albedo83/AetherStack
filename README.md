@@ -45,7 +45,8 @@ optimized CPU and GPU paths must match.
   full pre-run and pre-publication source-fingerprint verification;
 - immutable, sharded cache artifacts with domain-separated operation keys,
   streaming payload digests, atomic create-new publication, collision handling,
-  and mandatory full verification on lookup;
+  mandatory full verification on lookup, and restartable integrated-tile
+  checkpoints wired into the strict pipeline;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:

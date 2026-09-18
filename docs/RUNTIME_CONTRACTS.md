@@ -108,6 +108,33 @@ it exposes either no new destination or one complete synchronized FITS stream.
 The current slice keeps the final integrated image in memory because the FITS
 writer consumes a complete scientific image. Signal working storage is tiled,
 and its reserved size changes with tile area and signal count. Header memory is
-bounded separately by `HeaderReadOptions`. A future streaming writer and
-checkpoint cache will remove the full-output allocation and provide resumable
-execution; neither behavior is claimed by this initial slice.
+bounded separately by `HeaderReadOptions`. A future streaming writer will remove
+the full-output allocation; that behavior is not yet claimed.
+
+## Integrated-tile checkpoints
+
+`StrictPipelineRequest::with_cache` enables verified checkpoints for integrated
+tiles. The `strict-mean-tile-v1` operation key includes the manifest digest,
+group and algorithm identifiers, flat threshold, complete image dimensions,
+tile coordinates, FITS acceptance mode, and the ordered fingerprints of every
+signal and both masters. Local paths and the destination path are excluded, so
+moving an unchanged session does not invalidate or disclose it. Tests require a
+scientific parameter or source fingerprint change to produce a different key.
+
+The tile payload has a versioned fixed header followed by each binary64 value
+and its exact quality-flag byte in planar order. Cache-container length and
+SHA-256 validation occurs first; the runtime then independently validates the
+tile payload's magic, version, dimensions, and sample count.
+
+Existing verified checkpoints are loaded before FITS tile reads and counted in
+the result. Newly computed checkpoints are not published immediately: the
+pipeline first finishes all calculations and revalidates every complete source.
+Only then can bytes enter the immutable cache. This prevents a file changed
+during processing from poisoning the expected operation key.
+
+Checkpoint publication is itself cancellable between tiles. A cancellation
+after checkpoint publication but before final FITS publication leaves no output
+and preserves valid restart material. The restart test requires every tile to be
+reused and the resulting FITS bytes to equal an uninterrupted no-cache run.
+Malformed or corrupt cache entries stop the run explicitly; they are never
+treated as misses and are never deleted automatically.

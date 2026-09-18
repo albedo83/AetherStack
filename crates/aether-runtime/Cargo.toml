@@ -10,6 +10,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+aether-cache = { path = "../aether-cache" }
 aether-calibration = { path = "../aether-calibration" }
 aether-core = { path = "../aether-core" }
 aether-fits = { path = "../aether-fits" }

@@ -68,6 +68,8 @@ payload length.
 
 The store does not delete or repair corrupt entries automatically. Recovery
 policy belongs to a higher layer because deletion changes shared cache state.
-Likewise, this initial contract does not yet select tile checkpoint payloads or
-connect them to runtime restart. Those steps remain part of the Phase 3 pipeline
-work.
+
+The strict runtime uses this store for versioned integrated-tile checkpoints.
+It publishes them only after final source-fingerprint verification, can reuse
+them after cancellation, and treats invalid entries as hard errors. Streaming
+final FITS output remains separate Phase 3 work.
