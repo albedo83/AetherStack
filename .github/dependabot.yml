@@ -11,3 +11,7 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    ignore:
+      # This action's tag names select the Rust toolchain. Updating the tag would
+      # change the project's pinned compiler instead of updating action code.
+      - dependency-name: dtolnay/rust-toolchain
