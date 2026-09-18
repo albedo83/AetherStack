@@ -8,12 +8,14 @@ mod card;
 mod diagnostic;
 mod error;
 mod header;
+mod image_hdu;
 mod reader;
 
 pub use card::{Card, FitsValue};
 pub use diagnostic::{Diagnostic, DiagnosticCode, Severity, ValidationMode};
 pub use error::FitsError;
 pub use header::{Header, HeaderReport};
+pub use image_hdu::{ImageHduDescriptor, ImageHduError, StoredSampleFormat};
 pub use reader::{HeaderReadOptions, read_primary_header};
 
 /// Size of a FITS card in bytes.
