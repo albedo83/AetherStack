@@ -29,6 +29,8 @@ optimized CPU and GPU paths must match.
   unassigned-source reporting, and no symbolic-link traversal;
 - cooperative cancellation, validated machine-readable progress events, and
   atomic RAII memory reservations for future pipeline stages;
+- strict `f64` dark-and-flat calibration with conservative quality-mask
+  propagation and explicit flat-divisor thresholds;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
@@ -44,7 +46,9 @@ See the [implementation plan](docs/IMPLEMENTATION_PLAN.md) and the anonymized
 the evidence driving format support. The [session manifest contract](docs/SESSION_MANIFEST.md)
 documents the current portable interchange schema and its validation rules. The
 [runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
-and memory-accounting behavior for later pipeline stages.
+and memory-accounting behavior for later pipeline stages. The initial
+[calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,
+precision, and mask behavior used by the CPU vertical slice.
 
 ## Build and test
 

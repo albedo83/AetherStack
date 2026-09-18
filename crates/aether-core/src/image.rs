@@ -68,6 +68,15 @@ impl<T> Image<T> {
         &mut self.mask
     }
 
+    /// Returns mutable views of samples and mask together.
+    ///
+    /// The fixed-length views preserve the image invariant while allowing a
+    /// processing kernel to update values and flags in one deterministic pass.
+    #[must_use]
+    pub fn pixels_and_mask_mut(&mut self) -> (&mut [T], &mut PixelMask) {
+        (&mut self.pixels, &mut self.mask)
+    }
+
     /// Reads a pixel by coordinate.
     ///
     /// # Errors
@@ -180,6 +189,25 @@ mod tests {
         assert_eq!(image.mark(0, 0, 0, PixelFlags::SATURATED), Ok(()));
         assert_eq!(image.get(0, 0, 0), Ok(&7.0));
         assert_eq!(image.mask().get(0, 0, 0), Ok(PixelFlags::SATURATED));
+    }
+
+    #[test]
+    fn exposes_pixels_and_mask_for_one_pass_kernels() {
+        let Some(dimensions) = test_dimensions() else {
+            return;
+        };
+        let result = Image::filled(dimensions, 0_u16);
+        let Some(mut image) = result.ok() else {
+            return;
+        };
+
+        let (pixels, mask) = image.pixels_and_mask_mut();
+        assert_eq!(pixels.len(), mask.as_slice().len());
+        pixels[1] = 42;
+        mask.as_mut_slice()[1] = PixelFlags::HOT;
+
+        assert_eq!(image.get(1, 0, 0), Ok(&42));
+        assert_eq!(image.mask().get(1, 0, 0), Ok(PixelFlags::HOT));
     }
 
     #[test]
