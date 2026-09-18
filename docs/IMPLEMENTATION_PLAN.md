@@ -404,7 +404,8 @@ safety reasoning. They do not narrate obvious syntax.
 5. ~~Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite status into `f64`.~~
 6. Generate tiny synthetic 294MC/585C-shaped semantic fixtures, not full-size
    camera files.
-7. Compare samples and summary statistics with an independent FITS reader.
+7. ~~Compare distributed samples and full-array summary statistics with an
+   independent FITS reader.~~
 8. Add manifest serialization only after grouping types are stable.
 
 ## 11. Stable-release definition

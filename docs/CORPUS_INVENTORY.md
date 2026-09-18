@@ -169,6 +169,17 @@ All 24,576 sampled physical values decoded successfully and were finite. This is
 a compatibility smoke test; synthetic and independent differential tests remain
 the release criterion.
 
+A separate differential check compared eight strategically distributed sample
+positions in each of those three arrays against Astropy 7.2.0. All 24 converted
+`f64` values matched bit for bit. Astropy independently warned about the known
+fixed-card formatting problem in the 585C master. No source path, pixel value, or
+private header content from that check is retained in the repository.
+
+The same independent reader then covered all 28,283,168 pixels across the three
+arrays. Rust and Astropy reported identical finite/invalid counts, minima,
+maxima, and 17-digit reference sums. The Rust totals used deterministic Neumaier
+compensation; the independent totals used Python's accurately rounded `fsum`.
+
 ## Implementation consequences
 
 1. Apply `BSCALE` and `BZERO` before scientific computation while retaining the
