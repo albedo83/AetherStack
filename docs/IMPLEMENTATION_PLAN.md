@@ -419,7 +419,8 @@ safety reasoning. They do not narrate obvious syntax.
     image statistics, and unweighted mean integration are complete;
     binary64 FITS encoding, readback, and atomic create-new publication are
     complete. Validated output provenance and tiled end-to-end orchestration are
-    complete, including cancellation and logical working-set enforcement.
+    complete, including cancellation, logical working-set enforcement, and
+    before/after verification of every immutable source fingerprint.
 13. Add verified content-addressed checkpoints, restart tests, and streaming
     output so large integrations no longer retain the complete final image.
     The immutable artifact store, operation-key derivation, streaming payload

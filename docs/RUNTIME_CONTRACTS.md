@@ -72,18 +72,21 @@ failure remains a separate typed error even after a reservation succeeds.
 a second implementation of their numerical rules. One request contains a stable
 ordered signal list, one dark master, one already normalized flat master,
 explicit calibration parameters, validated output provenance, an output path,
-and the FITS acceptance policy.
+and the FITS acceptance policy. Every `PipelineSource` pairs its local path with
+the exact byte length and SHA-256 previously recorded by session ingestion.
 
 The run performs these bounded steps:
 
-1. inspect every input and require exactly equal checked dimensions;
-2. reserve the complete logical pixel working set;
-3. traverse spatial-plane tiles in deterministic order;
-4. reopen and read one signal at a time, limiting live file descriptors;
-5. calculate `(signal - dark) / flat` using the strict `f64` kernel;
-6. integrate calibrated tiles using the strict mean oracle in signal-list order;
-7. assemble the output image and calculate complete-image statistics;
-8. publish one create-new binary64 FITS product with validated provenance.
+1. hash every complete input and require its manifest fingerprint;
+2. inspect every FITS input and require exactly equal checked dimensions;
+3. reserve the complete logical pixel working set;
+4. traverse spatial-plane tiles in deterministic order;
+5. reopen and read one signal at a time, limiting live file descriptors;
+6. calculate `(signal - dark) / flat` using the strict `f64` kernel;
+7. integrate calibrated tiles using the strict mean oracle in signal-list order;
+8. assemble the output image and calculate complete-image statistics;
+9. hash every complete input again to detect changes during processing;
+10. publish one create-new binary64 FITS product with validated provenance.
 
 The source count and algorithm identifier in provenance must exactly describe
 the executed operation. The fixed identifier is `strict-mean-v1`. Errors name an
@@ -91,13 +94,16 @@ input role and signal index but deliberately omit filesystem paths.
 
 Progress starts before input inspection. The total becomes known after image
 dimensions establish the tile count. A successful run emits running events for
-each completed tile and the statistics pass, followed by one completed event
-after publication. Failures and cancellation emit stable lowercase codes.
+each completed tile, the statistics pass, and final source revalidation,
+followed by one completed event after publication. Failures and cancellation
+emit stable lowercase codes.
 
 Cancellation checkpoints occur before inspection, between inspected inputs,
-between signal reads, between tiles, before statistics, and before publication.
-The atomic writer is not interrupted after publication begins; it exposes either
-no new destination or one complete synchronized FITS stream.
+between signal reads, between tiles, before statistics, throughout final source
+revalidation, and before publication. A fingerprint mismatch identifies only
+the source role and signal index; local paths are not copied into errors or
+output metadata. The atomic writer is not interrupted after publication begins;
+it exposes either no new destination or one complete synchronized FITS stream.
 
 The current slice keeps the final integrated image in memory because the FITS
 writer consumes a complete scientific image. Signal working storage is tiled,

@@ -15,6 +15,7 @@ use aether_fits::{
     write_f64_primary_atomic_new_with_provenance,
 };
 use aether_integration::{IntegrationError, PixelSupport, integrate_mean};
+use aether_session::{FingerprintError, SourceFingerprint, fingerprint_reader};
 
 use crate::{
     CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, ProgressEvent,
@@ -53,12 +54,43 @@ impl Display for PipelineInput {
     }
 }
 
+/// One immutable pipeline input and the fingerprint expected by the manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PipelineSource {
+    path: PathBuf,
+    fingerprint: SourceFingerprint,
+}
+
+impl PipelineSource {
+    /// Associates a local path with its previously recorded source fingerprint.
+    ///
+    /// The path is never copied into output provenance, cache keys, or pipeline
+    /// error messages. The runtime verifies the length and SHA-256 before
+    /// processing and again immediately before output publication.
+    #[must_use]
+    pub fn new(path: PathBuf, fingerprint: SourceFingerprint) -> Self {
+        Self { path, fingerprint }
+    }
+
+    /// Local path used only to open this input.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Exact length and SHA-256 expected for this input.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &SourceFingerprint {
+        &self.fingerprint
+    }
+}
+
 /// Validated inputs and explicit policy for one strict CPU stack.
 #[derive(Clone, Debug)]
 pub struct StrictPipelineRequest {
-    signals: Vec<PathBuf>,
-    dark: PathBuf,
-    normalized_flat: PathBuf,
+    signals: Vec<PipelineSource>,
+    dark: PipelineSource,
+    normalized_flat: PipelineSource,
     output: PathBuf,
     provenance: FitsOutputProvenance,
     calibration: CalibrationParameters,
@@ -81,9 +113,9 @@ impl StrictPipelineRequest {
     /// provenance source count that does not match it, or an algorithm identifier
     /// other than [`STRICT_MEAN_ALGORITHM_ID`].
     pub fn new(
-        signals: Vec<PathBuf>,
-        dark: PathBuf,
-        normalized_flat: PathBuf,
+        signals: Vec<PipelineSource>,
+        dark: PipelineSource,
+        normalized_flat: PipelineSource,
         output: PathBuf,
         provenance: FitsOutputProvenance,
         calibration: CalibrationParameters,
@@ -155,9 +187,9 @@ impl StrictPipelineRequest {
         self
     }
 
-    /// Signal paths in their deterministic integration order.
+    /// Signal sources in their deterministic integration order.
     #[must_use]
-    pub fn signals(&self) -> &[PathBuf] {
+    pub fn signals(&self) -> &[PipelineSource] {
         &self.signals
     }
 
@@ -242,6 +274,22 @@ pub enum StrictPipelineError {
         /// Structured FITS failure.
         source: ImageReadError,
     },
+    /// Exact source fingerprint could not be calculated.
+    FingerprintInput {
+        /// Input role, without disclosing its path.
+        input: PipelineInput,
+        /// Streaming fingerprint failure.
+        source: FingerprintError,
+    },
+    /// Source bytes differ from the immutable manifest identity.
+    SourceFingerprintMismatch {
+        /// Changed input role.
+        input: PipelineInput,
+        /// Fingerprint recorded before processing was authorized.
+        expected: SourceFingerprint,
+        /// Fingerprint calculated from the current file bytes.
+        actual: SourceFingerprint,
+    },
     /// Strict policy rejected retained FITS conformance diagnostics.
     HeaderRejected {
         /// Rejected input role.
@@ -309,6 +357,8 @@ impl StrictPipelineError {
             Self::Memory(_) => "memory-budget",
             Self::OpenInput { .. } => "open-input",
             Self::ReadInput { .. } => "read-input",
+            Self::FingerprintInput { .. } => "fingerprint-input",
+            Self::SourceFingerprintMismatch { .. } => "source-fingerprint-mismatch",
             Self::HeaderRejected { .. } => "header-rejected",
             Self::UnsupportedImageAxes { .. } => "unsupported-image-axes",
             Self::InvalidImageDimensions { .. } => "invalid-image-dimensions",
@@ -357,6 +407,21 @@ impl Display for StrictPipelineError {
             Self::ReadInput { input, source } => {
                 write!(formatter, "cannot read {input}: {source}")
             }
+            Self::FingerprintInput { input, source } => {
+                write!(formatter, "cannot fingerprint {input}: {source}")
+            }
+            Self::SourceFingerprintMismatch {
+                input,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "{input} fingerprint changed: expected {} bytes/{}, observed {} bytes/{}",
+                expected.byte_length(),
+                expected.sha256(),
+                actual.byte_length(),
+                actual.sha256()
+            ),
             Self::HeaderRejected { input, errors } => write!(
                 formatter,
                 "{input} has {errors} error-severity FITS diagnostics rejected by policy"
@@ -409,6 +474,7 @@ impl Error for StrictPipelineError {
             Self::Memory(error) => Some(error),
             Self::OpenInput { source, .. } => Some(source),
             Self::ReadInput { source, .. } => Some(source),
+            Self::FingerprintInput { source, .. } => Some(source),
             Self::InvalidImageDimensions { source, .. } => Some(source),
             Self::Calibration(error) => Some(error),
             Self::Integration(error) => Some(error),
@@ -425,6 +491,7 @@ impl Error for StrictPipelineError {
             | Self::WorkSizeOverflow
             | Self::HeaderRejected { .. }
             | Self::UnsupportedImageAxes { .. }
+            | Self::SourceFingerprintMismatch { .. }
             | Self::DimensionMismatch { .. }
             | Self::AllocationFailed { .. }
             | Self::OutputAssemblyInvariant => None,
@@ -444,8 +511,10 @@ impl Error for StrictPipelineError {
 /// Progress is emitted synchronously. The callback receives a started event,
 /// running events after each tile and statistics pass, and exactly one terminal
 /// event after execution begins. Cancellation is checked before input inspection,
-/// between inputs, between tiles, and before publication. No destination is
-/// created when cancellation is observed before publication.
+/// between inputs, between tiles, and before publication. Every source is
+/// fingerprinted before processing and revalidated after calculation. No
+/// destination is created when cancellation or source mutation is observed
+/// before publication.
 ///
 /// # Errors
 ///
@@ -547,7 +616,7 @@ where
     .map_err(StrictPipelineError::TileGrid)?;
     let tile_count = checked_tile_count(grid)?;
     let run_total = tile_count
-        .checked_add(2)
+        .checked_add(3)
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
     *total_units = Some(run_total);
 
@@ -602,6 +671,23 @@ where
     cancellation
         .checkpoint()
         .map_err(StrictPipelineError::Cancelled)?;
+    validate_input_fingerprints(request, cancellation)?;
+    *completed_units = completed_units
+        .checked_add(1)
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    emit_progress(
+        sequence,
+        stage,
+        ProgressState::Running,
+        *completed_units,
+        *total_units,
+        None,
+        progress,
+    )?;
+
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
     let write_summary =
         write_f64_primary_atomic_new_with_provenance(&request.output, &output, &request.provenance)
             .map_err(StrictPipelineError::Publish)?;
@@ -622,20 +708,23 @@ fn validate_input_dimensions(
     cancellation: &CancellationToken,
 ) -> Result<Dimensions, StrictPipelineError> {
     let first_role = PipelineInput::Signal { index: 0 };
+    verify_source(&request.signals[0], first_role)?;
     let dimensions = inspect_dimensions(
-        &request.signals[0],
+        request.signals[0].path(),
         first_role,
         request.header_options,
         request.validation_mode,
     )?;
 
-    for (index, path) in request.signals.iter().enumerate().skip(1) {
+    for (index, source) in request.signals.iter().enumerate().skip(1) {
         cancellation
             .checkpoint()
             .map_err(StrictPipelineError::Cancelled)?;
+        let input = PipelineInput::Signal { index };
+        verify_source(source, input)?;
         validate_dimensions(
-            path,
-            PipelineInput::Signal { index },
+            source.path(),
+            input,
             dimensions,
             request.header_options,
             request.validation_mode,
@@ -644,8 +733,9 @@ fn validate_input_dimensions(
     cancellation
         .checkpoint()
         .map_err(StrictPipelineError::Cancelled)?;
+    verify_source(&request.dark, PipelineInput::Dark)?;
     validate_dimensions(
-        &request.dark,
+        request.dark.path(),
         PipelineInput::Dark,
         dimensions,
         request.header_options,
@@ -654,14 +744,50 @@ fn validate_input_dimensions(
     cancellation
         .checkpoint()
         .map_err(StrictPipelineError::Cancelled)?;
+    verify_source(&request.normalized_flat, PipelineInput::NormalizedFlat)?;
     validate_dimensions(
-        &request.normalized_flat,
+        request.normalized_flat.path(),
         PipelineInput::NormalizedFlat,
         dimensions,
         request.header_options,
         request.validation_mode,
     )?;
     Ok(dimensions)
+}
+
+fn validate_input_fingerprints(
+    request: &StrictPipelineRequest,
+    cancellation: &CancellationToken,
+) -> Result<(), StrictPipelineError> {
+    for (index, source) in request.signals.iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        verify_source(source, PipelineInput::Signal { index })?;
+    }
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
+    verify_source(&request.dark, PipelineInput::Dark)?;
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
+    verify_source(&request.normalized_flat, PipelineInput::NormalizedFlat)
+}
+
+fn verify_source(source: &PipelineSource, input: PipelineInput) -> Result<(), StrictPipelineError> {
+    let mut file = File::open(source.path())
+        .map_err(|source| StrictPipelineError::OpenInput { input, source })?;
+    let actual = fingerprint_reader(&mut file)
+        .map_err(|source| StrictPipelineError::FingerprintInput { input, source })?;
+    if actual != *source.fingerprint() {
+        return Err(StrictPipelineError::SourceFingerprintMismatch {
+            input,
+            expected: source.fingerprint().clone(),
+            actual,
+        });
+    }
+    Ok(())
 }
 
 fn validate_dimensions(
@@ -759,14 +885,14 @@ fn process_tile(
         u64::try_from(core.height()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
     );
     let dark = read_tile(
-        &request.dark,
+        request.dark.path(),
         PipelineInput::Dark,
         request,
         dimensions,
         region,
     )?;
     let flat = read_tile(
-        &request.normalized_flat,
+        request.normalized_flat.path(),
         PipelineInput::NormalizedFlat,
         request,
         dimensions,
@@ -779,12 +905,12 @@ fn process_tile(
         .map_err(|_| StrictPipelineError::AllocationFailed {
             elements: request.signals.len(),
         })?;
-    for (index, path) in request.signals.iter().enumerate() {
+    for (index, source) in request.signals.iter().enumerate() {
         cancellation
             .checkpoint()
             .map_err(StrictPipelineError::Cancelled)?;
         let signal = read_tile(
-            path,
+            source.path(),
             PipelineInput::Signal { index },
             request,
             dimensions,
@@ -1011,7 +1137,20 @@ mod tests {
         )?)
     }
 
-    fn write_standard_inputs(directory: &TestDirectory) -> TestResult<Vec<PathBuf>> {
+    fn pipeline_source(path: PathBuf) -> TestResult<PipelineSource> {
+        let mut file = File::open(&path)?;
+        let fingerprint = fingerprint_reader(&mut file)?;
+        Ok(PipelineSource::new(path, fingerprint))
+    }
+
+    fn placeholder_source(path: &str) -> TestResult<PipelineSource> {
+        Ok(PipelineSource::new(
+            PathBuf::from(path),
+            SourceFingerprint::new(1, "a".repeat(64))?,
+        ))
+    }
+
+    fn write_standard_inputs(directory: &TestDirectory) -> TestResult<Vec<PipelineSource>> {
         let dimensions = Dimensions::new(4, 2, 1)?;
         let first = directory.path.join("signal-1.fits");
         let second = directory.path.join("signal-2.fits");
@@ -1033,7 +1172,12 @@ mod tests {
             dimensions,
             vec![2.0, 1.0, 0.5, 2.0, 2.0, 1.0, 0.5, 2.0],
         )?;
-        Ok(vec![first, second, dark, flat])
+        Ok(vec![
+            pipeline_source(first)?,
+            pipeline_source(second)?,
+            pipeline_source(dark)?,
+            pipeline_source(flat)?,
+        ])
     }
 
     #[test]
@@ -1073,12 +1217,12 @@ mod tests {
         assert_eq!(memory.used(), 0);
         assert_eq!(memory.peak(), result.reserved_bytes());
 
-        assert_eq!(events.len(), 7);
+        assert_eq!(events.len(), 8);
         assert_eq!(events[0].state(), ProgressState::Started);
         assert_eq!(events[0].total_units(), None);
-        assert_eq!(events[6].state(), ProgressState::Completed);
-        assert_eq!(events[6].completed_units(), 6);
-        assert_eq!(events[6].total_units(), Some(6));
+        assert_eq!(events[7].state(), ProgressState::Completed);
+        assert_eq!(events[7].completed_units(), 7);
+        assert_eq!(events[7].total_units(), Some(7));
         for (index, event) in events.iter().enumerate() {
             assert_eq!(event.sequence(), (index + 1) as u64);
         }
@@ -1259,9 +1403,9 @@ mod tests {
         write_image(&dark, Dimensions::new(1, 1, 1)?, vec![0.0])?;
         write_image(&flat, Dimensions::new(2, 1, 1)?, vec![1.0, 1.0])?;
         let request = StrictPipelineRequest::new(
-            vec![signal],
-            dark,
-            flat,
+            vec![pipeline_source(signal)?],
+            pipeline_source(dark)?,
+            pipeline_source(flat)?,
             output.clone(),
             provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
             CalibrationParameters::new(0.0)?,
@@ -1286,12 +1430,103 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_source_that_no_longer_matches_its_manifest_fingerprint() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let changed_path = paths[0].path().to_owned();
+        let output = directory.path.join("stack.fits");
+        let request = StrictPipelineRequest::new(
+            vec![paths[0].clone(), paths[1].clone()],
+            paths[2].clone(),
+            paths[3].clone(),
+            output.clone(),
+            provenance(2, STRICT_MEAN_ALGORITHM_ID)?,
+            CalibrationParameters::new(0.0)?,
+        )?;
+        fs::write(changed_path, b"changed after manifest generation")?;
+        let mut events = Vec::new();
+
+        let result = run_strict_pipeline(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(1_048_576)?,
+            |event| events.push(event),
+        );
+
+        assert!(matches!(
+            result,
+            Err(StrictPipelineError::SourceFingerprintMismatch {
+                input: PipelineInput::Signal { index: 0 },
+                ..
+            })
+        ));
+        assert!(!output.exists());
+        assert_eq!(
+            events.last().and_then(ProgressEvent::code),
+            Some("source-fingerprint-mismatch")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn revalidates_every_source_after_processing_before_publication() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let changed_path = paths[0].path().to_owned();
+        let output = directory.path.join("stack.fits");
+        let request = StrictPipelineRequest::new(
+            vec![paths[0].clone(), paths[1].clone()],
+            paths[2].clone(),
+            paths[3].clone(),
+            output.clone(),
+            provenance(2, STRICT_MEAN_ALGORITHM_ID)?,
+            CalibrationParameters::new(0.0)?,
+        )?
+        .with_tile_shape(4, 2)?;
+        let mut mutation_error = None;
+        let mut events = Vec::new();
+
+        let result = run_strict_pipeline(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(1_048_576)?,
+            |event| {
+                if event.state() == ProgressState::Running
+                    && event.completed_units() == 1
+                    && let Err(error) = fs::write(&changed_path, b"changed during processing")
+                {
+                    mutation_error = Some(error);
+                }
+                events.push(event);
+            },
+        );
+
+        if let Some(error) = mutation_error {
+            return Err(error.into());
+        }
+        assert!(matches!(
+            result,
+            Err(StrictPipelineError::SourceFingerprintMismatch {
+                input: PipelineInput::Signal { index: 0 },
+                ..
+            })
+        ));
+        assert!(!output.exists());
+        assert_eq!(events.last().map(ProgressEvent::completed_units), Some(2));
+        assert_eq!(
+            events.last().map(ProgressEvent::state),
+            Some(ProgressState::Failed)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn request_rejects_incoherent_provenance_and_tile_shape() -> TestResult {
         let calibration = CalibrationParameters::new(0.0)?;
         let empty = StrictPipelineRequest::new(
             Vec::new(),
-            PathBuf::from("dark.fits"),
-            PathBuf::from("flat.fits"),
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
             PathBuf::from("output.fits"),
             provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
             calibration,
@@ -1299,9 +1534,9 @@ mod tests {
         assert!(matches!(empty, Err(StrictPipelineError::NoSignals)));
 
         let mismatch = StrictPipelineRequest::new(
-            vec![PathBuf::from("signal.fits")],
-            PathBuf::from("dark.fits"),
-            PathBuf::from("flat.fits"),
+            vec![placeholder_source("signal.fits")?],
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
             PathBuf::from("output.fits"),
             provenance(2, STRICT_MEAN_ALGORITHM_ID)?,
             calibration,
@@ -1312,9 +1547,9 @@ mod tests {
         ));
 
         let wrong_algorithm = StrictPipelineRequest::new(
-            vec![PathBuf::from("signal.fits")],
-            PathBuf::from("dark.fits"),
-            PathBuf::from("flat.fits"),
+            vec![placeholder_source("signal.fits")?],
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
             PathBuf::from("output.fits"),
             provenance(1, "other-v1")?,
             calibration,
@@ -1325,9 +1560,9 @@ mod tests {
         ));
 
         let valid = StrictPipelineRequest::new(
-            vec![PathBuf::from("signal.fits")],
-            PathBuf::from("dark.fits"),
-            PathBuf::from("flat.fits"),
+            vec![placeholder_source("signal.fits")?],
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
             PathBuf::from("output.fits"),
             provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
             calibration,
@@ -1353,9 +1588,9 @@ mod tests {
         write_image(&dark, dimensions, vec![2.0, 2.0])?;
         write_image(&flat, dimensions, vec![2.0, 0.0])?;
         let request = StrictPipelineRequest::new(
-            vec![signal],
-            dark,
-            flat,
+            vec![pipeline_source(signal)?],
+            pipeline_source(dark)?,
+            pipeline_source(flat)?,
             output.clone(),
             provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
             CalibrationParameters::new(0.0)?,

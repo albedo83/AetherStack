@@ -60,6 +60,7 @@ dependencies = [
  "aether-core",
  "aether-fits",
  "aether-integration",
+ "aether-session",
  "serde",
  "serde_json",
 ]

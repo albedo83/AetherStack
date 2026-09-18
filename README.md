@@ -41,7 +41,8 @@ optimized CPU and GPU paths must match.
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, calculates output statistics, and
-  atomically publishes a provenance-bearing binary64 FITS product;
+  atomically publishes a provenance-bearing binary64 FITS product only after
+  full pre-run and pre-publication source-fingerprint verification;
 - immutable, sharded cache artifacts with domain-separated operation keys,
   streaming payload digests, atomic create-new publication, collision handling,
   and mandatory full verification on lookup;
