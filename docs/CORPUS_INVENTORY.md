@@ -180,6 +180,10 @@ arrays. Rust and Astropy reported identical finite/invalid counts, minima,
 maxima, and 17-digit reference sums. The Rust totals used deterministic Neumaier
 compensation; the independent totals used Python's accurately rounded `fsum`.
 
+Rectangular access was additionally checked on a three-plane `float32` processed
+image. A 2 × 2 region from each plane matched Astropy bit for bit, validating the
+FITS axis order, plane stride, row stride, and region packing.
+
 ## Implementation consequences
 
 1. Apply `BSCALE` and `BZERO` before scientific computation while retaining the

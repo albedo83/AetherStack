@@ -20,6 +20,60 @@ pub enum SampleStatus {
     NonFinite,
 }
 
+/// Rectangular region within one FITS image plane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageRegion {
+    plane: u64,
+    x: u64,
+    y: u64,
+    width: u64,
+    height: u64,
+}
+
+impl ImageRegion {
+    /// Builds a region. Bounds are checked against an image when it is read.
+    #[must_use]
+    pub const fn new(plane: u64, x: u64, y: u64, width: u64, height: u64) -> Self {
+        Self {
+            plane,
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Zero-based image plane.
+    #[must_use]
+    pub const fn plane(self) -> u64 {
+        self.plane
+    }
+
+    /// First source column.
+    #[must_use]
+    pub const fn x(self) -> u64 {
+        self.x
+    }
+
+    /// First source row.
+    #[must_use]
+    pub const fn y(self) -> u64 {
+        self.y
+    }
+
+    /// Region width.
+    #[must_use]
+    pub const fn width(self) -> u64 {
+        self.width
+    }
+
+    /// Region height.
+    #[must_use]
+    pub const fn height(self) -> u64 {
+        self.height
+    }
+}
+
 /// Seekable reader for the pixel array of a primary FITS image.
 ///
 /// The reader owns the stream and keeps the full header report available. The
@@ -170,6 +224,101 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
         Ok(())
     }
 
+    /// Reads a rectangular region from a two- or three-dimensional image.
+    ///
+    /// `plane` selects the third FITS axis; it must be zero for a 2D image.
+    /// Output is tightly packed in row-major order even though source rows may
+    /// contain pixels outside the requested region. Empty regions are accepted
+    /// when their origin lies on or inside the corresponding image edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported axis counts, invalid coordinates, output
+    /// lengths that do not exactly match `width * height`, arithmetic overflow,
+    /// or any error reported by [`Self::read_physical_samples`].
+    pub fn read_physical_region(
+        &mut self,
+        region: ImageRegion,
+        values: &mut [f64],
+        statuses: &mut [SampleStatus],
+    ) -> Result<(), ImageReadError> {
+        let plane = region.plane();
+        let x = region.x();
+        let y = region.y();
+        let width = region.width();
+        let height = region.height();
+        let (image_width, image_height, plane_count) = match self.descriptor.axes() {
+            [image_width, image_height] => (*image_width, *image_height, 1),
+            [image_width, image_height, plane_count] => (*image_width, *image_height, *plane_count),
+            axes => {
+                return Err(ImageReadError::UnsupportedAxisCount { axes: axes.len() });
+            }
+        };
+
+        if plane >= plane_count {
+            return Err(ImageReadError::PlaneOutOfBounds { plane, plane_count });
+        }
+        let right = x.checked_add(width);
+        let bottom = y.checked_add(height);
+        if right.is_none_or(|right| right > image_width)
+            || bottom.is_none_or(|bottom| bottom > image_height)
+        {
+            return Err(ImageReadError::RegionOutOfBounds {
+                x,
+                y,
+                width,
+                height,
+                image_width,
+                image_height,
+            });
+        }
+
+        let expected_u64 = width
+            .checked_mul(height)
+            .ok_or(ImageReadError::OffsetOverflow)?;
+        let expected = usize::try_from(expected_u64).map_err(|_| ImageReadError::OffsetOverflow)?;
+        if values.len() != expected || statuses.len() != expected {
+            return Err(ImageReadError::RegionOutputLengthMismatch {
+                expected,
+                values: values.len(),
+                statuses: statuses.len(),
+            });
+        }
+
+        let row_width = usize::try_from(width).map_err(|_| ImageReadError::OffsetOverflow)?;
+        let row_count = usize::try_from(height).map_err(|_| ImageReadError::OffsetOverflow)?;
+        let plane_start = plane
+            .checked_mul(image_height)
+            .and_then(|row| row.checked_mul(image_width))
+            .ok_or(ImageReadError::OffsetOverflow)?;
+
+        for row in 0..row_count {
+            let output_start = row
+                .checked_mul(row_width)
+                .ok_or(ImageReadError::OffsetOverflow)?;
+            let output_end = output_start
+                .checked_add(row_width)
+                .ok_or(ImageReadError::OffsetOverflow)?;
+            let Some(value_row) = values.get_mut(output_start..output_end) else {
+                return Err(ImageReadError::OffsetOverflow);
+            };
+            let Some(status_row) = statuses.get_mut(output_start..output_end) else {
+                return Err(ImageReadError::OffsetOverflow);
+            };
+            let source_y = y
+                .checked_add(u64::try_from(row).map_err(|_| ImageReadError::OffsetOverflow)?)
+                .ok_or(ImageReadError::OffsetOverflow)?;
+            let source_start = source_y
+                .checked_mul(image_width)
+                .and_then(|offset| plane_start.checked_add(offset))
+                .and_then(|offset| offset.checked_add(x))
+                .ok_or(ImageReadError::OffsetOverflow)?;
+            self.read_physical_samples(source_start, value_row, status_row)?;
+        }
+
+        Ok(())
+    }
+
     fn to_physical(&self, stored: StoredSample) -> (f64, SampleStatus) {
         if let StoredSample::Integer(value) = stored
             && self.descriptor.blank() == Some(value)
@@ -249,6 +398,42 @@ pub enum ImageReadError {
         /// Total available sample count.
         available: u64,
     },
+    /// A rectangular read was requested from an unsupported number of axes.
+    UnsupportedAxisCount {
+        /// Actual number of axes.
+        axes: usize,
+    },
+    /// The selected plane does not exist.
+    PlaneOutOfBounds {
+        /// Requested zero-based plane.
+        plane: u64,
+        /// Available plane count.
+        plane_count: u64,
+    },
+    /// A rectangular region extends beyond the image.
+    RegionOutOfBounds {
+        /// Requested first column.
+        x: u64,
+        /// Requested first row.
+        y: u64,
+        /// Requested width.
+        width: u64,
+        /// Requested height.
+        height: u64,
+        /// Available image width.
+        image_width: u64,
+        /// Available image height.
+        image_height: u64,
+    },
+    /// Region output slices do not match the requested area.
+    RegionOutputLengthMismatch {
+        /// Required sample count.
+        expected: usize,
+        /// Number of physical-value slots.
+        values: usize,
+        /// Number of status slots.
+        statuses: usize,
+    },
     /// A byte or sample offset cannot be represented safely.
     OffsetOverflow,
     /// Pixel decoding for the stored representation is not implemented yet.
@@ -278,6 +463,33 @@ impl Display for ImageReadError {
                 formatter,
                 "sample range starting at {start} with length {count} exceeds {available} samples"
             ),
+            Self::UnsupportedAxisCount { axes } => write!(
+                formatter,
+                "rectangular reads require 2 or 3 FITS axes, received {axes}"
+            ),
+            Self::PlaneOutOfBounds { plane, plane_count } => write!(
+                formatter,
+                "plane {plane} is outside the available plane count {plane_count}"
+            ),
+            Self::RegionOutOfBounds {
+                x,
+                y,
+                width,
+                height,
+                image_width,
+                image_height,
+            } => write!(
+                formatter,
+                "region ({x}, {y}, {width}, {height}) exceeds image {image_width}x{image_height}"
+            ),
+            Self::RegionOutputLengthMismatch {
+                expected,
+                values,
+                statuses,
+            } => write!(
+                formatter,
+                "region requires {expected} outputs, received {values} values and {statuses} statuses"
+            ),
             Self::OffsetOverflow => formatter.write_str("FITS image byte offset overflows"),
             Self::UnsupportedSampleFormat { format } => {
                 write!(
@@ -300,6 +512,10 @@ impl Error for ImageReadError {
             Self::Io(error) => Some(error),
             Self::OutputLengthMismatch { .. }
             | Self::SampleRangeOutOfBounds { .. }
+            | Self::UnsupportedAxisCount { .. }
+            | Self::PlaneOutOfBounds { .. }
+            | Self::RegionOutOfBounds { .. }
+            | Self::RegionOutputLengthMismatch { .. }
             | Self::OffsetOverflow
             | Self::UnsupportedSampleFormat { .. }
             | Self::InvalidStoredSampleWidth => None,
@@ -320,12 +536,23 @@ mod tests {
     }
 
     fn fits_image(bitpix: i64, width: usize, data: &[u8], extra_cards: &[String]) -> Vec<u8> {
+        fits_image_with_axes(bitpix, &[width], data, extra_cards)
+    }
+
+    fn fits_image_with_axes(
+        bitpix: i64,
+        axes: &[usize],
+        data: &[u8],
+        extra_cards: &[String],
+    ) -> Vec<u8> {
         let mut cards = vec![
             fixed_card("SIMPLE", "T"),
             fixed_card("BITPIX", &bitpix.to_string()),
-            fixed_card("NAXIS", "1"),
-            fixed_card("NAXIS1", &width.to_string()),
+            fixed_card("NAXIS", &axes.len().to_string()),
         ];
+        cards.extend(axes.iter().enumerate().map(|(index, length)| {
+            fixed_card(&format!("NAXIS{}", index + 1), &length.to_string())
+        }));
         cards.extend_from_slice(extra_cards);
         cards.push("END".to_owned());
 
@@ -518,6 +745,130 @@ mod tests {
             Err(ImageReadError::UnsupportedSampleFormat {
                 format: StoredSampleFormat::Unsigned8
             })
+        ));
+    }
+
+    #[test]
+    fn reads_a_rectangular_region_from_a_selected_plane() {
+        let stored: Vec<i16> = (0..24).collect();
+        let data: Vec<u8> = stored
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect();
+        let input = fits_image_with_axes(16, &[4, 3, 2], &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+        let mut values = [0.0; 4];
+        let mut statuses = [SampleStatus::Undefined; 4];
+
+        assert!(
+            reader
+                .read_physical_region(ImageRegion::new(1, 1, 1, 2, 2), &mut values, &mut statuses,)
+                .is_ok()
+        );
+        assert_eq!(
+            values.map(f64::to_bits),
+            [17.0, 18.0, 21.0, 22.0].map(f64::to_bits)
+        );
+        assert_eq!(statuses, [SampleStatus::Valid; 4]);
+    }
+
+    #[test]
+    fn rejects_a_region_crossing_an_image_edge() {
+        let data = vec![0_u8; 4 * 3 * 2];
+        let input = fits_image_with_axes(16, &[4, 3], &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+        let mut values = [0.0; 4];
+        let mut statuses = [SampleStatus::Valid; 4];
+
+        assert!(matches!(
+            reader.read_physical_region(
+                ImageRegion::new(0, 3, 1, 2, 2),
+                &mut values,
+                &mut statuses
+            ),
+            Err(ImageReadError::RegionOutOfBounds {
+                x: 3,
+                y: 1,
+                width: 2,
+                height: 2,
+                image_width: 4,
+                image_height: 3
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_missing_plane() {
+        let data = vec![0_u8; 4 * 3 * 2];
+        let input = fits_image_with_axes(16, &[4, 3], &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+        let mut values = [0.0; 1];
+        let mut statuses = [SampleStatus::Valid; 1];
+
+        assert!(matches!(
+            reader.read_physical_region(
+                ImageRegion::new(1, 0, 0, 1, 1),
+                &mut values,
+                &mut statuses
+            ),
+            Err(ImageReadError::PlaneOutOfBounds {
+                plane: 1,
+                plane_count: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_region_output_with_wrong_area() {
+        let data = vec![0_u8; 4 * 3 * 2];
+        let input = fits_image_with_axes(16, &[4, 3], &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+        let mut values = [0.0; 3];
+        let mut statuses = [SampleStatus::Valid; 4];
+
+        assert!(matches!(
+            reader.read_physical_region(
+                ImageRegion::new(0, 0, 0, 2, 2),
+                &mut values,
+                &mut statuses
+            ),
+            Err(ImageReadError::RegionOutputLengthMismatch {
+                expected: 4,
+                values: 3,
+                statuses: 4
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_rectangular_access_to_a_one_dimensional_array() {
+        let input = fits_image(16, 2, &[0, 1, 0, 2], &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+        let mut values = [0.0; 1];
+        let mut statuses = [SampleStatus::Valid; 1];
+
+        assert!(matches!(
+            reader.read_physical_region(
+                ImageRegion::new(0, 0, 0, 1, 1),
+                &mut values,
+                &mut statuses
+            ),
+            Err(ImageReadError::UnsupportedAxisCount { axes: 1 })
         ));
     }
 }

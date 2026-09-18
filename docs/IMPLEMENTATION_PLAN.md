@@ -399,8 +399,8 @@ safety reasoning. They do not narrate obvious syntax.
 1. ~~Finish repository publication and baseline CI.~~
 2. ~~Complete explicit classification policies and exact session-grouping keys.~~
 3. ~~Introduce a checked FITS image-HDU descriptor without allocating pixels.~~
-4. ~~Implement bounded sample-range reading for 16-bit integer and 32-bit
-   floating data.~~
+4. ~~Implement bounded sample-range and rectangular tile reading for 16-bit
+   integer and 32-bit floating data.~~
 5. ~~Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite status into `f64`.~~
 6. Generate tiny synthetic 294MC/585C-shaped semantic fixtures, not full-size
    camera files.
