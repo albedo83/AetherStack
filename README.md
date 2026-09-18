@@ -31,6 +31,8 @@ optimized CPU and GPU paths must match.
   atomic RAII memory reservations for future pipeline stages;
 - strict `f64` dark-and-flat calibration with conservative quality-mask
   propagation and explicit flat-divisor thresholds;
+- deterministic masked image statistics with compensated, overflow-resistant
+  mean and variance calculations;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
@@ -48,7 +50,9 @@ documents the current portable interchange schema and its validation rules. The
 [runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
 and memory-accounting behavior for later pipeline stages. The initial
 [calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,
-precision, and mask behavior used by the CPU vertical slice.
+precision, and mask behavior used by the CPU vertical slice. The
+[statistics contract](docs/STATISTICS_CONTRACT.md) defines usable samples and
+the strict reference moment calculations.
 
 ## Build and test
 

@@ -1,0 +1,41 @@
+# Strict image statistics
+
+`image_statistics` is the reference summary operation for a scientific image or
+tile. It traverses samples in deterministic planar row-major order and uses only
+unmasked finite values.
+
+A sample with any quality bit is counted as masked, even if its stored value is
+also NaN or infinite. An unmasked NaN or infinity is counted separately as
+non-finite. If no usable sample remains, the operation returns a typed error with
+all exclusion counts rather than manufacturing zero-valued statistics.
+
+## Precision strategy
+
+The implementation uses three passes:
+
+1. count usable, masked, and non-finite samples while finding the finite range
+   and largest absolute value;
+2. divide each usable value by that scale and by the sample count, then calculate
+   the mean with Neumaier compensated summation;
+3. calculate squared deviations in normalized coordinates with another
+   compensated sum, divide by the population or sample denominator, and rescale.
+
+Dividing before summation prevents the mean of several large equal samples from
+overflowing. Normalized deviations protect the intermediate square. Rescaling
+multiplies by the normalized variance before the second scale factor, preserving
+finite results when a small normalized spread offsets a large data scale.
+
+The final normalized mean is constrained to the observed normalized range. This
+only removes a possible last-bit excursion introduced by floating-point
+rounding; a mathematical arithmetic mean cannot lie outside that range.
+
+## Results and failures
+
+The summary reports total, usable, masked, and unmasked non-finite counts;
+minimum; maximum; mean; population variance; and sample variance when at least
+two samples are usable. Standard deviations are derived from the corresponding
+variances. Signed zero results are canonicalized to positive zero.
+
+When the true variance is outside the finite binary64 result domain, the
+operation returns `VarianceOverflow`. It never silently stores infinity as an
+ordinary scientific statistic.
