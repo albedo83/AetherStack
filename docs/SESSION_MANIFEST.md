@@ -46,6 +46,13 @@ acceptance policy, rewinds the source, and computes the length and SHA-256 using
 stages must still re-check the length and digest if files may have changed after
 manifest generation.
 
+`generate_manifest_from_directory` additionally bounds directory depth, entries
+per directory, total entries, FITS-file count, retained failures, per-source
+bytes, and aggregate source bytes. Symbolic links are counted but never followed.
+Reaching a hard bound aborts rather than returning a partial manifest. Individual
+open, parse, validation, and hashing failures remain explicit in the scan report,
+as do successfully analyzed sources that could not be assigned to an exact group.
+
 ## Exact groups
 
 Each group has a portable identifier, one `StrictGroupingKey`, and one or more

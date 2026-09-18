@@ -25,6 +25,8 @@ optimized CPU and GPU paths must match.
 - exact, hashable session-grouping keys with explicit missing-field reports;
 - versioned, deterministic JSON session manifests with strict validation,
   retained FITS diagnostics, and streaming SHA-256 source fingerprints;
+- bounded directory-to-manifest ingestion with explicit per-source failures,
+  unassigned-source reporting, and no symbolic-link traversal;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:
