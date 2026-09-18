@@ -10,6 +10,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+aether-calibration = { path = "../aether-calibration" }
+aether-core = { path = "../aether-core" }
+aether-fits = { path = "../aether-fits" }
+aether-integration = { path = "../aether-integration" }
 serde.workspace = true
 
 [dev-dependencies]

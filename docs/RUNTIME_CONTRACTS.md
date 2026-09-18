@@ -1,9 +1,9 @@
 # Runtime contracts
 
-The `aether-runtime` crate defines execution behavior shared by future pipeline
-stages. It intentionally contains no scheduler and no scientific algorithm. The
-contracts are small enough to test exhaustively before concurrency is introduced
-into calibration, registration, and integration code.
+The `aether-runtime` crate defines execution behavior shared by pipeline stages
+and owns the first narrow strict CPU orchestration path. The reusable contracts
+remain small enough to test exhaustively before concurrency is introduced into
+calibration, registration, and integration code.
 
 ## Cooperative cancellation
 
@@ -65,3 +65,43 @@ dropped.
 
 These reservations are accounting contracts, not allocator hooks. Allocation
 failure remains a separate typed error even after a reservation succeeds.
+
+## Strict CPU vertical slice
+
+`run_strict_pipeline` connects the existing reference components without adding
+a second implementation of their numerical rules. One request contains a stable
+ordered signal list, one dark master, one already normalized flat master,
+explicit calibration parameters, validated output provenance, an output path,
+and the FITS acceptance policy.
+
+The run performs these bounded steps:
+
+1. inspect every input and require exactly equal checked dimensions;
+2. reserve the complete logical pixel working set;
+3. traverse spatial-plane tiles in deterministic order;
+4. reopen and read one signal at a time, limiting live file descriptors;
+5. calculate `(signal - dark) / flat` using the strict `f64` kernel;
+6. integrate calibrated tiles using the strict mean oracle in signal-list order;
+7. assemble the output image and calculate complete-image statistics;
+8. publish one create-new binary64 FITS product with validated provenance.
+
+The source count and algorithm identifier in provenance must exactly describe
+the executed operation. The fixed identifier is `strict-mean-v1`. Errors name an
+input role and signal index but deliberately omit filesystem paths.
+
+Progress starts before input inspection. The total becomes known after image
+dimensions establish the tile count. A successful run emits running events for
+each completed tile and the statistics pass, followed by one completed event
+after publication. Failures and cancellation emit stable lowercase codes.
+
+Cancellation checkpoints occur before inspection, between inspected inputs,
+between signal reads, between tiles, before statistics, and before publication.
+The atomic writer is not interrupted after publication begins; it exposes either
+no new destination or one complete synchronized FITS stream.
+
+The current slice keeps the final integrated image in memory because the FITS
+writer consumes a complete scientific image. Signal working storage is tiled,
+and its reserved size changes with tile area and signal count. Header memory is
+bounded separately by `HeaderReadOptions`. A future streaming writer and
+checkpoint cache will remove the full-output allocation and provide resumable
+execution; neither behavior is claimed by this initial slice.

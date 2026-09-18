@@ -31,13 +31,16 @@ optimized CPU and GPU paths must match.
 - bounded directory-to-manifest ingestion with explicit per-source failures,
   unassigned-source reporting, and no symbolic-link traversal;
 - cooperative cancellation, validated machine-readable progress events, and
-  atomic RAII memory reservations for future pipeline stages;
+  atomic RAII memory reservations for pipeline stages;
 - strict `f64` dark-and-flat calibration with conservative quality-mask
   propagation and explicit flat-divisor thresholds;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
+- a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
+  calibration, integrates in stable order, calculates output statistics, and
+  atomically publishes a provenance-bearing binary64 FITS product;
 - streaming corpus inspection without loading pixel arrays.
 
 The priority camera profiles currently cover:

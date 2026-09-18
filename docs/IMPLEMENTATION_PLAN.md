@@ -413,13 +413,15 @@ safety reasoning. They do not narrate obvious syntax.
 10. ~~Add bounded directory-to-manifest orchestration with explicit handling for
     per-file failures and unassigned sources.~~
 11. ~~Define runtime cancellation, progress, and memory-budget contracts.~~
-12. Build the first strict CPU vertical slice from tile ingestion through simple
-    calibration, statistics, mean integration, and FITS output.
+12. ~~Build the first strict CPU vertical slice from tile ingestion through simple
+    calibration, statistics, mean integration, and FITS output.~~
     The dark-and-normalized-flat `f64` calibration kernel, mask contract, strict
     image statistics, and unweighted mean integration are complete;
     binary64 FITS encoding, readback, and atomic create-new publication are
-    complete. Validated output provenance cards are complete; end-to-end
-    orchestration remains.
+    complete. Validated output provenance and tiled end-to-end orchestration are
+    complete, including cancellation and logical working-set enforcement.
+13. Add verified content-addressed checkpoints, restart tests, and streaming
+    output so large integrations no longer retain the complete final image.
 
 ## 11. Stable-release definition
 

@@ -49,6 +49,10 @@ dependencies = [
 name = "aether-runtime"
 version = "0.1.0"
 dependencies = [
+ "aether-calibration",
+ "aether-core",
+ "aether-fits",
+ "aether-integration",
  "serde",
  "serde_json",
 ]
