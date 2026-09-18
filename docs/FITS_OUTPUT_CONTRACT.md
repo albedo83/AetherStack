@@ -29,8 +29,32 @@ by its binary64 bits.
 The stream writer reports size overflow, internal image-invariant failure,
 generated-card overflow, and destination I/O errors. An arbitrary stream may
 contain a valid prefix after an I/O error. Flushing, durable synchronization,
-atomic filesystem publication, provenance cards, and checksums belong to the
-higher-level file publisher and are not implied by a successful stream write.
+and atomic filesystem publication belong to the file publisher and are not
+implied by a successful stream write. FITS checksums remain future work.
+
+## Processing provenance
+
+`FitsOutputProvenance` validates identifiers before output begins. Manifest and
+group identifiers are exactly 64 lowercase hexadecimal digits. The versioned
+algorithm identifier is limited to 32 ASCII bytes and uses only lowercase
+letters, digits, `.`, `_`, and `-`. Its first byte must be a lowercase letter or
+digit. A product must represent at least one source image.
+
+`write_f64_primary_with_provenance` emits these cards before `END`:
+
+| Card | Meaning |
+| --- | --- |
+| `CREATOR` | AetherStack package name and version |
+| `AETHVER` | Version of this provenance-card contract |
+| `AETHMAN` | SHA-256 of the canonical session-manifest bytes |
+| `AETHGRP` | Exact session group identifier |
+| `AETHALG` | Versioned integration algorithm identifier |
+| `AETHSRC` | Number of source images represented by the product |
+
+The corresponding atomic API places the same cards in the synchronized
+temporary stream before publication. Provenance deliberately contains stable
+identifiers rather than source paths, target names, observer details, or other
+private acquisition metadata.
 
 ## Atomic create-new publication
 
@@ -53,5 +77,5 @@ cleanup. Errors during temporary-link cleanup or directory synchronization
 report that the destination is already published, preventing a caller from
 mistakenly retrying under another name.
 
-Provenance cards and FITS checksums remain higher-level output work and are not
-yet claimed by this contract.
+FITS `CHECKSUM` and `DATASUM` cards remain future output work and are not yet
+claimed by this contract.

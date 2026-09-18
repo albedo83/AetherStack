@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use aether_core::ScientificImage;
 
-use crate::{FitsWriteError, FitsWriteSummary, write_f64_primary};
+use crate::{
+    FitsOutputProvenance, FitsWriteError, FitsWriteSummary, write_f64_primary,
+    write_f64_primary_with_provenance,
+};
 
 const FILE_BUFFER_BYTES: usize = 64 * 1_024;
 const MAX_TEMPORARY_NAME_ATTEMPTS: usize = 128;
@@ -157,6 +160,33 @@ pub fn write_f64_primary_atomic_new(
     path: &Path,
     image: &ScientificImage,
 ) -> Result<FitsWriteSummary, AtomicFitsWriteError> {
+    write_f64_primary_atomic_new_inner(path, image, None)
+}
+
+/// Writes and atomically publishes a new binary64 FITS file with provenance.
+///
+/// Publication and durability guarantees match
+/// [`write_f64_primary_atomic_new`]. The validated provenance cards are part of
+/// the temporary file before its complete byte stream becomes visible at
+/// `path`.
+///
+/// # Errors
+///
+/// Returns the same publication and encoding errors as
+/// [`write_f64_primary_atomic_new`].
+pub fn write_f64_primary_atomic_new_with_provenance(
+    path: &Path,
+    image: &ScientificImage,
+    provenance: &FitsOutputProvenance,
+) -> Result<FitsWriteSummary, AtomicFitsWriteError> {
+    write_f64_primary_atomic_new_inner(path, image, Some(provenance))
+}
+
+fn write_f64_primary_atomic_new_inner(
+    path: &Path,
+    image: &ScientificImage,
+    provenance: Option<&FitsOutputProvenance>,
+) -> Result<FitsWriteSummary, AtomicFitsWriteError> {
     let file_name = path
         .file_name()
         .filter(|value| !value.is_empty())
@@ -175,7 +205,11 @@ pub fn write_f64_primary_atomic_new(
     let (temporary_path, file) = create_temporary(parent, file_name)?;
     let mut guard = TemporaryPathGuard::new(temporary_path.clone());
     let mut writer = BufWriter::with_capacity(FILE_BUFFER_BYTES, file);
-    let summary = write_f64_primary(&mut writer, image).map_err(AtomicFitsWriteError::Encode)?;
+    let summary = match provenance {
+        Some(provenance) => write_f64_primary_with_provenance(&mut writer, image, provenance),
+        None => write_f64_primary(&mut writer, image),
+    }
+    .map_err(AtomicFitsWriteError::Encode)?;
     writer.flush().map_err(AtomicFitsWriteError::Flush)?;
     writer
         .get_ref()
@@ -324,6 +358,28 @@ mod tests {
         let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path(), path);
+        Ok(())
+    }
+
+    #[test]
+    fn publishes_provenance_as_part_of_the_atomic_file() -> Result<(), Box<dyn StdError>> {
+        let directory = TestDirectory::new()?;
+        let path = directory.path.join("result.fits");
+        let provenance =
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 2)?;
+
+        write_f64_primary_atomic_new_with_provenance(&path, &image(10.0)?, &provenance)?;
+        let reader = PrimaryImageReader::open(File::open(&path)?, HeaderReadOptions::default())?;
+
+        assert!(reader.report().is_conformant());
+        assert_eq!(
+            reader.report().header().string("AETHMAN"),
+            Some(provenance.manifest_sha256())
+        );
+        assert_eq!(
+            reader.report().header().string("AETHALG"),
+            Some(provenance.algorithm_id())
+        );
         Ok(())
     }
 

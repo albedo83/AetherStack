@@ -418,7 +418,8 @@ safety reasoning. They do not narrate obvious syntax.
     The dark-and-normalized-flat `f64` calibration kernel, mask contract, strict
     image statistics, and unweighted mean integration are complete;
     binary64 FITS encoding, readback, and atomic create-new publication are
-    complete. Provenance and end-to-end orchestration remain.
+    complete. Validated output provenance cards are complete; end-to-end
+    orchestration remains.
 
 ## 11. Stable-release definition
 

@@ -8,6 +8,115 @@ use crate::{BLOCK_SIZE, CARD_SIZE};
 
 /// Canonical quiet-NaN payload used for unavailable floating FITS samples.
 pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+/// Version of the provenance cards emitted by this writer.
+pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 1;
+/// Maximum byte length of a canonical output algorithm identifier.
+pub const MAX_FITS_ALGORITHM_ID_BYTES: usize = 32;
+
+/// Validated provenance attached to one processed FITS product.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FitsOutputProvenance {
+    manifest_sha256: String,
+    group_id: String,
+    algorithm_id: String,
+    source_count: u32,
+}
+
+impl FitsOutputProvenance {
+    /// Builds provenance from canonical identifiers.
+    ///
+    /// The manifest digest and group identifier are full lowercase SHA-256 hex.
+    /// The algorithm identifier starts with a lowercase ASCII letter or digit
+    /// and may contain lowercase letters, digits, `.`, `_`, and `-`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for a malformed identifier or zero source count.
+    pub fn new(
+        manifest_sha256: impl Into<String>,
+        group_id: impl Into<String>,
+        algorithm_id: impl Into<String>,
+        source_count: u32,
+    ) -> Result<Self, FitsProvenanceError> {
+        let manifest_sha256 = manifest_sha256.into();
+        let group_id = group_id.into();
+        let algorithm_id = algorithm_id.into();
+        if !is_lower_sha256(&manifest_sha256) {
+            return Err(FitsProvenanceError::InvalidManifestSha256);
+        }
+        if !is_lower_sha256(&group_id) {
+            return Err(FitsProvenanceError::InvalidGroupId);
+        }
+        if !is_algorithm_id(&algorithm_id) {
+            return Err(FitsProvenanceError::InvalidAlgorithmId);
+        }
+        if source_count == 0 {
+            return Err(FitsProvenanceError::ZeroSourceCount);
+        }
+        Ok(Self {
+            manifest_sha256,
+            group_id,
+            algorithm_id,
+            source_count,
+        })
+    }
+
+    /// SHA-256 of the exact canonical session-manifest bytes.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+
+    /// Exact session group identifier.
+    #[must_use]
+    pub fn group_id(&self) -> &str {
+        &self.group_id
+    }
+
+    /// Versioned algorithm identifier.
+    #[must_use]
+    pub fn algorithm_id(&self) -> &str {
+        &self.algorithm_id
+    }
+
+    /// Number of source images represented by the product.
+    #[must_use]
+    pub const fn source_count(&self) -> u32 {
+        self.source_count
+    }
+}
+
+/// Failure to construct canonical FITS output provenance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FitsProvenanceError {
+    /// Manifest fingerprint is not 64 lowercase hexadecimal digits.
+    InvalidManifestSha256,
+    /// Group identifier is not 64 lowercase hexadecimal digits.
+    InvalidGroupId,
+    /// Algorithm identifier is empty, oversized, or non-canonical.
+    InvalidAlgorithmId,
+    /// A processed output must represent at least one source.
+    ZeroSourceCount,
+}
+
+impl Display for FitsProvenanceError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidManifestSha256 => {
+                formatter.write_str("manifest SHA-256 must be 64 lowercase hexadecimal digits")
+            }
+            Self::InvalidGroupId => {
+                formatter.write_str("group identifier must be 64 lowercase hexadecimal digits")
+            }
+            Self::InvalidAlgorithmId => {
+                formatter.write_str("algorithm identifier is not canonical")
+            }
+            Self::ZeroSourceCount => formatter.write_str("source count must be greater than zero"),
+        }
+    }
+}
+
+impl Error for FitsProvenanceError {}
 
 /// Exact accounting returned after a successful primary-image write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +210,31 @@ pub fn write_f64_primary<W: Write>(
     writer: &mut W,
     image: &ScientificImage,
 ) -> Result<FitsWriteSummary, FitsWriteError> {
+    write_f64_primary_inner(writer, image, None)
+}
+
+/// Writes a binary64 primary FITS image with validated processing provenance.
+///
+/// In addition to [`write_f64_primary`]'s image contract, this emits `CREATOR`,
+/// `AETHVER`, `AETHMAN`, `AETHGRP`, `AETHALG`, and `AETHSRC` cards. Identifiers
+/// are validated by [`FitsOutputProvenance`] before any output is accepted.
+///
+/// # Errors
+///
+/// Returns the same stream and encoding errors as [`write_f64_primary`].
+pub fn write_f64_primary_with_provenance<W: Write>(
+    writer: &mut W,
+    image: &ScientificImage,
+    provenance: &FitsOutputProvenance,
+) -> Result<FitsWriteSummary, FitsWriteError> {
+    write_f64_primary_inner(writer, image, Some(provenance))
+}
+
+fn write_f64_primary_inner<W: Write>(
+    writer: &mut W,
+    image: &ScientificImage,
+    provenance: Option<&FitsOutputProvenance>,
+) -> Result<FitsWriteSummary, FitsWriteError> {
     if image.pixels().len() != image.mask().as_slice().len() {
         return Err(FitsWriteError::ImageInvariant);
     }
@@ -132,6 +266,39 @@ pub fn write_f64_primary<W: Write>(
         )?;
     }
     write_fixed_card(writer, "EXTEND", "T", &mut header_bytes)?;
+    if let Some(provenance) = provenance {
+        write_string_card(
+            writer,
+            "CREATOR",
+            &format!("AetherStack {}", env!("CARGO_PKG_VERSION")),
+            &mut header_bytes,
+        )?;
+        write_fixed_card(
+            writer,
+            "AETHVER",
+            &FITS_OUTPUT_PROVENANCE_VERSION.to_string(),
+            &mut header_bytes,
+        )?;
+        write_string_card(
+            writer,
+            "AETHMAN",
+            provenance.manifest_sha256(),
+            &mut header_bytes,
+        )?;
+        write_string_card(writer, "AETHGRP", provenance.group_id(), &mut header_bytes)?;
+        write_string_card(
+            writer,
+            "AETHALG",
+            provenance.algorithm_id(),
+            &mut header_bytes,
+        )?;
+        write_fixed_card(
+            writer,
+            "AETHSRC",
+            &provenance.source_count().to_string(),
+            &mut header_bytes,
+        )?;
+    }
     write_card(writer, "END", "END", &mut header_bytes)?;
     let header_padding = block_padding(header_bytes);
     write_padding(writer, b' ', header_padding)?;
@@ -168,6 +335,17 @@ pub fn write_f64_primary<W: Write>(
         substituted_samples,
         bytes_written,
     })
+}
+
+fn write_string_card<W: Write>(
+    writer: &mut W,
+    keyword: &'static str,
+    value: &str,
+    header_bytes: &mut usize,
+) -> Result<(), FitsWriteError> {
+    let escaped = value.replace('\'', "''");
+    let text = format!("{keyword:<8}= '{escaped}'");
+    write_card(writer, keyword, &text, header_bytes)
 }
 
 fn write_fixed_card<W: Write>(
@@ -231,6 +409,27 @@ fn write_padding<W: Write>(
         bytes -= length;
     }
     Ok(())
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f'))
+}
+
+fn is_algorithm_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes
+        .first()
+        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        && bytes.len() <= MAX_FITS_ALGORITHM_ID_BYTES
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(*byte, b'.' | b'_' | b'-')
+        })
 }
 
 #[cfg(test)]
@@ -331,6 +530,73 @@ mod tests {
         let reader = PrimaryImageReader::open(Cursor::new(output), HeaderReadOptions::default())?;
 
         assert_eq!(reader.descriptor().axes(), &[2, 1, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn validates_canonical_output_provenance() -> Result<(), Box<dyn Error>> {
+        let provenance =
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 3)?;
+
+        assert_eq!(provenance.manifest_sha256(), "a".repeat(64));
+        assert_eq!(provenance.group_id(), "b".repeat(64));
+        assert_eq!(provenance.algorithm_id(), "strict-mean-v1");
+        assert_eq!(provenance.source_count(), 3);
+
+        assert!(matches!(
+            FitsOutputProvenance::new("A".repeat(64), "b".repeat(64), "strict-mean-v1", 3),
+            Err(FitsProvenanceError::InvalidManifestSha256)
+        ));
+        assert!(matches!(
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(63), "strict-mean-v1", 3),
+            Err(FitsProvenanceError::InvalidGroupId)
+        ));
+        for invalid in [
+            "",
+            "Strict-mean-v1",
+            "strict/mean",
+            "-strict-mean",
+            "an-algorithm-identifier-that-is-too-long",
+        ] {
+            assert!(matches!(
+                FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), invalid, 3),
+                Err(FitsProvenanceError::InvalidAlgorithmId)
+            ));
+        }
+        assert!(matches!(
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 0),
+            Err(FitsProvenanceError::ZeroSourceCount)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn writes_validated_provenance_cards() -> Result<(), Box<dyn Error>> {
+        let image = image()?;
+        let provenance =
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 3)?;
+        let mut output = Vec::new();
+
+        write_f64_primary_with_provenance(&mut output, &image, &provenance)?;
+        let reader = PrimaryImageReader::open(Cursor::new(output), HeaderReadOptions::default())?;
+        let header = reader.report().header();
+
+        assert!(reader.report().is_conformant());
+        assert_eq!(
+            header.string("CREATOR"),
+            Some(concat!("AetherStack ", env!("CARGO_PKG_VERSION")))
+        );
+        assert_eq!(
+            header.integer("AETHVER"),
+            Some(i64::from(FITS_OUTPUT_PROVENANCE_VERSION))
+        );
+        assert_eq!(header.string("AETHMAN"), Some(provenance.manifest_sha256()));
+        assert_eq!(header.string("AETHGRP"), Some(provenance.group_id()));
+        assert_eq!(header.string("AETHALG"), Some(provenance.algorithm_id()));
+        assert_eq!(
+            header.integer("AETHSRC"),
+            Some(i64::from(provenance.source_count()))
+        );
         Ok(())
     }
 
