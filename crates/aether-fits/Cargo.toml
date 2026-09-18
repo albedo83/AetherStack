@@ -1,6 +1,6 @@
 [package]
 name = "aether-fits"
-description = "Safe FITS header reading and auditing for AetherStack"
+description = "Safe FITS validation and bounded image reading for AetherStack"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,6 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+aether-core = { path = "../aether-core" }

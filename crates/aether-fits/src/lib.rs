@@ -1,8 +1,9 @@
-//! Safe FITS header reading and validation.
+//! Safe FITS header validation and bounded primary-image reading.
 //!
-//! The reader deliberately handles headers only. It retains every 80-byte card
-//! so higher layers can explain normalization decisions or diagnose a
-//! non-conformant file without rewriting the source.
+//! The parser retains every 80-byte card so higher layers can explain
+//! normalization decisions or diagnose a non-conformant file without rewriting
+//! the source. Pixel access is seek-based and can materialize bounded regions in
+//! the shared scientific image representation.
 
 mod card;
 mod diagnostic;

@@ -18,7 +18,8 @@ impl<T> Image<T> {
     /// # Errors
     ///
     /// Returns [`CoreError::PixelCountMismatch`] when the buffer length does not
-    /// exactly match the declared dimensions.
+    /// exactly match the declared dimensions, or [`CoreError::AllocationFailed`]
+    /// when the matching quality mask cannot be reserved.
     pub fn from_pixels(dimensions: Dimensions, pixels: Vec<T>) -> Result<Self, CoreError> {
         if pixels.len() != dimensions.pixel_count() {
             return Err(CoreError::PixelCountMismatch {
@@ -30,7 +31,7 @@ impl<T> Image<T> {
         Ok(Self {
             dimensions,
             pixels,
-            mask: PixelMask::clear(dimensions),
+            mask: PixelMask::clear(dimensions)?,
         })
     }
 
@@ -111,13 +112,20 @@ impl<T> Image<T> {
 
 impl<T: Clone> Image<T> {
     /// Creates an image whose samples share the same initial value.
-    #[must_use]
-    pub fn filled(dimensions: Dimensions, value: T) -> Self {
-        Self {
-            dimensions,
-            pixels: vec![value; dimensions.pixel_count()],
-            mask: PixelMask::clear(dimensions),
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::AllocationFailed`] when the pixel or mask storage
+    /// cannot be reserved.
+    pub fn filled(dimensions: Dimensions, value: T) -> Result<Self, CoreError> {
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(dimensions.pixel_count())
+            .map_err(|_| CoreError::AllocationFailed {
+                elements: dimensions.pixel_count(),
+            })?;
+        pixels.resize(dimensions.pixel_count(), value);
+        Self::from_pixels(dimensions, pixels)
     }
 }
 
@@ -164,10 +172,28 @@ mod tests {
         let Some(dimensions) = test_dimensions() else {
             return;
         };
-        let mut image = Image::filled(dimensions, 7.0_f64);
+        let result = Image::filled(dimensions, 7.0_f64);
+        let Some(mut image) = result.ok() else {
+            return;
+        };
 
         assert_eq!(image.mark(0, 0, 0, PixelFlags::SATURATED), Ok(()));
         assert_eq!(image.get(0, 0, 0), Ok(&7.0));
         assert_eq!(image.mask().get(0, 0, 0), Ok(PixelFlags::SATURATED));
+    }
+
+    #[test]
+    fn reports_pixel_allocation_failure() {
+        let result = Dimensions::new(usize::MAX, 1, 1);
+        let Some(dimensions) = result.ok() else {
+            return;
+        };
+
+        assert!(matches!(
+            Image::filled(dimensions, 0_u8),
+            Err(CoreError::AllocationFailed {
+                elements: usize::MAX
+            })
+        ));
     }
 }

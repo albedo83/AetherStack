@@ -77,12 +77,20 @@ pub struct PixelMask {
 
 impl PixelMask {
     /// Creates a mask whose pixels are initially valid.
-    #[must_use]
-    pub fn clear(dimensions: Dimensions) -> Self {
-        Self {
-            dimensions,
-            flags: vec![PixelFlags::CLEAR; dimensions.pixel_count()],
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::AllocationFailed`] when the backing storage cannot
+    /// be reserved.
+    pub fn clear(dimensions: Dimensions) -> Result<Self, CoreError> {
+        let mut flags = Vec::new();
+        flags
+            .try_reserve_exact(dimensions.pixel_count())
+            .map_err(|_| CoreError::AllocationFailed {
+                elements: dimensions.pixel_count(),
+            })?;
+        flags.resize(dimensions.pixel_count(), PixelFlags::CLEAR);
+        Ok(Self { dimensions, flags })
     }
 
     /// Mask dimensions.
@@ -150,6 +158,15 @@ impl PixelMask {
     pub fn as_slice(&self) -> &[PixelFlags] {
         &self.flags
     }
+
+    /// Linear mutable view of all flags.
+    ///
+    /// The slice cannot be resized, preserving the one-to-one correspondence
+    /// between image samples and quality flags.
+    #[must_use]
+    pub fn as_mut_slice(&mut self) -> &mut [PixelFlags] {
+        &mut self.flags
+    }
 }
 
 #[cfg(test)]
@@ -165,7 +182,11 @@ mod tests {
         let Some(dimensions) = test_dimensions() else {
             return;
         };
-        let mask = PixelMask::clear(dimensions);
+        let result = PixelMask::clear(dimensions);
+        assert!(result.is_ok());
+        let Some(mask) = result.ok() else {
+            return;
+        };
 
         assert!(mask.as_slice().iter().all(|flags| flags.is_clear()));
     }
@@ -175,7 +196,10 @@ mod tests {
         let Some(dimensions) = test_dimensions() else {
             return;
         };
-        let mut mask = PixelMask::clear(dimensions);
+        let result = PixelMask::clear(dimensions);
+        let Some(mut mask) = result.ok() else {
+            return;
+        };
 
         assert_eq!(mask.insert(1, 0, 0, PixelFlags::HOT), Ok(()));
         assert_eq!(mask.insert(1, 0, 0, PixelFlags::SATURATED), Ok(()));
@@ -199,11 +223,46 @@ mod tests {
         let Some(dimensions) = test_dimensions() else {
             return;
         };
-        let mut mask = PixelMask::clear(dimensions);
+        let result = PixelMask::clear(dimensions);
+        let Some(mut mask) = result.ok() else {
+            return;
+        };
 
         assert!(matches!(
             mask.insert(2, 0, 0, PixelFlags::HOT),
             Err(CoreError::CoordinateOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn exposes_a_fixed_length_mutable_view() {
+        let Some(dimensions) = test_dimensions() else {
+            return;
+        };
+        let result = PixelMask::clear(dimensions);
+        let Some(mut mask) = result.ok() else {
+            return;
+        };
+
+        let flags = mask.as_mut_slice();
+        assert_eq!(flags.len(), 4);
+        flags[2] = PixelFlags::INVALID;
+
+        assert_eq!(mask.get(0, 1, 0), Ok(PixelFlags::INVALID));
+    }
+
+    #[test]
+    fn reports_mask_allocation_failure() {
+        let result = Dimensions::new(usize::MAX, 1, 1);
+        let Some(dimensions) = result.ok() else {
+            return;
+        };
+
+        assert!(matches!(
+            PixelMask::clear(dimensions),
+            Err(CoreError::AllocationFailed {
+                elements: usize::MAX
+            })
         ));
     }
 }

@@ -47,6 +47,11 @@ pub enum CoreError {
         /// Received sample count.
         actual: usize,
     },
+    /// Memory for a requested sample or mask buffer could not be reserved.
+    AllocationFailed {
+        /// Number of elements requested by the allocation.
+        elements: usize,
+    },
     /// A coordinate lies outside the image.
     CoordinateOutOfBounds {
         /// Requested horizontal coordinate.
@@ -88,6 +93,10 @@ impl Display for CoreError {
             Self::PixelCountMismatch { expected, actual } => write!(
                 formatter,
                 "pixel count mismatch: expected {expected}, received {actual}"
+            ),
+            Self::AllocationFailed { elements } => write!(
+                formatter,
+                "cannot reserve memory for {elements} image elements"
             ),
             Self::CoordinateOutOfBounds {
                 x,

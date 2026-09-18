@@ -9,6 +9,9 @@ version = "0.1.0"
 [[package]]
 name = "aether-fits"
 version = "0.1.0"
+dependencies = [
+ "aether-core",
+]
 
 [[package]]
 name = "aether-inspect"

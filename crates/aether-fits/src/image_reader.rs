@@ -2,6 +2,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Seek, SeekFrom};
 
+use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
+
 use crate::{
     FitsError, HeaderReadOptions, HeaderReport, ImageHduDescriptor, ImageHduError,
     StoredSampleFormat, read_primary_header,
@@ -85,6 +87,15 @@ pub struct PrimaryImageReader<R> {
     reader: R,
     report: HeaderReport,
     descriptor: ImageHduDescriptor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ValidatedRegion {
+    image_width: u64,
+    plane_start: u64,
+    row_width: usize,
+    row_count: usize,
+    sample_count: usize,
 }
 
 impl<R: Read + Seek> PrimaryImageReader<R> {
@@ -242,6 +253,58 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
         values: &mut [f64],
         statuses: &mut [SampleStatus],
     ) -> Result<(), ImageReadError> {
+        let layout = self.validate_region(region)?;
+        self.read_validated_region(region, layout, values, statuses)
+    }
+
+    /// Reads a non-empty rectangular region into the shared scientific image.
+    ///
+    /// The selected source plane becomes a one-plane image. Integer `BLANK`
+    /// samples receive [`PixelFlags::MISSING`], while stored or scaled NaNs and
+    /// infinities receive [`PixelFlags::INVALID`]. The original physical values,
+    /// including NaN and infinity, remain in the pixel buffer for diagnostics.
+    ///
+    /// Allocation is proportional to the requested region, not to the complete
+    /// FITS array. This is the bridge used by tiled processing stages.
+    ///
+    /// # Errors
+    ///
+    /// Returns any region, decoding, or I/O error described by
+    /// [`Self::read_physical_region`]. Zero-sized regions cannot be represented
+    /// by the core image model. Dimension and allocation failures are returned
+    /// through [`ImageReadError::Core`].
+    pub fn read_region_image(
+        &mut self,
+        region: ImageRegion,
+    ) -> Result<ScientificImage, ImageReadError> {
+        let layout = self.validate_region(region)?;
+        let dimensions =
+            Dimensions::new(layout.row_width, layout.row_count, 1).map_err(ImageReadError::Core)?;
+        let mut image = ScientificImage::filled(dimensions, 0.0).map_err(ImageReadError::Core)?;
+
+        let mut statuses = Vec::new();
+        statuses
+            .try_reserve_exact(layout.sample_count)
+            .map_err(|_| {
+                ImageReadError::Core(CoreError::AllocationFailed {
+                    elements: layout.sample_count,
+                })
+            })?;
+        statuses.resize(layout.sample_count, SampleStatus::Valid);
+
+        self.read_validated_region(region, layout, image.pixels_mut(), &mut statuses)?;
+        for (flags, status) in image.mask_mut().as_mut_slice().iter_mut().zip(statuses) {
+            *flags = match status {
+                SampleStatus::Valid => PixelFlags::CLEAR,
+                SampleStatus::Undefined => PixelFlags::MISSING,
+                SampleStatus::NonFinite => PixelFlags::INVALID,
+            };
+        }
+
+        Ok(image)
+    }
+
+    fn validate_region(&self, region: ImageRegion) -> Result<ValidatedRegion, ImageReadError> {
         let plane = region.plane();
         let x = region.x();
         let y = region.y();
@@ -276,15 +339,8 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
         let expected_u64 = width
             .checked_mul(height)
             .ok_or(ImageReadError::OffsetOverflow)?;
-        let expected = usize::try_from(expected_u64).map_err(|_| ImageReadError::OffsetOverflow)?;
-        if values.len() != expected || statuses.len() != expected {
-            return Err(ImageReadError::RegionOutputLengthMismatch {
-                expected,
-                values: values.len(),
-                statuses: statuses.len(),
-            });
-        }
-
+        let sample_count =
+            usize::try_from(expected_u64).map_err(|_| ImageReadError::OffsetOverflow)?;
         let row_width = usize::try_from(width).map_err(|_| ImageReadError::OffsetOverflow)?;
         let row_count = usize::try_from(height).map_err(|_| ImageReadError::OffsetOverflow)?;
         let plane_start = plane
@@ -292,12 +348,36 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
             .and_then(|row| row.checked_mul(image_width))
             .ok_or(ImageReadError::OffsetOverflow)?;
 
-        for row in 0..row_count {
+        Ok(ValidatedRegion {
+            image_width,
+            plane_start,
+            row_width,
+            row_count,
+            sample_count,
+        })
+    }
+
+    fn read_validated_region(
+        &mut self,
+        region: ImageRegion,
+        layout: ValidatedRegion,
+        values: &mut [f64],
+        statuses: &mut [SampleStatus],
+    ) -> Result<(), ImageReadError> {
+        if values.len() != layout.sample_count || statuses.len() != layout.sample_count {
+            return Err(ImageReadError::RegionOutputLengthMismatch {
+                expected: layout.sample_count,
+                values: values.len(),
+                statuses: statuses.len(),
+            });
+        }
+
+        for row in 0..layout.row_count {
             let output_start = row
-                .checked_mul(row_width)
+                .checked_mul(layout.row_width)
                 .ok_or(ImageReadError::OffsetOverflow)?;
             let output_end = output_start
-                .checked_add(row_width)
+                .checked_add(layout.row_width)
                 .ok_or(ImageReadError::OffsetOverflow)?;
             let Some(value_row) = values.get_mut(output_start..output_end) else {
                 return Err(ImageReadError::OffsetOverflow);
@@ -305,13 +385,14 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
             let Some(status_row) = statuses.get_mut(output_start..output_end) else {
                 return Err(ImageReadError::OffsetOverflow);
             };
-            let source_y = y
+            let source_y = region
+                .y()
                 .checked_add(u64::try_from(row).map_err(|_| ImageReadError::OffsetOverflow)?)
                 .ok_or(ImageReadError::OffsetOverflow)?;
             let source_start = source_y
-                .checked_mul(image_width)
-                .and_then(|offset| plane_start.checked_add(offset))
-                .and_then(|offset| offset.checked_add(x))
+                .checked_mul(layout.image_width)
+                .and_then(|offset| layout.plane_start.checked_add(offset))
+                .and_then(|offset| offset.checked_add(region.x()))
                 .ok_or(ImageReadError::OffsetOverflow)?;
             self.read_physical_samples(source_start, value_row, status_row)?;
         }
@@ -380,6 +461,8 @@ pub enum ImageReadError {
     Header(FitsError),
     /// Image layout derivation failed.
     Descriptor(ImageHduError),
+    /// The shared in-memory image representation rejected the request.
+    Core(CoreError),
     /// Seeking or reading pixel bytes failed.
     Io(std::io::Error),
     /// The value and status output buffers have different lengths.
@@ -450,6 +533,7 @@ impl Display for ImageReadError {
         match self {
             Self::Header(error) => write!(formatter, "cannot read FITS primary header: {error}"),
             Self::Descriptor(error) => write!(formatter, "invalid FITS image layout: {error}"),
+            Self::Core(error) => write!(formatter, "cannot create scientific image: {error}"),
             Self::Io(error) => write!(formatter, "cannot read FITS image data: {error}"),
             Self::OutputLengthMismatch { values, statuses } => write!(
                 formatter,
@@ -509,6 +593,7 @@ impl Error for ImageReadError {
         match self {
             Self::Header(error) => Some(error),
             Self::Descriptor(error) => Some(error),
+            Self::Core(error) => Some(error),
             Self::Io(error) => Some(error),
             Self::OutputLengthMismatch { .. }
             | Self::SampleRangeOutOfBounds { .. }
@@ -773,6 +858,88 @@ mod tests {
             [17.0, 18.0, 21.0, 22.0].map(f64::to_bits)
         );
         assert_eq!(statuses, [SampleStatus::Valid; 4]);
+    }
+
+    #[test]
+    fn materializes_a_region_with_missing_pixel_flags() {
+        let stored = [1_i16, 2, 3, 4, -32_768, 6];
+        let data: Vec<u8> = stored
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect();
+        let input = fits_image_with_axes(16, &[3, 2], &data, &[fixed_card("BLANK", "-32768")]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+
+        let result = reader.read_region_image(ImageRegion::new(0, 1, 0, 2, 2));
+        assert!(result.is_ok());
+        let Some(image) = result.ok() else {
+            return;
+        };
+
+        let dimensions = image.dimensions();
+        assert_eq!(
+            (dimensions.width(), dimensions.height(), dimensions.planes()),
+            (2, 2, 1)
+        );
+        assert_eq!(image.pixels()[0].to_bits(), 2.0_f64.to_bits());
+        assert_eq!(image.pixels()[1].to_bits(), 3.0_f64.to_bits());
+        assert!(image.pixels()[2].is_nan());
+        assert_eq!(image.pixels()[3].to_bits(), 6.0_f64.to_bits());
+        assert_eq!(
+            image.mask().as_slice(),
+            &[
+                PixelFlags::CLEAR,
+                PixelFlags::CLEAR,
+                PixelFlags::MISSING,
+                PixelFlags::CLEAR
+            ]
+        );
+    }
+
+    #[test]
+    fn materializes_non_finite_float_flags_without_losing_values() {
+        let stored = [1.5_f32, f32::NAN, f32::NEG_INFINITY];
+        let data: Vec<u8> = stored
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect();
+        let input = fits_image_with_axes(-32, &[3, 1], &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+
+        let result = reader.read_region_image(ImageRegion::new(0, 0, 0, 3, 1));
+        assert!(result.is_ok());
+        let Some(image) = result.ok() else {
+            return;
+        };
+
+        assert_eq!(image.pixels()[0].to_bits(), 1.5_f64.to_bits());
+        assert!(image.pixels()[1].is_nan());
+        assert!(image.pixels()[2].is_infinite() && image.pixels()[2].is_sign_negative());
+        assert_eq!(
+            image.mask().as_slice(),
+            &[PixelFlags::CLEAR, PixelFlags::INVALID, PixelFlags::INVALID]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_region_materialization() {
+        let data = vec![0_u8; 2 * 2 * 2];
+        let input = fits_image_with_axes(16, &[2, 2], &data, &[]);
+        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
+        let Some(mut reader) = result.ok() else {
+            return;
+        };
+
+        assert!(matches!(
+            reader.read_region_image(ImageRegion::new(0, 0, 0, 0, 1)),
+            Err(ImageReadError::Core(CoreError::ZeroDimension { .. }))
+        ));
     }
 
     #[test]

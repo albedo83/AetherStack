@@ -246,7 +246,7 @@ Deliverables:
 - explainable frame classification;
 - streaming inventory CLI;
 - safe image-HDU descriptor and tiled/row pixel reader;
-- scaling, blanking, and mask propagation;
+- ~~scaling, blanking, and mask propagation;~~
 - versioned session manifest and grouping rules;
 - synthetic public FITS fixtures and differential tests.
 
@@ -401,7 +401,8 @@ safety reasoning. They do not narrate obvious syntax.
 3. ~~Introduce a checked FITS image-HDU descriptor without allocating pixels.~~
 4. ~~Implement bounded sample-range and rectangular tile reading for 16-bit
    integer and 32-bit floating data.~~
-5. ~~Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite status into `f64`.~~
+5. ~~Apply `BSCALE`, `BZERO`, `BLANK`, and non-finite status into `f64`, then
+   propagate unusable samples into the shared quality mask.~~
 6. Generate tiny synthetic 294MC/585C-shaped semantic fixtures, not full-size
    camera files.
 7. ~~Compare distributed samples and full-array summary statistics with an
