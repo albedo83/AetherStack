@@ -90,7 +90,8 @@ The run performs these bounded steps:
    first-pass accounting and bounded staged-output readback for later passes;
 10. hash every complete input again to detect changes during processing;
 11. publish verified checkpoints, when enabled, and then publish one create-new
-    binary64 FITS product with validated provenance.
+    binary64 FITS product with validated provenance and embedded `DATASUM` and
+    `CHECKSUM` integrity cards.
 
 The source count and algorithm identifier in provenance must exactly describe
 the executed operation. The fixed identifier is `strict-mean-v1`. Errors name an

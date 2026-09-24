@@ -184,13 +184,8 @@ impl AtomicF64PrimaryStreamWriter {
     ) -> Result<Self, AtomicFitsWriteError> {
         let (destination, parent, temporary_path, file, guard) = prepare_temporary(path)?;
         let writer = BufWriter::with_capacity(FILE_BUFFER_BYTES, file);
-        let encoder = match provenance {
-            Some(provenance) => {
-                F64PrimaryStreamWriter::new_with_provenance(writer, dimensions, provenance)
-            }
-            None => F64PrimaryStreamWriter::new(writer, dimensions),
-        }
-        .map_err(AtomicFitsWriteError::Encode)?;
+        let encoder = F64PrimaryStreamWriter::new_checksummed(writer, dimensions, provenance)
+            .map_err(AtomicFitsWriteError::Encode)?;
         Ok(Self {
             destination,
             parent,
@@ -245,7 +240,9 @@ impl AtomicF64PrimaryStreamWriter {
             encoder,
             guard,
         } = self;
-        let (mut writer, summary) = encoder.finish().map_err(AtomicFitsWriteError::Encode)?;
+        let (mut writer, summary) = encoder
+            .finish_with_checksums()
+            .map_err(AtomicFitsWriteError::Encode)?;
         writer.flush().map_err(AtomicFitsWriteError::Flush)?;
         Ok(CompletedAtomicFits {
             destination,
@@ -485,7 +482,10 @@ mod tests {
 
     use aether_core::Dimensions;
 
-    use crate::{HeaderReadOptions, PrimaryImageReader, SampleStatus};
+    use crate::{
+        BLOCK_SIZE, HeaderReadOptions, PrimaryImageReader, SampleStatus, checksum_aligned,
+        is_negative_zero,
+    };
 
     use super::*;
 
@@ -618,6 +618,42 @@ mod tests {
             reader.report().header().string("AETHALG"),
             Some(provenance.algorithm_id())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn publishes_valid_datasum_and_checksum_cards() -> Result<(), Box<dyn StdError>> {
+        let directory = TestDirectory::new()?;
+        let path = directory.path.join("result.fits");
+
+        let summary = write_f64_primary_atomic_new(&path, &image(10.0)?)?;
+        let bytes = fs::read(&path)?;
+        let data = bytes
+            .get(BLOCK_SIZE..)
+            .ok_or_else(|| io::Error::other("test FITS data unit is missing"))?;
+        let data_checksum = checksum_aligned(data)?;
+        let hdu_checksum = checksum_aligned(&bytes)?;
+        let reader = PrimaryImageReader::open(File::open(&path)?, HeaderReadOptions::default())?;
+        let header = reader.report().header();
+
+        assert_eq!(summary.data_checksum(), Some(data_checksum));
+        assert_eq!(
+            header.string("DATASUM"),
+            Some(data_checksum.to_string().as_str())
+        );
+        let encoded = summary
+            .encoded_checksum()
+            .ok_or_else(|| io::Error::other("write summary omitted CHECKSUM"))?;
+        let encoded: String = encoded.into_iter().map(char::from).collect();
+        assert_eq!(header.string("CHECKSUM"), Some(encoded.as_str()));
+        assert!(is_negative_zero(hdu_checksum));
+
+        let mut corrupted = bytes;
+        let sample = corrupted
+            .get_mut(BLOCK_SIZE)
+            .ok_or_else(|| io::Error::other("test sample is missing"))?;
+        *sample ^= 1;
+        assert!(!is_negative_zero(checksum_aligned(&corrupted)?));
         Ok(())
     }
 

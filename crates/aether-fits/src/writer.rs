@@ -1,10 +1,15 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 
 use aether_core::{Dimensions, PixelFlags, ScientificImage};
 
-use crate::{BLOCK_SIZE, CARD_SIZE};
+use crate::{
+    BLOCK_SIZE, CARD_SIZE, FitsChecksum, checksum_aligned, combine_checksums, encode_checksum,
+    is_negative_zero,
+};
+
+const INITIAL_CHECKSUM_VALUE: &str = "0000000000000000";
 
 /// Canonical quiet-NaN payload used for unavailable floating FITS samples.
 pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
@@ -125,6 +130,8 @@ pub struct FitsWriteSummary {
     samples_written: u64,
     substituted_samples: u64,
     bytes_written: u64,
+    data_checksum: Option<u32>,
+    encoded_checksum: Option<[u8; 16]>,
 }
 
 impl FitsWriteSummary {
@@ -145,6 +152,18 @@ impl FitsWriteSummary {
     pub const fn bytes_written(self) -> u64 {
         self.bytes_written
     }
+
+    /// One's-complement checksum stored by `DATASUM`, when generated.
+    #[must_use]
+    pub const fn data_checksum(self) -> Option<u32> {
+        self.data_checksum
+    }
+
+    /// Recommended 16-byte `CHECKSUM` value, when generated.
+    #[must_use]
+    pub const fn encoded_checksum(self) -> Option<[u8; 16]> {
+        self.encoded_checksum
+    }
 }
 
 /// Failure while encoding a strict binary64 primary FITS image.
@@ -152,6 +171,11 @@ impl FitsWriteSummary {
 pub enum FitsWriteError {
     /// A derived byte or sample count overflowed its representation.
     SizeOverflow,
+    /// The bounded primary-header buffer could not be allocated.
+    HeaderAllocationFailed {
+        /// Exact capacity requested for the generated header.
+        bytes: usize,
+    },
     /// Image samples and mask entries violated their shared length invariant.
     ImageInvariant,
     /// A stream chunk would exceed the declared primary-image sample count.
@@ -173,6 +197,8 @@ pub enum FitsWriteError {
         /// Keyword associated with the card.
         keyword: &'static str,
     },
+    /// Internal checksum patching did not produce FITS negative zero.
+    ChecksumInvariant,
     /// The destination rejected header, data, or padding bytes.
     Io(io::Error),
 }
@@ -181,6 +207,9 @@ impl Display for FitsWriteError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SizeOverflow => formatter.write_str("FITS output size overflows"),
+            Self::HeaderAllocationFailed { bytes } => {
+                write!(formatter, "cannot allocate {bytes}-byte FITS header buffer")
+            }
             Self::ImageInvariant => {
                 formatter.write_str("image sample and mask lengths do not match")
             }
@@ -201,6 +230,9 @@ impl Display for FitsWriteError {
                     "generated FITS card `{keyword}` exceeds 80 bytes"
                 )
             }
+            Self::ChecksumInvariant => {
+                formatter.write_str("generated FITS checksum does not verify as negative zero")
+            }
             Self::Io(error) => write!(formatter, "cannot write FITS output: {error}"),
         }
     }
@@ -211,10 +243,12 @@ impl Error for FitsWriteError {
         match self {
             Self::Io(error) => Some(error),
             Self::SizeOverflow
+            | Self::HeaderAllocationFailed { .. }
             | Self::ImageInvariant
             | Self::TooManySamples { .. }
             | Self::IncompleteSamples { .. }
-            | Self::CardTooLong { .. } => None,
+            | Self::CardTooLong { .. }
+            | Self::ChecksumInvariant => None,
         }
     }
 }
@@ -231,6 +265,25 @@ pub struct F64PrimaryStreamWriter<W: Write> {
     written_samples: usize,
     substituted_samples: u64,
     padded_header_bytes: usize,
+    checksum_header: Option<ChecksumHeader>,
+    data_checksum: Option<FitsChecksum>,
+}
+
+struct ChecksumHeader {
+    bytes: Vec<u8>,
+    datasum_card_offset: usize,
+    checksum_card_offset: usize,
+}
+
+struct PrimaryHeader {
+    padded_bytes: usize,
+    checksum: Option<ChecksumHeader>,
+}
+
+struct FinishedDataUnit<W> {
+    writer: W,
+    summary: FitsWriteSummary,
+    checksum: Option<(ChecksumHeader, u32)>,
 }
 
 impl<W: Write> F64PrimaryStreamWriter<W> {
@@ -242,7 +295,7 @@ impl<W: Write> F64PrimaryStreamWriter<W> {
     /// sample chunks are accepted. The destination may contain a valid header
     /// prefix when an error is returned.
     pub fn new(writer: W, dimensions: Dimensions) -> Result<Self, FitsWriteError> {
-        Self::new_inner(writer, dimensions, None)
+        Self::new_inner(writer, dimensions, None, false)
     }
 
     /// Starts an incremental binary64 primary FITS image with provenance.
@@ -255,21 +308,32 @@ impl<W: Write> F64PrimaryStreamWriter<W> {
         dimensions: Dimensions,
         provenance: &FitsOutputProvenance,
     ) -> Result<Self, FitsWriteError> {
-        Self::new_inner(writer, dimensions, Some(provenance))
+        Self::new_inner(writer, dimensions, Some(provenance), false)
+    }
+
+    pub(crate) fn new_checksummed(
+        writer: W,
+        dimensions: Dimensions,
+        provenance: Option<&FitsOutputProvenance>,
+    ) -> Result<Self, FitsWriteError> {
+        Self::new_inner(writer, dimensions, provenance, true)
     }
 
     fn new_inner(
         mut writer: W,
         dimensions: Dimensions,
         provenance: Option<&FitsOutputProvenance>,
+        include_checksums: bool,
     ) -> Result<Self, FitsWriteError> {
-        let padded_header_bytes = write_primary_header(&mut writer, dimensions, provenance)?;
+        let header = write_primary_header(&mut writer, dimensions, provenance, include_checksums)?;
         Ok(Self {
             writer,
             expected_samples: dimensions.pixel_count(),
             written_samples: 0,
             substituted_samples: 0,
-            padded_header_bytes,
+            padded_header_bytes: header.padded_bytes,
+            checksum_header: header.checksum,
+            data_checksum: include_checksums.then(FitsChecksum::new),
         })
     }
 
@@ -309,9 +373,11 @@ impl<W: Write> F64PrimaryStreamWriter<W> {
                     .ok_or(FitsWriteError::SizeOverflow)?;
                 f64::from_bits(CANONICAL_FITS_NAN_BITS)
             };
-            self.writer
-                .write_all(&stored.to_be_bytes())
-                .map_err(FitsWriteError::Io)?;
+            let bytes = stored.to_be_bytes();
+            self.writer.write_all(&bytes).map_err(FitsWriteError::Io)?;
+            if let Some(checksum) = &mut self.data_checksum {
+                checksum.update(&bytes);
+            }
         }
         self.written_samples = attempted;
         Ok(())
@@ -338,7 +404,15 @@ impl<W: Write> F64PrimaryStreamWriter<W> {
     ///
     /// Returns [`FitsWriteError::IncompleteSamples`] unless every declared
     /// sample was supplied, or an I/O error while writing final zero padding.
-    pub fn finish(mut self) -> Result<(W, FitsWriteSummary), FitsWriteError> {
+    pub fn finish(self) -> Result<(W, FitsWriteSummary), FitsWriteError> {
+        let finished = self.finish_data_unit()?;
+        if finished.checksum.is_some() {
+            return Err(FitsWriteError::ChecksumInvariant);
+        }
+        Ok((finished.writer, finished.summary))
+    }
+
+    fn finish_data_unit(mut self) -> Result<FinishedDataUnit<W>, FitsWriteError> {
         if self.written_samples != self.expected_samples {
             return Err(FitsWriteError::IncompleteSamples {
                 expected: self.expected_samples,
@@ -348,6 +422,9 @@ impl<W: Write> F64PrimaryStreamWriter<W> {
         let data_bytes = checked_data_bytes(self.expected_samples)?;
         let data_padding = block_padding(data_bytes);
         write_padding(&mut self.writer, 0, data_padding)?;
+        if let Some(checksum) = &mut self.data_checksum {
+            update_zero_padding(checksum, data_padding);
+        }
         let bytes_written = self
             .padded_header_bytes
             .checked_add(data_bytes)
@@ -356,14 +433,63 @@ impl<W: Write> F64PrimaryStreamWriter<W> {
             .ok_or(FitsWriteError::SizeOverflow)?;
         let samples_written =
             u64::try_from(self.written_samples).map_err(|_| FitsWriteError::SizeOverflow)?;
-        Ok((
-            self.writer,
-            FitsWriteSummary {
+        Ok(FinishedDataUnit {
+            writer: self.writer,
+            summary: FitsWriteSummary {
                 samples_written,
                 substituted_samples: self.substituted_samples,
                 bytes_written,
+                data_checksum: None,
+                encoded_checksum: None,
             },
-        ))
+            checksum: self
+                .checksum_header
+                .zip(self.data_checksum.map(FitsChecksum::finish_zero_padded)),
+        })
+    }
+}
+
+impl<W: Write + Seek> F64PrimaryStreamWriter<W> {
+    pub(crate) fn finish_with_checksums(self) -> Result<(W, FitsWriteSummary), FitsWriteError> {
+        let finished = self.finish_data_unit()?;
+        let mut writer = finished.writer;
+        let mut summary = finished.summary;
+        let Some((mut header, data_checksum)) = finished.checksum else {
+            return Err(FitsWriteError::ChecksumInvariant);
+        };
+
+        replace_string_card(
+            &mut header.bytes,
+            header.datasum_card_offset,
+            "DATASUM",
+            &data_checksum.to_string(),
+        )?;
+        let initial_header_checksum =
+            checksum_aligned(&header.bytes).map_err(|_| FitsWriteError::ChecksumInvariant)?;
+        let hdu_checksum = combine_checksums(initial_header_checksum, data_checksum);
+        let encoded_checksum = encode_checksum(hdu_checksum);
+        let encoded_text: String = encoded_checksum.iter().copied().map(char::from).collect();
+        replace_string_card(
+            &mut header.bytes,
+            header.checksum_card_offset,
+            "CHECKSUM",
+            &encoded_text,
+        )?;
+
+        let final_header_checksum =
+            checksum_aligned(&header.bytes).map_err(|_| FitsWriteError::ChecksumInvariant)?;
+        if !is_negative_zero(combine_checksums(final_header_checksum, data_checksum)) {
+            return Err(FitsWriteError::ChecksumInvariant);
+        }
+
+        writer
+            .seek(SeekFrom::Start(0))
+            .and_then(|_| writer.write_all(&header.bytes))
+            .and_then(|_| writer.seek(SeekFrom::End(0)).map(|_| ()))
+            .map_err(FitsWriteError::Io)?;
+        summary.data_checksum = Some(data_checksum);
+        summary.encoded_checksum = Some(encoded_checksum);
+        Ok((writer, summary))
     }
 }
 
@@ -431,73 +557,143 @@ fn write_primary_header<W: Write>(
     writer: &mut W,
     dimensions: Dimensions,
     provenance: Option<&FitsOutputProvenance>,
-) -> Result<usize, FitsWriteError> {
+    include_checksums: bool,
+) -> Result<PrimaryHeader, FitsWriteError> {
     let axis_count = if dimensions.planes() == 1 { 2 } else { 3 };
+    let mut header = Vec::new();
+    header
+        .try_reserve_exact(BLOCK_SIZE)
+        .map_err(|_| FitsWriteError::HeaderAllocationFailed { bytes: BLOCK_SIZE })?;
     let mut header_bytes = 0_usize;
 
-    write_fixed_card(writer, "SIMPLE", "T", &mut header_bytes)?;
-    write_fixed_card(writer, "BITPIX", "-64", &mut header_bytes)?;
-    write_fixed_card(writer, "NAXIS", &axis_count.to_string(), &mut header_bytes)?;
+    write_fixed_card(&mut header, "SIMPLE", "T", &mut header_bytes)?;
+    write_fixed_card(&mut header, "BITPIX", "-64", &mut header_bytes)?;
     write_fixed_card(
-        writer,
+        &mut header,
+        "NAXIS",
+        &axis_count.to_string(),
+        &mut header_bytes,
+    )?;
+    write_fixed_card(
+        &mut header,
         "NAXIS1",
         &dimensions.width().to_string(),
         &mut header_bytes,
     )?;
     write_fixed_card(
-        writer,
+        &mut header,
         "NAXIS2",
         &dimensions.height().to_string(),
         &mut header_bytes,
     )?;
     if axis_count == 3 {
         write_fixed_card(
-            writer,
+            &mut header,
             "NAXIS3",
             &dimensions.planes().to_string(),
             &mut header_bytes,
         )?;
     }
-    write_fixed_card(writer, "EXTEND", "T", &mut header_bytes)?;
+    write_fixed_card(&mut header, "EXTEND", "T", &mut header_bytes)?;
     if let Some(provenance) = provenance {
         write_string_card(
-            writer,
+            &mut header,
             "CREATOR",
             &format!("AetherStack {}", env!("CARGO_PKG_VERSION")),
             &mut header_bytes,
         )?;
         write_fixed_card(
-            writer,
+            &mut header,
             "AETHVER",
             &FITS_OUTPUT_PROVENANCE_VERSION.to_string(),
             &mut header_bytes,
         )?;
         write_string_card(
-            writer,
+            &mut header,
             "AETHMAN",
             provenance.manifest_sha256(),
             &mut header_bytes,
         )?;
-        write_string_card(writer, "AETHGRP", provenance.group_id(), &mut header_bytes)?;
         write_string_card(
-            writer,
+            &mut header,
+            "AETHGRP",
+            provenance.group_id(),
+            &mut header_bytes,
+        )?;
+        write_string_card(
+            &mut header,
             "AETHALG",
             provenance.algorithm_id(),
             &mut header_bytes,
         )?;
         write_fixed_card(
-            writer,
+            &mut header,
             "AETHSRC",
             &provenance.source_count().to_string(),
             &mut header_bytes,
         )?;
     }
-    write_card(writer, "END", "END", &mut header_bytes)?;
+    let checksum_offsets = if include_checksums {
+        let datasum_card_offset = header_bytes;
+        write_string_card(&mut header, "DATASUM", "0", &mut header_bytes)?;
+        let checksum_card_offset = header_bytes;
+        write_string_card(
+            &mut header,
+            "CHECKSUM",
+            INITIAL_CHECKSUM_VALUE,
+            &mut header_bytes,
+        )?;
+        Some((datasum_card_offset, checksum_card_offset))
+    } else {
+        None
+    };
+    write_card(&mut header, "END", "END", &mut header_bytes)?;
     let header_padding = block_padding(header_bytes);
-    write_padding(writer, b' ', header_padding)?;
-    header_bytes
+    write_padding(&mut header, b' ', header_padding)?;
+    let padded_bytes = header_bytes
         .checked_add(header_padding)
-        .ok_or(FitsWriteError::SizeOverflow)
+        .ok_or(FitsWriteError::SizeOverflow)?;
+    if header.len() != padded_bytes {
+        return Err(FitsWriteError::SizeOverflow);
+    }
+    writer.write_all(&header).map_err(FitsWriteError::Io)?;
+
+    Ok(PrimaryHeader {
+        padded_bytes,
+        checksum: checksum_offsets.map(|(datasum_card_offset, checksum_card_offset)| {
+            ChecksumHeader {
+                bytes: header,
+                datasum_card_offset,
+                checksum_card_offset,
+            }
+        }),
+    })
+}
+
+fn replace_string_card(
+    header: &mut [u8],
+    offset: usize,
+    keyword: &'static str,
+    value: &str,
+) -> Result<(), FitsWriteError> {
+    let card = format_string_card(keyword, value)?;
+    let end = offset
+        .checked_add(CARD_SIZE)
+        .ok_or(FitsWriteError::SizeOverflow)?;
+    let destination = header
+        .get_mut(offset..end)
+        .ok_or(FitsWriteError::ChecksumInvariant)?;
+    destination.copy_from_slice(&card);
+    Ok(())
+}
+
+fn format_string_card(
+    keyword: &'static str,
+    value: &str,
+) -> Result<[u8; CARD_SIZE], FitsWriteError> {
+    let escaped = value.replace('\'', "''");
+    let text = format!("{keyword:<8}= '{escaped}'");
+    format_card(keyword, &text)
 }
 
 fn write_string_card<W: Write>(
@@ -506,9 +702,8 @@ fn write_string_card<W: Write>(
     value: &str,
     header_bytes: &mut usize,
 ) -> Result<(), FitsWriteError> {
-    let escaped = value.replace('\'', "''");
-    let text = format!("{keyword:<8}= '{escaped}'");
-    write_card(writer, keyword, &text, header_bytes)
+    let card = format_string_card(keyword, value)?;
+    write_formatted_card(writer, &card, header_bytes)
 }
 
 fn write_fixed_card<W: Write>(
@@ -527,19 +722,31 @@ fn write_card<W: Write>(
     text: &str,
     header_bytes: &mut usize,
 ) -> Result<(), FitsWriteError> {
+    let card = format_card(keyword, text)?;
+    write_formatted_card(writer, &card, header_bytes)
+}
+
+fn format_card(keyword: &'static str, text: &str) -> Result<[u8; CARD_SIZE], FitsWriteError> {
     let source = text.as_bytes();
-    let Some(destination_length) = CARD_SIZE.checked_sub(source.len()) else {
+    if source.len() > CARD_SIZE {
         return Err(FitsWriteError::CardTooLong { keyword });
-    };
+    }
     let mut card = [b' '; CARD_SIZE];
     let Some(destination) = card.get_mut(..source.len()) else {
         return Err(FitsWriteError::CardTooLong { keyword });
     };
     destination.copy_from_slice(source);
-    writer.write_all(&card).map_err(FitsWriteError::Io)?;
+    Ok(card)
+}
+
+fn write_formatted_card<W: Write>(
+    writer: &mut W,
+    card: &[u8; CARD_SIZE],
+    header_bytes: &mut usize,
+) -> Result<(), FitsWriteError> {
+    writer.write_all(card).map_err(FitsWriteError::Io)?;
     *header_bytes = header_bytes
-        .checked_add(source.len())
-        .and_then(|bytes| bytes.checked_add(destination_length))
+        .checked_add(CARD_SIZE)
         .ok_or(FitsWriteError::SizeOverflow)?;
     Ok(())
 }
@@ -572,6 +779,15 @@ fn write_padding<W: Write>(
         bytes -= length;
     }
     Ok(())
+}
+
+fn update_zero_padding(checksum: &mut FitsChecksum, mut bytes: usize) {
+    let block = [0_u8; BLOCK_SIZE];
+    while bytes > 0 {
+        let length = bytes.min(BLOCK_SIZE);
+        checksum.update(&block[..length]);
+        bytes -= length;
+    }
 }
 
 fn is_lower_sha256(value: &str) -> bool {

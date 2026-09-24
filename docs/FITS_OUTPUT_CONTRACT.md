@@ -80,6 +80,39 @@ overwrite each other and a reader never observes a partial destination. The
 temporary link is removed afterward. `write_f64_primary_atomic_new` is the
 complete-image convenience API over the same two-phase mechanism.
 
+## `DATASUM` and `CHECKSUM`
+
+Atomic output implements the registered FITS checksum convention. Every data
+byte is accumulated while it is streamed as big-endian 32-bit words using
+one's-complement end-around carry. Zero data padding is included. At finish:
+
+1. `DATASUM` receives the unsigned decimal checksum of the padded data records
+   as a quoted string;
+2. the header is checksummed with `CHECKSUM` initialized to 16 ASCII zeroes;
+3. the complement of the combined header and data checksum is encoded using the
+   recommended 16-character alphanumeric algorithm;
+4. the completed header is patched inside the still-private staging file;
+5. the implementation verifies that the complete HDU now sums to
+   one's-complement negative zero before returning it for readback.
+
+The generic write-only stream API cannot safely backpatch a header and therefore
+does not claim embedded checksums. The atomic seekable writer generates both
+cards by default. The write summary returns the numerical data checksum and the
+encoded complete-HDU checksum when they were generated.
+
+`PrimaryImageReader::verify_checksums` independently rereads the exact padded
+header and data ranges using fixed-size storage. For each keyword it distinguishes
+absence, an explicitly undefined value, malformed syntax, a mismatch, and a
+valid result. Truncated padding is an I/O failure rather than a checksum
+mismatch. Verification restores the caller's stream position on success.
+
+Unit tests cover arbitrary streaming chunk boundaries, end-around carry, the
+registered encoding example, corruption, malformed and undefined values, and
+truncation. A generated output was also accepted independently by CFITSIO's
+`fitsverify` and Astropy's checksum and data-checksum verification. The
+convention detects likely accidental corruption; it is not a cryptographic
+authenticity mechanism.
+
 This API deliberately does not replace an existing artifact. Replacement needs
 a separate policy because portable standard-library rename behavior differs
 between supported operating systems. On Unix, directory metadata is synchronized
@@ -92,5 +125,5 @@ cleanup. Errors during temporary-link cleanup or directory synchronization
 report that the destination is already published, preventing a caller from
 mistakenly retrying under another name.
 
-FITS `CHECKSUM` and `DATASUM` cards remain future output work and are not yet
-claimed by this contract.
+The implementation follows the
+[registered FITS checksum convention](https://fits.gsfc.nasa.gov/registry/checksum.html).

@@ -22,8 +22,9 @@ optimized CPU and GPU paths must match.
   floating-point data, including scaling and invalid-pixel mask propagation;
 - conformant big-endian binary64 primary-FITS output with incremental sample
   encoding, deterministic NaN substitution, exact block padding, private
-  pre-publication readback, atomic create-new publication, and validated
-  path-free processing provenance;
+  pre-publication readback, registered `DATASUM`/`CHECKSUM` generation and
+  verification, atomic create-new publication, and validated path-free
+  processing provenance;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;

@@ -428,9 +428,9 @@ safety reasoning. They do not narrate obvious syntax.
     and interruption/restart equivalence tests are complete. Streaming output
     now writes bounded scan-line bands to a private FITS stream. Exact statistics
     are calculated by bounded readback before atomic publication.~~
-14. Implement and independently verify FITS `DATASUM` and `CHECKSUM`, then add
-    corruption and interoperability tests before enabling those cards by
-    default.
+14. ~~Implement FITS `DATASUM` and `CHECKSUM` generation and verification. Add
+    corruption, malformed-keyword, chunk-boundary, registered-vector, and
+    interoperability tests before enabling the cards in atomic output.~~
 15. Begin Phase 4 with versioned bias, dark, and flat master plans, including
     short-exposure dark matching. The planner must support real bias frames while
     allowing a matched short dark to calibrate a flat without subtracting both

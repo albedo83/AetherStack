@@ -5,8 +5,9 @@ use std::io::{Read, Seek, SeekFrom};
 use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
 
 use crate::{
-    FitsError, HeaderReadOptions, HeaderReport, ImageHduDescriptor, ImageHduError,
-    StoredSampleFormat, read_primary_header,
+    DatasumVerification, FitsChecksum, FitsError, FitsValue, HduChecksumVerification, Header,
+    HeaderReadOptions, HeaderReport, ImageHduDescriptor, ImageHduError, PrimaryChecksumReport,
+    StoredSampleFormat, combine_checksums, is_negative_zero, read_primary_header,
 };
 
 const SCRATCH_BYTES: usize = 8 * 1_024;
@@ -134,6 +135,38 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
     #[must_use]
     pub fn into_inner(self) -> R {
         self.reader
+    }
+
+    /// Verifies optional `DATASUM` and `CHECKSUM` cards for the primary HDU.
+    ///
+    /// Absence, an explicitly undefined value, malformed syntax, and checksum
+    /// mismatch are distinct report states. Verification reads the exact padded
+    /// header and data records in bounded chunks and restores the original stream
+    /// position after a successful calculation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when stream position cannot be obtained, a checksum
+    /// range cannot be sought or read completely, or the original position cannot
+    /// be restored. Truncated padded data is therefore never reported as a mere
+    /// checksum mismatch.
+    pub fn verify_checksums(&mut self) -> Result<PrimaryChecksumReport, ImageReadError> {
+        let original_position = self.reader.stream_position().map_err(ImageReadError::Io)?;
+        let calculation = calculate_primary_checksums(&mut self.reader, &self.descriptor);
+        let restoration = self
+            .reader
+            .seek(SeekFrom::Start(original_position))
+            .map_err(ImageReadError::Io);
+        let (header_checksum, data_checksum) = calculation?;
+        restoration?;
+
+        Ok(PrimaryChecksumReport::new(
+            verify_datasum_card(self.report.header(), data_checksum),
+            verify_checksum_card(
+                self.report.header(),
+                combine_checksums(header_checksum, data_checksum),
+            ),
+        ))
     }
 
     /// Reads a contiguous sample range and converts it to physical `f64` values.
@@ -422,6 +455,95 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
     }
 }
 
+fn calculate_primary_checksums<R: Read + Seek>(
+    reader: &mut R,
+    descriptor: &ImageHduDescriptor,
+) -> Result<(u32, u32), ImageReadError> {
+    let header_checksum = checksum_stream_range(reader, 0, descriptor.data_offset())?;
+    let data_checksum = checksum_stream_range(
+        reader,
+        descriptor.data_offset(),
+        descriptor.padded_data_bytes(),
+    )?;
+    Ok((header_checksum, data_checksum))
+}
+
+fn checksum_stream_range<R: Read + Seek>(
+    reader: &mut R,
+    offset: u64,
+    length: u64,
+) -> Result<u32, ImageReadError> {
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(ImageReadError::Io)?;
+    let mut checksum = FitsChecksum::new();
+    let mut remaining = length;
+    let mut scratch = [0_u8; SCRATCH_BYTES];
+    while remaining > 0 {
+        let count = usize::try_from(remaining)
+            .unwrap_or(usize::MAX)
+            .min(scratch.len());
+        let chunk = &mut scratch[..count];
+        reader.read_exact(chunk).map_err(ImageReadError::Io)?;
+        checksum.update(chunk);
+        remaining -= count as u64;
+    }
+    Ok(checksum.finish_zero_padded())
+}
+
+fn verify_datasum_card(header: &Header, calculated: u32) -> DatasumVerification {
+    let mut cards = header.cards_named("DATASUM");
+    let Some(card) = cards.next() else {
+        return DatasumVerification::Missing;
+    };
+    if cards.next().is_some() {
+        return DatasumVerification::Malformed;
+    }
+    let Some(FitsValue::String(value)) = card.value() else {
+        return DatasumVerification::Malformed;
+    };
+    if value.trim().is_empty() {
+        return DatasumVerification::Undefined;
+    }
+    let Ok(declared) = value.trim().parse::<u32>() else {
+        return DatasumVerification::Malformed;
+    };
+    if declared == calculated {
+        DatasumVerification::Valid {
+            checksum: calculated,
+        }
+    } else {
+        DatasumVerification::Mismatch {
+            declared,
+            calculated,
+        }
+    }
+}
+
+fn verify_checksum_card(header: &Header, calculated: u32) -> HduChecksumVerification {
+    let mut cards = header.cards_named("CHECKSUM");
+    let Some(card) = cards.next() else {
+        return HduChecksumVerification::Missing;
+    };
+    if cards.next().is_some() {
+        return HduChecksumVerification::Malformed;
+    }
+    let Some(FitsValue::String(value)) = card.value() else {
+        return HduChecksumVerification::Malformed;
+    };
+    if value.trim().is_empty() {
+        return HduChecksumVerification::Undefined;
+    }
+    if value.len() != 16 || !value.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return HduChecksumVerification::Malformed;
+    }
+    if is_negative_zero(calculated) {
+        HduChecksumVerification::Valid
+    } else {
+        HduChecksumVerification::Mismatch { calculated }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum StoredSample {
     Integer(i64),
@@ -619,9 +741,12 @@ impl Error for ImageReadError {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
     use std::io::Cursor;
 
-    use crate::{BLOCK_SIZE, CARD_SIZE};
+    use aether_core::{Dimensions, PixelFlags, ScientificImage};
+
+    use crate::{BLOCK_SIZE, CARD_SIZE, F64PrimaryStreamWriter, write_f64_primary};
 
     use super::*;
 
@@ -662,6 +787,150 @@ mod tests {
         }
         bytes.extend_from_slice(data);
         bytes
+    }
+
+    fn checksummed_image() -> Result<Vec<u8>, Box<dyn StdError>> {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        let mut writer =
+            F64PrimaryStreamWriter::new_checksummed(Cursor::new(Vec::new()), dimensions, None)?;
+        writer.write_samples(&[10.0, 11.0], &[PixelFlags::CLEAR; 2])?;
+        let (cursor, _summary) = writer.finish_with_checksums()?;
+        Ok(cursor.into_inner())
+    }
+
+    fn card_offset(bytes: &[u8], keyword: &[u8; 8]) -> Option<usize> {
+        bytes[..BLOCK_SIZE]
+            .chunks_exact(CARD_SIZE)
+            .position(|card| card.starts_with(keyword))
+            .map(|index| index * CARD_SIZE)
+    }
+
+    #[test]
+    fn verifies_generated_primary_checksums() -> Result<(), Box<dyn StdError>> {
+        let mut reader = PrimaryImageReader::open(
+            Cursor::new(checksummed_image()?),
+            HeaderReadOptions::default(),
+        )?;
+
+        let report = reader.verify_checksums()?;
+
+        assert!(matches!(
+            report.datasum(),
+            DatasumVerification::Valid { .. }
+        ));
+        assert_eq!(report.checksum(), HduChecksumVerification::Valid);
+        assert!(report.is_fully_verified());
+        Ok(())
+    }
+
+    #[test]
+    fn distinguishes_missing_checksum_keywords() -> Result<(), Box<dyn StdError>> {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        let image = ScientificImage::from_pixels(dimensions, vec![10.0, 11.0])?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+        let mut reader =
+            PrimaryImageReader::open(Cursor::new(bytes), HeaderReadOptions::default())?;
+
+        let report = reader.verify_checksums()?;
+
+        assert_eq!(report.datasum(), DatasumVerification::Missing);
+        assert_eq!(report.checksum(), HduChecksumVerification::Missing);
+        assert!(!report.is_fully_verified());
+        Ok(())
+    }
+
+    #[test]
+    fn reports_data_and_hdu_checksum_mismatches() -> Result<(), Box<dyn StdError>> {
+        let mut bytes = checksummed_image()?;
+        let sample = bytes
+            .get_mut(BLOCK_SIZE)
+            .ok_or_else(|| std::io::Error::other("test sample is missing"))?;
+        *sample ^= 1;
+        let mut reader =
+            PrimaryImageReader::open(Cursor::new(bytes), HeaderReadOptions::default())?;
+
+        let report = reader.verify_checksums()?;
+
+        assert!(matches!(
+            report.datasum(),
+            DatasumVerification::Mismatch { .. }
+        ));
+        assert!(matches!(
+            report.checksum(),
+            HduChecksumVerification::Mismatch { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn distinguishes_malformed_checksum_values() -> Result<(), Box<dyn StdError>> {
+        let mut malformed_datasum = checksummed_image()?;
+        let datasum_offset = card_offset(&malformed_datasum, b"DATASUM ")
+            .ok_or_else(|| std::io::Error::other("DATASUM card is missing"))?;
+        malformed_datasum[datasum_offset + 11] = b'x';
+        let mut reader =
+            PrimaryImageReader::open(Cursor::new(malformed_datasum), HeaderReadOptions::default())?;
+        assert_eq!(
+            reader.verify_checksums()?.datasum(),
+            DatasumVerification::Malformed
+        );
+
+        let mut malformed_checksum = checksummed_image()?;
+        let checksum_offset = card_offset(&malformed_checksum, b"CHECKSUM")
+            .ok_or_else(|| std::io::Error::other("CHECKSUM card is missing"))?;
+        malformed_checksum[checksum_offset + 11] = b'!';
+        let mut reader = PrimaryImageReader::open(
+            Cursor::new(malformed_checksum),
+            HeaderReadOptions::default(),
+        )?;
+        assert_eq!(
+            reader.verify_checksums()?.checksum(),
+            HduChecksumVerification::Malformed
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn distinguishes_explicitly_undefined_checksum_values() -> Result<(), Box<dyn StdError>> {
+        let mut bytes = checksummed_image()?;
+        for keyword in [b"DATASUM ", b"CHECKSUM"] {
+            let offset = card_offset(&bytes, keyword)
+                .ok_or_else(|| std::io::Error::other("checksum card is missing"))?;
+            let card = bytes
+                .get_mut(offset..offset + CARD_SIZE)
+                .ok_or_else(|| std::io::Error::other("checksum card is truncated"))?;
+            let closing_quote = card[11..]
+                .iter()
+                .position(|byte| *byte == b'\'')
+                .map(|relative| relative + 11)
+                .ok_or_else(|| std::io::Error::other("checksum quote is missing"))?;
+            card[11..closing_quote].fill(b' ');
+        }
+        let mut reader =
+            PrimaryImageReader::open(Cursor::new(bytes), HeaderReadOptions::default())?;
+
+        let report = reader.verify_checksums()?;
+
+        assert_eq!(report.datasum(), DatasumVerification::Undefined);
+        assert_eq!(report.checksum(), HduChecksumVerification::Undefined);
+        Ok(())
+    }
+
+    #[test]
+    fn checksum_verification_rejects_truncated_padding() -> Result<(), Box<dyn StdError>> {
+        let mut bytes = checksummed_image()?;
+        let removed = bytes.pop();
+        assert!(removed.is_some());
+        let mut reader =
+            PrimaryImageReader::open(Cursor::new(bytes), HeaderReadOptions::default())?;
+
+        assert!(matches!(
+            reader.verify_checksums(),
+            Err(ImageReadError::Io(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof
+        ));
+        Ok(())
     }
 
     #[test]

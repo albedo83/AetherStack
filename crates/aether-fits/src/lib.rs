@@ -7,6 +7,7 @@
 
 mod atomic_writer;
 mod card;
+mod checksum;
 mod diagnostic;
 mod error;
 mod header;
@@ -20,6 +21,10 @@ pub use atomic_writer::{
     write_f64_primary_atomic_new, write_f64_primary_atomic_new_with_provenance,
 };
 pub use card::{Card, FitsValue};
+pub use checksum::{
+    DatasumVerification, FitsChecksum, FitsChecksumError, HduChecksumVerification,
+    PrimaryChecksumReport, checksum_aligned, combine_checksums, encode_checksum, is_negative_zero,
+};
 pub use diagnostic::{Diagnostic, DiagnosticCode, Severity, ValidationMode};
 pub use error::FitsError;
 pub use header::{Header, HeaderReport};
