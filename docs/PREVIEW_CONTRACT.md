@@ -65,25 +65,35 @@ not alter scientific cache state.
 
 The native command enforces a two-megapixel desktop limit and a fixed 256
 Ki-sample decode chunk even when a caller requests larger dimensions. It accepts
-only an explicit validated display transform; automatic stretch selection is a
-separate review-model responsibility.
+only an explicit validated display transform. A separate Rust command estimates
+the versioned `aether-preview-auto-stretch-v1` transform from the selected
+reference frame. The estimator ignores unsupported pixels, uses the median and
+Gaussian-consistent MAD for the black point, limits the white point to the
+99.95th percentile, and maps the measured background to 25% gray. Its median,
+scaled MAD, quantile, and exact support count remain inspectable. The presenter
+locks that explicit transform for subsequent frames in the active Blink role.
 
 ## Current scope and release gates
 
 The implemented path reads one selected plane from a 2D or 3D primary FITS image
 and produces scalar, grayscale, or native PNG output. The desktop Review surface
-accepts only identity-bound preview URLs. Session import and file selection are
-not wired to that bridge yet. The renderer does not yet demosaic a Bayer image,
-compose RGB planes, resolve a shared automatic stretch, cache pyramid levels, or
+accepts only identity-bound preview URLs. Native directory selection now runs
+the bounded session scanner, derives stable frame identities, preserves role
+conflicts, loads a real reference-stretched preview, offers fitted and actual
+preview-pixel presentation, and delegates metric-table sorting to the Rust
+review model. The renderer does not yet demosaic a Bayer image, compose RGB
+planes, estimate a multi-frame aggregate stretch, cache pyramid levels, or
 stream viewport tiles. Those capabilities require versioned cache keys and
 camera-aware tests before they are presented as complete.
 
 Synthetic tests cover edge support, non-finite exclusion, no-support blocks,
 chunk-size invariance, safety limits, automatic level selection, exact linear
 mapping, missing-pixel presentation, finite nonlinear transfer endpoints, PNG
-dimensions, invalid native transform rejection, and stale frontend identity
-rejection.
+dimensions, robust automatic-stretch behavior, invalid native transform
+rejection, cancelled directory selection, and stale frontend identity rejection.
 A representative 4144 by 2822 ASI294MC Pro light also reduced to 1036 by 706 at
 the automatically selected level with all 11,694,368 source samples accounted
-for. Real ASI294MC Pro and ToupTek 585C validation remains required for color
-preview presets.
+for. The complete 135-frame local ASI294MC Pro comparison session also imports
+under its explicit directory-preference policy, retains the 25 known flat/header
+conflicts, and produces a bounded PNG from a real light. ToupTek 585C validation
+and color preview presets remain required.

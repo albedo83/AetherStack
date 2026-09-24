@@ -22,6 +22,59 @@ pub const MAX_PREVIEW_IO_CHUNK_SAMPLES: usize = 1_024 * 1_024;
 /// Level 15 has at most `2^30` source samples in an interior square block, so
 /// the per-pixel `u32` support counters cannot overflow for a valid block.
 pub const MAX_REDUCTION_LEVEL: u8 = 15;
+/// Stable identifier for the first robust display-only stretch estimator.
+pub const AUTO_STRETCH_ALGORITHM_ID: &str = "aether-preview-auto-stretch-v1";
+
+const AUTO_STRETCH_SHADOW_SIGMA: f64 = 2.8;
+const AUTO_STRETCH_TARGET_BACKGROUND: f64 = 0.25;
+const AUTO_STRETCH_HIGH_QUANTILE: f64 = 0.9995;
+const NORMALIZED_BACKGROUND_EPSILON: f64 = 1.0e-6;
+
+/// Inspectable evidence behind one automatic display transform.
+///
+/// Automatic stretching changes only the presentation. The median, scaled
+/// median absolute deviation, high quantile, and exact supporting-pixel count
+/// are retained so a caller can explain why a preview looks the way it does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AutomaticDisplayTransform {
+    transform: DisplayTransform,
+    finite_samples: usize,
+    median: f64,
+    scaled_mad: f64,
+    high_quantile: f64,
+}
+
+impl AutomaticDisplayTransform {
+    /// Explicit transform suitable for [`render_grayscale_rgba8`].
+    #[must_use]
+    pub const fn transform(self) -> DisplayTransform {
+        self.transform
+    }
+
+    /// Number of reduced pixels supporting the estimator.
+    #[must_use]
+    pub const fn finite_samples(self) -> usize {
+        self.finite_samples
+    }
+
+    /// Median of the finite reduced pixels.
+    #[must_use]
+    pub const fn median(self) -> f64 {
+        self.median
+    }
+
+    /// Gaussian-consistent median absolute deviation (`MAD * 1.4826`).
+    #[must_use]
+    pub const fn scaled_mad(self) -> f64 {
+        self.scaled_mad
+    }
+
+    /// Upper order statistic used as the display white point candidate.
+    #[must_use]
+    pub const fn high_quantile(self) -> f64 {
+        self.high_quantile
+    }
+}
 
 /// Validated output constraints used to select a preview-pyramid level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -533,6 +586,110 @@ pub fn build_fits_preview<R: Read + Seek>(
     })
 }
 
+/// Estimates a robust, deterministic display-only transform from one preview.
+///
+/// The estimator ignores pixels without valid support, places the black point
+/// 2.8 scaled-MAD units below the median, and limits the white point to the
+/// 99.95th percentile so a single hot pixel cannot collapse the useful display
+/// range. A midtones transfer maps the measured background median to 25% gray.
+/// Constant images receive a small finite symmetric range instead of failing or
+/// inventing scientific variation.
+///
+/// The complete valid sample set is sorted with [`f64::total_cmp`], making the
+/// result independent of platform, I/O chunking, and thread scheduling.
+///
+/// # Errors
+///
+/// Returns a typed error when the preview arrays are inconsistent, no finite
+/// supported samples exist, allocation fails, or derived arithmetic leaves the
+/// finite numerical domain.
+pub fn estimate_display_transform(
+    preview: &ScalarPreview,
+) -> Result<AutomaticDisplayTransform, PreviewError> {
+    let pixel_count = preview
+        .width
+        .checked_mul(preview.height)
+        .ok_or(PreviewError::SizeOverflow)?;
+    if preview.values.len() != pixel_count || preview.valid_support.len() != pixel_count {
+        return Err(PreviewError::PreviewInvariant);
+    }
+
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(pixel_count)
+        .map_err(|_| PreviewError::AllocationFailed {
+            elements: pixel_count,
+        })?;
+    samples.extend(
+        preview
+            .values
+            .iter()
+            .zip(&preview.valid_support)
+            .filter_map(|(value, support)| (*support > 0 && value.is_finite()).then_some(*value)),
+    );
+    if samples.is_empty() {
+        return Err(PreviewError::NoValidSamples);
+    }
+
+    samples.sort_by(f64::total_cmp);
+    let median = median_of_sorted(&samples)?;
+    let high_index = ((samples.len() - 1) as f64 * AUTO_STRETCH_HIGH_QUANTILE).floor() as usize;
+    let high_quantile = samples[high_index];
+
+    for value in &mut samples {
+        *value = (*value - median).abs();
+        if !value.is_finite() {
+            return Err(PreviewError::NumericalOverflow);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    let mad = median_of_sorted(&samples)?;
+    let scaled_mad = mad * 1.4826;
+    if !scaled_mad.is_finite() {
+        return Err(PreviewError::NumericalOverflow);
+    }
+
+    let fallback_scale = median.abs().max(1.0) * 1.0e-6;
+    let black_point = if scaled_mad > 0.0 {
+        median - AUTO_STRETCH_SHADOW_SIGMA * scaled_mad
+    } else {
+        median - fallback_scale
+    };
+    let mut white_point = high_quantile;
+    if white_point <= black_point || white_point <= median {
+        white_point = median + fallback_scale;
+    }
+    if !black_point.is_finite() || !white_point.is_finite() || black_point >= white_point {
+        return Err(PreviewError::NumericalOverflow);
+    }
+
+    let normalized_background = ((median - black_point) / (white_point - black_point)).clamp(
+        NORMALIZED_BACKGROUND_EPSILON,
+        1.0 - NORMALIZED_BACKGROUND_EPSILON,
+    );
+    let midtone = solve_midtone(normalized_background, AUTO_STRETCH_TARGET_BACKGROUND)?;
+    let transform = DisplayTransform::new(
+        black_point,
+        white_point,
+        midtone,
+        TransferFunction::Midtones,
+    )
+    .map_err(|_| PreviewError::InvalidDisplayTransform)?;
+
+    Ok(AutomaticDisplayTransform {
+        transform,
+        finite_samples: preview
+            .valid_support
+            .iter()
+            .zip(&preview.values)
+            .filter(|(support, value)| **support > 0 && value.is_finite())
+            .count(),
+        median,
+        scaled_mad,
+        high_quantile,
+    })
+}
+
 /// Maps one scalar preview to packed RGBA8 with an explicit display transform.
 ///
 /// The transform never changes the scalar preview. Missing pixels use the
@@ -663,6 +820,8 @@ pub enum PreviewError {
     InvalidDisplayTransform,
     /// Internal scalar-preview arrays did not share one exact length.
     PreviewInvariant,
+    /// No finite pixel with valid source support was available for estimation.
+    NoValidSamples,
 }
 
 impl Display for PreviewError {
@@ -727,6 +886,9 @@ impl Display for PreviewError {
             }
             Self::PreviewInvariant => {
                 formatter.write_str("preview arrays do not share one pixel count")
+            }
+            Self::NoValidSamples => {
+                formatter.write_str("preview contains no finite pixel with valid support")
             }
         }
     }
@@ -826,6 +988,30 @@ fn map_transfer(value: f64, transform: DisplayTransform) -> Result<f64, PreviewE
     };
     if mapped.is_finite() {
         Ok(mapped.clamp(0.0, 1.0))
+    } else {
+        Err(PreviewError::NumericalOverflow)
+    }
+}
+
+fn median_of_sorted(values: &[f64]) -> Result<f64, PreviewError> {
+    let middle = values.len() / 2;
+    let median = if values.len().is_multiple_of(2) {
+        values[middle - 1] * 0.5 + values[middle] * 0.5
+    } else {
+        values[middle]
+    };
+    if median.is_finite() {
+        Ok(canonical_zero(median))
+    } else {
+        Err(PreviewError::NumericalOverflow)
+    }
+}
+
+fn solve_midtone(input: f64, output: f64) -> Result<f64, PreviewError> {
+    let denominator = input + output - 2.0 * input * output;
+    let midtone = input * (1.0 - output) / denominator;
+    if midtone.is_finite() && (0.0..1.0).contains(&midtone) {
+        Ok(midtone)
     } else {
         Err(PreviewError::NumericalOverflow)
     }
@@ -1041,6 +1227,61 @@ mod tests {
         assert_eq!(transparent.pixels(), &[0; 8]);
         assert_eq!(checker.pixels(), &[188, 64, 188, 255, 54, 22, 54, 255]);
         assert!(preview.values().iter().all(|value| value.is_nan()));
+        Ok(())
+    }
+
+    #[test]
+    fn automatic_stretch_is_robust_to_one_extreme_hot_pixel() -> TestResult {
+        let mut values: Vec<_> = (0..1_000)
+            .map(|index| 1_000.0 + f64::from(index % 11) - 5.0)
+            .collect();
+        values.push(65_535.0);
+        let mut reader = fits_reader(values.len(), 1, values)?;
+        let preview =
+            build_fits_preview(&mut reader, FitsPreviewParameters::new(0, 0, 2_000, 257)?)?;
+
+        let estimate = estimate_display_transform(&preview)?;
+
+        assert_eq!(estimate.finite_samples(), 1_001);
+        assert!(estimate.median() >= 999.0 && estimate.median() <= 1_001.0);
+        assert!(estimate.scaled_mad() > 0.0);
+        assert!(estimate.high_quantile() < 65_535.0);
+        assert_eq!(
+            estimate.transform().white_point().to_bits(),
+            estimate.high_quantile().to_bits()
+        );
+        assert_eq!(
+            estimate.transform().transfer_function(),
+            TransferFunction::Midtones
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn automatic_stretch_gives_a_constant_image_a_finite_range() -> TestResult {
+        let mut reader = fits_reader(8, 1, vec![42.0; 8])?;
+        let preview = build_fits_preview(&mut reader, parameters(0, 8)?)?;
+
+        let estimate = estimate_display_transform(&preview)?;
+        let transform = estimate.transform();
+
+        assert_eq!(estimate.median().to_bits(), 42.0_f64.to_bits());
+        assert_eq!(estimate.scaled_mad().to_bits(), 0.0_f64.to_bits());
+        assert!(transform.black_point() < 42.0);
+        assert!(transform.white_point() > 42.0);
+        assert!((0.0..1.0).contains(&transform.midtone()));
+        Ok(())
+    }
+
+    #[test]
+    fn automatic_stretch_rejects_a_preview_without_valid_support() -> TestResult {
+        let mut reader = fits_reader(2, 1, vec![f64::NAN, f64::INFINITY])?;
+        let preview = build_fits_preview(&mut reader, parameters(0, 2)?)?;
+
+        assert!(matches!(
+            estimate_display_transform(&preview),
+            Err(PreviewError::NoValidSamples)
+        ));
         Ok(())
     }
 

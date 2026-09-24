@@ -8,11 +8,13 @@ const frameId = (digit: string): string => digit.repeat(64);
  */
 export const demoReviewModel: ReviewViewModel = {
   sessionName: "M31 · Session 01",
+  sessionStatus: { tone: "ready", label: "Demo ready" },
   activeRole: "light",
   playing: false,
   selectedFrameId: frameId("b"),
   sharedStretchLabel: "Shared stretch · locked",
   preview: null,
+  viewerScale: "fit",
   roles: [
     { role: "bias", label: "Bias", count: 0, unresolved: 0 },
     { role: "dark", label: "Darks", count: 204, unresolved: 0 },
@@ -23,8 +25,10 @@ export const demoReviewModel: ReviewViewModel = {
     {
       id: frameId("a"),
       label: "light_0001.fits",
+      sourcePath: null,
       exposureSeconds: 60,
       temperatureCelsius: -5.3,
+      classificationWarning: null,
       state: "accepted",
       rejectionReason: null,
       metrics: {
@@ -38,8 +42,10 @@ export const demoReviewModel: ReviewViewModel = {
     {
       id: frameId("b"),
       label: "light_0002.fits",
+      sourcePath: null,
       exposureSeconds: 60,
       temperatureCelsius: -4.9,
+      classificationWarning: null,
       state: "undecided",
       rejectionReason: null,
       metrics: {
@@ -53,8 +59,10 @@ export const demoReviewModel: ReviewViewModel = {
     {
       id: frameId("c"),
       label: "light_0003.fits",
+      sourcePath: null,
       exposureSeconds: 60,
       temperatureCelsius: -4.9,
+      classificationWarning: null,
       state: "rejected",
       rejectionReason: "Trailing",
       metrics: {
@@ -68,8 +76,10 @@ export const demoReviewModel: ReviewViewModel = {
     {
       id: frameId("d"),
       label: "light_0004.fits",
+      sourcePath: null,
       exposureSeconds: 60,
       temperatureCelsius: -5.3,
+      classificationWarning: null,
       state: "undecided",
       rejectionReason: null,
       metrics: {
@@ -83,8 +93,10 @@ export const demoReviewModel: ReviewViewModel = {
     {
       id: frameId("e"),
       label: "light_0005.fits",
+      sourcePath: null,
       exposureSeconds: 60,
       temperatureCelsius: -5.3,
+      classificationWarning: null,
       state: "undecided",
       rejectionReason: null,
       metrics: {

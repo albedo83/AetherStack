@@ -38,8 +38,8 @@ versioned policy. It never subtracts both blindly.
 
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
-| Separate Bias, Dark, Flat, and Light views | Preserve roles during import and expose independent counts, groups, masters, and diagnostics. | Planned UI; classification core implemented |
-| Add a directory, arbitrary files, or a role-specific selection | Support drag-and-drop, folder import, and explicit role assignment without losing header evidence. | Planned |
+| Separate Bias, Dark, Flat, and Light views | Preserve roles during import and expose independent counts, groups, masters, and diagnostics. | Initial desktop views and native directory import implemented; group/master panels planned |
+| Add a directory, arbitrary files, or a role-specific selection | Support drag-and-drop, folder import, and explicit role assignment without losing header evidence. | Native structured-directory import implemented; arbitrary files, drag-and-drop, and explicit reassignment planned |
 | Hierarchical groups | Group by checked dimensions, binning, exposure, filter, gain, offset, temperature policy, camera, and configurable keywords. | Grouping core implemented; UI planned |
 | Master detection | Detect a master from metadata and product provenance, never from a filename alone. | Planned |
 | Selection, inverse selection, remove, and clear | Provide keyboard-accessible bulk operations with undo before a run. | Planned |
@@ -135,7 +135,7 @@ evidence, not automatically an AetherStack default.
 | --- | --- | --- |
 | Linear defect correction | Detect and correct row or column defects conservatively with reason masks. | Planned |
 | Subframe weighting | Calculate documented quality metrics and preserve every metric and expression. | Strict global background and stellar-shape primitives implemented; weighting expression planned |
-| Frame selection | Support automatic thresholds and an interactive review without changing metrics. | Strict metrics, review decisions, undo, stable sorting, Blink state, bounded FITS previews, and initial accessible desktop Review surface implemented; automatic rule evidence and CFA/RGB preview planned |
+| Frame selection | Support automatic thresholds and an interactive review without changing metrics. | Strict metrics, review decisions, undo, stable Rust sorting, Blink state, bounded FITS previews, and initial accessible desktop Review surface implemented; persistent desktop decisions, automatic rule evidence, and CFA/RGB preview planned |
 | Image registration | Provide robust matching, transforms, interpolation, and residual diagnostics. | Planned |
 | Local normalization | Fit guarded background and scale models with inspectable samples and residuals. | Planned |
 | Image integration | Provide deterministic weighted robust estimators, support maps, and rejection maps. | Planned |

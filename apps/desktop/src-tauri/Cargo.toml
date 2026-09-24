@@ -17,11 +17,14 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 aether-fits = { path = "../../../crates/aether-fits" }
+aether-metadata = { path = "../../../crates/aether-metadata" }
 aether-preview = { path = "../../../crates/aether-preview" }
 aether-review = { path = "../../../crates/aether-review" }
+aether-session = { path = "../../../crates/aether-session" }
 png = "0.18"
 serde.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 aether-core = { path = "../../../crates/aether-core" }

@@ -468,17 +468,24 @@ safety reasoning. They do not narrate obvious syntax.
 20. Implement the first bounded preview path. FITS planes now reduce through
     deterministic power-of-two compensated means with exact valid/excluded
     support, explicit resource limits, I/O chunk invariance, automatic level
-    selection, versioned grayscale display mapping, and representative ASI294MC
-    Pro scalar validation. CFA demosaicing, RGB composition, shared automatic
-    stretch, cache publication, broader real-camera validation, and viewport
-    tile streaming remain next.
+    selection, versioned grayscale display mapping, a robust inspectable
+    reference-stretch estimator, and representative ASI294MC Pro scalar and PNG
+    validation. CFA demosaicing, RGB composition, multi-frame aggregate stretch,
+    cache publication, broader real-camera validation, and viewport tile
+    streaming remain next.
 21. Begin the native desktop surface. A Tauri 2 shell now hosts an accessible
     dark Review/Blink workspace with separate Bias, Darks, Flats, and Lights,
     deterministic typed actions, responsive layouts, and tactile instrument-like
     surfaces. A bounded Rust command produces PNG previews over raw binary IPC;
     the presenter rejects stale frame identities and releases browser resources
-    idempotently. Session import, native file selection, automatic shared-stretch
-    resolution, and live review-model synchronization remain next.
+    idempotently. Native directory selection now imports a strict session in a
+    worker, explicitly prefers structured directory roles when acquisition
+    headers conflict, marks every override, resolves one reference stretch, and
+    keeps it locked across Blink frames. Fit and preview-pixel views are real,
+    deterministic table sorting delegates to the Rust review model, and
+    unfinished commands are exposed as unavailable instead of inert controls.
+    Arbitrary-file import, progress events, multi-frame stretch estimation, and
+    persistent decision/undo synchronization remain next.
 
 ## 11. Stable-release definition
 

@@ -15,11 +15,19 @@ export interface FrameMetrics {
 export interface ReviewFrame {
   readonly id: string;
   readonly label: string;
-  readonly exposureSeconds: number;
+  /** Absolute runtime-only source path; never persisted in portable state. */
+  readonly sourcePath: string | null;
+  readonly exposureSeconds: number | null;
   readonly temperatureCelsius: number | null;
+  readonly classificationWarning: string | null;
   readonly state: ReviewState;
   readonly rejectionReason: string | null;
   readonly metrics: FrameMetrics;
+}
+
+export interface SessionStatus {
+  readonly tone: "ready" | "busy" | "warning" | "error";
+  readonly label: string;
 }
 
 export interface RoleSummary {
@@ -38,6 +46,7 @@ export interface FramePreview {
 
 export interface ReviewViewModel {
   readonly sessionName: string;
+  readonly sessionStatus: SessionStatus;
   readonly roles: readonly RoleSummary[];
   readonly activeRole: FrameRole;
   readonly frames: readonly ReviewFrame[];
@@ -45,6 +54,7 @@ export interface ReviewViewModel {
   readonly playing: boolean;
   readonly sharedStretchLabel: string;
   readonly preview: FramePreview | null;
+  readonly viewerScale: "fit" | "actual";
 }
 
 export type SortField =
@@ -58,6 +68,7 @@ export type SortField =
 export type SortDirection = "ascending" | "descending";
 
 export interface ReviewActions {
+  readonly onImportSession: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
   readonly onSelectFrame: (frameId: string) => void;
   readonly onSort: (field: SortField, direction: SortDirection) => void;
@@ -70,4 +81,5 @@ export interface ReviewActions {
   readonly onUndo: () => void;
   readonly onSetPlaying: (playing: boolean) => void;
   readonly onRequestStep: (direction: "backward" | "forward") => void;
+  readonly onSetViewerScale: (scale: "fit" | "actual") => void;
 }

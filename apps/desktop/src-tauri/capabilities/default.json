@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Minimum permissions required by the main AetherStack window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

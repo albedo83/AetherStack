@@ -11,6 +11,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
   root.id = "root";
   document.body.append(root);
   const actions: ReviewActions = {
+    onImportSession: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectFrame: vi.fn(),
     onSort: vi.fn(),
@@ -19,12 +20,51 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUndo: vi.fn(),
     onSetPlaying: vi.fn(),
     onRequestStep: vi.fn(),
+    onSetViewerScale: vi.fn(),
   };
   const controller = mountReviewScreen(root, model, actions);
   return { root, actions, controller };
 }
 
 describe("frame review workspace", () => {
+  it("requests a native session import from the primary workspace action", () => {
+    const { root, actions } = fixture();
+
+    fireEvent.click(getByRole(root, "button", { name: "＋ Import session" }));
+
+    expect(actions.onImportSession).toHaveBeenCalledOnce();
+  });
+
+  it("exposes busy import state without allowing a duplicate scan", () => {
+    const { root } = fixture({
+      ...demoReviewModel,
+      sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
+    });
+
+    const button = getByRole(root, "button", { name: "Scanning FITS…" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(root.textContent).toContain("Scanning FITS sources");
+  });
+
+  it("keeps classification overrides visibly and accessibly explained", () => {
+    const first = demoReviewModel.frames[0];
+    expect(first).toBeDefined();
+    if (!first) return;
+    const explanation =
+      "Header and directory frame types conflict; the directory role was applied";
+    const { root } = fixture({
+      ...demoReviewModel,
+      frames: [
+        { ...first, classificationWarning: explanation },
+        ...demoReviewModel.frames.slice(1),
+      ],
+    });
+
+    const warning = root.querySelector<HTMLElement>(".classification-warning");
+    expect(warning?.getAttribute("aria-label")).toBe(explanation);
+    expect(warning?.title).toBe(explanation);
+  });
+
   it("keeps all four acquisition roles visibly separate", () => {
     const { root } = fixture();
     const tabs = getByRole(root, "tablist", { name: "Frame types" });
@@ -194,6 +234,42 @@ describe("frame review workspace", () => {
     expect(actions.onSetPlaying).toHaveBeenCalledWith(true);
     fireEvent.click(getByRole(root, "button", { name: "Next frame" }));
     expect(actions.onRequestStep).toHaveBeenCalledWith("forward");
+  });
+
+  it("switches between fitted and actual preview pixels explicitly", () => {
+    const { root, actions, controller } = fixture();
+
+    const fit = getByRole(root, "button", { name: "Fit preview to viewer" });
+    const actual = getByRole(root, "button", {
+      name: "Show preview pixels at one hundred percent",
+    });
+    expect(fit.getAttribute("aria-pressed")).toBe("true");
+    expect(actual.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(actual);
+    expect(actions.onSetViewerScale).toHaveBeenCalledWith("actual");
+
+    controller.update({ ...demoReviewModel, viewerScale: "actual" });
+    expect(fit.getAttribute("aria-pressed")).toBe("false");
+    expect(actual.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      root.querySelector<HTMLElement>("[data-preview]")?.dataset.scale,
+    ).toBe("actual");
+  });
+
+  it("does not expose unfinished controls as working actions", () => {
+    const { root } = fixture();
+
+    for (const name of [
+      "Diagnostics",
+      "Review plan",
+      "Clipping overlay is not available in this build",
+      "Undo is not available in this build",
+    ]) {
+      expect(getByRole(root, "button", { name }).hasAttribute("disabled")).toBe(
+        true,
+      );
+    }
   });
 
   it("has no automatically detectable accessibility violations", async () => {

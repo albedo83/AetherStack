@@ -19,10 +19,37 @@ export interface FitsPreviewRequest {
   readonly transfer: PreviewTransfer;
 }
 
+export interface FitsPreviewEstimateRequest {
+  readonly path: string;
+  readonly plane: number;
+  readonly maximumWidth: number;
+  readonly maximumHeight: number;
+}
+
+export interface EstimatedDisplayTransform {
+  readonly algorithmId: string;
+  readonly blackPoint: number;
+  readonly whitePoint: number;
+  readonly midtone: number;
+  readonly finiteSamples: number;
+  readonly median: number;
+  readonly scaledMad: number;
+  readonly highQuantile: number;
+}
+
 export interface PreviewResource {
   readonly preview: FramePreview;
   /** Releases the browser-side PNG URL without affecting Rust cache state. */
   readonly revoke: () => void;
+}
+
+/** Resolves one auditable reference stretch in Rust for shared Blink display. */
+export function estimateFitsPreviewTransform(
+  request: FitsPreviewEstimateRequest,
+): Promise<EstimatedDisplayTransform> {
+  return invoke<EstimatedDisplayTransform>("estimate_fits_preview_transform", {
+    request,
+  });
 }
 
 /**

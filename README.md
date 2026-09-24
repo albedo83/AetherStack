@@ -61,6 +61,10 @@ optimized CPU and GPU paths must match.
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
   workspace, separate acquisition roles, diagnostic metrics, explicit manual
   decisions, and a presenter boundary that leaves scientific state in Rust;
+- native structured-directory import with retained classification conflicts,
+  content-derived frame identities, an inspectable robust reference stretch,
+  identity-safe real FITS preview loading, and Rust-owned deterministic review
+  sorting;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat

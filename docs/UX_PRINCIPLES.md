@@ -37,10 +37,12 @@ states are explicit, keyboard accessible, undoable, and carry a visible reason.
 The detailed behavior is defined in
 [`FRAME_REVIEW_CONTRACT.md`](FRAME_REVIEW_CONTRACT.md).
 
-The shared Rust interaction model is the first implemented UI layer. It owns
-review transactions, undo, sealing, table order, locked display state, and Blink
-identity transitions without depending on a desktop toolkit. The future Tauri
-surface must render this model rather than reimplementing these invariants in
+The shared Rust interaction model owns review transactions, undo, sealing, table
+order, locked display state, and Blink identity transitions without depending on
+a desktop toolkit. The initial Tauri surface already delegates deterministic
+table sorting to that model and uses identity-bound native previews. Persistent
+decision transactions and undo stay visibly unavailable in the desktop surface
+until their adapter is connected; these invariants must not be approximated in
 frontend state.
 
 ## Three disclosure levels
@@ -145,6 +147,12 @@ The desktop release gate includes:
 - deterministic view-model tests for every automatic decision and conflict;
 - component tests for ranges, units, reset behavior, and disabled prerequisites;
 - end-to-end tests proving that the reviewed plan equals serialized provenance.
+
+The initial native importer already keeps acquisition-software contradictions
+visible. When a structured directory import explicitly prefers the nearest role
+directory, the affected frame carries a labeled warning marker and the session
+status reports the override count. A color change alone never communicates that
+decision.
 
 Visual polish is necessary, but the final authority is the plan: what data is
 used, what operation will run, why each automatic choice was made, and how the

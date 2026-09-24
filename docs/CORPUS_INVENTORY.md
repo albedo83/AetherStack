@@ -25,6 +25,8 @@ The 25 flat files declare a light frame type in their headers while their exact
 directory role is flat. Strict classification therefore reports 25 evidence
 conflicts. The comparison manifest must record an explicit directory-preference
 override rather than hiding this acquisition-software inconsistency.
+The native structured-directory importer now applies that named policy, exposes
+the retained conflicts in its session summary, and marks affected frame rows.
 
 Short-exposure calibration frames remain classified as darks. Exposure and the
 other acquisition fields separate them from the long-exposure dark group and

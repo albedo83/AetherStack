@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { requestFitsPreview } from "./preview-bridge.ts";
+import {
+  estimateFitsPreviewTransform,
+  requestFitsPreview,
+} from "./preview-bridge.ts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -18,6 +21,37 @@ afterEach(() => {
 });
 
 describe("native preview bridge", () => {
+  it("requests an auditable reference stretch from Rust", async () => {
+    const estimate = {
+      algorithmId: "aether-preview-auto-stretch-v1",
+      blackPoint: 900,
+      whitePoint: 4_500,
+      midtone: 0.22,
+      finiteSamples: 50_000,
+      median: 1_100,
+      scaledMad: 45,
+      highQuantile: 4_500,
+    };
+    vi.mocked(invoke).mockResolvedValue(estimate);
+
+    await expect(
+      estimateFitsPreviewTransform({
+        path: "/selected/reference.fits",
+        plane: 0,
+        maximumWidth: 1_600,
+        maximumHeight: 1_200,
+      }),
+    ).resolves.toBe(estimate);
+    expect(invoke).toHaveBeenCalledWith("estimate_fits_preview_transform", {
+      request: {
+        path: "/selected/reference.fits",
+        plane: 0,
+        maximumWidth: 1_600,
+        maximumHeight: 1_200,
+      },
+    });
+  });
+
   it("keeps identity out of the native pixel request and binds it on return", async () => {
     vi.mocked(invoke).mockResolvedValue(new ArrayBuffer(8));
 

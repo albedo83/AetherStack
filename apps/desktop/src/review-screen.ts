@@ -36,6 +36,12 @@ export function mountReviewScreen(
 
   const elements = {
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
+    sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
+    sessionStatusLabel: required<HTMLElement>(
+      root,
+      "[data-session-status-label]",
+    ),
+    importSession: required<HTMLButtonElement>(root, "[data-import-session]"),
     roleTabs: required<HTMLElement>(root, "[data-role-tabs]"),
     roleHeading: required<HTMLElement>(root, "[data-role-heading]"),
     frameTable: required<HTMLTableElement>(root, "[data-frame-table]"),
@@ -55,6 +61,11 @@ export function mountReviewScreen(
     previewDescription: required<HTMLElement>(
       root,
       "[data-preview-description]",
+    ),
+    fitPreview: required<HTMLButtonElement>(root, '[data-action="viewer-fit"]'),
+    actualPreview: required<HTMLButtonElement>(
+      root,
+      '[data-action="viewer-actual"]',
     ),
     state: required<HTMLElement>(root, "[data-review-state]"),
     fwhm: required<HTMLElement>(root, "[data-metric-fwhm]"),
@@ -87,6 +98,10 @@ export function mountReviewScreen(
     if (action === "select-role") {
       const role = actionElement.dataset.role;
       if (isFrameRole(role)) actions.onSelectRole(role);
+      return;
+    }
+    if (action === "import-session") {
+      actions.onImportSession();
       return;
     }
     if (action === "select-frame") {
@@ -149,6 +164,14 @@ export function mountReviewScreen(
     }
     if (action === "next") {
       actions.onRequestStep("forward");
+      return;
+    }
+    if (action === "viewer-fit") {
+      actions.onSetViewerScale("fit");
+      return;
+    }
+    if (action === "viewer-actual") {
+      actions.onSetViewerScale("actual");
     }
   };
 
@@ -222,6 +245,13 @@ export function mountReviewScreen(
   const update = (nextModel: ReviewViewModel): void => {
     model = nextModel;
     elements.sessionName.textContent = model.sessionName;
+    elements.sessionStatus.dataset.tone = model.sessionStatus.tone;
+    elements.sessionStatusLabel.textContent = model.sessionStatus.label;
+    const importing = model.sessionStatus.tone === "busy";
+    elements.importSession.disabled = importing;
+    elements.importSession.textContent = importing
+      ? "Scanning FITS…"
+      : "＋ Import session";
     renderRoles(elements.roleTabs, model);
     renderRows(elements.tableBody, model);
     const activeRole = model.roles.find(
@@ -260,16 +290,29 @@ export function mountReviewScreen(
     }
     elements.previewBadges.hidden = frame === null;
     elements.previewTitle.textContent = frame
-      ? "Native FITS renderer ready"
+      ? frame.sourcePath
+        ? "Rendering FITS preview"
+        : "Native FITS renderer ready"
       : "No frame selected";
     elements.previewDescription.textContent = frame
-      ? "Import a session to inspect its bounded pixel preview"
+      ? frame.sourcePath
+        ? "Reducing pixels with the locked display stretch"
+        : "Import a session to inspect its bounded pixel preview"
       : "Select a frame to inspect its display preview";
     elements.preview.setAttribute(
       "aria-label",
       frame
         ? `Display-only preview for ${frame.label}`
         : "No frame preview selected",
+    );
+    elements.preview.dataset.scale = model.viewerScale;
+    elements.fitPreview.setAttribute(
+      "aria-pressed",
+      String(model.viewerScale === "fit"),
+    );
+    elements.actualPreview.setAttribute(
+      "aria-pressed",
+      String(model.viewerScale === "actual"),
     );
     elements.stretch.textContent = model.sharedStretchLabel;
     renderSelectedMetrics(elements, frame);
@@ -364,10 +407,24 @@ function renderRows(
     required<HTMLElement>(state, ".sr-only").textContent = stateLabel(
       frame.state,
     );
+    const frameName = textCell(frame.label, "frame-name");
+    if (frame.classificationWarning) {
+      const warning = document.createElement("span");
+      warning.className = "classification-warning";
+      warning.title = frame.classificationWarning;
+      warning.setAttribute("aria-label", frame.classificationWarning);
+      warning.textContent = "!";
+      frameName.append(" ", warning);
+    }
     row.append(
       state,
-      textCell(frame.label, "frame-name"),
-      textCell(`${frame.exposureSeconds.toFixed(1)} s`, "numeric"),
+      frameName,
+      textCell(
+        frame.exposureSeconds === null
+          ? "—"
+          : `${frame.exposureSeconds.toFixed(1)} s`,
+        "numeric",
+      ),
       textCell(formatTemperature(frame.temperatureCelsius), "numeric"),
       textCell(formatMetric(frame.metrics.fwhmPixels, 2), "numeric"),
       textCell(formatMetric(frame.metrics.eccentricity, 2), "numeric"),
@@ -516,7 +573,7 @@ function shellMarkup(): string {
           ${navigationItem("run", "Run", "▷", false)}
           ${navigationItem("results", "Results", "◉", false)}
         </nav>
-        <button class="nav-item sidebar__settings" type="button" aria-label="Settings">
+        <button class="nav-item sidebar__settings" type="button" aria-label="Settings, not available in this build" title="Settings workspace is not connected yet" disabled>
           <span class="nav-item__icon" aria-hidden="true">⚙</span>
           <span>Settings</span>
         </button>
@@ -529,9 +586,9 @@ function shellMarkup(): string {
             <h1 data-session-name></h1>
           </div>
           <div class="topbar__actions">
-            <span class="health-chip"><span aria-hidden="true">●</span> Plan healthy</span>
-            <button class="button button--quiet" type="button">Diagnostics</button>
-            <button class="button button--primary" type="button">Review plan</button>
+            <span class="health-chip" data-session-status data-tone="ready"><span aria-hidden="true">●</span><span data-session-status-label>Demo ready</span></span>
+            <button class="button button--quiet" type="button" title="Diagnostics workspace is not connected yet" disabled>Diagnostics</button>
+            <button class="button button--primary" type="button" title="Review planning is not connected yet" disabled>Review plan</button>
           </div>
         </header>
 
@@ -542,8 +599,8 @@ function shellMarkup(): string {
               <h2 id="frames-heading">Review acquisition data</h2>
             </div>
             <div class="workspace-heading__actions">
-              <button class="icon-button" type="button" data-action="undo" aria-label="Undo last review change" title="Undo last review change">↶</button>
-              <button class="button button--quiet" type="button">＋ Add frames</button>
+              <button class="icon-button" type="button" data-action="undo" aria-label="Undo is not available in this build" title="Transactional undo will be enabled with persistent review decisions" disabled>↶</button>
+              <button class="button button--quiet" type="button" data-action="import-session" data-import-session>＋ Import session</button>
             </div>
           </div>
 
@@ -556,7 +613,7 @@ function shellMarkup(): string {
                   <h3 id="light-table-heading" data-role-heading></h3>
                   <p><span data-selection-count></span> · metrics are diagnostic</p>
                 </div>
-                <button class="icon-button" type="button" data-filter-frames aria-label="Filter frames" title="Filter frames">⌕</button>
+                <button class="icon-button" type="button" data-filter-frames aria-label="Frame filtering is not available in this build" title="Frame filtering is not connected yet" disabled>⌕</button>
               </div>
               <div class="table-scroll" tabindex="0" aria-label="Scrollable frame table">
                 <table class="frame-table" data-frame-table aria-label="Frame review metrics">
@@ -588,9 +645,9 @@ function shellMarkup(): string {
                   <h3 id="viewer-heading" data-selected-label></h3>
                 </div>
                 <div class="viewer__tools" aria-label="Viewer controls">
-                  <button class="tool-button" type="button" aria-label="Fit image to viewer">Fit</button>
-                  <button class="tool-button" type="button" aria-label="Show image at one hundred percent">1:1</button>
-                  <button class="tool-button" type="button" aria-label="Toggle clipping overlay">Clipping</button>
+                  <button class="tool-button" type="button" data-action="viewer-fit" aria-label="Fit preview to viewer" aria-pressed="true">Fit</button>
+                  <button class="tool-button" type="button" data-action="viewer-actual" aria-label="Show preview pixels at one hundred percent" aria-pressed="false">1:1</button>
+                  <button class="tool-button" type="button" aria-label="Clipping overlay is not available in this build" title="Clipping requires rejection maps" disabled>Clipping</button>
                 </div>
               </div>
 
@@ -655,7 +712,12 @@ function navigationItem(
   icon: string,
   current: boolean,
 ): string {
-  return `<button class="nav-item" type="button" data-workspace="${id}" ${current ? 'aria-current="page"' : ""}>
+  if (current) {
+    return `<span class="nav-item" data-workspace="${id}" aria-current="page">
+      <span class="nav-item__icon" aria-hidden="true">${icon}</span><span>${label}</span>
+    </span>`;
+  }
+  return `<button class="nav-item" type="button" data-workspace="${id}" aria-label="${label}, not available in this build" title="${label} workspace is not connected yet" disabled>
     <span class="nav-item__icon" aria-hidden="true">${icon}</span><span>${label}</span>
   </button>`;
 }
