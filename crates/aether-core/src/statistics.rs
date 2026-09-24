@@ -236,6 +236,45 @@ impl StatisticsFirstPass {
         Ok(())
     }
 
+    /// Adds consecutive physical values without a separate quality mask.
+    ///
+    /// This is the bounded-stream counterpart used by FITS readers. Every
+    /// finite value is usable and every NaN or infinity is counted as an
+    /// unmasked non-finite sample. Callers that need distinct mask accounting
+    /// must use [`Self::observe_image`] for the first pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::SampleCountOverflow`] if aggregate accounting
+    /// cannot be represented by `usize`.
+    pub fn observe_values(&mut self, values: &[f64]) -> Result<(), StatisticsError> {
+        self.total_samples = self
+            .total_samples
+            .checked_add(values.len())
+            .ok_or(StatisticsError::SampleCountOverflow)?;
+        let mut usable_samples = 0_usize;
+        let mut non_finite_samples = 0_usize;
+        for value in values {
+            if value.is_finite() {
+                usable_samples += 1;
+                self.minimum = self.minimum.min(*value);
+                self.maximum = self.maximum.max(*value);
+                self.scale = self.scale.max(value.abs());
+            } else {
+                non_finite_samples += 1;
+            }
+        }
+        self.usable_samples = self
+            .usable_samples
+            .checked_add(usable_samples)
+            .ok_or(StatisticsError::SampleCountOverflow)?;
+        self.non_finite_samples = self
+            .non_finite_samples
+            .checked_add(non_finite_samples)
+            .ok_or(StatisticsError::SampleCountOverflow)?;
+        Ok(())
+    }
+
     /// Freezes first-pass accounting and starts the canonical-order mean pass.
     ///
     /// # Errors
@@ -637,6 +676,28 @@ mod tests {
                 actual: 1,
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn value_stream_first_pass_counts_non_finite_samples_without_masks() -> TestResult {
+        let values = [1.0, f64::NAN, -2.0, f64::INFINITY, 5.0];
+        let mut first = StatisticsFirstPass::new();
+        first.observe_values(&values[..2])?;
+        first.observe_values(&values[2..])?;
+        let mut mean = first.finish()?;
+        mean.observe_values(&values)?;
+        let mut variance = mean.finish()?;
+        variance.observe_values(&values)?;
+        let statistics = variance.finish()?;
+
+        assert_eq!(statistics.total_samples(), 5);
+        assert_eq!(statistics.usable_samples(), 3);
+        assert_eq!(statistics.masked_samples(), 0);
+        assert_eq!(statistics.non_finite_samples(), 2);
+        assert_eq!(statistics.minimum().to_bits(), (-2.0_f64).to_bits());
+        assert_eq!(statistics.maximum().to_bits(), 5.0_f64.to_bits());
+        assert!((statistics.mean() - (4.0 / 3.0)).abs() <= f64::EPSILON);
         Ok(())
     }
 }

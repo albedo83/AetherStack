@@ -444,6 +444,11 @@ safety reasoning. They do not narrate obvious syntax.
     propagation, per-pixel and global support diagnostics, allocation failures,
     numerical edge cases, and a synthetic subtract-integrate-normalize equation
     test. Plan-driven bounded FITS execution remains next.
+17. Begin the frame-review foundation with strict bounded-memory FITS pixel
+    statistics and deterministic batch output. The three-pass library operation,
+    separate invalid-sample accounting, JSON Lines tool output, synthetic tests,
+    and representative ASI294MC Pro validation are complete. Robust astronomical
+    quality metrics, preview pyramids, and the internal Blink view remain next.
 
 ## 11. Stable-release definition
 

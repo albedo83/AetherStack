@@ -29,6 +29,14 @@ Counts, unresolved conflicts, blocking errors, and master readiness remain
 visible without opening a settings dialog. Short darks stay under Darks; the
 calibration graph shows when a short-exposure dark group calibrates flats.
 
+Lights also provide a Review view with a synchronized metric table and image
+viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch
+fixed while switching frames, so a visual comparison cannot be improved or
+degraded accidentally by per-frame auto-stretch. Accept, reject, and undecided
+states are explicit, keyboard accessible, undoable, and carry a visible reason.
+The detailed behavior is defined in
+[`FRAME_REVIEW_CONTRACT.md`](FRAME_REVIEW_CONTRACT.md).
+
 ## Three disclosure levels
 
 ### Essentials

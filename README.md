@@ -46,6 +46,9 @@ optimized CPU and GPU paths must match.
   master construction with exact per-pixel contribution accounting;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
+- strict three-pass FITS pixel statistics with fixed-size decoding buffers,
+  separate `BLANK` and non-finite accounting, deterministic corpus traversal,
+  and human-readable or JSON Lines batch output;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
@@ -88,7 +91,9 @@ artifact verification, and publication failure boundaries.
 The [reference feature inventory](docs/WBPP_FEATURE_INVENTORY.md) records the
 preprocessing controls that must be considered for scientific parity, while the
 [UX principles](docs/UX_PRINCIPLES.md) define the modern dark interface,
-progressive disclosure, diagnostics, and accessibility requirements.
+progressive disclosure, diagnostics, and accessibility requirements. The
+[frame review contract](docs/FRAME_REVIEW_CONTRACT.md) defines quality-table,
+viewer, Blink, rejection, and reproducibility behavior.
 
 ## Build and test
 
@@ -106,6 +111,13 @@ Inspect a FITS file or directory without loading image pixels:
 ```shell
 cargo run -p aether-inspect -- /path/to/fits-corpus
 cargo run -p aether-inspect -- --strict --examples 10 /path/to/fits-corpus
+```
+
+Calculate strict pixel statistics without loading complete images:
+
+```shell
+cargo run -p aether-stats -- /path/to/fits-file-or-directory
+cargo run -p aether-stats -- --strict --jsonl /path/to/fits-corpus
 ```
 
 Full acquisition data must never be committed. Test cases must use small,

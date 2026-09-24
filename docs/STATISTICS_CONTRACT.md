@@ -51,3 +51,24 @@ A changed or truncated repeated stream returns `PassSampleMismatch`. Aggregate
 count overflow is also a typed failure. These checks let a staged FITS output be
 used as bounded backing storage without weakening the in-memory reference
 contract.
+
+## FITS streaming statistics
+
+`primary_image_statistics` applies the same three-pass algorithm directly to a
+seekable primary FITS image. It retains only a caller-sized value buffer and
+status buffer, decodes samples in canonical order on every pass, and produces
+bit-identical results for different chunk boundaries. The source must remain
+immutable across the passes; session execution additionally verifies its
+fingerprint before and after processing.
+
+Integer `BLANK` samples and stored or scaled NaN/infinity values are reported
+separately. Both are excluded from the finite moments. Allocation, decoding,
+sample-count, no-support, pass-mismatch, and variance-overflow failures remain
+typed rather than being converted to partial statistics.
+
+The `aether-stats` command applies this operation to files or deterministic
+directory traversals without following symbolic links. Its JSON Lines output is
+versioned per record and is suitable for batch inspection and the future frame
+review view. These pixel moments are descriptive diagnostics; they are not a
+substitute for astronomical quality metrics such as background, noise, FWHM,
+eccentricity, star count, or signal weight.
