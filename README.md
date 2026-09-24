@@ -49,6 +49,9 @@ optimized CPU and GPU paths must match.
 - strict three-pass FITS pixel statistics with fixed-size decoding buffers,
   separate `BLANK` and non-finite accounting, deterministic corpus traversal,
   and human-readable or JSON Lines batch output;
+- exact iterative median/MAD background estimation and deterministic stellar
+  local-maximum, centroid, FWHM, eccentricity, saturation, and support
+  measurements on prepared linear detection planes;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
@@ -93,7 +96,9 @@ preprocessing controls that must be considered for scientific parity, while the
 [UX principles](docs/UX_PRINCIPLES.md) define the modern dark interface,
 progressive disclosure, diagnostics, and accessibility requirements. The
 [frame review contract](docs/FRAME_REVIEW_CONTRACT.md) defines quality-table,
-viewer, Blink, rejection, and reproducibility behavior.
+viewer, Blink, rejection, and reproducibility behavior. The
+[quality contract](docs/QUALITY_CONTRACT.md) defines the strict initial
+background and stellar measurement algorithms and their current release gates.
 
 ## Build and test
 

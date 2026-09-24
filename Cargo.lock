@@ -54,6 +54,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-quality"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "serde",
+]
+
+[[package]]
 name = "aether-runtime"
 version = "0.1.0"
 dependencies = [

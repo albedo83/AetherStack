@@ -134,8 +134,8 @@ evidence, not automatically an AetherStack default.
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
 | Linear defect correction | Detect and correct row or column defects conservatively with reason masks. | Planned |
-| Subframe weighting | Calculate documented quality metrics and preserve every metric and expression. | Planned |
-| Frame selection | Support automatic thresholds and an interactive review without changing metrics. | Strict batch pixel moments implemented; astronomical metrics and interactive review planned |
+| Subframe weighting | Calculate documented quality metrics and preserve every metric and expression. | Strict global background and stellar-shape primitives implemented; weighting expression planned |
+| Frame selection | Support automatic thresholds and an interactive review without changing metrics. | Strict batch pixel moments and prepared-plane FWHM/eccentricity implemented; CFA validation and interactive review planned |
 | Image registration | Provide robust matching, transforms, interpolation, and residual diagnostics. | Planned |
 | Local normalization | Fit guarded background and scale models with inspectable samples and residuals. | Planned |
 | Image integration | Provide deterministic weighted robust estimators, support maps, and rejection maps. | Planned |

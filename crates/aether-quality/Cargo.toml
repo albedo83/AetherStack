@@ -1,0 +1,17 @@
+[package]
+name = "aether-quality"
+description = "Robust astronomical frame-quality measurement for AetherStack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+serde.workspace = true
+
+[lints]
+workspace = true

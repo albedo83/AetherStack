@@ -449,6 +449,12 @@ safety reasoning. They do not narrate obvious syntax.
     separate invalid-sample accounting, JSON Lines tool output, synthetic tests,
     and representative ASI294MC Pro validation are complete. Robust astronomical
     quality metrics, preview pyramids, and the internal Blink view remain next.
+18. Begin strict astronomical quality measurement. Exact iterative median/MAD
+    background clipping and deterministic local-maximum stellar measurements now
+    report centroids, threshold-corrected major/minor FWHM, eccentricity,
+    background SNR, saturation, and support with explicit work bounds. CFA-aware
+    detection, spatial background modeling, real-camera validation, preview
+    pyramids, and UI integration remain release gates.
 
 ## 11. Stable-release definition
 

@@ -29,6 +29,12 @@ No composite score exists until its expression, normalization, missing-value
 policy, and direction are visible. The default table keeps the individual
 metrics available beside any weight.
 
+The initial strict backend implements global median/MAD background clipping and
+local-maximum stellar moments for a prepared monochrome detection plane. These
+metrics remain disabled for raw CFA camera presets until a CFA-neutral transform
+and real ASI294MC Pro/ToupTek 585C validation satisfy the
+[`QUALITY_CONTRACT.md`](QUALITY_CONTRACT.md) release gates.
+
 ## Viewer fidelity
 
 The viewer keeps scientific pixels immutable. Debayering, channel combination,
