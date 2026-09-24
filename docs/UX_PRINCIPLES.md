@@ -74,6 +74,13 @@ frame role are never communicated by color alone. Text and essential icons meet
 WCAG 2.2 AA contrast; scientific plots provide distinguishable line styles and
 accessible data tables.
 
+The visual identity may use restrained skeuomorphic cues from precision optical
+instruments: recessed image wells, tactile transport controls, illuminated
+status lamps, machined panel edges, and visibly pressed selections. These cues
+must clarify containment or interaction state. They never replace a label,
+reduce contrast, shrink a target, or imitate a control that has no implemented
+action.
+
 Typography and spacing scale with the operating-system accessibility settings.
 Dense frame tables may use a compact mode, but primary actions and form controls
 keep a minimum 44 by 44 logical-pixel target. Long paths and identifiers elide

@@ -1,0 +1,30 @@
+[package]
+name = "aetherstack-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "aetherstack_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aether-fits = { path = "../../../crates/aether-fits" }
+aether-preview = { path = "../../../crates/aether-preview" }
+aether-review = { path = "../../../crates/aether-review" }
+png = "0.18"
+serde.workspace = true
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+aether-core = { path = "../../../crates/aether-core" }
+
+[lints]
+workspace = true

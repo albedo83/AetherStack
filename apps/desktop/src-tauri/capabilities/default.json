@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimum permissions required by the main AetherStack window.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

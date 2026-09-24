@@ -58,6 +58,9 @@ optimized CPU and GPU paths must match.
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   and explicit linear, midtone, or asinh grayscale display mapping;
+- a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
+  workspace, separate acquisition roles, diagnostic metrics, explicit manual
+  decisions, and a presenter boundary that leaves scientific state in Rust;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
@@ -117,6 +120,17 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo doc --workspace --all-features --no-deps
+```
+
+Build and test the desktop presenter:
+
+```shell
+cd apps/desktop
+npm ci
+npm run format:check
+npm run build
+npm test
+npm run tauri:dev
 ```
 
 Inspect a FITS file or directory without loading image pixels:

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "apps/desktop/src-tauri",
     "crates/aether-cache",
     "crates/aether-calibration",
     "crates/aether-core",

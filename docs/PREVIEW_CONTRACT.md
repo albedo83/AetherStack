@@ -49,17 +49,40 @@ overlay or use a high-contrast checkerboard. The scalar values and support
 evidence remain unchanged. A production UI must pair any color cue with an icon,
 pattern, label, or inspectable status.
 
+## Desktop transport
+
+The initial native bridge returns a bounded PNG through Tauri's raw binary IPC
+response. Preview bytes are therefore not expanded into a JSON number array or
+base64 string. Rust owns FITS parsing, level selection, scalar reduction,
+display mapping, and PNG encoding; the TypeScript layer owns only the temporary
+browser object URL used for presentation.
+
+Every completed object URL is paired with the stable frame identity that
+requested it. The presenter displays it only when that identity still matches
+the selected frame. A delayed response from an earlier Blink request cannot be
+shown under the current filename. Releasing a browser URL is idempotent and does
+not alter scientific cache state.
+
+The native command enforces a two-megapixel desktop limit and a fixed 256
+Ki-sample decode chunk even when a caller requests larger dimensions. It accepts
+only an explicit validated display transform; automatic stretch selection is a
+separate review-model responsibility.
+
 ## Current scope and release gates
 
 The implemented path reads one selected plane from a 2D or 3D primary FITS image
-and produces scalar or grayscale output. It does not yet demosaic a Bayer image,
+and produces scalar, grayscale, or native PNG output. The desktop Review surface
+accepts only identity-bound preview URLs. Session import and file selection are
+not wired to that bridge yet. The renderer does not yet demosaic a Bayer image,
 compose RGB planes, resolve a shared automatic stretch, cache pyramid levels, or
-stream tiles to a desktop surface. Those capabilities require versioned cache
-keys and camera-aware tests before they are presented as complete.
+stream viewport tiles. Those capabilities require versioned cache keys and
+camera-aware tests before they are presented as complete.
 
 Synthetic tests cover edge support, non-finite exclusion, no-support blocks,
 chunk-size invariance, safety limits, automatic level selection, exact linear
-mapping, missing-pixel presentation, and finite nonlinear transfer endpoints.
+mapping, missing-pixel presentation, finite nonlinear transfer endpoints, PNG
+dimensions, invalid native transform rejection, and stale frontend identity
+rejection.
 A representative 4144 by 2822 ASI294MC Pro light also reduced to 1036 by 706 at
 the automatically selected level with all 11,694,368 source samples accounted
 for. Real ASI294MC Pro and ToupTek 585C validation remains required for color
