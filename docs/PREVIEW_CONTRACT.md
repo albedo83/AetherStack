@@ -63,6 +63,16 @@ the selected frame. A delayed response from an earlier Blink request cannot be
 shown under the current filename. Releasing a browser URL is idempotent and does
 not alter scientific cache state.
 
+The desktop presenter retains recently rendered PNG object URLs in a path-free
+least-recently-used cache. Its versioned key contains the content-derived frame
+identity, plane, output bounds, every resolved display-transform value, transfer
+parameters, and transform algorithm identity. It is bounded independently to
+five entries and 32 MiB of encoded PNG payload. At the two-megapixel native
+limit, those five live URLs can address at most about 40 MiB of decoded RGBA
+surfaces; WebView-internal caching is not under application control. Eviction
+and session or role replacement revoke object URLs immediately. An individual
+PNG larger than the encoded-byte budget remains displayable but is not retained.
+
 The native command enforces a two-megapixel desktop limit and a fixed 256
 Ki-sample decode chunk even when a caller requests larger dimensions. It accepts
 only an explicit validated display transform. A separate Rust command estimates
@@ -81,10 +91,12 @@ accepts only identity-bound preview URLs. Native directory selection now runs
 the bounded session scanner, derives stable frame identities, preserves role
 conflicts, loads a real reference-stretched preview, offers fitted and actual
 preview-pixel presentation, and delegates metric-table sorting to the Rust
-review model. The renderer does not yet demosaic a Bayer image, compose RGB
-planes, estimate a multi-frame aggregate stretch, cache pyramid levels, or
-stream viewport tiles. Those capabilities require versioned cache keys and
-camera-aware tests before they are presented as complete.
+review model. A bounded browser artifact cache accelerates revisiting Blink
+frames but is not a scientific or scalar pyramid cache. The renderer does not
+yet demosaic a Bayer image, compose RGB planes, estimate a multi-frame aggregate
+stretch, cache reusable scalar pyramid levels, or stream viewport tiles. Those
+capabilities require versioned cache keys and camera-aware tests before they are
+presented as complete.
 
 Synthetic tests cover edge support, non-finite exclusion, no-support blocks,
 chunk-size invariance, safety limits, automatic level selection, exact linear

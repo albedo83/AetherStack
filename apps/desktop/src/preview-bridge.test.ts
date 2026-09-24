@@ -83,6 +83,7 @@ describe("native preview bridge", () => {
       frameId: "a".repeat(64),
       url: "blob:aether-preview",
     });
+    expect(resource.byteLength).toBe(8);
   });
 
   it("revokes each browser object URL at most once", async () => {

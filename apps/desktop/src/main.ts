@@ -13,8 +13,10 @@ import {
   estimateFitsPreviewTransform,
   requestFitsPreview,
   type EstimatedDisplayTransform,
+  type FitsPreviewRequest,
   type PreviewResource,
 } from "./preview-bridge.ts";
+import { BoundedPreviewCache, previewCacheKey } from "./preview-cache.ts";
 import {
   inspectCfaFrameQuality,
   type FrameQualityResult,
@@ -45,6 +47,8 @@ const roleLabels: Readonly<Record<FrameRole, string>> = {
   light: "Lights",
 };
 const previewBounds = { maximumWidth: 1_600, maximumHeight: 1_200 } as const;
+const maximumCachedPreviews = 5;
+const maximumCachedPreviewBytes = 32 * 1_024 * 1_024;
 
 let model = demoReviewModel;
 let importedSession: ImportedSession | null = null;
@@ -52,7 +56,11 @@ let sharedTransform: {
   readonly role: FrameRole;
   readonly value: EstimatedDisplayTransform;
 } | null = null;
-let previewResource: PreviewResource | null = null;
+const previewCache = new BoundedPreviewCache(
+  maximumCachedPreviews,
+  maximumCachedPreviewBytes,
+);
+let ephemeralPreviewResource: PreviewResource | null = null;
 let previewTicket = 0;
 let sortTicket = 0;
 let statisticsTicket = 0;
@@ -141,7 +149,7 @@ async function importSession(): Promise<void> {
 function installImportedSession(session: ImportedSession): void {
   importedSession = session;
   stopBlinkTimer();
-  releasePreview();
+  clearPreviewResources();
   sharedTransform = null;
   previewTicket += 1;
   sortTicket += 1;
@@ -343,7 +351,7 @@ function updateQualityFrame(
 
 function selectRole(role: FrameRole): void {
   stopBlinkTimer();
-  releasePreview();
+  clearPreviewResources();
   sharedTransform = null;
   previewTicket += 1;
   sortTicket += 1;
@@ -388,7 +396,7 @@ function selectRole(role: FrameRole): void {
 
 function selectFrame(frameId: string): void {
   statisticsTicket += 1;
-  releasePreview();
+  releaseEphemeralPreview();
   update({
     ...model,
     selectedFrameId: frameId,
@@ -504,7 +512,7 @@ async function loadSelectedPreview(): Promise<void> {
       });
     }
 
-    const resource = await requestFitsPreview({
+    const request: FitsPreviewRequest = {
       frameId: frame.id,
       path: frame.sourcePath,
       plane: 0,
@@ -513,13 +521,25 @@ async function loadSelectedPreview(): Promise<void> {
       whitePoint: transform.whitePoint,
       midtone: transform.midtone,
       transfer: { kind: "midtones" },
-    });
+    };
+    const cacheKey = previewCacheKey(request, transform.algorithmId);
+    const cached = previewCache.get(cacheKey);
+    if (cached) {
+      if (ticket !== previewTicket) return;
+      releaseEphemeralPreview();
+      update({ ...model, preview: cached.preview });
+      return;
+    }
+
+    const resource = await requestFitsPreview(request);
     if (ticket !== previewTicket) {
       resource.revoke();
       return;
     }
-    releasePreview();
-    previewResource = resource;
+    releaseEphemeralPreview();
+    if (!previewCache.put(cacheKey, resource)) {
+      ephemeralPreviewResource = resource;
+    }
     update({ ...model, preview: resource.preview });
   } catch {
     if (ticket !== previewTicket) return;
@@ -583,9 +603,14 @@ function stopBlinkTimer(): void {
   if (model.playing) model = { ...model, playing: false };
 }
 
-function releasePreview(): void {
-  previewResource?.revoke();
-  previewResource = null;
+function releaseEphemeralPreview(): void {
+  ephemeralPreviewResource?.revoke();
+  ephemeralPreviewResource = null;
+}
+
+function clearPreviewResources(): void {
+  releaseEphemeralPreview();
+  previewCache.clear();
 }
 
 function disposeRuntimeResources(): void {
@@ -595,7 +620,7 @@ function disposeRuntimeResources(): void {
   qualitySessionRevision += 1;
   decisionSessionRevision += 1;
   stopBlinkTimer();
-  releasePreview();
+  clearPreviewResources();
 }
 
 function update(next: ReviewViewModel): void {

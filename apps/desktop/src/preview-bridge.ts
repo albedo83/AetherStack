@@ -39,6 +39,8 @@ export interface EstimatedDisplayTransform {
 
 export interface PreviewResource {
   readonly preview: FramePreview;
+  /** Exact encoded PNG payload retained by the browser object URL. */
+  readonly byteLength: number;
   /** Releases the browser-side PNG URL without affecting Rust cache state. */
   readonly revoke: () => void;
 }
@@ -71,6 +73,7 @@ export async function requestFitsPreview(
   let revoked = false;
   return {
     preview: { frameId, url },
+    byteLength: png.byteLength,
     revoke() {
       if (revoked) return;
       URL.revokeObjectURL(url);
