@@ -24,6 +24,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onOpenStatistics: vi.fn(),
     onCloseStatistics: vi.fn(),
     onMeasureQuality: vi.fn(),
+    onMeasureAllQuality: vi.fn(),
   };
   const controller = mountReviewScreen(root, model, actions);
   return { root, actions, controller };
@@ -500,6 +501,39 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("QUALITY · DIAGNOSTIC");
     expect(root.textContent).toContain("3.42");
     expect(root.textContent).toContain("817");
+  });
+
+  it("offers bounded batch quality measurement for eligible light frames", () => {
+    const frames = demoReviewModel.frames.map((frame, index) => ({
+      ...frame,
+      sourcePath: `/session/LIGHTS/light_${index}.fits`,
+      bayerPattern: "rggb" as const,
+      qualityState: index < 2 ? ("idle" as const) : frame.qualityState,
+    }));
+    const { root, actions, controller } = fixture({
+      ...demoReviewModel,
+      reviewSessionReady: true,
+      frames,
+    });
+    const batch = getByRole(root, "button", {
+      name: "Measure diagnostic quality for 3 eligible light frames",
+    });
+    expect(batch.textContent).toBe("Measure all · 3");
+    expect(batch.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(batch);
+    expect(actions.onMeasureAllQuality).toHaveBeenCalledOnce();
+
+    controller.update({
+      ...demoReviewModel,
+      reviewSessionReady: true,
+      qualityBatchRunning: true,
+      qualityBatchProgress: { completed: 1, total: 3 },
+      frames,
+    });
+    expect(batch.textContent).toBe("Analyzing 1 / 3");
+    expect(batch.hasAttribute("disabled")).toBe(true);
+    expect(batch.getAttribute("aria-live")).toBe("polite");
   });
 
   it("has no automatically detectable accessibility violations", async () => {

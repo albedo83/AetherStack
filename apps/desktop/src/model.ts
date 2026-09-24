@@ -89,6 +89,11 @@ export interface StatisticsPanel {
   readonly message: string | null;
 }
 
+export interface QualityBatchProgress {
+  readonly completed: number;
+  readonly total: number;
+}
+
 export interface ReviewViewModel {
   readonly sessionName: string;
   readonly sessionStatus: SessionStatus;
@@ -100,6 +105,8 @@ export interface ReviewViewModel {
   readonly reviewSessionReady: boolean;
   readonly canUndo: boolean;
   readonly decisionPending: boolean;
+  readonly qualityBatchRunning: boolean;
+  readonly qualityBatchProgress: QualityBatchProgress | null;
   readonly sharedStretchLabel: string;
   readonly preview: FramePreview | null;
   readonly viewerScale: "fit" | "actual";
@@ -134,4 +141,5 @@ export interface ReviewActions {
   readonly onOpenStatistics: (frameId: string) => void;
   readonly onCloseStatistics: () => void;
   readonly onMeasureQuality: (frameId: string) => void;
+  readonly onMeasureAllQuality: () => void;
 }

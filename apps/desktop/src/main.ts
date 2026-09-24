@@ -25,6 +25,7 @@ import {
   inspectCfaFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
+import { runSerialBatch } from "./quality-batch.ts";
 import {
   applyReviewDecision,
   reorderReviewFrames,
@@ -79,6 +80,7 @@ const decisionCache = new Map<
   Pick<ReviewFrame, "state" | "rejectionReason">
 >();
 let qualitySessionRevision = 0;
+let qualityBatchTicket = 0;
 let decisionSessionRevision = 0;
 let decisionGeneration = 0;
 let blinkTimer: number | null = null;
@@ -121,7 +123,10 @@ const screen = mountReviewScreen(root, model, {
     closeStatistics();
   },
   onMeasureQuality(frameId) {
-    void measureQuality(frameId);
+    if (!model.qualityBatchRunning) void measureQuality(frameId);
+  },
+  onMeasureAllQuality() {
+    void measureAllQuality();
   },
 });
 
@@ -163,6 +168,7 @@ function installImportedSession(session: ImportedSession): void {
   statisticsTicket += 1;
   statisticsCache.clear();
   qualitySessionRevision += 1;
+  qualityBatchTicket += 1;
   qualityCache.clear();
   qualityPending.clear();
   decisionSessionRevision += 1;
@@ -204,6 +210,8 @@ function installImportedSession(session: ImportedSession): void {
     reviewSessionReady: session.frames.length > 0,
     canUndo: false,
     decisionPending: false,
+    qualityBatchRunning: false,
+    qualityBatchProgress: null,
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
@@ -285,6 +293,52 @@ function qualityResultMessage(result: FrameQualityResult): string {
   return `${result.usableStars.toLocaleString("en-US")} measured stars · ${result.interpretation} · ${result.detectionPlaneAlgorithmId} + ${result.starAlgorithmId} · saturation unclassified · diagnostic only`;
 }
 
+function qualityCandidate(frame: ReviewFrame): boolean {
+  return (
+    frame.sourcePath !== null &&
+    frame.bayerPattern !== null &&
+    (frame.qualityState === "idle" || frame.qualityState === "error")
+  );
+}
+
+async function measureAllQuality(): Promise<void> {
+  if (
+    !importedSession ||
+    model.activeRole !== "light" ||
+    model.qualityBatchRunning ||
+    qualityPending.size > 0
+  ) {
+    return;
+  }
+  const frameIds = model.frames
+    .filter(qualityCandidate)
+    .map((frame) => frame.id);
+  if (frameIds.length === 0) return;
+
+  const ticket = ++qualityBatchTicket;
+  update({
+    ...model,
+    qualityBatchRunning: true,
+    qualityBatchProgress: { completed: 0, total: frameIds.length },
+  });
+  try {
+    await runSerialBatch(
+      frameIds,
+      measureQuality,
+      (qualityBatchProgress) => update({ ...model, qualityBatchProgress }),
+      () => ticket !== qualityBatchTicket,
+    );
+  } finally {
+    if (ticket === qualityBatchTicket) {
+      update({
+        ...model,
+        qualityBatchRunning: false,
+        qualityBatchProgress: null,
+      });
+    }
+  }
+}
+
 async function measureQuality(frameId: string): Promise<void> {
   const frame = model.frames.find((candidate) => candidate.id === frameId);
   if (
@@ -357,6 +411,7 @@ function updateQualityFrame(
 }
 
 function selectRole(role: FrameRole): void {
+  qualityBatchTicket += 1;
   stopBlinkTimer();
   clearPreviewResources();
   sharedTransform = null;
@@ -371,6 +426,8 @@ function selectRole(role: FrameRole): void {
         frames: demoReviewModel.frames,
         selectedFrameId: demoReviewModel.selectedFrameId,
         preview: null,
+        qualityBatchRunning: false,
+        qualityBatchProgress: null,
         statisticsPanel: closedStatisticsPanel(),
       });
       return;
@@ -382,6 +439,8 @@ function selectRole(role: FrameRole): void {
       selectedFrameId: null,
       playing: false,
       preview: null,
+      qualityBatchRunning: false,
+      qualityBatchProgress: null,
       statisticsPanel: closedStatisticsPanel(),
     });
     return;
@@ -394,6 +453,8 @@ function selectRole(role: FrameRole): void {
     frames,
     selectedFrameId: frames[0]?.id ?? null,
     playing: false,
+    qualityBatchRunning: false,
+    qualityBatchProgress: null,
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
@@ -665,6 +726,7 @@ function disposeRuntimeResources(): void {
   sortTicket += 1;
   statisticsTicket += 1;
   qualitySessionRevision += 1;
+  qualityBatchTicket += 1;
   decisionSessionRevision += 1;
   stopBlinkTimer();
   clearPreviewResources();

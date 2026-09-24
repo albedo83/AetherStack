@@ -98,6 +98,13 @@ can join an in-flight request, and a session or role change invalidates its whol
 generation. Every late or uncached browser resource is revoked; accepted entries
 remain inside the five-entry and 32 MiB encoded-artifact cache bounds.
 
+Diagnostic quality measurement can run for one declared CFA light or for every
+eligible light in the active session. Batch measurement is deliberately serial:
+only one immutable FITS frame and its exact statistical scratch are active at a
+time. Switching frame type cancels the batch generation without discarding
+already completed, identity-keyed measurements. The action reports processed
+and total frame counts; each row independently retains ready or failed status.
+
 Keyboard actions cover previous/next frame, play/pause, accept, reject, undo,
 zoom reset, fit, and overlay toggles. Rejection never advances without first
 committing the visible frame identity. Screen readers announce file position,

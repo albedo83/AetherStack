@@ -72,7 +72,8 @@ optimized CPU and GPU paths must match.
   presenter;
 - explicit diagnostic frame-quality measurement for declared standard Bayer
   lights through a phase-neutral complete-cell plane, with robust background,
-  noise, stellar count, source-pixel FWHM, and eccentricity shown in Review;
+  noise, stellar count, source-pixel FWHM, and eccentricity shown in Review,
+  including serial bounded-memory whole-session measurement;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat

@@ -77,6 +77,10 @@ export function mountReviewScreen(
       root,
       '[data-action="measure-quality"]',
     ),
+    qualityBatchButton: required<HTMLButtonElement>(
+      root,
+      '[data-action="measure-all-quality"]',
+    ),
     qualityBadge: required<HTMLElement>(root, "[data-quality-badge]"),
     cfaBadge: required<HTMLElement>(root, "[data-cfa-badge]"),
     state: required<HTMLElement>(root, "[data-review-state]"),
@@ -235,6 +239,10 @@ export function mountReviewScreen(
     if (action === "measure-quality") {
       const frame = selectedFrame(model);
       if (frame) actions.onMeasureQuality(frame.id);
+      return;
+    }
+    if (action === "measure-all-quality") {
+      actions.onMeasureAllQuality();
       return;
     }
     if (action === "close-statistics") {
@@ -429,12 +437,47 @@ export function mountReviewScreen(
     elements.statisticsButton.disabled = !frame?.sourcePath;
     const qualityActionable =
       model.activeRole === "light" &&
+      !model.qualityBatchRunning &&
       !!frame?.sourcePath &&
       !!frame.bayerPattern &&
       (frame.qualityState === "idle" || frame.qualityState === "error");
     elements.qualityButton.disabled = !qualityActionable;
     elements.qualityButton.textContent = qualityButtonLabel(frame);
     elements.qualityButton.title = frame?.qualityMessage ?? "No frame selected";
+    const qualityCandidateCount = model.frames.filter(
+      (candidate) =>
+        candidate.sourcePath !== null &&
+        candidate.bayerPattern !== null &&
+        (candidate.qualityState === "idle" ||
+          candidate.qualityState === "error"),
+    ).length;
+    const qualityMeasurementActive = model.frames.some(
+      (candidate) => candidate.qualityState === "loading",
+    );
+    elements.qualityBatchButton.hidden = model.activeRole !== "light";
+    elements.qualityBatchButton.disabled =
+      model.qualityBatchRunning ||
+      qualityMeasurementActive ||
+      qualityCandidateCount === 0;
+    elements.qualityBatchButton.textContent = model.qualityBatchRunning
+      ? model.qualityBatchProgress
+        ? `Analyzing ${model.qualityBatchProgress.completed} / ${model.qualityBatchProgress.total}`
+        : "Measuring…"
+      : qualityCandidateCount > 0
+        ? `Measure all · ${qualityCandidateCount}`
+        : "Quality complete";
+    elements.qualityBatchButton.setAttribute(
+      "aria-label",
+      model.qualityBatchRunning
+        ? model.qualityBatchProgress
+          ? `Processed diagnostic quality for ${model.qualityBatchProgress.completed} of ${model.qualityBatchProgress.total} eligible light frames`
+          : "Measuring diagnostic quality for all eligible light frames"
+        : qualityMeasurementActive
+          ? "Wait for the active diagnostic quality measurement"
+          : qualityCandidateCount > 0
+            ? `Measure diagnostic quality for ${qualityCandidateCount} eligible light frames`
+            : "All eligible light frames have diagnostic quality measurements",
+    );
     elements.cfaBadge.textContent = frame?.bayerPattern
       ? `RAW CFA · ${frame.bayerPattern.toUpperCase()}`
       : "LINEAR · UNRESOLVED";
@@ -885,7 +928,10 @@ function shellMarkup(): string {
                   <h3 id="light-table-heading" data-role-heading></h3>
                   <p><span data-selection-count></span> · metrics are diagnostic</p>
                 </div>
-                <button class="icon-button" type="button" data-filter-frames aria-label="Frame filtering is not available in this build" title="Frame filtering is not connected yet" disabled>⌕</button>
+                <div class="panel-heading__actions">
+                  <button class="tool-button" type="button" data-action="measure-all-quality" aria-label="All eligible light frames have diagnostic quality measurements" aria-live="polite" aria-atomic="true" disabled>Quality complete</button>
+                  <button class="icon-button" type="button" data-filter-frames aria-label="Frame filtering is not available in this build" title="Frame filtering is not connected yet" disabled>⌕</button>
+                </div>
               </div>
               <div class="table-scroll" tabindex="0" aria-label="Scrollable frame table">
                 <table class="frame-table" data-frame-table aria-label="Frame review metrics">

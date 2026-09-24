@@ -520,6 +520,12 @@ button:active:not(:disabled) {
   font-size: 12px;
 }
 
+.panel-heading__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .table-scroll {
   min-height: 0;
   overflow: auto;

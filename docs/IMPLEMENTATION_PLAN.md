@@ -490,10 +490,13 @@ safety reasoning. They do not narrate obvious syntax.
     Unfinished commands are exposed as unavailable instead of inert controls.
     Declared standard CFA lights can now request strict diagnostic background,
     noise, stellar count, FWHM, and eccentricity without using display pixels;
-    the table and instrument badges expose completion and limitations. Manual
-    accept, reject, clear, and undo operations now execute against the native
-    generation-bound transaction engine and return identity-scoped patches to
-    the presenter. The Blink presenter owns a five-entry/32 MiB LRU artifact
+    the table and instrument badges expose completion and limitations.
+    Single-frame or serial whole-session measurement remains explicitly
+    diagnostic, reports bounded batch progress, and keeps the viewer responsive
+    without multiplying exact-median scratch allocations. Manual accept, reject,
+    clear, and undo operations now execute against the native generation-bound
+    transaction engine and return identity-scoped patches to the presenter. The
+    Blink presenter owns a five-entry/32 MiB LRU artifact
     cache and generation-cancelled adjacent-frame prefetch; foreground selection
     joins matching speculative work without weakening exact frame identity.
     Arbitrary-file import, progress events, durable decision recovery,

@@ -14,6 +14,8 @@ export const demoReviewModel: ReviewViewModel = {
   reviewSessionReady: false,
   canUndo: false,
   decisionPending: false,
+  qualityBatchRunning: false,
+  qualityBatchProgress: null,
   selectedFrameId: frameId("b"),
   sharedStretchLabel: "Shared stretch · locked",
   preview: null,
