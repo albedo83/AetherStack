@@ -9,6 +9,7 @@ members = [
     "crates/aether-metadata",
     "crates/aether-quality",
     "crates/aether-review",
+    "crates/aether-preview",
     "crates/aether-runtime",
     "crates/aether-session",
     "crates/aether-stats",

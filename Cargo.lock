@@ -54,6 +54,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-preview"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-fits",
+ "aether-review",
+]
+
+[[package]]
 name = "aether-quality"
 version = "0.1.0"
 dependencies = [

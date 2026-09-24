@@ -61,6 +61,13 @@ includes the source fingerprint, plane/channel interpretation, debayer method,
 orientation, reduction filter, and display-transform version. Cached previews
 are display artifacts and never become scientific pipeline inputs.
 
+The initial backend now produces deterministic power-of-two scalar reductions
+directly from bounded FITS regions and maps them through a locked grayscale
+display transform. It records valid and excluded support for every output pixel.
+Debayered/RGB composition, shared automatic-stretch resolution, persistent
+preview caching, and desktop tile transport remain release gates described in
+[`PREVIEW_CONTRACT.md`](PREVIEW_CONTRACT.md).
+
 ## Blink mode
 
 Blink switches among selected frames while preserving the same viewport and

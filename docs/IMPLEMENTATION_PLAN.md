@@ -84,6 +84,7 @@ crates/
 ├── aether-calibration/   # masters, calibration, cosmetic correction
 ├── aether-quality/       # background, noise, stars, FWHM, eccentricity
 ├── aether-review/        # review decisions, stable sorting, Blink state
+├── aether-preview/       # bounded FITS reduction and display mapping
 ├── aether-registration/  # matching, transforms, resampling
 ├── aether-localnorm/     # local background and scale models
 ├── aether-integration/   # weighting, rejection, accumulation
@@ -463,6 +464,13 @@ safety reasoning. They do not narrate obvious syntax.
     backward, and bounce traversal are implemented and unit tested. Automatic
     rule evidence, preview tile generation/cache, accessibility presentation, and
     the Tauri surface remain next.
+20. Implement the first bounded preview path. FITS planes now reduce through
+    deterministic power-of-two compensated means with exact valid/excluded
+    support, explicit resource limits, I/O chunk invariance, automatic level
+    selection, versioned grayscale display mapping, and representative ASI294MC
+    Pro scalar validation. CFA demosaicing, RGB composition, shared automatic
+    stretch, cache publication, broader real-camera validation, and the desktop
+    renderer remain next.
 
 ## 11. Stable-release definition
 

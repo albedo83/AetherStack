@@ -55,6 +55,9 @@ optimized CPU and GPU paths must match.
 - a toolkit-independent frame-review and Blink state model with stable source
   identities, previewed decision transactions, bounded undo, view-only sorting,
   locked display state, and exact asynchronous preview commits;
+- bounded FITS preview reduction with chunk-size-invariant compensated means,
+  complete valid/excluded support accounting, automatic pyramid-level choice,
+  and explicit linear, midtone, or asinh grayscale display mapping;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
@@ -102,6 +105,8 @@ progressive disclosure, diagnostics, and accessibility requirements. The
 viewer, Blink, rejection, and reproducibility behavior. The
 [quality contract](docs/QUALITY_CONTRACT.md) defines the strict initial
 background and stellar measurement algorithms and their current release gates.
+The [preview contract](docs/PREVIEW_CONTRACT.md) separates bounded display
+artifacts from scientific pixels and records the remaining viewer release gates.
 
 ## Build and test
 

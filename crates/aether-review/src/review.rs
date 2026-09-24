@@ -53,8 +53,9 @@ impl FrameId {
     ///
     /// The exact versioned encoding is: domain bytes, big-endian path byte
     /// length, UTF-8 path bytes, big-endian source byte length, and the canonical
-    /// lowercase content digest bytes. Moving the whole session does not change
-    /// the identity; adding a byte-identical source at another relative path does.
+    /// lowercase content-digest ASCII bytes. Moving the whole session does not
+    /// change the identity; adding a byte-identical source at another relative
+    /// path does.
     ///
     /// # Errors
     ///
