@@ -14,6 +14,14 @@ behavior. Changing a threshold recomputes the proposed state but does not erase
 manual decisions. Bulk changes are previewed and undoable until the run plan is
 sealed.
 
+The initial interaction model implements manual accept, reject, and clear
+transactions against content-derived frame identities. A transaction is first
+returned as an immutable generation-bound preview, then applied atomically. One
+undo operation reverts the complete transaction. Sealing advances the generation,
+discards undo history, and permanently blocks mutation. Automatic rule evidence
+and its precedence model remain a separate planned addition; they are not
+simulated by overloading manual decisions.
+
 Pixel minimum, maximum, mean, dispersion, and invalid counts are useful
 diagnostics but are not quality scores. Ranking requires versioned astronomical
 metrics with declared units and tested validity domains:
@@ -72,6 +80,13 @@ committing the visible frame identity. Screen readers announce file position,
 review state, important metrics, and playback state; status is never encoded by
 color alone.
 
+The initial Blink state machine separates the visible frame from a pending
+preview request. A decoded preview becomes current only when its stable identity
+exactly matches the pending identity. Stale renderer responses leave both states
+unchanged. Pausing cancels an unresolved timer request. Playback mode or the
+shared display lock cannot change under a pending request, so one preview can
+never be displayed under another frame's label or transform.
+
 ## Sorting and reproducibility
 
 Table sorting is a view operation. Ties use a stable source identifier and do
@@ -82,6 +97,11 @@ order is a separate recorded action.
 The sealed session plan records accepted sources, rejection reasons, metric and
 expression versions, thresholds, and the selected reference. The output
 provenance binds to that plan rather than to ephemeral viewer state.
+
+The backend review model implements processing-order, label, review-state,
+background, noise, star-count, FWHM, and eccentricity sorts. Missing placement is
+explicit and independent of ascending or descending direction. Every sort
+returns a new list of identities and cannot mutate processing order.
 
 ## Release gates
 

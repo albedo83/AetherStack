@@ -37,6 +37,12 @@ states are explicit, keyboard accessible, undoable, and carry a visible reason.
 The detailed behavior is defined in
 [`FRAME_REVIEW_CONTRACT.md`](FRAME_REVIEW_CONTRACT.md).
 
+The shared Rust interaction model is the first implemented UI layer. It owns
+review transactions, undo, sealing, table order, locked display state, and Blink
+identity transitions without depending on a desktop toolkit. The future Tauri
+surface must render this model rather than reimplementing these invariants in
+frontend state.
+
 ## Three disclosure levels
 
 ### Essentials

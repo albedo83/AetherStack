@@ -52,6 +52,9 @@ optimized CPU and GPU paths must match.
 - exact iterative median/MAD background estimation and deterministic stellar
   local-maximum, centroid, FWHM, eccentricity, saturation, and support
   measurements on prepared linear detection planes;
+- a toolkit-independent frame-review and Blink state model with stable source
+  identities, previewed decision transactions, bounded undo, view-only sorting,
+  locked display state, and exact asynchronous preview commits;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat

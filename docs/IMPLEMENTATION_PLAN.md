@@ -83,6 +83,7 @@ crates/
 ├── aether-runtime/       # pipeline graph, scheduling, cancellation, progress
 ├── aether-calibration/   # masters, calibration, cosmetic correction
 ├── aether-quality/       # background, noise, stars, FWHM, eccentricity
+├── aether-review/        # review decisions, stable sorting, Blink state
 ├── aether-registration/  # matching, transforms, resampling
 ├── aether-localnorm/     # local background and scale models
 ├── aether-integration/   # weighting, rejection, accumulation
@@ -455,6 +456,13 @@ safety reasoning. They do not narrate obvious syntax.
     background SNR, saturation, and support with explicit work bounds. CFA-aware
     detection, spatial background modeling, real-camera validation, preview
     pyramids, and UI integration remain release gates.
+19. Establish the toolkit-independent Review/Blink interaction model. Stable
+    frame identities, validated quality-table summaries, view-only deterministic
+    sorting, previewed decision batches, bounded transactional undo, sealing,
+    shared display transforms, exact pending-preview identity, and forward,
+    backward, and bounce traversal are implemented and unit tested. Automatic
+    rule evidence, preview tile generation/cache, accessibility presentation, and
+    the Tauri surface remain next.
 
 ## 11. Stable-release definition
 
