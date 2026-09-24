@@ -2,6 +2,7 @@ import "./styles.css";
 
 import { demoReviewModel } from "./demo-data.ts";
 import type {
+  FitsStatistics,
   FrameRole,
   ReviewFrame,
   ReviewState,
@@ -20,6 +21,7 @@ import {
   type ImportedFrame,
   type ImportedSession,
 } from "./session-bridge.ts";
+import { inspectFitsStatistics } from "./statistics-bridge.ts";
 
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("AetherStack desktop root is missing");
@@ -42,6 +44,8 @@ let sharedTransform: {
 let previewResource: PreviewResource | null = null;
 let previewTicket = 0;
 let sortTicket = 0;
+let statisticsTicket = 0;
+const statisticsCache = new Map<string, FitsStatistics>();
 let blinkTimer: number | null = null;
 
 const screen = mountReviewScreen(root, model, {
@@ -75,6 +79,12 @@ const screen = mountReviewScreen(root, model, {
   },
   onSetViewerScale(scale) {
     update({ ...model, viewerScale: scale });
+  },
+  onOpenStatistics(frameId) {
+    void openStatistics(frameId);
+  },
+  onCloseStatistics() {
+    closeStatistics();
   },
 });
 
@@ -113,6 +123,8 @@ function installImportedSession(session: ImportedSession): void {
   sharedTransform = null;
   previewTicket += 1;
   sortTicket += 1;
+  statisticsTicket += 1;
+  statisticsCache.clear();
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -148,6 +160,7 @@ function installImportedSession(session: ImportedSession): void {
     playing: false,
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
+    statisticsPanel: closedStatisticsPanel(),
   });
   void loadSelectedPreview();
 }
@@ -189,6 +202,7 @@ function selectRole(role: FrameRole): void {
   sharedTransform = null;
   previewTicket += 1;
   sortTicket += 1;
+  statisticsTicket += 1;
   if (!importedSession) {
     if (role === "light") {
       update({
@@ -197,6 +211,7 @@ function selectRole(role: FrameRole): void {
         frames: demoReviewModel.frames,
         selectedFrameId: demoReviewModel.selectedFrameId,
         preview: null,
+        statisticsPanel: closedStatisticsPanel(),
       });
       return;
     }
@@ -207,6 +222,7 @@ function selectRole(role: FrameRole): void {
       selectedFrameId: null,
       playing: false,
       preview: null,
+      statisticsPanel: closedStatisticsPanel(),
     });
     return;
   }
@@ -220,14 +236,103 @@ function selectRole(role: FrameRole): void {
     playing: false,
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
+    statisticsPanel: closedStatisticsPanel(),
   });
   void loadSelectedPreview();
 }
 
 function selectFrame(frameId: string): void {
+  statisticsTicket += 1;
   releasePreview();
-  update({ ...model, selectedFrameId: frameId, preview: null });
+  update({
+    ...model,
+    selectedFrameId: frameId,
+    preview: null,
+    statisticsPanel: closedStatisticsPanel(),
+  });
   void loadSelectedPreview();
+}
+
+async function openStatistics(frameId: string): Promise<void> {
+  const frame = model.frames.find((candidate) => candidate.id === frameId);
+  if (!frame?.sourcePath) return;
+
+  const cached = statisticsCache.get(frame.id);
+  if (cached) {
+    update({
+      ...model,
+      statisticsPanel: {
+        open: true,
+        frameId: frame.id,
+        frameLabel: frame.label,
+        state: "ready",
+        statistics: cached,
+        message: null,
+      },
+    });
+    return;
+  }
+
+  const ticket = ++statisticsTicket;
+  update({
+    ...model,
+    statisticsPanel: {
+      open: true,
+      frameId: frame.id,
+      frameLabel: frame.label,
+      state: "loading",
+      statistics: null,
+      message: "Reading the primary array in three deterministic passes…",
+    },
+  });
+  try {
+    const statistics = await inspectFitsStatistics(frame.sourcePath);
+    if (ticket !== statisticsTicket || model.selectedFrameId !== frame.id)
+      return;
+    statisticsCache.set(frame.id, statistics);
+    update({
+      ...model,
+      statisticsPanel: {
+        open: true,
+        frameId: frame.id,
+        frameLabel: frame.label,
+        state: "ready",
+        statistics,
+        message: null,
+      },
+    });
+  } catch {
+    if (ticket !== statisticsTicket || model.selectedFrameId !== frame.id)
+      return;
+    update({
+      ...model,
+      statisticsPanel: {
+        open: true,
+        frameId: frame.id,
+        frameLabel: frame.label,
+        state: "error",
+        statistics: null,
+        message:
+          "Exact FITS statistics could not be calculated for this frame.",
+      },
+    });
+  }
+}
+
+function closeStatistics(): void {
+  statisticsTicket += 1;
+  update({ ...model, statisticsPanel: closedStatisticsPanel() });
+}
+
+function closedStatisticsPanel(): ReviewViewModel["statisticsPanel"] {
+  return {
+    open: false,
+    frameId: null,
+    frameLabel: null,
+    state: "idle",
+    statistics: null,
+    message: null,
+  };
 }
 
 async function loadSelectedPreview(): Promise<void> {
@@ -341,6 +446,7 @@ function releasePreview(): void {
 function disposeRuntimeResources(): void {
   previewTicket += 1;
   sortTicket += 1;
+  statisticsTicket += 1;
   stopBlinkTimer();
   releasePreview();
 }

@@ -8,9 +8,13 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{Read, Seek};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
-use aether_fits::{HeaderReadOptions, PrimaryImageReader};
+use aether_fits::{
+    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions,
+    PrimaryImageReader, StoredSampleFormat, primary_image_statistics,
+};
 use aether_metadata::FrameType;
 use aether_preview::{
     AUTO_STRETCH_ALGORITHM_ID, AutomaticDisplayTransform, FitsPreviewParameters, MissingPixelStyle,
@@ -64,6 +68,32 @@ struct EstimatedDisplayTransform {
     median: f64,
     scaled_mad: f64,
     high_quantile: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FitsStatisticsRequest {
+    path: PathBuf,
+}
+
+/// Exact bounded-memory summary of the complete primary FITS array.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FitsStatisticsResponse {
+    algorithm_id: &'static str,
+    axes: Vec<u64>,
+    stored_format: &'static str,
+    header_conformant: bool,
+    header_diagnostics: usize,
+    total_samples: usize,
+    usable_samples: usize,
+    undefined_samples: usize,
+    non_finite_samples: usize,
+    minimum: f64,
+    maximum: f64,
+    mean: f64,
+    population_standard_deviation: f64,
+    sample_standard_deviation: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -176,6 +206,7 @@ impl Error for PreviewCommandError {}
 
 #[tauri::command]
 async fn render_fits_preview(request: FitsPreviewRequest) -> Result<Response, PreviewCommandError> {
+    validate_runtime_source_path(&request.path)?;
     tauri::async_runtime::spawn_blocking(move || {
         let file = File::open(&request.path).map_err(|_| {
             PreviewCommandError::new(
@@ -194,6 +225,7 @@ async fn render_fits_preview(request: FitsPreviewRequest) -> Result<Response, Pr
 async fn estimate_fits_preview_transform(
     request: FitsPreviewEstimateRequest,
 ) -> Result<EstimatedDisplayTransform, PreviewCommandError> {
+    validate_runtime_source_path(&request.path)?;
     tauri::async_runtime::spawn_blocking(move || {
         let file = File::open(&request.path).map_err(|_| {
             PreviewCommandError::new(
@@ -205,6 +237,97 @@ async fn estimate_fits_preview_transform(
     })
     .await
     .map_err(|_| preview_worker_error())?
+}
+
+#[tauri::command]
+async fn inspect_fits_statistics(
+    request: FitsStatisticsRequest,
+) -> Result<FitsStatisticsResponse, PreviewCommandError> {
+    validate_runtime_source_path(&request.path)?;
+    tauri::async_runtime::spawn_blocking(move || inspect_fits_statistics_sync(&request.path))
+        .await
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "fits_statistics_interrupted",
+                "The FITS statistics worker stopped before producing a result.",
+            )
+        })?
+}
+
+fn validate_runtime_source_path(path: &Path) -> Result<(), PreviewCommandError> {
+    if path.is_absolute() {
+        Ok(())
+    } else {
+        Err(PreviewCommandError::new(
+            "fits_path_not_absolute",
+            "A native FITS operation requires an absolute source path.",
+        ))
+    }
+}
+
+fn inspect_fits_statistics_sync(
+    path: &Path,
+) -> Result<FitsStatisticsResponse, PreviewCommandError> {
+    let file = File::open(path).map_err(|_| {
+        PreviewCommandError::new(
+            "fits_open_failed",
+            "The selected FITS file could not be opened.",
+        )
+    })?;
+    let mut reader =
+        PrimaryImageReader::open(file, HeaderReadOptions::default()).map_err(|_| {
+            PreviewCommandError::new(
+                "fits_statistics_header_failed",
+                "The selected FITS primary header could not be inspected.",
+            )
+        })?;
+    let axes = reader.descriptor().axes().to_vec();
+    let stored_format = stored_format_name(reader.descriptor().sample_format());
+    let header_conformant = reader.report().is_conformant();
+    let header_diagnostics = reader.report().diagnostics().len();
+    let chunk_samples = NonZeroUsize::new(DEFAULT_STATISTICS_CHUNK_SAMPLES)
+        .ok_or_else(fits_statistics_configuration_error)?;
+    let statistics = primary_image_statistics(&mut reader, chunk_samples).map_err(|_| {
+        PreviewCommandError::new(
+            "fits_statistics_failed",
+            "Exact statistics could not be calculated for this FITS primary array.",
+        )
+    })?;
+    let moments = statistics.moments();
+    Ok(FitsStatisticsResponse {
+        algorithm_id: FITS_STATISTICS_ALGORITHM_ID,
+        axes,
+        stored_format,
+        header_conformant,
+        header_diagnostics,
+        total_samples: moments.total_samples(),
+        usable_samples: moments.usable_samples(),
+        undefined_samples: statistics.undefined_samples(),
+        non_finite_samples: statistics.non_finite_samples(),
+        minimum: moments.minimum(),
+        maximum: moments.maximum(),
+        mean: moments.mean(),
+        population_standard_deviation: moments.population_standard_deviation(),
+        sample_standard_deviation: moments.sample_standard_deviation(),
+    })
+}
+
+const fn stored_format_name(format: StoredSampleFormat) -> &'static str {
+    match format {
+        StoredSampleFormat::Unsigned8 => "unsigned 8-bit integer",
+        StoredSampleFormat::Signed16 => "signed 16-bit integer",
+        StoredSampleFormat::Signed32 => "signed 32-bit integer",
+        StoredSampleFormat::Signed64 => "signed 64-bit integer",
+        StoredSampleFormat::Float32 => "IEEE 754 binary32",
+        StoredSampleFormat::Float64 => "IEEE 754 binary64",
+    }
+}
+
+const fn fits_statistics_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "fits_statistics_configuration_invalid",
+        "The FITS statistics buffer configuration is invalid.",
+    )
 }
 
 #[tauri::command]
@@ -392,7 +515,7 @@ fn imported_frame(
             "A session source could not be assigned a stable frame identity.",
         )
     })?;
-    let source_path = root.join(file.relative_path());
+    let source_path = join_portable_path(root, file.relative_path());
     let source_path = source_path.to_str().ok_or_else(|| {
         PreviewCommandError::new(
             "session_source_path_not_unicode",
@@ -433,6 +556,17 @@ fn imported_frame(
         fits_diagnostic_count: file.fits_diagnostics().len(),
         classification_conflict: file.classification().has_conflict(),
     }))
+}
+
+/// Rebuilds an operating-system path from the manifest's portable separator.
+///
+/// Manifest paths always use `/`, including on Windows. Joining the complete
+/// string would retain that separator in the display path on Windows, so each
+/// already-validated component is joined independently.
+fn join_portable_path(root: &Path, relative_path: &str) -> PathBuf {
+    relative_path
+        .split('/')
+        .fold(root.to_owned(), |path, component| path.join(component))
 }
 
 const fn frame_role(frame_type: &FrameType) -> Option<&'static str> {
@@ -620,6 +754,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .invoke_handler(tauri::generate_handler![
             estimate_fits_preview_transform,
             import_session_directory,
+            inspect_fits_statistics,
             render_fits_preview,
             sort_review_frames
         ])
@@ -739,6 +874,16 @@ mod tests {
     }
 
     #[test]
+    fn native_fits_operations_require_absolute_source_paths() -> TestResult {
+        let error = validate_runtime_source_path(Path::new("relative/frame.fits"))
+            .err()
+            .ok_or("relative source paths must be rejected")?;
+
+        assert_eq!(error.code, "fits_path_not_absolute");
+        Ok(())
+    }
+
+    #[test]
     fn estimates_an_inspectable_automatic_transform() -> TestResult {
         let estimate = estimate_fits_preview_transform_from_reader(
             Cursor::new(fits_bytes()?),
@@ -751,6 +896,31 @@ mod tests {
         assert!(estimate.white_point > estimate.median);
         assert!(estimate.scaled_mad > 0.0);
         assert!((0.0..1.0).contains(&estimate.midtone));
+        Ok(())
+    }
+
+    #[test]
+    fn calculates_exact_bounded_statistics_for_the_primary_array() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let path = directory.path().join("statistics.fits");
+        fs::write(&path, fits_bytes()?)?;
+
+        let statistics = inspect_fits_statistics_sync(&path)?;
+
+        assert_eq!(statistics.algorithm_id, FITS_STATISTICS_ALGORITHM_ID);
+        assert_eq!(statistics.axes, [4, 2]);
+        assert_eq!(statistics.stored_format, "IEEE 754 binary64");
+        assert!(statistics.header_conformant);
+        assert_eq!(statistics.header_diagnostics, 0);
+        assert_eq!(statistics.total_samples, 8);
+        assert_eq!(statistics.usable_samples, 8);
+        assert_eq!(statistics.undefined_samples, 0);
+        assert_eq!(statistics.non_finite_samples, 0);
+        assert_eq!(statistics.minimum.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(statistics.maximum.to_bits(), 7.0_f64.to_bits());
+        assert_eq!(statistics.mean.to_bits(), 3.5_f64.to_bits());
+        assert!(statistics.population_standard_deviation > 2.0);
+        assert!(statistics.sample_standard_deviation.is_some());
         Ok(())
     }
 
@@ -856,6 +1026,11 @@ mod tests {
         assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");
         assert!(u32::from_be_bytes(encoded[16..20].try_into()?) <= 800);
         assert!(u32::from_be_bytes(encoded[20..24].try_into()?) <= 600);
+        let statistics = inspect_fits_statistics_sync(&transform.path)?;
+        assert_eq!(statistics.total_samples, statistics.usable_samples);
+        assert_eq!(statistics.undefined_samples, 0);
+        assert_eq!(statistics.non_finite_samples, 0);
+        assert!(statistics.maximum > statistics.minimum);
         if let Some(output) = std::env::var_os("AETHERSTACK_TEST_PREVIEW_OUTPUT") {
             fs::write(output, encoded)?;
         }

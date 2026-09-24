@@ -65,6 +65,9 @@ optimized CPU and GPU paths must match.
   content-derived frame identities, an inspectable robust reference stretch,
   identity-safe real FITS preview loading, and Rust-owned deterministic review
   sorting;
+- an on-demand desktop FITS inspector exposing exact three-pass primary-array
+  moments and invalid-sample accounting without loading the array into the web
+  presenter;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat

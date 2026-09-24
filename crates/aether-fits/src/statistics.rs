@@ -9,6 +9,8 @@ use crate::{ImageReadError, PrimaryImageReader, SampleStatus};
 
 /// Default number of decoded `f64` samples retained by FITS statistics passes.
 pub const DEFAULT_STATISTICS_CHUNK_SAMPLES: usize = 256 * 1_024;
+/// Stable identifier for deterministic three-pass primary-image moments.
+pub const FITS_STATISTICS_ALGORITHM_ID: &str = "fits-three-pass-moments-v1";
 
 /// Strict moments and invalid-sample accounting for one FITS primary image.
 #[derive(Clone, Copy, Debug, PartialEq)]

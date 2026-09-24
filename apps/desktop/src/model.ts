@@ -44,6 +44,33 @@ export interface FramePreview {
   readonly url: string;
 }
 
+/** Exact three-pass moments for the complete primary FITS array. */
+export interface FitsStatistics {
+  readonly algorithmId: string;
+  readonly axes: readonly number[];
+  readonly storedFormat: string;
+  readonly headerConformant: boolean;
+  readonly headerDiagnostics: number;
+  readonly totalSamples: number;
+  readonly usableSamples: number;
+  readonly undefinedSamples: number;
+  readonly nonFiniteSamples: number;
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly mean: number;
+  readonly populationStandardDeviation: number;
+  readonly sampleStandardDeviation: number | null;
+}
+
+export interface StatisticsPanel {
+  readonly open: boolean;
+  readonly frameId: string | null;
+  readonly frameLabel: string | null;
+  readonly state: "idle" | "loading" | "ready" | "error";
+  readonly statistics: FitsStatistics | null;
+  readonly message: string | null;
+}
+
 export interface ReviewViewModel {
   readonly sessionName: string;
   readonly sessionStatus: SessionStatus;
@@ -55,6 +82,7 @@ export interface ReviewViewModel {
   readonly sharedStretchLabel: string;
   readonly preview: FramePreview | null;
   readonly viewerScale: "fit" | "actual";
+  readonly statisticsPanel: StatisticsPanel;
 }
 
 export type SortField =
@@ -82,4 +110,6 @@ export interface ReviewActions {
   readonly onSetPlaying: (playing: boolean) => void;
   readonly onRequestStep: (direction: "backward" | "forward") => void;
   readonly onSetViewerScale: (scale: "fit" | "actual") => void;
+  readonly onOpenStatistics: (frameId: string) => void;
+  readonly onCloseStatistics: () => void;
 }

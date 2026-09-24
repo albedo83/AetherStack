@@ -483,9 +483,11 @@ safety reasoning. They do not narrate obvious syntax.
     headers conflict, marks every override, resolves one reference stretch, and
     keeps it locked across Blink frames. Fit and preview-pixel views are real,
     deterministic table sorting delegates to the Rust review model, and
-    unfinished commands are exposed as unavailable instead of inert controls.
-    Arbitrary-file import, progress events, multi-frame stretch estimation, and
-    persistent decision/undo synchronization remain next.
+    an on-demand inspector exposes exact fixed-buffer three-pass FITS moments.
+    Unfinished commands are exposed as unavailable instead of inert controls.
+    Arbitrary-file import, progress events, multi-frame stretch estimation,
+    camera-aware quality metrics, and persistent decision/undo synchronization
+    remain next.
 
 ## 11. Stable-release definition
 

@@ -68,7 +68,13 @@ typed rather than being converted to partial statistics.
 
 The `aether-stats` command applies this operation to files or deterministic
 directory traversals without following symbolic links. Its JSON Lines output is
-versioned per record and is suitable for batch inspection and the future frame
-review view. These pixel moments are descriptive diagnostics; they are not a
-substitute for astronomical quality metrics such as background, noise, FWHM,
-eccentricity, star count, or signal weight.
+versioned per record and is suitable for batch inspection. The desktop Review
+viewer also exposes the same operation on demand for the selected source. Its
+dialog identifies the algorithm, array geometry, stored format, header state,
+finite support, excluded-sample categories, extrema, mean, and both population
+and sample standard deviations. Results are cached only in process memory and
+never replace the scientific source.
+
+These pixel moments are descriptive diagnostics; they are not a substitute for
+astronomical quality metrics such as background, noise, FWHM, eccentricity,
+star count, or signal weight.

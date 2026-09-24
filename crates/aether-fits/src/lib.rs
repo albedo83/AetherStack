@@ -33,8 +33,8 @@ pub use image_hdu::{ImageHduDescriptor, ImageHduError, ImageHduErrorCode, Stored
 pub use image_reader::{ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus};
 pub use reader::{HeaderReadOptions, read_primary_header};
 pub use statistics::{
-    DEFAULT_STATISTICS_CHUNK_SAMPLES, FitsImageStatistics, FitsStatisticsError,
-    primary_image_statistics,
+    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, FitsImageStatistics,
+    FitsStatisticsError, primary_image_statistics,
 };
 pub use writer::{
     CANONICAL_FITS_NAN_BITS, F64PrimaryStreamWriter, FITS_OUTPUT_PROVENANCE_VERSION,

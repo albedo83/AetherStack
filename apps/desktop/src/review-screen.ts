@@ -67,6 +67,10 @@ export function mountReviewScreen(
       root,
       '[data-action="viewer-actual"]',
     ),
+    statisticsButton: required<HTMLButtonElement>(
+      root,
+      '[data-action="open-statistics"]',
+    ),
     state: required<HTMLElement>(root, "[data-review-state]"),
     fwhm: required<HTMLElement>(root, "[data-metric-fwhm]"),
     eccentricity: required<HTMLElement>(root, "[data-metric-eccentricity]"),
@@ -82,6 +86,33 @@ export function mountReviewScreen(
     ),
     rejectDialog: required<HTMLElement>(root, "[data-reject-dialog]"),
     rejectFrame: required<HTMLElement>(root, "[data-reject-frame]"),
+    statisticsDialog: required<HTMLElement>(root, "[data-statistics-dialog]"),
+    statisticsFrame: required<HTMLElement>(root, "[data-statistics-frame]"),
+    statisticsStatus: required<HTMLElement>(root, "[data-statistics-status]"),
+    statisticsContent: required<HTMLElement>(root, "[data-statistics-content]"),
+    statisticsAlgorithm: required<HTMLElement>(
+      root,
+      "[data-statistics-algorithm]",
+    ),
+    statisticsAxes: required<HTMLElement>(root, "[data-statistics-axes]"),
+    statisticsFormat: required<HTMLElement>(root, "[data-statistics-format]"),
+    statisticsHeader: required<HTMLElement>(root, "[data-statistics-header]"),
+    statisticsUsable: required<HTMLElement>(root, "[data-statistics-usable]"),
+    statisticsExcluded: required<HTMLElement>(
+      root,
+      "[data-statistics-excluded]",
+    ),
+    statisticsMinimum: required<HTMLElement>(root, "[data-statistics-minimum]"),
+    statisticsMaximum: required<HTMLElement>(root, "[data-statistics-maximum]"),
+    statisticsMean: required<HTMLElement>(root, "[data-statistics-mean]"),
+    statisticsDeviation: required<HTMLElement>(
+      root,
+      "[data-statistics-deviation]",
+    ),
+    statisticsSampleDeviation: required<HTMLElement>(
+      root,
+      "[data-statistics-sample-deviation]",
+    ),
     liveRegion: required<HTMLElement>(root, "[data-live-region]"),
   };
 
@@ -172,12 +203,35 @@ export function mountReviewScreen(
     }
     if (action === "viewer-actual") {
       actions.onSetViewerScale("actual");
+      return;
+    }
+    if (action === "open-statistics") {
+      const frame = selectedFrame(model);
+      if (frame?.sourcePath) {
+        actions.onOpenStatistics(frame.id);
+        queueMicrotask(() => {
+          required<HTMLButtonElement>(
+            elements.statisticsDialog,
+            '[data-action="close-statistics"]',
+          ).focus();
+        });
+      }
+      return;
+    }
+    if (action === "close-statistics") {
+      actions.onCloseStatistics();
+      queueMicrotask(() => elements.statisticsButton.focus());
     }
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && !elements.rejectDialog.hidden) {
       closeRejectDialog();
+      return;
+    }
+    if (event.key === "Escape" && !elements.statisticsDialog.hidden) {
+      actions.onCloseStatistics();
+      queueMicrotask(() => elements.statisticsButton.focus());
       return;
     }
     const target = event.target instanceof Element ? event.target : null;
@@ -314,6 +368,8 @@ export function mountReviewScreen(
       "aria-pressed",
       String(model.viewerScale === "actual"),
     );
+    elements.statisticsButton.disabled = !frame?.sourcePath;
+    renderStatisticsPanel(elements, model);
     elements.stretch.textContent = model.sharedStretchLabel;
     renderSelectedMetrics(elements, frame);
     elements.play.setAttribute("aria-pressed", String(model.playing));
@@ -472,6 +528,65 @@ function renderSelectedMetrics(
   elements.noise.textContent = formatMetric(frame?.metrics.noise ?? null, 1);
 }
 
+function renderStatisticsPanel(
+  elements: {
+    statisticsDialog: HTMLElement;
+    statisticsFrame: HTMLElement;
+    statisticsStatus: HTMLElement;
+    statisticsContent: HTMLElement;
+    statisticsAlgorithm: HTMLElement;
+    statisticsAxes: HTMLElement;
+    statisticsFormat: HTMLElement;
+    statisticsHeader: HTMLElement;
+    statisticsUsable: HTMLElement;
+    statisticsExcluded: HTMLElement;
+    statisticsMinimum: HTMLElement;
+    statisticsMaximum: HTMLElement;
+    statisticsMean: HTMLElement;
+    statisticsDeviation: HTMLElement;
+    statisticsSampleDeviation: HTMLElement;
+  },
+  model: ReviewViewModel,
+): void {
+  const panel = model.statisticsPanel;
+  const statistics = panel.statistics;
+  elements.statisticsDialog.hidden = !panel.open;
+  elements.statisticsFrame.textContent =
+    panel.frameLabel ?? "No frame selected";
+  elements.statisticsContent.hidden = panel.state !== "ready" || !statistics;
+  elements.statisticsStatus.hidden = panel.state === "ready" && !!statistics;
+  elements.statisticsStatus.dataset.state = panel.state;
+  elements.statisticsStatus.textContent =
+    panel.message ??
+    (panel.state === "loading"
+      ? "Reading the primary array in three deterministic passes…"
+      : "Statistics are not available.");
+  if (!statistics) return;
+
+  elements.statisticsAlgorithm.textContent = statistics.algorithmId;
+  elements.statisticsAxes.textContent = statistics.axes.join(" × ");
+  elements.statisticsFormat.textContent = statistics.storedFormat;
+  elements.statisticsHeader.textContent = statistics.headerConformant
+    ? `Conformant · ${statistics.headerDiagnostics} diagnostics`
+    : `Accepted with ${statistics.headerDiagnostics} diagnostics`;
+  elements.statisticsUsable.textContent = `${formatCount(statistics.usableSamples)} / ${formatCount(statistics.totalSamples)}`;
+  elements.statisticsExcluded.textContent = `${formatCount(statistics.undefinedSamples)} undefined · ${formatCount(statistics.nonFiniteSamples)} non-finite`;
+  elements.statisticsMinimum.textContent = formatScientificValue(
+    statistics.minimum,
+  );
+  elements.statisticsMaximum.textContent = formatScientificValue(
+    statistics.maximum,
+  );
+  elements.statisticsMean.textContent = formatScientificValue(statistics.mean);
+  elements.statisticsDeviation.textContent = formatScientificValue(
+    statistics.populationStandardDeviation,
+  );
+  elements.statisticsSampleDeviation.textContent =
+    statistics.sampleStandardDeviation === null
+      ? "Undefined"
+      : formatScientificValue(statistics.sampleStandardDeviation);
+}
+
 function selectedFrame(model: ReviewViewModel): ReviewFrame | null {
   return (
     model.frames.find((frame) => frame.id === model.selectedFrameId) ?? null
@@ -506,6 +621,18 @@ function formatMetric(value: number | null, precision: number): string {
 
 function formatTemperature(value: number | null): string {
   return value === null ? "—" : `${value.toFixed(1)} °C`;
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+function formatScientificValue(value: number): string {
+  const magnitude = Math.abs(value);
+  if (magnitude !== 0 && (magnitude >= 1_000_000 || magnitude < 0.001)) {
+    return value.toExponential(6);
+  }
+  return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
 
 function humanize(field: SortField): string {
@@ -647,6 +774,7 @@ function shellMarkup(): string {
                 <div class="viewer__tools" aria-label="Viewer controls">
                   <button class="tool-button" type="button" data-action="viewer-fit" aria-label="Fit preview to viewer" aria-pressed="true">Fit</button>
                   <button class="tool-button" type="button" data-action="viewer-actual" aria-label="Show preview pixels at one hundred percent" aria-pressed="false">1:1</button>
+                  <button class="tool-button" type="button" data-action="open-statistics" aria-label="Inspect exact FITS statistics">Statistics</button>
                   <button class="tool-button" type="button" aria-label="Clipping overlay is not available in this build" title="Clipping requires rejection maps" disabled>Clipping</button>
                 </div>
               </div>
@@ -702,6 +830,32 @@ function shellMarkup(): string {
         <button class="button button--quiet dialog-cancel" type="button" data-action="cancel-reject">Cancel</button>
       </section>
     </div>
+    <div class="dialog-backdrop" role="presentation" data-statistics-dialog hidden>
+      <section class="statistics-dialog" role="dialog" aria-modal="true" aria-labelledby="statistics-title" aria-describedby="statistics-description">
+        <div class="statistics-dialog__heading">
+          <div>
+            <p class="eyebrow">Exact FITS statistics</p>
+            <h2 id="statistics-title" data-statistics-frame></h2>
+          </div>
+          <button class="icon-button" type="button" data-action="close-statistics" aria-label="Close FITS statistics">×</button>
+        </div>
+        <p id="statistics-description">The complete primary array is decoded in canonical order with fixed-size buffers. These moments are diagnostic and never alter scientific pixels.</p>
+        <p class="statistics-status" data-statistics-status></p>
+        <dl class="statistics-grid" data-statistics-content hidden>
+          ${statistic("Algorithm", "data-statistics-algorithm")}
+          ${statistic("Axes", "data-statistics-axes")}
+          ${statistic("Stored format", "data-statistics-format")}
+          ${statistic("Header", "data-statistics-header")}
+          ${statistic("Usable samples", "data-statistics-usable")}
+          ${statistic("Excluded samples", "data-statistics-excluded")}
+          ${statistic("Minimum", "data-statistics-minimum")}
+          ${statistic("Maximum", "data-statistics-maximum")}
+          ${statistic("Arithmetic mean", "data-statistics-mean")}
+          ${statistic("Population σ", "data-statistics-deviation")}
+          ${statistic("Sample σ", "data-statistics-sample-deviation")}
+        </dl>
+      </section>
+    </div>
     <p class="sr-only" aria-live="polite" aria-atomic="true" data-live-region></p>
   `;
 }
@@ -734,4 +888,8 @@ function sortableHeading(
 
 function metric(label: string, attribute: string, unit: string): string {
   return `<div><dt>${label}</dt><dd><span ${attribute}>—</span>${unit ? ` <small>${unit}</small>` : ""}</dd></div>`;
+}
+
+function statistic(label: string, attribute: string): string {
+  return `<div><dt>${label}</dt><dd ${attribute}>—</dd></div>`;
 }

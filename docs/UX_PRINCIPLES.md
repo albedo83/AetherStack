@@ -121,6 +121,11 @@ user can inspect those parameters without switching the project permanently to
 Advanced mode. A control that is not implemented does not appear to work; the
 plan reports the unsupported stage and blocks execution.
 
+The Review viewer includes an on-demand exact FITS statistics dialog for real
+sources. It distinguishes complete-array pixel moments from astronomical
+quality metrics, reports excluded samples explicitly, and performs no browser
+side numerical reconstruction.
+
 ## Performance without quality loss
 
 The default profile targets maximum validated quality. Execution optimizations

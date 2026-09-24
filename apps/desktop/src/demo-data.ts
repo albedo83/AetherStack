@@ -15,6 +15,14 @@ export const demoReviewModel: ReviewViewModel = {
   sharedStretchLabel: "Shared stretch · locked",
   preview: null,
   viewerScale: "fit",
+  statisticsPanel: {
+    open: false,
+    frameId: null,
+    frameLabel: null,
+    state: "idle",
+    statistics: null,
+    message: null,
+  },
   roles: [
     { role: "bias", label: "Bias", count: 0, unresolved: 0 },
     { role: "dark", label: "Darks", count: 204, unresolved: 0 },

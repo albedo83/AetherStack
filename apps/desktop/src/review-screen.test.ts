@@ -21,6 +21,8 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSetPlaying: vi.fn(),
     onRequestStep: vi.fn(),
     onSetViewerScale: vi.fn(),
+    onOpenStatistics: vi.fn(),
+    onCloseStatistics: vi.fn(),
   };
   const controller = mountReviewScreen(root, model, actions);
   return { root, actions, controller };
@@ -270,6 +272,67 @@ describe("frame review workspace", () => {
         true,
       );
     }
+  });
+
+  it("presents exact FITS statistics only for a real selected source", () => {
+    const selectedFrameId = demoReviewModel.selectedFrameId;
+    expect(selectedFrameId).not.toBeNull();
+    if (!selectedFrameId) return;
+    const frames = demoReviewModel.frames.map((frame) =>
+      frame.id === selectedFrameId
+        ? { ...frame, sourcePath: "/session/LIGHTS/light_0002.fits" }
+        : frame,
+    );
+    const { root, actions, controller } = fixture({
+      ...demoReviewModel,
+      frames,
+    });
+    const button = getByRole(root, "button", {
+      name: "Inspect exact FITS statistics",
+    });
+    expect(button.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(button);
+    expect(actions.onOpenStatistics).toHaveBeenCalledWith(selectedFrameId);
+
+    controller.update({
+      ...demoReviewModel,
+      frames,
+      statisticsPanel: {
+        open: true,
+        frameId: selectedFrameId,
+        frameLabel: "light_0002.fits",
+        state: "ready",
+        message: null,
+        statistics: {
+          algorithmId: "fits-three-pass-moments-v1",
+          axes: [4_144, 2_822],
+          storedFormat: "signed 16-bit integer",
+          headerConformant: true,
+          headerDiagnostics: 0,
+          totalSamples: 11_694_368,
+          usableSamples: 11_694_368,
+          undefinedSamples: 0,
+          nonFiniteSamples: 0,
+          minimum: 384,
+          maximum: 65_535,
+          mean: 1_924.25,
+          populationStandardDeviation: 84.125,
+          sampleStandardDeviation: 84.125_004,
+        },
+      },
+    });
+
+    const dialog = getByRole(root, "dialog", { name: "light_0002.fits" });
+    expect(dialog.textContent).toContain("fits-three-pass-moments-v1");
+    expect(dialog.textContent).toContain("4144 × 2822");
+    expect(dialog.textContent).toContain("11,694,368 / 11,694,368");
+    expect(dialog.textContent).toContain("1,924.25");
+
+    fireEvent.click(
+      getByRole(dialog, "button", { name: "Close FITS statistics" }),
+    );
+    expect(actions.onCloseStatistics).toHaveBeenCalledOnce();
   });
 
   it("has no automatically detectable accessibility violations", async () => {
