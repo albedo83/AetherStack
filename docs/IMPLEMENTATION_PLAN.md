@@ -439,6 +439,11 @@ safety reasoning. They do not narrate obvious syntax.
     are explicit.~~
 16. Implement deterministic strict-mean master construction from these plans,
     followed by guarded flat normalization and synthetic equation recovery tests.
+    Role-tagged strict-mean construction, exclusive pedestal subtraction, and
+    exact-median flat normalization primitives are complete, including mask
+    propagation, per-pixel and global support diagnostics, allocation failures,
+    numerical edge cases, and a synthetic subtract-integrate-normalize equation
+    test. Plan-driven bounded FITS execution remains next.
 
 ## 11. Stable-release definition
 

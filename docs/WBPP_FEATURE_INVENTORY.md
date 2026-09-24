@@ -77,7 +77,7 @@ role-specific policies layered on top.
 
 | Reference control | AetherStack requirement | Status |
 | --- | --- | --- |
-| Combination | Average, median, and any future estimator are separately versioned algorithms. | Strict mean core implemented; others planned |
+| Combination | Average, median, and any future estimator are separately versioned algorithms. | Role-tagged `strict-mean-v1` master construction implemented; others planned |
 | Automatic rejection | Automatic selection must publish the chosen algorithm and parameters before execution. | Planned |
 | Percentile low/high | Expose units, valid ranges, minimum frame support, and exact small-sample behavior. | Planned |
 | Sigma low/high | Implement deterministic robust location/scale estimation and tested iteration limits. | Planned |
@@ -113,7 +113,7 @@ evidence, not automatically an AetherStack default.
 | CFA flat state | Preserve CFA pattern and phase through calibration. | Planned |
 | Large-scale rejection high/low | Define structures eligible for rejection without suppressing real illumination gradients. | Research-gated |
 | Large-scale layers and growth | Bind scale parameters to image dimensions and test synthetic gradients and dust shadows. | Research-gated |
-| Flat normalization | Use robust finite unmasked statistics and fail on unsafe normalization support. | Planned |
+| Flat normalization | Use robust finite unmasked statistics and fail on unsafe normalization support. | Exact positive-sample median primitive implemented; plan execution and UI planned |
 
 ## Light calibration controls
 

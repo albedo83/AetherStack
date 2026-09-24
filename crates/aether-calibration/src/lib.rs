@@ -1,14 +1,28 @@
 //! Strict double-precision calibration primitives.
 //!
-//! The initial vertical slice deliberately exposes one narrow operation: dark
-//! subtraction followed by division by an already normalized flat. Bias
-//! handling, dark scaling, master construction, and uncertainty propagation are
-//! separate scientific policies and are not guessed here.
+//! The strict CPU primitives cover exclusive bias-or-dark pedestal subtraction,
+//! robust flat normalization, and dark-plus-normalized-flat light calibration.
+//! Master orchestration, dark scaling, rejection, and uncertainty propagation
+//! remain separate versioned policies and are never guessed here.
+
+mod flat;
+mod master;
+mod pedestal;
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
+
+pub use flat::{
+    FlatNormalizationError, FlatNormalizationParameters, FlatNormalizationSupport, NormalizedFlat,
+    normalize_flat,
+};
+pub use master::{
+    CalibrationMasterKind, MasterIntegrationAlgorithm, StrictMeanMaster,
+    construct_strict_mean_master,
+};
+pub use pedestal::{PedestalSubtractionError, subtract_pedestal};
 
 /// Validated parameters for dark-and-flat calibration.
 #[derive(Clone, Copy, Debug, PartialEq)]

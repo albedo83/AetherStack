@@ -40,6 +40,10 @@ optimized CPU and GPU paths must match.
   atomic RAII memory reservations for pipeline stages;
 - strict `f64` dark-and-flat calibration with conservative quality-mask
   propagation and explicit flat-divisor thresholds;
+- exclusive `f64` bias-or-dark pedestal subtraction and exact-median flat
+  normalization with complete support accounting and explicit safety guards;
+- role-tagged, versioned strict-mean bias, dark, and pedestal-corrected flat
+  master construction with exact per-pixel contribution accounting;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
 - strict unweighted mean integration with compensated normalized accumulation

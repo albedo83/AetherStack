@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 aether-core = { path = "../aether-core" }
+aether-integration = { path = "../aether-integration" }
 
 [lints]
 workspace = true

@@ -14,6 +14,7 @@ name = "aether-calibration"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-integration",
 ]
 
 [[package]]
