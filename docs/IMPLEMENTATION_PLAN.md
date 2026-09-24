@@ -431,10 +431,14 @@ safety reasoning. They do not narrate obvious syntax.
 14. ~~Implement FITS `DATASUM` and `CHECKSUM` generation and verification. Add
     corruption, malformed-keyword, chunk-boundary, registered-vector, and
     interoperability tests before enabling the cards in atomic output.~~
-15. Begin Phase 4 with versioned bias, dark, and flat master plans, including
-    short-exposure dark matching. The planner must support real bias frames while
-    allowing a matched short dark to calibrate a flat without subtracting both
-    sources blindly.
+15. ~~Begin Phase 4 with versioned bias, dark, and flat master plans, including
+    short-exposure dark matching. The planner supports real bias frames and uses
+    an exclusive short-dark-or-bias association so both sources cannot be
+    subtracted blindly. Matching tolerances, rejected-candidate evidence,
+    ambiguity, schema validation, deterministic serialization, and memory bounds
+    are explicit.~~
+16. Implement deterministic strict-mean master construction from these plans,
+    followed by guarded flat normalization and synthetic equation recovery tests.
 
 ## 11. Stable-release definition
 

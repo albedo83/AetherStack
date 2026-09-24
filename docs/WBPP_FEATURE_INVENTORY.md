@@ -97,11 +97,11 @@ evidence, not automatically an AetherStack default.
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
 | Group darks by exposure | Exact exposure is part of the master key; tolerance is explicit and unit-bearing. | Grouping core partially implemented |
-| Exposure tolerance | Use a documented matching interval and report equally good or missing candidates. | Planned |
+| Exposure tolerance | Use a documented matching interval and report equally good or missing candidates. | Inclusive unit-bearing planner control implemented |
 | Dark optimization threshold | Scaling is off unless the selected model is validated for the camera and data. | Research-gated |
 | Optimize master dark | Expose the fitted scale, residuals, safeguards, and fallback behavior. | Research-gated |
-| Bias master | Build and match a true bias independently of darks. | Planned |
-| Short-dark use for flat calibration | Match exposure, gain, offset, temperature policy, binning, and dimensions; show the association. | Planned |
+| Bias master | Build and match a true bias independently of darks. | Versioned planning and matching implemented; pixel construction planned |
+| Short-dark use for flat calibration | Match exposure, gain, offset, temperature policy, binning, dimensions, and CFA state; show every candidate decision. | Versioned planning and diagnostics implemented; pixel construction planned |
 | Long-dark use for light calibration | Prefer exact exposure and acquisition conditions; disclose any tolerated mismatch. | Planned |
 
 ## Flat controls
@@ -109,7 +109,7 @@ evidence, not automatically an AetherStack default.
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
 | Group by filter and exposure | Include camera, dimensions, binning, gain, offset, CFA state, filter, and exposure policy. | Grouping core partially implemented |
-| Bias or dark association status | Show the chosen calibrator, rejected candidates, evidence, and blocking mismatches. | Planned |
+| Bias or dark association status | Show the chosen calibrator, rejected candidates, evidence, and blocking mismatches. | Core association model implemented; UI planned |
 | CFA flat state | Preserve CFA pattern and phase through calibration. | Planned |
 | Large-scale rejection high/low | Define structures eligible for rejection without suppressing real illumination gradients. | Research-gated |
 | Large-scale layers and growth | Bind scale parameters to image dimensions and test synthetic gradients and dust shadows. | Research-gated |

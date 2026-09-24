@@ -28,6 +28,9 @@ optimized CPU and GPU paths must match.
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;
+- versioned bias, dark, and flat master plans with exclusive short-dark-or-bias
+  flat calibration, explicit tolerances, candidate diagnostics, and bounded
+  deterministic serialization;
 - versioned, deterministic JSON session manifests with strict validation,
   retained FITS diagnostics, canonical manifest digests, and streaming SHA-256
   source fingerprints;
@@ -64,6 +67,8 @@ See the [implementation plan](docs/IMPLEMENTATION_PLAN.md) and the anonymized
 [corpus inventory](docs/CORPUS_INVENTORY.md) for the architectural rationale and
 the evidence driving format support. The [session manifest contract](docs/SESSION_MANIFEST.md)
 documents the current portable interchange schema and its validation rules. The
+[master plan contract](docs/MASTER_PLAN_CONTRACT.md) defines conservative
+short-dark and true-bias association for flat construction. The
 [runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
 and memory-accounting behavior for later pipeline stages. The initial
 [calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,

@@ -10,6 +10,7 @@ mod fingerprint;
 mod generator;
 mod grouping;
 mod manifest;
+mod master_plan;
 mod source;
 
 pub use classification::{
@@ -29,5 +30,12 @@ pub use grouping::{GroupingField, GroupingKeyError, StrictGroupingKey};
 pub use manifest::{
     MAX_SESSION_MANIFEST_BYTES, ManifestError, ManifestFile, ManifestGroup, ManifestValidationCode,
     ManifestValidationError, SESSION_MANIFEST_SCHEMA_VERSION, SessionManifest, SourceFingerprint,
+};
+pub use master_plan::{
+    FlatPedestalAssociation, FlatPedestalBlockingReason, FlatPedestalPolicy,
+    MASTER_PLAN_SCHEMA_VERSION, MAX_MASTER_PLAN_BYTES, MAX_MASTER_PLAN_CANDIDATE_EVALUATIONS,
+    MasterPlan, MasterPlanError, MasterPlanOptions, MasterProductKind, MasterProductPlan,
+    PedestalCandidateCompatibility, PedestalCandidateEvaluation, PedestalMatchField,
+    PedestalMismatch, PedestalMismatchReason, PedestalSourceKind, TemperatureBasis,
 };
 pub use source::{SourceAnalysisError, analyze_fits_source};

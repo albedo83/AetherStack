@@ -3,9 +3,9 @@
 The session manifest is the durable boundary between FITS ingestion and later
 processing stages. Version 1 records source identity, canonical metadata,
 classification evidence and resolution, and exact group membership. It does not
-yet describe calibration masters, processing parameters, cache artifacts, or
-requested outputs; those fields will be introduced only with their owning
-pipeline stages and will require a deliberate schema evolution.
+embed calibration masters, processing parameters, cache artifacts, or requested
+outputs. Master dependencies are derived into a separate versioned plan bound to
+the manifest digest; execution artifacts remain separate contracts.
 
 ## Versioning and decoding
 
