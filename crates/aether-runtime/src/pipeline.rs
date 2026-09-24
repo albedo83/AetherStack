@@ -1,9 +1,11 @@
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::io::{Cursor, Read};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use aether_cache::{
     ArtifactStore, CacheKey, CacheKeyError, CacheReadError, CacheWriteError, VerifiedArtifact,
@@ -11,15 +13,18 @@ use aether_cache::{
 use aether_calibration::{CalibrationError, CalibrationParameters, calibrate_dark_flat};
 use aether_core::{
     CoreError, Dimensions, Halo, ImageStatistics, PixelFlags, ScientificImage, StatisticsError,
-    Tile, TileGrid, image_statistics,
+    StatisticsFirstPass, Tile, TileGrid,
 };
 use aether_fits::{
-    AtomicFitsWriteError, FitsOutputProvenance, FitsWriteSummary, HeaderReadOptions,
-    ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus, Severity, ValidationMode,
-    write_f64_primary_atomic_new_with_provenance,
+    AtomicF64PrimaryStreamWriter, AtomicFitsWriteError, FitsOutputProvenance, FitsWriteSummary,
+    HeaderReadOptions, ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus, Severity,
+    ValidationMode,
 };
 use aether_integration::{IntegrationError, PixelSupport, integrate_mean};
 use aether_session::{FingerprintError, SourceFingerprint, fingerprint_reader};
+
+#[cfg(test)]
+use aether_core::image_statistics;
 
 use crate::{
     CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, ProgressEvent,
@@ -38,6 +43,8 @@ const TILE_ARTIFACT_MAGIC: &[u8; 8] = b"AETHTILE";
 const TILE_ARTIFACT_VERSION: u32 = 1;
 const TILE_ARTIFACT_HEADER_BYTES: usize = 8 + 4 + 8 + 8 + 8;
 const TILE_ARTIFACT_SAMPLE_BYTES: usize = 8 + 1;
+const MAX_CHECKPOINT_SPOOL_NAME_ATTEMPTS: usize = 128;
+static CHECKPOINT_SPOOL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Input role reported by a strict-pipeline failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -359,6 +366,21 @@ pub enum StrictPipelineError {
     CacheRead(CacheReadError),
     /// Newly calculated tile checkpoint could not be published.
     CacheWrite(CacheWriteError),
+    /// A private checkpoint spool could not be created beside the output.
+    CreateCheckpointSpool(std::io::Error),
+    /// A calculated tile could not be appended to the private checkpoint spool.
+    WriteCheckpointSpool(std::io::Error),
+    /// The private checkpoint spool could not be rewound for publication.
+    SeekCheckpointSpool(std::io::Error),
+    /// Checkpoint spool metadata could not be inspected.
+    InspectCheckpointSpool(std::io::Error),
+    /// The private checkpoint spool does not have its exact derived length.
+    CheckpointSpoolLengthMismatch {
+        /// Length derived from the deterministic tile grid.
+        expected: u64,
+        /// Length observed on disk.
+        actual: u64,
+    },
     /// Verified cache payload violates the integrated-tile format.
     InvalidTileArtifact {
         /// Stable explanation suitable for diagnostics.
@@ -376,6 +398,8 @@ pub enum StrictPipelineError {
     OutputAssemblyInvariant,
     /// Final strict statistics could not be represented.
     Statistics(StatisticsError),
+    /// The complete staged FITS output could not be read back for statistics.
+    ReadOutput(ImageReadError),
     /// Atomic FITS publication failed.
     Publish(AtomicFitsWriteError),
     /// Execution stopped at a cooperative checkpoint.
@@ -408,6 +432,11 @@ impl StrictPipelineError {
             Self::CacheKey(_) => "cache-key",
             Self::CacheRead(_) => "cache-read",
             Self::CacheWrite(_) => "cache-write",
+            Self::CreateCheckpointSpool(_) => "checkpoint-spool-create",
+            Self::WriteCheckpointSpool(_) => "checkpoint-spool-write",
+            Self::SeekCheckpointSpool(_) => "checkpoint-spool-seek",
+            Self::InspectCheckpointSpool(_) => "checkpoint-spool-inspect",
+            Self::CheckpointSpoolLengthMismatch { .. } => "checkpoint-spool-length",
             Self::InvalidTileArtifact { .. } => "cache-tile-invalid",
             Self::TileArtifactIo(_) => "cache-tile-io",
             Self::Calibration(_) => "calibration",
@@ -415,6 +444,7 @@ impl StrictPipelineError {
             Self::OutputImage(_) => "output-image",
             Self::OutputAssemblyInvariant => "output-assembly",
             Self::Statistics(_) => "statistics",
+            Self::ReadOutput(_) => "read-output",
             Self::Publish(_) => "publish",
             Self::Cancelled(_) => "cancelled",
             Self::StageId(_) => "stage-id",
@@ -501,6 +531,22 @@ impl Display for StrictPipelineError {
             Self::CacheKey(error) => Display::fmt(error, formatter),
             Self::CacheRead(error) => Display::fmt(error, formatter),
             Self::CacheWrite(error) => Display::fmt(error, formatter),
+            Self::CreateCheckpointSpool(error) => {
+                write!(formatter, "cannot create checkpoint spool: {error}")
+            }
+            Self::WriteCheckpointSpool(error) => {
+                write!(formatter, "cannot write checkpoint spool: {error}")
+            }
+            Self::SeekCheckpointSpool(error) => {
+                write!(formatter, "cannot seek checkpoint spool: {error}")
+            }
+            Self::InspectCheckpointSpool(error) => {
+                write!(formatter, "cannot inspect checkpoint spool: {error}")
+            }
+            Self::CheckpointSpoolLengthMismatch { expected, actual } => write!(
+                formatter,
+                "checkpoint spool is {actual} bytes; expected {expected}"
+            ),
             Self::InvalidTileArtifact { reason } => {
                 write!(formatter, "integrated tile artifact is invalid: {reason}")
             }
@@ -514,6 +560,7 @@ impl Display for StrictPipelineError {
                 formatter.write_str("integrated tile cannot be copied into the output image")
             }
             Self::Statistics(error) => Display::fmt(error, formatter),
+            Self::ReadOutput(error) => write!(formatter, "cannot read staged FITS output: {error}"),
             Self::Publish(error) => Display::fmt(error, formatter),
             Self::Cancelled(error) => Display::fmt(error, formatter),
             Self::StageId(error) => Display::fmt(error, formatter),
@@ -534,11 +581,16 @@ impl Error for StrictPipelineError {
             Self::CacheKey(error) => Some(error),
             Self::CacheRead(error) => Some(error),
             Self::CacheWrite(error) => Some(error),
+            Self::CreateCheckpointSpool(error)
+            | Self::WriteCheckpointSpool(error)
+            | Self::SeekCheckpointSpool(error)
+            | Self::InspectCheckpointSpool(error) => Some(error),
             Self::TileArtifactIo(error) => Some(error),
             Self::Calibration(error) => Some(error),
             Self::Integration(error) => Some(error),
             Self::OutputImage(error) => Some(error),
             Self::Statistics(error) => Some(error),
+            Self::ReadOutput(error) => Some(error),
             Self::Publish(error) => Some(error),
             Self::Cancelled(error) => Some(error),
             Self::StageId(error) => Some(error),
@@ -553,20 +605,166 @@ impl Error for StrictPipelineError {
             | Self::SourceFingerprintMismatch { .. }
             | Self::DimensionMismatch { .. }
             | Self::AllocationFailed { .. }
+            | Self::CheckpointSpoolLengthMismatch { .. }
             | Self::InvalidTileArtifact { .. }
             | Self::OutputAssemblyInvariant => None,
         }
     }
 }
 
+/// Private sequential store for tile payloads awaiting source revalidation.
+///
+/// Cache keys must never receive bytes calculated from sources that changed
+/// during execution. Tiles are therefore spooled privately while computation
+/// proceeds, then replayed into the immutable cache only after every input
+/// fingerprint has been checked a second time.
+struct CheckpointSpool {
+    path: PathBuf,
+    file: Option<File>,
+    expected_bytes: u64,
+}
+
+impl CheckpointSpool {
+    fn create(output: &Path) -> Result<Self, StrictPipelineError> {
+        let file_name = output
+            .file_name()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                StrictPipelineError::CreateCheckpointSpool(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "output path has no file name",
+                ))
+            })?;
+        let parent = output
+            .parent()
+            .filter(|value| !value.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut last_collision = None;
+        for _ in 0..MAX_CHECKPOINT_SPOOL_NAME_ATTEMPTS {
+            let sequence = CHECKPOINT_SPOOL_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let mut name = OsString::from(".");
+            name.push(file_name);
+            name.push(format!(
+                ".aetherstack-checkpoints-{}-{sequence}.tmp",
+                std::process::id()
+            ));
+            let path = parent.join(name);
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        path,
+                        file: Some(file),
+                        expected_bytes: 0,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    last_collision = Some(error);
+                }
+                Err(error) => return Err(StrictPipelineError::CreateCheckpointSpool(error)),
+            }
+        }
+        Err(StrictPipelineError::CreateCheckpointSpool(
+            last_collision.unwrap_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "checkpoint spool name attempts exhausted",
+                )
+            }),
+        ))
+    }
+
+    fn append(&mut self, tile: Tile, image: &ScientificImage) -> Result<(), StrictPipelineError> {
+        let file = self.file.as_mut().ok_or_else(|| {
+            StrictPipelineError::WriteCheckpointSpool(std::io::Error::other(
+                "checkpoint spool is closed",
+            ))
+        })?;
+        let bytes = write_tile_artifact(file, tile, image)?;
+        self.expected_bytes = self
+            .expected_bytes
+            .checked_add(bytes)
+            .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+        Ok(())
+    }
+
+    fn rewind_verified(&mut self) -> Result<(), StrictPipelineError> {
+        let file = self.file.as_mut().ok_or_else(|| {
+            StrictPipelineError::InspectCheckpointSpool(std::io::Error::other(
+                "checkpoint spool is closed",
+            ))
+        })?;
+        let actual = file
+            .metadata()
+            .map_err(StrictPipelineError::InspectCheckpointSpool)?
+            .len();
+        if actual != self.expected_bytes {
+            return Err(StrictPipelineError::CheckpointSpoolLengthMismatch {
+                expected: self.expected_bytes,
+                actual,
+            });
+        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(StrictPipelineError::SeekCheckpointSpool)?;
+        Ok(())
+    }
+
+    fn file_mut(&mut self) -> Result<&mut File, StrictPipelineError> {
+        self.file.as_mut().ok_or_else(|| {
+            StrictPipelineError::InspectCheckpointSpool(std::io::Error::other(
+                "checkpoint spool is closed",
+            ))
+        })
+    }
+}
+
+impl Drop for CheckpointSpool {
+    fn drop(&mut self) {
+        // Windows requires the open handle to be closed before unlinking.
+        drop(self.file.take());
+        let _ignored = fs::remove_file(&self.path);
+    }
+}
+
+/// Bounded reader that treats premature EOF as corruption instead of success.
+struct ExactFileSlice<'a> {
+    file: &'a mut File,
+    remaining: u64,
+}
+
+impl Read for ExactFileSlice<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 || buffer.is_empty() {
+            return Ok(0);
+        }
+        let limit = usize::try_from(self.remaining)
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let read = self.file.read(&mut buffer[..limit])?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "checkpoint spool ended inside a tile payload",
+            ));
+        }
+        self.remaining -= read as u64;
+        Ok(read)
+    }
+}
+
 /// Runs the strict reference path from FITS inputs to one atomic FITS product.
 ///
 /// Each spatial-plane tile loads the two masters and all signals, calibrates in
-/// stable request order, integrates with the strict mean oracle, and copies the
-/// result into the final image. Reopening one signal at a time keeps file
-/// descriptor use bounded independently of the group size. The supplied memory
-/// budget reserves the complete logical pixel working set before allocation.
-/// Header parsing remains separately bounded by [`HeaderReadOptions`].
+/// stable request order, integrates with the strict mean oracle, and assembles
+/// one scan-line band at a time into a private FITS stream. Reopening one signal
+/// at a time keeps file descriptor use bounded independently of group size. The
+/// complete output image is never retained in memory. The supplied memory budget
+/// reserves the bounded logical working set before allocation; header parsing
+/// remains separately bounded by [`HeaderReadOptions`].
 ///
 /// Progress is emitted synchronously. The callback receives a started event,
 /// running events after each tile, statistics, source revalidation, and optional
@@ -690,19 +888,56 @@ where
     let _reservation = memory
         .try_reserve(reserved_bytes)
         .map_err(StrictPipelineError::Memory)?;
-    let mut output =
-        ScientificImage::filled(dimensions, f64::NAN).map_err(StrictPipelineError::OutputImage)?;
+    let mut output_writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        &request.output,
+        dimensions,
+        &request.provenance,
+    )
+    .map_err(StrictPipelineError::Publish)?;
+    let mut checkpoint_spool = request
+        .cache
+        .as_ref()
+        .map(|_| CheckpointSpool::create(&request.output))
+        .transpose()?;
+    let mut first_statistics_pass = StatisticsFirstPass::new();
+    let mut output_band = None;
 
     let mut tiles_reused = 0_u64;
     for tile in grid.iter() {
         cancellation
             .checkpoint()
             .map_err(StrictPipelineError::Cancelled)?;
-        if process_tile(request, cancellation, dimensions, tile, &mut output)? {
+        let core = tile.core();
+        let band_changed = output_band
+            .as_ref()
+            .is_some_and(|band: &OutputBand| band.plane != tile.plane() || band.y != core.y());
+        if band_changed {
+            let band = output_band
+                .take()
+                .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+            flush_output_band(&mut output_writer, &mut first_statistics_pass, band)?;
+        }
+        if output_band.is_none() {
+            output_band = Some(OutputBand::new(dimensions, tile)?);
+        }
+
+        let (integrated, reused) = process_tile(request, cancellation, dimensions, tile)?;
+        if reused {
             tiles_reused = tiles_reused
                 .checked_add(1)
                 .ok_or(StrictPipelineError::WorkSizeOverflow)?;
         }
+        if let Some(spool) = &mut checkpoint_spool {
+            spool.append(tile, &integrated)?;
+        }
+        copy_tile_to_band(
+            dimensions,
+            tile,
+            &integrated,
+            output_band
+                .as_mut()
+                .ok_or(StrictPipelineError::OutputAssemblyInvariant)?,
+        )?;
         *completed_units = completed_units
             .checked_add(1)
             .ok_or(StrictPipelineError::WorkSizeOverflow)?;
@@ -716,11 +951,21 @@ where
             progress,
         )?;
     }
+    let final_band = output_band.ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+    flush_output_band(&mut output_writer, &mut first_statistics_pass, final_band)?;
+    let staged_output = output_writer
+        .finish()
+        .map_err(StrictPipelineError::Publish)?;
 
     cancellation
         .checkpoint()
         .map_err(StrictPipelineError::Cancelled)?;
-    let statistics = image_statistics(&output).map_err(StrictPipelineError::Statistics)?;
+    let statistics = staged_output_statistics(
+        first_statistics_pass,
+        &staged_output,
+        dimensions,
+        cancellation,
+    )?;
     *completed_units = completed_units
         .checked_add(1)
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
@@ -754,8 +999,8 @@ where
     cancellation
         .checkpoint()
         .map_err(StrictPipelineError::Cancelled)?;
-    if let Some(cache) = &request.cache {
-        publish_tile_checkpoints(request, cancellation, cache, grid, &output)?;
+    if let (Some(cache), Some(spool)) = (&request.cache, &mut checkpoint_spool) {
+        publish_tile_checkpoints(request, cancellation, cache, grid, spool)?;
         *completed_units = completed_units
             .checked_add(1)
             .ok_or(StrictPipelineError::WorkSizeOverflow)?;
@@ -773,9 +1018,9 @@ where
             .map_err(StrictPipelineError::Cancelled)?;
     }
 
-    let write_summary =
-        write_f64_primary_atomic_new_with_provenance(&request.output, &output, &request.provenance)
-            .map_err(StrictPipelineError::Publish)?;
+    let write_summary = staged_output
+        .publish()
+        .map_err(StrictPipelineError::Publish)?;
     *completed_units = completed_units
         .checked_add(1)
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
@@ -955,18 +1200,186 @@ fn dimensions_from_axes(
         .map_err(|source| StrictPipelineError::InvalidImageDimensions { input, source })
 }
 
+struct OutputBand {
+    plane: usize,
+    y: usize,
+    image: ScientificImage,
+}
+
+impl OutputBand {
+    fn new(dimensions: Dimensions, first_tile: Tile) -> Result<Self, StrictPipelineError> {
+        let core = first_tile.core();
+        if core.x() != 0 {
+            return Err(StrictPipelineError::OutputAssemblyInvariant);
+        }
+        let band_dimensions = Dimensions::new(dimensions.width(), core.height(), 1)
+            .map_err(StrictPipelineError::OutputImage)?;
+        let image = ScientificImage::filled(band_dimensions, f64::NAN)
+            .map_err(StrictPipelineError::OutputImage)?;
+        Ok(Self {
+            plane: first_tile.plane(),
+            y: core.y(),
+            image,
+        })
+    }
+}
+
+fn copy_tile_to_band(
+    dimensions: Dimensions,
+    tile: Tile,
+    source: &ScientificImage,
+    band: &mut OutputBand,
+) -> Result<(), StrictPipelineError> {
+    let core = tile.core();
+    let expected = Dimensions::new(core.width(), core.height(), 1)
+        .map_err(StrictPipelineError::OutputImage)?;
+    if source.dimensions() != expected
+        || band.plane != tile.plane()
+        || band.y != core.y()
+        || band.image.dimensions().width() != dimensions.width()
+        || band.image.dimensions().height() != core.height()
+    {
+        return Err(StrictPipelineError::OutputAssemblyInvariant);
+    }
+
+    let (destination_pixels, destination_mask) = band.image.pixels_and_mask_mut();
+    for row in 0..core.height() {
+        let source_start = row
+            .checked_mul(core.width())
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+        let source_end = source_start
+            .checked_add(core.width())
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+        let destination_start = row
+            .checked_mul(dimensions.width())
+            .and_then(|index| index.checked_add(core.x()))
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+        let destination_end = destination_start
+            .checked_add(core.width())
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+        let source_pixels = source
+            .pixels()
+            .get(source_start..source_end)
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+        let source_flags = source
+            .mask()
+            .as_slice()
+            .get(source_start..source_end)
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+        destination_pixels
+            .get_mut(destination_start..destination_end)
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?
+            .copy_from_slice(source_pixels);
+        destination_mask
+            .as_mut_slice()
+            .get_mut(destination_start..destination_end)
+            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?
+            .copy_from_slice(source_flags);
+    }
+    Ok(())
+}
+
+fn flush_output_band(
+    writer: &mut AtomicF64PrimaryStreamWriter,
+    statistics: &mut StatisticsFirstPass,
+    band: OutputBand,
+) -> Result<(), StrictPipelineError> {
+    statistics
+        .observe_image(&band.image)
+        .map_err(StrictPipelineError::Statistics)?;
+    writer
+        .write_image_chunk(&band.image)
+        .map_err(StrictPipelineError::Publish)
+}
+
+fn staged_output_statistics(
+    first: StatisticsFirstPass,
+    staged: &aether_fits::CompletedAtomicFits,
+    dimensions: Dimensions,
+    cancellation: &CancellationToken,
+) -> Result<ImageStatistics, StrictPipelineError> {
+    let file = staged
+        .try_clone_for_readback()
+        .map_err(StrictPipelineError::Publish)?;
+    let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())
+        .map_err(StrictPipelineError::ReadOutput)?;
+    let readback_dimensions = dimensions_from_axes(
+        PipelineInput::Signal { index: 0 },
+        reader.descriptor().axes(),
+    )?;
+    if readback_dimensions != dimensions {
+        return Err(StrictPipelineError::OutputAssemblyInvariant);
+    }
+
+    let mut mean = first.finish().map_err(StrictPipelineError::Statistics)?;
+    visit_staged_output_values(
+        &mut reader,
+        dimensions.pixel_count(),
+        cancellation,
+        |values| mean.observe_values(values),
+    )?;
+    let mut variance = mean.finish().map_err(StrictPipelineError::Statistics)?;
+    visit_staged_output_values(
+        &mut reader,
+        dimensions.pixel_count(),
+        cancellation,
+        |values| variance.observe_values(values),
+    )?;
+    variance.finish().map_err(StrictPipelineError::Statistics)
+}
+
+fn visit_staged_output_values<F>(
+    reader: &mut PrimaryImageReader<File>,
+    total_samples: usize,
+    cancellation: &CancellationToken,
+    mut observe: F,
+) -> Result<(), StrictPipelineError>
+where
+    F: FnMut(&[f64]) -> Result<(), StatisticsError>,
+{
+    let capacity = (OUTPUT_BUFFER_BYTES / size_of::<f64>()).max(1);
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| StrictPipelineError::AllocationFailed { elements: capacity })?;
+    values.resize(capacity, 0.0);
+    let mut statuses = Vec::new();
+    statuses
+        .try_reserve_exact(capacity)
+        .map_err(|_| StrictPipelineError::AllocationFailed { elements: capacity })?;
+    statuses.resize(capacity, SampleStatus::Undefined);
+
+    let mut offset = 0_usize;
+    while offset < total_samples {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        let count = (total_samples - offset).min(capacity);
+        reader
+            .read_physical_samples(
+                u64::try_from(offset).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
+                &mut values[..count],
+                &mut statuses[..count],
+            )
+            .map_err(StrictPipelineError::ReadOutput)?;
+        observe(&values[..count]).map_err(StrictPipelineError::Statistics)?;
+        offset = offset
+            .checked_add(count)
+            .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    }
+    Ok(())
+}
+
 fn process_tile(
     request: &StrictPipelineRequest,
     cancellation: &CancellationToken,
     dimensions: Dimensions,
     tile: Tile,
-    output: &mut ScientificImage,
-) -> Result<bool, StrictPipelineError> {
+) -> Result<(ScientificImage, bool), StrictPipelineError> {
     if let Some(cache) = &request.cache
         && let Some(cached) = load_cached_tile(request, cache, dimensions, tile)?
     {
-        copy_tile(dimensions, tile, &cached, output)?;
-        return Ok(true);
+        return Ok((cached, true));
     }
 
     let core = tile.core();
@@ -1023,8 +1436,8 @@ fn process_tile(
         })?;
     references.extend(calibrated.iter());
     let integration = integrate_mean(&references).map_err(StrictPipelineError::Integration)?;
-    copy_tile(dimensions, tile, integration.image(), output)?;
-    Ok(false)
+    let (image, _support) = integration.into_parts();
+    Ok((image, false))
 }
 
 fn load_cached_tile(
@@ -1046,31 +1459,29 @@ fn publish_tile_checkpoints(
     cancellation: &CancellationToken,
     cache: &ArtifactStore,
     grid: TileGrid,
-    output: &ScientificImage,
+    spool: &mut CheckpointSpool,
 ) -> Result<(), StrictPipelineError> {
+    spool.rewind_verified()?;
     let dimensions = grid.dimensions();
     for tile in grid.iter() {
         cancellation
             .checkpoint()
             .map_err(StrictPipelineError::Cancelled)?;
         let key = tile_cache_key(request, dimensions, tile)?;
-        if let Some(artifact) = cache
-            .lookup_verified(&key)
-            .map_err(StrictPipelineError::CacheRead)?
-        {
-            let cached = decode_tile_artifact(artifact, tile)?;
-            if !tile_matches_output(dimensions, tile, &cached, output)? {
-                return Err(StrictPipelineError::InvalidTileArtifact {
-                    reason: "payload does not match the deterministic output tile",
-                });
-            }
-            continue;
-        }
-
-        let encoded = encode_output_tile(dimensions, tile, output)?;
+        let payload_bytes = tile_artifact_bytes(tile)?;
+        let mut payload = ExactFileSlice {
+            file: spool.file_mut()?,
+            remaining: payload_bytes,
+        };
         cache
-            .publish(&key, &mut Cursor::new(encoded))
+            .publish(&key, &mut payload)
             .map_err(StrictPipelineError::CacheWrite)?;
+        if payload.remaining != 0 {
+            return Err(StrictPipelineError::CheckpointSpoolLengthMismatch {
+                expected: payload_bytes,
+                actual: payload_bytes - payload.remaining,
+            });
+        }
     }
     Ok(())
 }
@@ -1147,76 +1558,49 @@ fn append_source_identity(destination: &mut Vec<u8>, fingerprint: &SourceFingerp
     destination.extend_from_slice(fingerprint.sha256().as_bytes());
 }
 
-fn encode_output_tile(
-    dimensions: Dimensions,
+fn write_tile_artifact<W: Write>(
+    writer: &mut W,
     tile: Tile,
-    output: &ScientificImage,
-) -> Result<Vec<u8>, StrictPipelineError> {
-    if output.dimensions() != dimensions {
+    image: &ScientificImage,
+) -> Result<u64, StrictPipelineError> {
+    let core = tile.core();
+    let expected = Dimensions::new(core.width(), core.height(), 1)
+        .map_err(StrictPipelineError::OutputImage)?;
+    if image.dimensions() != expected {
         return Err(StrictPipelineError::OutputAssemblyInvariant);
     }
-    let core = tile.core();
     let sample_count = core
         .width()
         .checked_mul(core.height())
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
-    let encoded_bytes = sample_count
-        .checked_mul(TILE_ARTIFACT_SAMPLE_BYTES)
-        .and_then(|bytes| bytes.checked_add(TILE_ARTIFACT_HEADER_BYTES))
-        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
-    let mut encoded = Vec::new();
-    encoded.try_reserve_exact(encoded_bytes).map_err(|_| {
-        StrictPipelineError::AllocationFailed {
-            elements: encoded_bytes,
-        }
-    })?;
-    encoded.extend_from_slice(TILE_ARTIFACT_MAGIC);
-    encoded.extend_from_slice(&TILE_ARTIFACT_VERSION.to_be_bytes());
-    encoded.extend_from_slice(
-        &u64::try_from(core.width())
-            .map_err(|_| StrictPipelineError::WorkSizeOverflow)?
-            .to_be_bytes(),
-    );
-    encoded.extend_from_slice(
-        &u64::try_from(core.height())
-            .map_err(|_| StrictPipelineError::WorkSizeOverflow)?
-            .to_be_bytes(),
-    );
-    encoded.extend_from_slice(
-        &u64::try_from(sample_count)
-            .map_err(|_| StrictPipelineError::WorkSizeOverflow)?
-            .to_be_bytes(),
-    );
+    let width = u64::try_from(core.width()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?;
+    let height = u64::try_from(core.height()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?;
+    let sample_count =
+        u64::try_from(sample_count).map_err(|_| StrictPipelineError::WorkSizeOverflow)?;
+    writer
+        .write_all(TILE_ARTIFACT_MAGIC)
+        .and_then(|()| writer.write_all(&TILE_ARTIFACT_VERSION.to_be_bytes()))
+        .and_then(|()| writer.write_all(&width.to_be_bytes()))
+        .and_then(|()| writer.write_all(&height.to_be_bytes()))
+        .and_then(|()| writer.write_all(&sample_count.to_be_bytes()))
+        .map_err(StrictPipelineError::WriteCheckpointSpool)?;
+    for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
+        writer
+            .write_all(&value.to_bits().to_be_bytes())
+            .and_then(|()| writer.write_all(&[flags.bits()]))
+            .map_err(StrictPipelineError::WriteCheckpointSpool)?;
+    }
+    tile_artifact_bytes(tile)
+}
 
-    for row in 0..core.height() {
-        let y = core
-            .y()
-            .checked_add(row)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let start = dimensions
-            .linear_index(core.x(), y, tile.plane())
-            .map_err(StrictPipelineError::OutputImage)?;
-        let end = start
-            .checked_add(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let pixels = output
-            .pixels()
-            .get(start..end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let flags = output
-            .mask()
-            .as_slice()
-            .get(start..end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        for (value, flags) in pixels.iter().zip(flags) {
-            encoded.extend_from_slice(&value.to_bits().to_be_bytes());
-            encoded.push(flags.bits());
-        }
-    }
-    if encoded.len() != encoded_bytes {
-        return Err(StrictPipelineError::OutputAssemblyInvariant);
-    }
-    Ok(encoded)
+fn tile_artifact_bytes(tile: Tile) -> Result<u64, StrictPipelineError> {
+    tile.core()
+        .width()
+        .checked_mul(tile.core().height())
+        .and_then(|samples| samples.checked_mul(TILE_ARTIFACT_SAMPLE_BYTES))
+        .and_then(|bytes| bytes.checked_add(TILE_ARTIFACT_HEADER_BYTES))
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or(StrictPipelineError::WorkSizeOverflow)
 }
 
 fn decode_tile_artifact(
@@ -1312,67 +1696,6 @@ fn tile_header_u64(
         })
 }
 
-fn tile_matches_output(
-    dimensions: Dimensions,
-    tile: Tile,
-    cached: &ScientificImage,
-    output: &ScientificImage,
-) -> Result<bool, StrictPipelineError> {
-    let core = tile.core();
-    let expected = Dimensions::new(core.width(), core.height(), 1)
-        .map_err(StrictPipelineError::OutputImage)?;
-    if cached.dimensions() != expected || output.dimensions() != dimensions {
-        return Err(StrictPipelineError::OutputAssemblyInvariant);
-    }
-    for row in 0..core.height() {
-        let cached_start = row
-            .checked_mul(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let cached_end = cached_start
-            .checked_add(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let output_y = core
-            .y()
-            .checked_add(row)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let output_start = dimensions
-            .linear_index(core.x(), output_y, tile.plane())
-            .map_err(StrictPipelineError::OutputImage)?;
-        let output_end = output_start
-            .checked_add(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let cached_pixels = cached
-            .pixels()
-            .get(cached_start..cached_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let output_pixels = output
-            .pixels()
-            .get(output_start..output_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        if !cached_pixels
-            .iter()
-            .zip(output_pixels)
-            .all(|(left, right)| left.to_bits() == right.to_bits())
-        {
-            return Ok(false);
-        }
-        let cached_flags = cached
-            .mask()
-            .as_slice()
-            .get(cached_start..cached_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let output_flags = output
-            .mask()
-            .as_slice()
-            .get(output_start..output_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        if cached_flags != output_flags {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
 fn read_tile(
     path: &Path,
     input: PipelineInput,
@@ -1392,60 +1715,6 @@ fn read_tile(
     reader
         .read_region_image(region)
         .map_err(|source| StrictPipelineError::ReadInput { input, source })
-}
-
-fn copy_tile(
-    dimensions: Dimensions,
-    tile: Tile,
-    source: &ScientificImage,
-    output: &mut ScientificImage,
-) -> Result<(), StrictPipelineError> {
-    let core = tile.core();
-    let expected = Dimensions::new(core.width(), core.height(), 1)
-        .map_err(StrictPipelineError::OutputImage)?;
-    if source.dimensions() != expected || output.dimensions() != dimensions {
-        return Err(StrictPipelineError::OutputAssemblyInvariant);
-    }
-
-    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
-    for row in 0..core.height() {
-        let source_start = row
-            .checked_mul(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let source_end = source_start
-            .checked_add(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let destination_y = core
-            .y()
-            .checked_add(row)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let destination_start = dimensions
-            .linear_index(core.x(), destination_y, tile.plane())
-            .map_err(StrictPipelineError::OutputImage)?;
-        let destination_end = destination_start
-            .checked_add(core.width())
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-
-        let source_pixels = source
-            .pixels()
-            .get(source_start..source_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let source_flags = source
-            .mask()
-            .as_slice()
-            .get(source_start..source_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let destination_pixels = output_pixels
-            .get_mut(destination_start..destination_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        let destination_flags = output_mask
-            .as_mut_slice()
-            .get_mut(destination_start..destination_end)
-            .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
-        destination_pixels.copy_from_slice(source_pixels);
-        destination_flags.copy_from_slice(source_flags);
-    }
-    Ok(())
 }
 
 fn checked_tile_count(grid: TileGrid) -> Result<u64, StrictPipelineError> {
@@ -1468,13 +1737,22 @@ fn planned_working_set_bytes(
     let image_sample_bytes = size_of::<f64>()
         .checked_add(size_of::<PixelFlags>())
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
-    let output_bytes = dimensions
-        .pixel_count()
-        .checked_mul(image_sample_bytes)
+    let output_band_bytes = dimensions
+        .width()
+        .checked_mul(tile_height.min(dimensions.height()))
+        .and_then(|samples| samples.checked_mul(image_sample_bytes))
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
     let maximum_tile_samples = tile_width
         .min(dimensions.width())
         .checked_mul(tile_height.min(dimensions.height()))
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let statistics_samples = (OUTPUT_BUFFER_BYTES / size_of::<f64>()).max(1);
+    let statistics_buffers = statistics_samples
+        .checked_mul(
+            size_of::<f64>()
+                .checked_add(size_of::<SampleStatus>())
+                .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+        )
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
 
     // At calibration peak, references, previously calibrated signals, the
@@ -1498,10 +1776,11 @@ fn planned_working_set_bytes(
         )
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
 
-    output_bytes
+    output_band_bytes
         .checked_add(tile_images)
         .and_then(|bytes| bytes.checked_add(tile_auxiliary))
         .and_then(|bytes| bytes.checked_add(vector_storage))
+        .and_then(|bytes| bytes.checked_add(statistics_buffers))
         .and_then(|bytes| bytes.checked_add(OUTPUT_BUFFER_BYTES))
         .ok_or(StrictPipelineError::WorkSizeOverflow)
 }
@@ -2059,6 +2338,23 @@ mod tests {
     }
 
     #[test]
+    fn planned_memory_is_bounded_by_band_height_not_full_image_height() -> TestResult {
+        let short = Dimensions::new(100, 256, 1)?;
+        let tall = Dimensions::new(100, 10_000, 1)?;
+
+        let short_bytes = planned_working_set_bytes(short, 64, 64, 4)?;
+        let tall_bytes = planned_working_set_bytes(tall, 64, 64, 4)?;
+        let complete_tall_image_bytes = tall
+            .pixel_count()
+            .checked_mul(size_of::<f64>() + size_of::<PixelFlags>())
+            .ok_or_else(|| std::io::Error::other("test byte count overflow"))?;
+
+        assert_eq!(tall_bytes, short_bytes);
+        assert!(tall_bytes < complete_tall_image_bytes);
+        Ok(())
+    }
+
+    #[test]
     fn dimension_mismatch_identifies_the_input_role() -> TestResult {
         let directory = TestDirectory::new()?;
         let signal = directory.path.join("signal.fits");
@@ -2140,6 +2436,7 @@ mod tests {
         let paths = write_standard_inputs(&directory)?;
         let changed_path = paths[0].path().to_owned();
         let output = directory.path.join("stack.fits");
+        let cache = ArtifactStore::new(directory.path.join("cache"))?;
         let request = StrictPipelineRequest::new(
             vec![paths[0].clone(), paths[1].clone()],
             paths[2].clone(),
@@ -2148,7 +2445,8 @@ mod tests {
             provenance(2, STRICT_MEAN_ALGORITHM_ID)?,
             CalibrationParameters::new(0.0)?,
         )?
-        .with_tile_shape(4, 2)?;
+        .with_tile_shape(4, 2)?
+        .with_cache(cache.clone());
         let mut mutation_error = None;
         let mut events = Vec::new();
 
@@ -2178,6 +2476,16 @@ mod tests {
             })
         ));
         assert!(!output.exists());
+        assert!(!cache.root().exists());
+        assert!(
+            fs::read_dir(&directory.path)?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("aetherstack-checkpoints"))
+        );
         assert_eq!(events.last().map(ProgressEvent::completed_units), Some(2));
         assert_eq!(
             events.last().map(ProgressEvent::state),

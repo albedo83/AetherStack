@@ -84,9 +84,13 @@ The run performs these bounded steps:
 5. reopen and read one signal at a time, limiting live file descriptors;
 6. calculate `(signal - dark) / flat` using the strict `f64` kernel;
 7. integrate calibrated tiles using the strict mean oracle in signal-list order;
-8. assemble the output image and calculate complete-image statistics;
-9. hash every complete input again to detect changes during processing;
-10. publish one create-new binary64 FITS product with validated provenance.
+8. assemble one bounded full-width tile-row band at a time and append it to a
+   private FITS stream in canonical planar order;
+9. calculate exact three-pass complete-image statistics using the band masks for
+   first-pass accounting and bounded staged-output readback for later passes;
+10. hash every complete input again to detect changes during processing;
+11. publish verified checkpoints, when enabled, and then publish one create-new
+    binary64 FITS product with validated provenance.
 
 The source count and algorithm identifier in provenance must exactly describe
 the executed operation. The fixed identifier is `strict-mean-v1`. Errors name an
@@ -94,22 +98,25 @@ input role and signal index but deliberately omit filesystem paths.
 
 Progress starts before input inspection. The total becomes known after image
 dimensions establish the tile count. A successful run emits running events for
-each completed tile, the statistics pass, and final source revalidation,
-followed by one completed event after publication. Failures and cancellation
-emit stable lowercase codes.
+each completed tile, the statistics pass, final source revalidation, and
+optional checkpoint publication, followed by one completed event after output
+publication. Failures and cancellation emit stable lowercase codes.
 
 Cancellation checkpoints occur before inspection, between inspected inputs,
-between signal reads, between tiles, before statistics, throughout final source
-revalidation, and before publication. A fingerprint mismatch identifies only
-the source role and signal index; local paths are not copied into errors or
-output metadata. The atomic writer is not interrupted after publication begins;
-it exposes either no new destination or one complete synchronized FITS stream.
+between signal reads, between tiles, between staged-output readback chunks,
+throughout final source revalidation, between checkpoint publications, and
+before final publication. A fingerprint mismatch identifies only the source
+role and signal index; local paths are not copied into errors or output
+metadata. The atomic writer is not interrupted after publication begins; it
+exposes either no new destination or one complete synchronized FITS stream.
 
-The current slice keeps the final integrated image in memory because the FITS
-writer consumes a complete scientific image. Signal working storage is tiled,
-and its reserved size changes with tile area and signal count. Header memory is
-bounded separately by `HeaderReadOptions`. A future streaming writer will remove
-the full-output allocation; that behavior is not yet claimed.
+The final integrated image is never retained in memory. The largest output
+allocation is one full-width band whose height is bounded by the configured tile
+height. Signal working storage remains bounded by tile area and signal count.
+Two fixed readback buffers support the mean and variance passes, and the FITS
+publisher owns one fixed output buffer. The logical reservation is therefore
+independent of total image height once the image is taller than one band. Header
+memory is bounded separately by `HeaderReadOptions`.
 
 ## Integrated-tile checkpoints
 
@@ -127,10 +134,12 @@ SHA-256 validation occurs first; the runtime then independently validates the
 tile payload's magic, version, dimensions, and sample count.
 
 Existing verified checkpoints are loaded before FITS tile reads and counted in
-the result. Newly computed checkpoints are not published immediately: the
-pipeline first finishes all calculations and revalidates every complete source.
-Only then can bytes enter the immutable cache. This prevents a file changed
-during processing from poisoning the expected operation key.
+the result. Newly computed checkpoints are not published immediately. Their
+exact payloads are appended to a private sequential spool while calculation
+proceeds. The pipeline finishes the staged FITS stream, calculates its
+statistics, and revalidates every complete source before replaying the spool
+into the immutable cache. A changed source therefore cannot poison the expected
+operation key. The spool is removed on success, cancellation, or failure.
 
 Checkpoint publication is itself cancellable between tiles. A cancellation
 after checkpoint publication but before final FITS publication leaves no output

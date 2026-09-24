@@ -2,16 +2,13 @@ use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use aether_core::ScientificImage;
+use aether_core::{Dimensions, PixelFlags, ScientificImage};
 
-use crate::{
-    FitsOutputProvenance, FitsWriteError, FitsWriteSummary, write_f64_primary,
-    write_f64_primary_with_provenance,
-};
+use crate::{F64PrimaryStreamWriter, FitsOutputProvenance, FitsWriteError, FitsWriteSummary};
 
 const FILE_BUFFER_BYTES: usize = 64 * 1_024;
 const MAX_TEMPORARY_NAME_ATTEMPTS: usize = 128;
@@ -32,6 +29,8 @@ pub enum AtomicFitsWriteError {
     Encode(FitsWriteError),
     /// Buffered bytes could not be flushed before publication.
     Flush(io::Error),
+    /// The completed temporary file could not be cloned for bounded readback.
+    CloneTemporary(io::Error),
     /// Temporary file contents could not be synchronized before publication.
     SyncTemporary(io::Error),
     /// The complete temporary file could not be linked to the destination.
@@ -74,6 +73,9 @@ impl Display for AtomicFitsWriteError {
             }
             Self::Encode(error) => Display::fmt(error, formatter),
             Self::Flush(error) => write!(formatter, "cannot flush temporary FITS output: {error}"),
+            Self::CloneTemporary(error) => {
+                write!(formatter, "cannot clone temporary FITS output: {error}")
+            }
             Self::SyncTemporary(error) => {
                 write!(
                     formatter,
@@ -103,6 +105,7 @@ impl Error for AtomicFitsWriteError {
             Self::InspectTarget(error)
             | Self::CreateTemporary(error)
             | Self::Flush(error)
+            | Self::CloneTemporary(error)
             | Self::SyncTemporary(error)
             | Self::Publish(error)
             | Self::DirectorySyncAfterPublish(error) => Some(error),
@@ -133,6 +136,200 @@ impl Drop for TemporaryPathGuard {
         if self.armed {
             let _ignored = fs::remove_file(&self.path);
         }
+    }
+}
+
+/// Incremental binary64 FITS output staged for atomic create-new publication.
+///
+/// Dropping this value at any point removes its private temporary file. The
+/// destination remains absent until [`CompletedAtomicFits::publish`] succeeds.
+pub struct AtomicF64PrimaryStreamWriter {
+    destination: PathBuf,
+    parent: PathBuf,
+    temporary_path: PathBuf,
+    encoder: F64PrimaryStreamWriter<BufWriter<File>>,
+    // Keep the guard after the encoder so the file is closed before abandoned
+    // staging data is removed on platforms that forbid unlinking open files.
+    guard: TemporaryPathGuard,
+}
+
+impl AtomicF64PrimaryStreamWriter {
+    /// Creates a private incremental output and writes its primary header.
+    ///
+    /// # Errors
+    ///
+    /// Returns a path, collision, temporary-file, or FITS header error. An
+    /// existing destination is never modified.
+    pub fn create(path: &Path, dimensions: Dimensions) -> Result<Self, AtomicFitsWriteError> {
+        Self::create_inner(path, dimensions, None)
+    }
+
+    /// Creates a private incremental output with validated provenance cards.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::create`].
+    pub fn create_with_provenance(
+        path: &Path,
+        dimensions: Dimensions,
+        provenance: &FitsOutputProvenance,
+    ) -> Result<Self, AtomicFitsWriteError> {
+        Self::create_inner(path, dimensions, Some(provenance))
+    }
+
+    fn create_inner(
+        path: &Path,
+        dimensions: Dimensions,
+        provenance: Option<&FitsOutputProvenance>,
+    ) -> Result<Self, AtomicFitsWriteError> {
+        let (destination, parent, temporary_path, file, guard) = prepare_temporary(path)?;
+        let writer = BufWriter::with_capacity(FILE_BUFFER_BYTES, file);
+        let encoder = match provenance {
+            Some(provenance) => {
+                F64PrimaryStreamWriter::new_with_provenance(writer, dimensions, provenance)
+            }
+            None => F64PrimaryStreamWriter::new(writer, dimensions),
+        }
+        .map_err(AtomicFitsWriteError::Encode)?;
+        Ok(Self {
+            destination,
+            parent,
+            temporary_path,
+            encoder,
+            guard,
+        })
+    }
+
+    /// Appends one consecutive sample chunk in primary-image order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a FITS encoding, accounting, invariant, or temporary I/O error.
+    pub fn write_samples(
+        &mut self,
+        pixels: &[f64],
+        flags: &[PixelFlags],
+    ) -> Result<(), AtomicFitsWriteError> {
+        self.encoder
+            .write_samples(pixels, flags)
+            .map_err(AtomicFitsWriteError::Encode)
+    }
+
+    /// Appends all samples in one image-shaped consecutive chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::write_samples`].
+    pub fn write_image_chunk(
+        &mut self,
+        image: &ScientificImage,
+    ) -> Result<(), AtomicFitsWriteError> {
+        self.encoder
+            .write_image_chunk(image)
+            .map_err(AtomicFitsWriteError::Encode)
+    }
+
+    /// Completes FITS padding while keeping the destination unpublished.
+    ///
+    /// The returned value may be read back for validation before the final
+    /// atomic publication. Dropping it still removes the private temporary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sample-count, padding, or flush failure.
+    pub fn finish(self) -> Result<CompletedAtomicFits, AtomicFitsWriteError> {
+        let Self {
+            destination,
+            parent,
+            temporary_path,
+            encoder,
+            guard,
+        } = self;
+        let (mut writer, summary) = encoder.finish().map_err(AtomicFitsWriteError::Encode)?;
+        writer.flush().map_err(AtomicFitsWriteError::Flush)?;
+        Ok(CompletedAtomicFits {
+            destination,
+            parent,
+            temporary_path,
+            writer: Some(writer),
+            guard,
+            summary,
+        })
+    }
+}
+
+/// Complete private FITS stream awaiting validation and atomic publication.
+pub struct CompletedAtomicFits {
+    destination: PathBuf,
+    parent: PathBuf,
+    temporary_path: PathBuf,
+    writer: Option<BufWriter<File>>,
+    // Field order is deliberate: close the file handle before path cleanup.
+    guard: TemporaryPathGuard,
+    summary: FitsWriteSummary,
+}
+
+impl CompletedAtomicFits {
+    /// Opens an independent handle to the complete unpublished bytes.
+    ///
+    /// This supports bounded readback and statistics without exposing a partial
+    /// destination. The returned handle must not be used to modify the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operating-system clone failure.
+    pub fn try_clone_for_readback(&self) -> Result<File, AtomicFitsWriteError> {
+        let writer = self.writer.as_ref().ok_or_else(|| {
+            AtomicFitsWriteError::CloneTemporary(io::Error::other(
+                "temporary FITS writer is unavailable",
+            ))
+        })?;
+        let mut file = writer
+            .get_ref()
+            .try_clone()
+            .map_err(AtomicFitsWriteError::CloneTemporary)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(AtomicFitsWriteError::CloneTemporary)?;
+        Ok(file)
+    }
+
+    /// Atomically publishes the already complete stream without overwriting.
+    ///
+    /// # Errors
+    ///
+    /// Returns synchronization, create-new publication, cleanup, or directory
+    /// durability failures. See [`AtomicFitsWriteError::output_is_published`]
+    /// to distinguish post-publication failures.
+    pub fn publish(mut self) -> Result<FitsWriteSummary, AtomicFitsWriteError> {
+        let writer = self.writer.take().ok_or_else(|| {
+            AtomicFitsWriteError::SyncTemporary(io::Error::other(
+                "temporary FITS writer is unavailable",
+            ))
+        })?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(AtomicFitsWriteError::SyncTemporary)?;
+        drop(writer);
+
+        match fs::hard_link(&self.temporary_path, &self.destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(AtomicFitsWriteError::TargetExists);
+            }
+            Err(error) => return Err(AtomicFitsWriteError::Publish(error)),
+        }
+
+        if let Err(source) = fs::remove_file(&self.temporary_path) {
+            self.guard.disarm();
+            return Err(AtomicFitsWriteError::CleanupAfterPublish {
+                temporary_path: self.temporary_path.clone(),
+                source,
+            });
+        }
+        self.guard.disarm();
+        sync_directory_after_publish(&self.parent)?;
+        Ok(self.summary)
     }
 }
 
@@ -187,6 +384,21 @@ fn write_f64_primary_atomic_new_inner(
     image: &ScientificImage,
     provenance: Option<&FitsOutputProvenance>,
 ) -> Result<FitsWriteSummary, AtomicFitsWriteError> {
+    let mut staged = match provenance {
+        Some(provenance) => AtomicF64PrimaryStreamWriter::create_with_provenance(
+            path,
+            image.dimensions(),
+            provenance,
+        )?,
+        None => AtomicF64PrimaryStreamWriter::create(path, image.dimensions())?,
+    };
+    staged.write_image_chunk(image)?;
+    staged.finish()?.publish()
+}
+
+fn prepare_temporary(
+    path: &Path,
+) -> Result<(PathBuf, PathBuf, PathBuf, File, TemporaryPathGuard), AtomicFitsWriteError> {
     let file_name = path
         .file_name()
         .filter(|value| !value.is_empty())
@@ -203,39 +415,14 @@ fn write_f64_primary_atomic_new_inner(
     }
 
     let (temporary_path, file) = create_temporary(parent, file_name)?;
-    let mut guard = TemporaryPathGuard::new(temporary_path.clone());
-    let mut writer = BufWriter::with_capacity(FILE_BUFFER_BYTES, file);
-    let summary = match provenance {
-        Some(provenance) => write_f64_primary_with_provenance(&mut writer, image, provenance),
-        None => write_f64_primary(&mut writer, image),
-    }
-    .map_err(AtomicFitsWriteError::Encode)?;
-    writer.flush().map_err(AtomicFitsWriteError::Flush)?;
-    writer
-        .get_ref()
-        .sync_all()
-        .map_err(AtomicFitsWriteError::SyncTemporary)?;
-    drop(writer);
-
-    match fs::hard_link(&temporary_path, path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(AtomicFitsWriteError::TargetExists);
-        }
-        Err(error) => return Err(AtomicFitsWriteError::Publish(error)),
-    }
-
-    if let Err(source) = fs::remove_file(&temporary_path) {
-        guard.disarm();
-        return Err(AtomicFitsWriteError::CleanupAfterPublish {
-            temporary_path,
-            source,
-        });
-    }
-    guard.disarm();
-
-    sync_directory_after_publish(parent)?;
-    Ok(summary)
+    let guard = TemporaryPathGuard::new(temporary_path.clone());
+    Ok((
+        path.to_path_buf(),
+        parent.to_path_buf(),
+        temporary_path,
+        file,
+        guard,
+    ))
 }
 
 fn create_temporary(
@@ -253,6 +440,7 @@ fn create_temporary(
         ));
         let temporary_path = parent.join(temporary_name);
         match OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .open(&temporary_path)
@@ -358,6 +546,56 @@ mod tests {
         let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path(), path);
+        Ok(())
+    }
+
+    #[test]
+    fn staged_stream_is_readable_but_private_until_publication() -> Result<(), Box<dyn StdError>> {
+        let directory = TestDirectory::new()?;
+        let path = directory.path.join("result.fits");
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        let mut staged = AtomicF64PrimaryStreamWriter::create(&path, dimensions)?;
+
+        assert!(!path.exists());
+        staged.write_samples(&[10.0], &[PixelFlags::CLEAR])?;
+        staged.write_samples(&[11.0], &[PixelFlags::CLEAR])?;
+        let completed = staged.finish()?;
+        assert!(!path.exists());
+
+        let readback = completed.try_clone_for_readback()?;
+        let mut reader = PrimaryImageReader::open(readback, HeaderReadOptions::default())?;
+        let mut values = [0.0; 2];
+        let mut statuses = [SampleStatus::Undefined; 2];
+        reader.read_physical_samples(0, &mut values, &mut statuses)?;
+        assert_eq!(values.map(f64::to_bits), [10.0, 11.0].map(f64::to_bits));
+        assert_eq!(statuses, [SampleStatus::Valid; 2]);
+
+        let summary = completed.publish()?;
+        assert_eq!(summary.samples_written(), 2);
+        assert_eq!(
+            read_values(&path)?.map(f64::to_bits),
+            [10.0, 11.0].map(f64::to_bits)
+        );
+        let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), path);
+        Ok(())
+    }
+
+    #[test]
+    fn abandoning_a_staged_stream_removes_its_private_file() -> Result<(), Box<dyn StdError>> {
+        let directory = TestDirectory::new()?;
+        let path = directory.path.join("result.fits");
+        let dimensions = Dimensions::new(2, 1, 1)?;
+
+        {
+            let mut staged = AtomicF64PrimaryStreamWriter::create(&path, dimensions)?;
+            staged.write_samples(&[10.0], &[PixelFlags::CLEAR])?;
+        }
+
+        assert!(!path.exists());
+        let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
+        assert!(entries.is_empty());
         Ok(())
     }
 

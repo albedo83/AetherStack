@@ -99,6 +99,15 @@ pub enum StatisticsError {
     },
     /// The true variance is outside the finite `f64` result domain.
     VarianceOverflow,
+    /// A repeated streaming pass did not contain the same usable samples.
+    PassSampleMismatch {
+        /// Usable finite samples established by the first pass.
+        expected: usize,
+        /// Usable finite samples observed by the repeated pass.
+        actual: usize,
+    },
+    /// Accumulated sample accounting overflowed the platform size domain.
+    SampleCountOverflow,
 }
 
 impl Display for StatisticsError {
@@ -115,6 +124,11 @@ impl Display for StatisticsError {
             Self::VarianceOverflow => {
                 formatter.write_str("sample variance exceeds the finite f64 result domain")
             }
+            Self::PassSampleMismatch { expected, actual } => write!(
+                formatter,
+                "statistics pass observed {actual} usable samples; expected {expected}"
+            ),
+            Self::SampleCountOverflow => formatter.write_str("statistics sample count overflows"),
         }
     }
 }
@@ -139,90 +153,287 @@ impl Error for StatisticsError {}
 /// or [`StatisticsError::VarianceOverflow`] when the final variance cannot be
 /// represented as finite `f64`.
 pub fn image_statistics(image: &ScientificImage) -> Result<ImageStatistics, StatisticsError> {
-    let mut usable_samples = 0_usize;
-    let mut masked_samples = 0_usize;
-    let mut non_finite_samples = 0_usize;
-    let mut minimum = f64::INFINITY;
-    let mut maximum = f64::NEG_INFINITY;
-    let mut scale = 0.0_f64;
+    let mut first = StatisticsFirstPass::new();
+    first.observe_image(image)?;
+    let mut mean = first.finish()?;
+    mean.observe_image(image)?;
+    let mut variance = mean.finish()?;
+    variance.observe_image(image)?;
+    variance.finish()
+}
 
-    for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
-        if !flags.is_clear() {
-            masked_samples += 1;
-        } else if !value.is_finite() {
-            non_finite_samples += 1;
-        } else {
-            usable_samples += 1;
-            minimum = minimum.min(*value);
-            maximum = maximum.max(*value);
-            scale = scale.max(value.abs());
+/// Order-independent first pass for bounded or tiled image statistics.
+///
+/// This pass establishes validity counts, extrema, and a finite scale. Those
+/// quantities are independent of chunk boundaries and traversal order. The
+/// following mean and variance passes remain order-sensitive and must observe
+/// finite values in the canonical image order.
+#[derive(Clone, Copy, Debug)]
+pub struct StatisticsFirstPass {
+    total_samples: usize,
+    usable_samples: usize,
+    masked_samples: usize,
+    non_finite_samples: usize,
+    minimum: f64,
+    maximum: f64,
+    scale: f64,
+}
+
+impl Default for StatisticsFirstPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StatisticsFirstPass {
+    /// Creates an empty first-pass accumulator.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            total_samples: 0,
+            usable_samples: 0,
+            masked_samples: 0,
+            non_finite_samples: 0,
+            minimum: f64::INFINITY,
+            maximum: f64::NEG_INFINITY,
+            scale: 0.0,
         }
     }
 
-    if usable_samples == 0 {
-        return Err(StatisticsError::NoUsableSamples {
-            total: image.pixels().len(),
-            masked: masked_samples,
-            non_finite: non_finite_samples,
-        });
+    /// Adds one internally consistent scientific image or bounded image chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::SampleCountOverflow`] if aggregate accounting
+    /// cannot be represented by `usize`.
+    pub fn observe_image(&mut self, image: &ScientificImage) -> Result<(), StatisticsError> {
+        self.total_samples = self
+            .total_samples
+            .checked_add(image.pixels().len())
+            .ok_or(StatisticsError::SampleCountOverflow)?;
+
+        for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
+            if !flags.is_clear() {
+                self.masked_samples = self
+                    .masked_samples
+                    .checked_add(1)
+                    .ok_or(StatisticsError::SampleCountOverflow)?;
+            } else if !value.is_finite() {
+                self.non_finite_samples = self
+                    .non_finite_samples
+                    .checked_add(1)
+                    .ok_or(StatisticsError::SampleCountOverflow)?;
+            } else {
+                self.usable_samples = self
+                    .usable_samples
+                    .checked_add(1)
+                    .ok_or(StatisticsError::SampleCountOverflow)?;
+                self.minimum = self.minimum.min(*value);
+                self.maximum = self.maximum.max(*value);
+                self.scale = self.scale.max(value.abs());
+            }
+        }
+        Ok(())
     }
 
-    let (mean, normalized_mean) = if scale == 0.0 {
-        (0.0, 0.0)
-    } else {
-        let divisor = usable_samples as f64;
-        let mut normalized_sum = CompensatedSum::new();
-        for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
-            if flags.is_clear() && value.is_finite() {
-                normalized_sum.add((*value / scale) / divisor);
-            }
+    /// Freezes first-pass accounting and starts the canonical-order mean pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::NoUsableSamples`] when every observed sample
+    /// was masked or non-finite.
+    pub fn finish(self) -> Result<StatisticsMeanPass, StatisticsError> {
+        if self.usable_samples == 0 {
+            return Err(StatisticsError::NoUsableSamples {
+                total: self.total_samples,
+                masked: self.masked_samples,
+                non_finite: self.non_finite_samples,
+            });
         }
-        // Roundoff cannot move a mathematical mean outside the observed range.
-        // Clamping that final ulp protects multiplication by `f64::MAX` from a
-        // spurious overflow when every sample is near the same extreme.
-        let normalized_mean = normalized_sum
-            .total()
-            .max(minimum / scale)
-            .min(maximum / scale);
-        (canonical_zero(normalized_mean * scale), normalized_mean)
-    };
+        Ok(StatisticsMeanPass {
+            first: self,
+            normalized_sum: CompensatedSum::new(),
+            observed_usable: 0,
+        })
+    }
+}
 
-    let (population_variance, sample_variance) = if scale == 0.0 {
-        (0.0, (usable_samples > 1).then_some(0.0))
-    } else {
-        let mut squares = CompensatedSum::new();
+/// Second statistics pass accumulating the scaled mean in canonical order.
+#[derive(Clone, Copy, Debug)]
+pub struct StatisticsMeanPass {
+    first: StatisticsFirstPass,
+    normalized_sum: CompensatedSum,
+    observed_usable: usize,
+}
+
+impl StatisticsMeanPass {
+    /// Adds one image in canonical order while honoring its quality mask.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::SampleCountOverflow`] on count overflow.
+    pub fn observe_image(&mut self, image: &ScientificImage) -> Result<(), StatisticsError> {
         for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
             if flags.is_clear() && value.is_finite() {
-                let deviation = (*value / scale) - normalized_mean;
-                squares.add(deviation * deviation);
+                self.observe_finite(*value)?;
             }
         }
-        // Every addend is non-negative. A negative zero or sub-ulp correction
-        // has no physical meaning and is canonicalized before rescaling.
-        let normalized_sum = squares.total().max(0.0);
-        let population = rescale_variance(normalized_sum / usable_samples as f64, scale)?;
-        let sample = if usable_samples > 1 {
-            Some(rescale_variance(
-                normalized_sum / (usable_samples - 1) as f64,
-                scale,
-            )?)
+        Ok(())
+    }
+
+    /// Adds the next consecutive values from the canonical image stream.
+    ///
+    /// Masked output values may be represented by non-finite sentinels; every
+    /// non-finite value is excluded. Chunk boundaries do not affect the exact
+    /// accumulation order of the remaining finite samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::SampleCountOverflow`] on count overflow.
+    pub fn observe_values(&mut self, values: &[f64]) -> Result<(), StatisticsError> {
+        for value in values.iter().copied().filter(|value| value.is_finite()) {
+            self.observe_finite(value)?;
+        }
+        Ok(())
+    }
+
+    fn observe_finite(&mut self, value: f64) -> Result<(), StatisticsError> {
+        self.observed_usable = self
+            .observed_usable
+            .checked_add(1)
+            .ok_or(StatisticsError::SampleCountOverflow)?;
+        if self.first.scale != 0.0 {
+            let divisor = self.first.usable_samples as f64;
+            self.normalized_sum
+                .add((value / self.first.scale) / divisor);
+        }
+        Ok(())
+    }
+
+    /// Validates the repeated sample count and starts the variance pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::PassSampleMismatch`] if the repeated stream
+    /// differs in finite-sample count from the first pass.
+    pub fn finish(self) -> Result<StatisticsVariancePass, StatisticsError> {
+        if self.observed_usable != self.first.usable_samples {
+            return Err(StatisticsError::PassSampleMismatch {
+                expected: self.first.usable_samples,
+                actual: self.observed_usable,
+            });
+        }
+        let normalized_mean = if self.first.scale == 0.0 {
+            0.0
         } else {
-            None
+            self.normalized_sum
+                .total()
+                .max(self.first.minimum / self.first.scale)
+                .min(self.first.maximum / self.first.scale)
         };
-        (population, sample)
-    };
+        Ok(StatisticsVariancePass {
+            first: self.first,
+            normalized_mean,
+            squares: CompensatedSum::new(),
+            observed_usable: 0,
+        })
+    }
+}
 
-    Ok(ImageStatistics {
-        total_samples: image.pixels().len(),
-        usable_samples,
-        masked_samples,
-        non_finite_samples,
-        minimum: canonical_zero(minimum),
-        maximum: canonical_zero(maximum),
-        mean,
-        population_variance,
-        sample_variance,
-    })
+/// Third statistics pass accumulating scaled squared deviations.
+#[derive(Clone, Copy, Debug)]
+pub struct StatisticsVariancePass {
+    first: StatisticsFirstPass,
+    normalized_mean: f64,
+    squares: CompensatedSum,
+    observed_usable: usize,
+}
+
+impl StatisticsVariancePass {
+    /// Adds one image in canonical order while honoring its quality mask.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::SampleCountOverflow`] on count overflow.
+    pub fn observe_image(&mut self, image: &ScientificImage) -> Result<(), StatisticsError> {
+        for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
+            if flags.is_clear() && value.is_finite() {
+                self.observe_finite(*value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds the next consecutive values from the same canonical image stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StatisticsError::SampleCountOverflow`] on count overflow.
+    pub fn observe_values(&mut self, values: &[f64]) -> Result<(), StatisticsError> {
+        for value in values.iter().copied().filter(|value| value.is_finite()) {
+            self.observe_finite(value)?;
+        }
+        Ok(())
+    }
+
+    fn observe_finite(&mut self, value: f64) -> Result<(), StatisticsError> {
+        self.observed_usable = self
+            .observed_usable
+            .checked_add(1)
+            .ok_or(StatisticsError::SampleCountOverflow)?;
+        if self.first.scale != 0.0 {
+            let deviation = (value / self.first.scale) - self.normalized_mean;
+            self.squares.add(deviation * deviation);
+        }
+        Ok(())
+    }
+
+    /// Completes the three-pass finite statistics calculation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a pass mismatch if the stream changed, or a variance overflow
+    /// when the finite result lies outside the `f64` domain.
+    pub fn finish(self) -> Result<ImageStatistics, StatisticsError> {
+        if self.observed_usable != self.first.usable_samples {
+            return Err(StatisticsError::PassSampleMismatch {
+                expected: self.first.usable_samples,
+                actual: self.observed_usable,
+            });
+        }
+
+        let mean = canonical_zero(self.normalized_mean * self.first.scale);
+        let (population_variance, sample_variance) = if self.first.scale == 0.0 {
+            (0.0, (self.first.usable_samples > 1).then_some(0.0))
+        } else {
+            let normalized_sum = self.squares.total().max(0.0);
+            let population = rescale_variance(
+                normalized_sum / self.first.usable_samples as f64,
+                self.first.scale,
+            )?;
+            let sample = if self.first.usable_samples > 1 {
+                Some(rescale_variance(
+                    normalized_sum / (self.first.usable_samples - 1) as f64,
+                    self.first.scale,
+                )?)
+            } else {
+                None
+            };
+            (population, sample)
+        };
+
+        Ok(ImageStatistics {
+            total_samples: self.first.total_samples,
+            usable_samples: self.first.usable_samples,
+            masked_samples: self.first.masked_samples,
+            non_finite_samples: self.first.non_finite_samples,
+            minimum: canonical_zero(self.first.minimum),
+            maximum: canonical_zero(self.first.maximum),
+            mean,
+            population_variance,
+            sample_variance,
+        })
+    }
 }
 
 fn rescale_variance(normalized: f64, scale: f64) -> Result<f64, StatisticsError> {
@@ -360,6 +571,71 @@ mod tests {
         assert_eq!(
             statistics.population_variance().to_bits(),
             0.0_f64.to_bits()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_passes_match_the_in_memory_oracle_across_chunk_boundaries() -> TestResult {
+        let dimensions = Dimensions::new(7, 1, 1)?;
+        let mut complete = ScientificImage::from_pixels(
+            dimensions,
+            vec![1.0e16, 1.0, -1.0e16, 4.0, f64::NAN, 6.0, 9.0],
+        )?;
+        complete.mask_mut().as_mut_slice()[3] = PixelFlags::REJECTED;
+        let expected = image_statistics(&complete)?;
+
+        let mut first_chunk = ScientificImage::from_pixels(
+            Dimensions::new(3, 1, 1)?,
+            complete.pixels()[..3].to_vec(),
+        )?;
+        first_chunk
+            .mask_mut()
+            .as_mut_slice()
+            .copy_from_slice(&complete.mask().as_slice()[..3]);
+        let mut second_chunk = ScientificImage::from_pixels(
+            Dimensions::new(4, 1, 1)?,
+            complete.pixels()[3..].to_vec(),
+        )?;
+        second_chunk
+            .mask_mut()
+            .as_mut_slice()
+            .copy_from_slice(&complete.mask().as_slice()[3..]);
+
+        let mut first = StatisticsFirstPass::new();
+        first.observe_image(&first_chunk)?;
+        first.observe_image(&second_chunk)?;
+
+        // A FITS stream stores both masked and non-finite output as NaN. The
+        // first pass has already retained the distinction needed for counts.
+        let stored = [1.0e16, 1.0, -1.0e16, f64::NAN, f64::NAN, 6.0, 9.0];
+        let mut mean = first.finish()?;
+        mean.observe_values(&stored[..2])?;
+        mean.observe_values(&stored[2..6])?;
+        mean.observe_values(&stored[6..])?;
+        let mut variance = mean.finish()?;
+        variance.observe_values(&stored[..5])?;
+        variance.observe_values(&stored[5..])?;
+        let actual = variance.finish()?;
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_pass_detects_a_changed_finite_sample_count() -> TestResult {
+        let input = image(vec![1.0, 2.0])?;
+        let mut first = StatisticsFirstPass::new();
+        first.observe_image(&input)?;
+        let mut mean = first.finish()?;
+        mean.observe_values(&[1.0, f64::NAN])?;
+
+        assert_eq!(
+            mean.finish().map(|_| ()),
+            Err(StatisticsError::PassSampleMismatch {
+                expected: 2,
+                actual: 1,
+            })
         );
         Ok(())
     }

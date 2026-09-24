@@ -4,6 +4,13 @@
 tile. It traverses samples in deterministic planar row-major order and uses only
 unmasked finite values.
 
+The public first-pass, mean-pass, and variance-pass accumulators apply the same
+algorithm to bounded chunks. The first pass may receive tile-row bands because
+counts, extrema, and scale are order-independent. The mean and variance passes
+must receive values in canonical planar order; their result is invariant to
+chunk boundaries but not to sample reordering. Each repeated pass verifies that
+its usable-sample count matches the first pass.
+
 A sample with any quality bit is counted as masked, even if its stored value is
 also NaN or infinite. An unmasked NaN or infinity is counted separately as
 non-finite. If no usable sample remains, the operation returns a typed error with
@@ -39,3 +46,8 @@ variances. Signed zero results are canonicalized to positive zero.
 When the true variance is outside the finite binary64 result domain, the
 operation returns `VarianceOverflow`. It never silently stores infinity as an
 ordinary scientific statistic.
+
+A changed or truncated repeated stream returns `PassSampleMismatch`. Aggregate
+count overflow is also a typed failure. These checks let a staged FITS output be
+used as bounded backing storage without weakening the in-memory reference
+contract.

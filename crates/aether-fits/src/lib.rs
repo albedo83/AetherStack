@@ -16,8 +16,8 @@ mod reader;
 mod writer;
 
 pub use atomic_writer::{
-    AtomicFitsWriteError, write_f64_primary_atomic_new,
-    write_f64_primary_atomic_new_with_provenance,
+    AtomicF64PrimaryStreamWriter, AtomicFitsWriteError, CompletedAtomicFits,
+    write_f64_primary_atomic_new, write_f64_primary_atomic_new_with_provenance,
 };
 pub use card::{Card, FitsValue};
 pub use diagnostic::{Diagnostic, DiagnosticCode, Severity, ValidationMode};
@@ -27,9 +27,10 @@ pub use image_hdu::{ImageHduDescriptor, ImageHduError, ImageHduErrorCode, Stored
 pub use image_reader::{ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus};
 pub use reader::{HeaderReadOptions, read_primary_header};
 pub use writer::{
-    CANONICAL_FITS_NAN_BITS, FITS_OUTPUT_PROVENANCE_VERSION, FitsOutputProvenance,
-    FitsProvenanceError, FitsWriteError, FitsWriteSummary, MAX_FITS_ALGORITHM_ID_BYTES,
-    MAX_FITS_GROUP_ID_BYTES, write_f64_primary, write_f64_primary_with_provenance,
+    CANONICAL_FITS_NAN_BITS, F64PrimaryStreamWriter, FITS_OUTPUT_PROVENANCE_VERSION,
+    FitsOutputProvenance, FitsProvenanceError, FitsWriteError, FitsWriteSummary,
+    MAX_FITS_ALGORITHM_ID_BYTES, MAX_FITS_GROUP_ID_BYTES, write_f64_primary,
+    write_f64_primary_with_provenance,
 };
 
 /// Size of a FITS card in bytes.

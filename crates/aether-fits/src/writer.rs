@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{self, Write};
 
-use aether_core::ScientificImage;
+use aether_core::{Dimensions, PixelFlags, ScientificImage};
 
 use crate::{BLOCK_SIZE, CARD_SIZE};
 
@@ -154,6 +154,20 @@ pub enum FitsWriteError {
     SizeOverflow,
     /// Image samples and mask entries violated their shared length invariant.
     ImageInvariant,
+    /// A stream chunk would exceed the declared primary-image sample count.
+    TooManySamples {
+        /// Samples declared by the output dimensions.
+        expected: usize,
+        /// Samples that would have been written after accepting the chunk.
+        attempted: usize,
+    },
+    /// Stream finalization was attempted before every declared sample arrived.
+    IncompleteSamples {
+        /// Samples declared by the output dimensions.
+        expected: usize,
+        /// Samples accepted by the writer.
+        written: usize,
+    },
     /// An internally generated card did not fit the 80-byte FITS card width.
     CardTooLong {
         /// Keyword associated with the card.
@@ -170,6 +184,17 @@ impl Display for FitsWriteError {
             Self::ImageInvariant => {
                 formatter.write_str("image sample and mask lengths do not match")
             }
+            Self::TooManySamples {
+                expected,
+                attempted,
+            } => write!(
+                formatter,
+                "FITS stream would contain {attempted} samples; expected {expected}"
+            ),
+            Self::IncompleteSamples { expected, written } => write!(
+                formatter,
+                "FITS stream contains {written} samples; expected {expected}"
+            ),
             Self::CardTooLong { keyword } => {
                 write!(
                     formatter,
@@ -185,8 +210,160 @@ impl Error for FitsWriteError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::SizeOverflow | Self::ImageInvariant | Self::CardTooLong { .. } => None,
+            Self::SizeOverflow
+            | Self::ImageInvariant
+            | Self::TooManySamples { .. }
+            | Self::IncompleteSamples { .. }
+            | Self::CardTooLong { .. } => None,
         }
+    }
+}
+
+/// Incremental binary64 primary-HDU encoder with exact sample accounting.
+///
+/// The caller supplies consecutive chunks in FITS planar order. Chunks may be
+/// scan lines, tile-row bands, or a complete image; their boundaries do not
+/// appear in the output stream. Masked and non-finite values use the same
+/// canonical NaN encoding as the complete-image convenience functions.
+pub struct F64PrimaryStreamWriter<W: Write> {
+    writer: W,
+    expected_samples: usize,
+    written_samples: usize,
+    substituted_samples: u64,
+    padded_header_bytes: usize,
+}
+
+impl<W: Write> F64PrimaryStreamWriter<W> {
+    /// Starts an incremental standards-conformant binary64 primary FITS image.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed size, card-encoding, or destination I/O error before any
+    /// sample chunks are accepted. The destination may contain a valid header
+    /// prefix when an error is returned.
+    pub fn new(writer: W, dimensions: Dimensions) -> Result<Self, FitsWriteError> {
+        Self::new_inner(writer, dimensions, None)
+    }
+
+    /// Starts an incremental binary64 primary FITS image with provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::new`].
+    pub fn new_with_provenance(
+        writer: W,
+        dimensions: Dimensions,
+        provenance: &FitsOutputProvenance,
+    ) -> Result<Self, FitsWriteError> {
+        Self::new_inner(writer, dimensions, Some(provenance))
+    }
+
+    fn new_inner(
+        mut writer: W,
+        dimensions: Dimensions,
+        provenance: Option<&FitsOutputProvenance>,
+    ) -> Result<Self, FitsWriteError> {
+        let padded_header_bytes = write_primary_header(&mut writer, dimensions, provenance)?;
+        Ok(Self {
+            writer,
+            expected_samples: dimensions.pixel_count(),
+            written_samples: 0,
+            substituted_samples: 0,
+            padded_header_bytes,
+        })
+    }
+
+    /// Appends one consecutive sample chunk in canonical FITS order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invariant error when slice lengths differ, a count error when
+    /// the chunk exceeds the dimensions declared in the header, or an I/O error
+    /// if the destination rejects bytes.
+    pub fn write_samples(
+        &mut self,
+        pixels: &[f64],
+        flags: &[PixelFlags],
+    ) -> Result<(), FitsWriteError> {
+        if pixels.len() != flags.len() {
+            return Err(FitsWriteError::ImageInvariant);
+        }
+        let attempted = self
+            .written_samples
+            .checked_add(pixels.len())
+            .ok_or(FitsWriteError::SizeOverflow)?;
+        if attempted > self.expected_samples {
+            return Err(FitsWriteError::TooManySamples {
+                expected: self.expected_samples,
+                attempted,
+            });
+        }
+
+        for (value, flags) in pixels.iter().zip(flags) {
+            let stored = if flags.is_clear() && value.is_finite() {
+                *value
+            } else {
+                self.substituted_samples = self
+                    .substituted_samples
+                    .checked_add(1)
+                    .ok_or(FitsWriteError::SizeOverflow)?;
+                f64::from_bits(CANONICAL_FITS_NAN_BITS)
+            };
+            self.writer
+                .write_all(&stored.to_be_bytes())
+                .map_err(FitsWriteError::Io)?;
+        }
+        self.written_samples = attempted;
+        Ok(())
+    }
+
+    /// Appends all samples from one image-shaped consecutive chunk.
+    ///
+    /// The chunk's own dimensions are intentionally not encoded; only its
+    /// canonical pixel and mask order contributes to the enclosing image.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::write_samples`].
+    pub fn write_image_chunk(&mut self, image: &ScientificImage) -> Result<(), FitsWriteError> {
+        self.write_samples(image.pixels(), image.mask().as_slice())
+    }
+
+    /// Completes data padding and returns the underlying destination.
+    ///
+    /// This method does not flush the destination. Filesystem wrappers must
+    /// flush and synchronize before publication.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FitsWriteError::IncompleteSamples`] unless every declared
+    /// sample was supplied, or an I/O error while writing final zero padding.
+    pub fn finish(mut self) -> Result<(W, FitsWriteSummary), FitsWriteError> {
+        if self.written_samples != self.expected_samples {
+            return Err(FitsWriteError::IncompleteSamples {
+                expected: self.expected_samples,
+                written: self.written_samples,
+            });
+        }
+        let data_bytes = checked_data_bytes(self.expected_samples)?;
+        let data_padding = block_padding(data_bytes);
+        write_padding(&mut self.writer, 0, data_padding)?;
+        let bytes_written = self
+            .padded_header_bytes
+            .checked_add(data_bytes)
+            .and_then(|bytes| bytes.checked_add(data_padding))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(FitsWriteError::SizeOverflow)?;
+        let samples_written =
+            u64::try_from(self.written_samples).map_err(|_| FitsWriteError::SizeOverflow)?;
+        Ok((
+            self.writer,
+            FitsWriteSummary {
+                samples_written,
+                substituted_samples: self.substituted_samples,
+                bytes_written,
+            },
+        ))
     }
 }
 
@@ -239,7 +416,22 @@ fn write_f64_primary_inner<W: Write>(
     if image.pixels().len() != image.mask().as_slice().len() {
         return Err(FitsWriteError::ImageInvariant);
     }
-    let dimensions = image.dimensions();
+    let mut stream = match provenance {
+        Some(provenance) => {
+            F64PrimaryStreamWriter::new_with_provenance(writer, image.dimensions(), provenance)?
+        }
+        None => F64PrimaryStreamWriter::new(writer, image.dimensions())?,
+    };
+    stream.write_image_chunk(image)?;
+    let (_writer, summary) = stream.finish()?;
+    Ok(summary)
+}
+
+fn write_primary_header<W: Write>(
+    writer: &mut W,
+    dimensions: Dimensions,
+    provenance: Option<&FitsOutputProvenance>,
+) -> Result<usize, FitsWriteError> {
     let axis_count = if dimensions.planes() == 1 { 2 } else { 3 };
     let mut header_bytes = 0_usize;
 
@@ -303,39 +495,9 @@ fn write_f64_primary_inner<W: Write>(
     write_card(writer, "END", "END", &mut header_bytes)?;
     let header_padding = block_padding(header_bytes);
     write_padding(writer, b' ', header_padding)?;
-
-    let mut substituted_samples = 0_u64;
-    for (value, flags) in image.pixels().iter().zip(image.mask().as_slice()) {
-        let stored = if flags.is_clear() && value.is_finite() {
-            *value
-        } else {
-            substituted_samples = substituted_samples
-                .checked_add(1)
-                .ok_or(FitsWriteError::SizeOverflow)?;
-            f64::from_bits(CANONICAL_FITS_NAN_BITS)
-        };
-        writer
-            .write_all(&stored.to_be_bytes())
-            .map_err(FitsWriteError::Io)?;
-    }
-
-    let data_bytes = checked_data_bytes(image.pixels().len())?;
-    let data_padding = block_padding(data_bytes);
-    write_padding(writer, 0, data_padding)?;
-    let bytes_written = header_bytes
+    header_bytes
         .checked_add(header_padding)
-        .and_then(|bytes| bytes.checked_add(data_bytes))
-        .and_then(|bytes| bytes.checked_add(data_padding))
-        .and_then(|bytes| u64::try_from(bytes).ok())
-        .ok_or(FitsWriteError::SizeOverflow)?;
-    let samples_written =
-        u64::try_from(image.pixels().len()).map_err(|_| FitsWriteError::SizeOverflow)?;
-
-    Ok(FitsWriteSummary {
-        samples_written,
-        substituted_samples,
-        bytes_written,
-    })
+        .ok_or(FitsWriteError::SizeOverflow)
 }
 
 fn write_string_card<W: Write>(
@@ -526,6 +688,65 @@ mod tests {
         for sample in output[BLOCK_SIZE..BLOCK_SIZE + 24].chunks_exact(8) {
             assert_eq!(sample, canonical);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_chunks_are_byte_identical_to_complete_image_encoding()
+    -> Result<(), Box<dyn Error>> {
+        let dimensions = Dimensions::new(5, 1, 1)?;
+        let mut image = ScientificImage::from_pixels(
+            dimensions,
+            vec![1.0, -2.5, f64::INFINITY, 4.0, f64::NAN],
+        )?;
+        image.mask_mut().as_mut_slice()[1] = PixelFlags::REJECTED;
+        let provenance =
+            FitsOutputProvenance::new("a".repeat(64), "light-001", "strict-mean-v1", 2)?;
+        let mut complete = Vec::new();
+        let complete_summary =
+            write_f64_primary_with_provenance(&mut complete, &image, &provenance)?;
+
+        let mut stream =
+            F64PrimaryStreamWriter::new_with_provenance(Vec::new(), dimensions, &provenance)?;
+        stream.write_samples(&image.pixels()[..2], &image.mask().as_slice()[..2])?;
+        stream.write_samples(&image.pixels()[2..], &image.mask().as_slice()[2..])?;
+        let (incremental, incremental_summary) = stream.finish()?;
+
+        assert_eq!(incremental_summary, complete_summary);
+        assert_eq!(incremental, complete);
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_writer_rejects_incoherent_sample_counts() -> Result<(), Box<dyn Error>> {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        let mut mismatched = F64PrimaryStreamWriter::new(Vec::new(), dimensions)?;
+        assert!(matches!(
+            mismatched.write_samples(&[1.0], &[]),
+            Err(FitsWriteError::ImageInvariant)
+        ));
+
+        let mut excessive = F64PrimaryStreamWriter::new(Vec::new(), dimensions)?;
+        assert!(matches!(
+            excessive.write_samples(
+                &[1.0, 2.0, 3.0],
+                &[PixelFlags::CLEAR, PixelFlags::CLEAR, PixelFlags::CLEAR]
+            ),
+            Err(FitsWriteError::TooManySamples {
+                expected: 2,
+                attempted: 3,
+            })
+        ));
+
+        let mut incomplete = F64PrimaryStreamWriter::new(Vec::new(), dimensions)?;
+        incomplete.write_samples(&[1.0], &[PixelFlags::CLEAR])?;
+        assert!(matches!(
+            incomplete.finish(),
+            Err(FitsWriteError::IncompleteSamples {
+                expected: 2,
+                written: 1,
+            })
+        ));
         Ok(())
     }
 

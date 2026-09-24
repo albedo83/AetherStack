@@ -1,9 +1,16 @@
 # Strict binary64 FITS output
 
-`write_f64_primary` encodes a scientific image as one primary FITS HDU with
+`F64PrimaryStreamWriter` incrementally encodes one primary FITS HDU with
 `BITPIX=-64`. A one-plane image uses axes `(width, height)`; a multi-plane image
-uses `(width, height, planes)`. The core planar row-major representation therefore
-maps directly to FITS storage order without transposition.
+uses `(width, height, planes)`. The core planar row-major representation
+therefore maps directly to FITS storage order without transposition.
+
+Callers provide consecutive chunks in exact FITS order. Chunk boundaries are
+not represented in the file and may correspond to rows, full-width tile bands,
+or a complete image. The writer counts every accepted sample, rejects a chunk
+that would exceed the dimensions declared in the header, and refuses to finish
+an incomplete stream. `write_f64_primary` remains the complete-image convenience
+API and uses the same incremental implementation.
 
 Mandatory logical and integer values use fixed FITS columns. Every card occupies
 exactly 80 bytes, the header ends with `END`, unused header bytes are spaces, and
@@ -27,10 +34,11 @@ by its binary64 bits.
 ## Failure boundary
 
 The stream writer reports size overflow, internal image-invariant failure,
-generated-card overflow, and destination I/O errors. An arbitrary stream may
-contain a valid prefix after an I/O error. Flushing, durable synchronization,
-and atomic filesystem publication belong to the file publisher and are not
-implied by a successful stream write. FITS checksums remain future work.
+sample-count mismatch, generated-card overflow, and destination I/O errors. An
+arbitrary stream may contain a valid prefix after an I/O error. Flushing,
+durable synchronization, and atomic filesystem publication belong to the file
+publisher and are not implied by a successful stream write. FITS checksums
+remain future work.
 
 ## Processing provenance
 
@@ -59,12 +67,18 @@ private acquisition metadata.
 
 ## Atomic create-new publication
 
-`write_f64_primary_atomic_new` creates a unique temporary file in the output
-directory, writes through a bounded buffer, flushes it, and synchronizes its
-contents. It then creates the destination as a hard link to the complete
-temporary file. Hard-link creation fails when the destination exists, so two
-concurrent publishers cannot overwrite each other and a reader never observes a
-partial destination. The temporary link is removed after publication.
+`AtomicF64PrimaryStreamWriter` creates a unique private file in the output
+directory and accepts incremental chunks through a bounded buffer. `finish`
+completes padding and flushes all bytes while leaving the destination absent.
+The resulting `CompletedAtomicFits` can provide a read-only clone for bounded
+validation and statistics before publication.
+
+`publish` synchronizes the completed file, closes its write handle, and creates
+the destination as a hard link to the complete private file. Hard-link creation
+fails when the destination exists, so two concurrent publishers cannot
+overwrite each other and a reader never observes a partial destination. The
+temporary link is removed afterward. `write_f64_primary_atomic_new` is the
+complete-image convenience API over the same two-phase mechanism.
 
 This API deliberately does not replace an existing artifact. Replacement needs
 a separate policy because portable standard-library rename behavior differs

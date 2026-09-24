@@ -16,7 +16,10 @@ pub use error::{CoreError, DimensionAxis};
 pub use image::Image;
 pub use mask::{PixelFlags, PixelMask};
 pub use numerics::{CompensatedSum, compensated_sum};
-pub use statistics::{ImageStatistics, StatisticsError, image_statistics};
+pub use statistics::{
+    ImageStatistics, StatisticsError, StatisticsFirstPass, StatisticsMeanPass,
+    StatisticsVariancePass, image_statistics,
+};
 pub use tile::{Halo, Rect, Tile, TileGrid, TileIter};
 
 /// Reference scientific image used by the strict computation profile.
