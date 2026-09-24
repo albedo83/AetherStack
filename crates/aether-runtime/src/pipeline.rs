@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use aether_cache::{
     ArtifactStore, CacheKey, CacheKeyError, CacheReadError, CacheWriteError, VerifiedArtifact,
 };
-use aether_calibration::{CalibrationError, CalibrationParameters, calibrate_dark_flat};
+use aether_calibration::{
+    CalibrationError, CalibrationMasterKind, CalibrationParameters, calibrate_dark_flat,
+};
 use aether_core::{
     CoreError, Dimensions, Halo, ImageStatistics, PixelFlags, ScientificImage, StatisticsError,
     StatisticsFirstPass, Tile, TileGrid,
@@ -38,6 +40,7 @@ const DEFAULT_TILE_WIDTH: usize = 256;
 const DEFAULT_TILE_HEIGHT: usize = 256;
 const OUTPUT_BUFFER_BYTES: usize = 64 * 1_024;
 const PIPELINE_STAGE_ID: &str = "strict-cpu-slice";
+const MASTER_PIPELINE_STAGE_ID: &str = "strict-master";
 const TILE_CACHE_DOMAIN: &str = "strict-mean-tile-v1";
 const TILE_ARTIFACT_MAGIC: &[u8; 8] = b"AETHTILE";
 const TILE_ARTIFACT_VERSION: u32 = 1;
@@ -54,6 +57,11 @@ pub enum PipelineInput {
         /// Zero-based index in the request's signal list.
         index: usize,
     },
+    /// Bias or dark source at its stable master-plan order index.
+    MasterSource {
+        /// Zero-based index in the request's canonical source list.
+        index: usize,
+    },
     /// Dark master subtracted from every signal.
     Dark,
     /// Already normalized flat master used as the divisor.
@@ -64,6 +72,7 @@ impl Display for PipelineInput {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Signal { index } => write!(formatter, "signal[{index}]"),
+            Self::MasterSource { index } => write!(formatter, "master source[{index}]"),
             Self::Dark => formatter.write_str("dark master"),
             Self::NormalizedFlat => formatter.write_str("normalized flat master"),
         }
@@ -228,6 +237,128 @@ impl StrictPipelineRequest {
     }
 }
 
+/// Validated request for one direct bias or dark master.
+///
+/// Flat masters are deliberately excluded: every flat frame first needs the
+/// exclusive plan-selected pedestal subtraction, followed by normalization of
+/// the integrated master. Treating raw flats as a direct mean would produce a
+/// scientifically incomplete product.
+#[derive(Clone, Debug)]
+pub struct StrictMasterRequest {
+    kind: CalibrationMasterKind,
+    sources: Vec<PipelineSource>,
+    output: PathBuf,
+    provenance: FitsOutputProvenance,
+    tile_width: usize,
+    tile_height: usize,
+    header_options: HeaderReadOptions,
+    validation_mode: ValidationMode,
+}
+
+impl StrictMasterRequest {
+    /// Builds one plan-bound direct bias or dark master request.
+    ///
+    /// Source order is the canonical manifest order and therefore determines
+    /// the strict reduction order. Master provenance must contain the exact
+    /// master-plan SHA-256 and represent every source exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for a flat role, empty or unrepresentable source
+    /// count, incoherent provenance, or the wrong algorithm identifier.
+    pub fn new(
+        kind: CalibrationMasterKind,
+        sources: Vec<PipelineSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+    ) -> Result<Self, StrictPipelineError> {
+        if kind == CalibrationMasterKind::Flat {
+            return Err(StrictPipelineError::FlatMasterRequiresCalibration);
+        }
+        if sources.is_empty() {
+            return Err(StrictPipelineError::NoSignals);
+        }
+        let source_count =
+            u32::try_from(sources.len()).map_err(|_| StrictPipelineError::TooManySignals {
+                count: sources.len(),
+            })?;
+        if provenance.source_count() != source_count {
+            return Err(StrictPipelineError::ProvenanceSourceCountMismatch {
+                signals: source_count,
+                provenance: provenance.source_count(),
+            });
+        }
+        if provenance.algorithm_id() != STRICT_MEAN_ALGORITHM_ID {
+            return Err(StrictPipelineError::ProvenanceAlgorithmMismatch);
+        }
+        if provenance.plan_sha256().is_none() {
+            return Err(StrictPipelineError::MissingMasterPlanProvenance);
+        }
+
+        Ok(Self {
+            kind,
+            sources,
+            output,
+            provenance,
+            tile_width: DEFAULT_TILE_WIDTH,
+            tile_height: DEFAULT_TILE_HEIGHT,
+            header_options: HeaderReadOptions::default(),
+            validation_mode: ValidationMode::Strict,
+        })
+    }
+
+    /// Replaces the default 256 by 256 tile shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either extent is zero.
+    pub fn with_tile_shape(
+        mut self,
+        width: usize,
+        height: usize,
+    ) -> Result<Self, StrictPipelineError> {
+        if width == 0 || height == 0 {
+            return Err(StrictPipelineError::TileGrid(CoreError::ZeroTileExtent {
+                width,
+                height,
+            }));
+        }
+        self.tile_width = width;
+        self.tile_height = height;
+        Ok(self)
+    }
+
+    /// Replaces FITS header limits and the diagnostic acceptance policy.
+    #[must_use]
+    pub const fn with_header_policy(
+        mut self,
+        options: HeaderReadOptions,
+        mode: ValidationMode,
+    ) -> Self {
+        self.header_options = options;
+        self.validation_mode = mode;
+        self
+    }
+
+    /// Scientific role of the product.
+    #[must_use]
+    pub const fn kind(&self) -> CalibrationMasterKind {
+        self.kind
+    }
+
+    /// Source frames in canonical deterministic integration order.
+    #[must_use]
+    pub fn sources(&self) -> &[PipelineSource] {
+        &self.sources
+    }
+
+    /// Destination governed by atomic create-new publication.
+    #[must_use]
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
+}
+
 /// Successful strict-pipeline measurements and output accounting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StrictPipelineResult {
@@ -289,6 +420,10 @@ pub enum StrictPipelineError {
     },
     /// Provenance names an algorithm other than the one this pipeline executes.
     ProvenanceAlgorithmMismatch,
+    /// A master product is not bound to the canonical master plan.
+    MissingMasterPlanProvenance,
+    /// Raw flat frames cannot use the direct bias/dark integration path.
+    FlatMasterRequiresCalibration,
     /// A tile shape is invalid for the core traversal contract.
     TileGrid(CoreError),
     /// Derived work-unit or byte accounting overflowed.
@@ -417,6 +552,8 @@ impl StrictPipelineError {
             Self::TooManySignals { .. } => "too-many-signals",
             Self::ProvenanceSourceCountMismatch { .. } => "provenance-source-count",
             Self::ProvenanceAlgorithmMismatch => "provenance-algorithm",
+            Self::MissingMasterPlanProvenance => "master-plan-provenance",
+            Self::FlatMasterRequiresCalibration => "flat-master-calibration",
             Self::TileGrid(_) => "tile-grid",
             Self::WorkSizeOverflow => "work-size-overflow",
             Self::Memory(_) => "memory-budget",
@@ -473,6 +610,12 @@ impl Display for StrictPipelineError {
             Self::ProvenanceAlgorithmMismatch => write!(
                 formatter,
                 "provenance algorithm must be {STRICT_MEAN_ALGORITHM_ID}"
+            ),
+            Self::MissingMasterPlanProvenance => {
+                formatter.write_str("master provenance must include the canonical plan SHA-256")
+            }
+            Self::FlatMasterRequiresCalibration => formatter.write_str(
+                "flat masters require plan-selected pedestal subtraction and normalization",
             ),
             Self::TileGrid(error) => Display::fmt(error, formatter),
             Self::WorkSizeOverflow => formatter.write_str("pipeline work size overflows"),
@@ -599,6 +742,8 @@ impl Error for StrictPipelineError {
             | Self::TooManySignals { .. }
             | Self::ProvenanceSourceCountMismatch { .. }
             | Self::ProvenanceAlgorithmMismatch
+            | Self::MissingMasterPlanProvenance
+            | Self::FlatMasterRequiresCalibration
             | Self::WorkSizeOverflow
             | Self::HeaderRejected { .. }
             | Self::UnsupportedImageAxes { .. }
@@ -847,6 +992,245 @@ where
     }
 }
 
+/// Builds one direct bias or dark master as an atomic, plan-bound FITS file.
+///
+/// The source list is reduced in its exact request order with the strict mean
+/// oracle. Processing is spatially tiled, reserves its bounded working set
+/// before allocating, and keeps the complete product out of memory. Every
+/// input fingerprint is verified before use and again after calculation. A
+/// cancelled, mutated, malformed, or under-budget run never publishes its
+/// destination.
+///
+/// Flat frames are not accepted by [`StrictMasterRequest`]. They require the
+/// plan-selected pedestal calibration and normalization path rather than this
+/// direct integration path.
+///
+/// # Errors
+///
+/// Returns a typed validation, I/O, integration, memory, cancellation,
+/// progress, statistics, or atomic-publication failure.
+pub fn run_strict_master_pipeline<F>(
+    request: &StrictMasterRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<StrictPipelineResult, StrictPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let stage = StageId::new(MASTER_PIPELINE_STAGE_ID).map_err(StrictPipelineError::StageId)?;
+    let sequence = ProgressSequence::new();
+    emit_progress(
+        &sequence,
+        &stage,
+        ProgressState::Started,
+        0,
+        None,
+        None,
+        &mut progress,
+    )?;
+
+    let mut completed_units = 0_u64;
+    let mut total_units = None;
+    let execution = execute_master_pipeline(
+        request,
+        cancellation,
+        memory,
+        &sequence,
+        &stage,
+        &mut completed_units,
+        &mut total_units,
+        &mut progress,
+    );
+
+    match execution {
+        Ok(result) => {
+            emit_progress(
+                &sequence,
+                &stage,
+                ProgressState::Completed,
+                completed_units,
+                total_units,
+                None,
+                &mut progress,
+            )?;
+            Ok(result)
+        }
+        Err(error) => {
+            let state = if matches!(error, StrictPipelineError::Cancelled(_)) {
+                ProgressState::Cancelled
+            } else {
+                ProgressState::Failed
+            };
+            // Preserve the scientific or I/O failure if the best-effort
+            // terminal progress event itself cannot be constructed.
+            let _ignored = emit_progress(
+                &sequence,
+                &stage,
+                state,
+                completed_units,
+                total_units,
+                Some(error.code().to_owned()),
+                &mut progress,
+            );
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_master_pipeline<F>(
+    request: &StrictMasterRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    sequence: &ProgressSequence,
+    stage: &StageId,
+    completed_units: &mut u64,
+    total_units: &mut Option<u64>,
+    progress: &mut F,
+) -> Result<StrictPipelineResult, StrictPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
+    let dimensions = validate_master_input_dimensions(request, cancellation)?;
+    let grid = TileGrid::new(
+        dimensions,
+        request.tile_width,
+        request.tile_height,
+        Halo::default(),
+    )
+    .map_err(StrictPipelineError::TileGrid)?;
+    let tile_count = checked_tile_count(grid)?;
+    let run_total = tile_count
+        .checked_add(3)
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    *total_units = Some(run_total);
+
+    let reserved_bytes = planned_master_working_set_bytes(
+        dimensions,
+        request.tile_width,
+        request.tile_height,
+        request.sources.len(),
+    )?;
+    let _reservation = memory
+        .try_reserve(reserved_bytes)
+        .map_err(StrictPipelineError::Memory)?;
+    let mut output_writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        &request.output,
+        dimensions,
+        &request.provenance,
+    )
+    .map_err(StrictPipelineError::Publish)?;
+    let mut first_statistics_pass = StatisticsFirstPass::new();
+    let mut output_band = None;
+
+    for tile in grid.iter() {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        let core = tile.core();
+        let band_changed = output_band
+            .as_ref()
+            .is_some_and(|band: &OutputBand| band.plane != tile.plane() || band.y != core.y());
+        if band_changed {
+            let band = output_band
+                .take()
+                .ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+            flush_output_band(&mut output_writer, &mut first_statistics_pass, band)?;
+        }
+        if output_band.is_none() {
+            output_band = Some(OutputBand::new(dimensions, tile)?);
+        }
+
+        let integrated = process_master_tile(request, cancellation, dimensions, tile)?;
+        copy_tile_to_band(
+            dimensions,
+            tile,
+            &integrated,
+            output_band
+                .as_mut()
+                .ok_or(StrictPipelineError::OutputAssemblyInvariant)?,
+        )?;
+        *completed_units = completed_units
+            .checked_add(1)
+            .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+        emit_progress(
+            sequence,
+            stage,
+            ProgressState::Running,
+            *completed_units,
+            *total_units,
+            None,
+            progress,
+        )?;
+    }
+    let final_band = output_band.ok_or(StrictPipelineError::OutputAssemblyInvariant)?;
+    flush_output_band(&mut output_writer, &mut first_statistics_pass, final_band)?;
+    let staged_output = output_writer
+        .finish()
+        .map_err(StrictPipelineError::Publish)?;
+
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
+    let statistics = staged_output_statistics(
+        first_statistics_pass,
+        &staged_output,
+        dimensions,
+        cancellation,
+    )?;
+    *completed_units = completed_units
+        .checked_add(1)
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    emit_progress(
+        sequence,
+        stage,
+        ProgressState::Running,
+        *completed_units,
+        *total_units,
+        None,
+        progress,
+    )?;
+
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
+    validate_master_input_fingerprints(request, cancellation)?;
+    *completed_units = completed_units
+        .checked_add(1)
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    emit_progress(
+        sequence,
+        stage,
+        ProgressState::Running,
+        *completed_units,
+        *total_units,
+        None,
+        progress,
+    )?;
+
+    cancellation
+        .checkpoint()
+        .map_err(StrictPipelineError::Cancelled)?;
+    let write_summary = staged_output
+        .publish()
+        .map_err(StrictPipelineError::Publish)?;
+    *completed_units = completed_units
+        .checked_add(1)
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+
+    Ok(StrictPipelineResult {
+        statistics,
+        write_summary,
+        tiles_processed: tile_count,
+        reserved_bytes,
+        tiles_reused: 0,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_pipeline<F>(
     request: &StrictPipelineRequest,
@@ -1086,6 +1470,36 @@ fn validate_input_dimensions(
     Ok(dimensions)
 }
 
+fn validate_master_input_dimensions(
+    request: &StrictMasterRequest,
+    cancellation: &CancellationToken,
+) -> Result<Dimensions, StrictPipelineError> {
+    let first_role = PipelineInput::MasterSource { index: 0 };
+    verify_source(&request.sources[0], first_role)?;
+    let dimensions = inspect_dimensions(
+        request.sources[0].path(),
+        first_role,
+        request.header_options,
+        request.validation_mode,
+    )?;
+
+    for (index, source) in request.sources.iter().enumerate().skip(1) {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        let input = PipelineInput::MasterSource { index };
+        verify_source(source, input)?;
+        validate_dimensions(
+            source.path(),
+            input,
+            dimensions,
+            request.header_options,
+            request.validation_mode,
+        )?;
+    }
+    Ok(dimensions)
+}
+
 fn validate_input_fingerprints(
     request: &StrictPipelineRequest,
     cancellation: &CancellationToken,
@@ -1104,6 +1518,19 @@ fn validate_input_fingerprints(
         .checkpoint()
         .map_err(StrictPipelineError::Cancelled)?;
     verify_source(&request.normalized_flat, PipelineInput::NormalizedFlat)
+}
+
+fn validate_master_input_fingerprints(
+    request: &StrictMasterRequest,
+    cancellation: &CancellationToken,
+) -> Result<(), StrictPipelineError> {
+    for (index, source) in request.sources.iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        verify_source(source, PipelineInput::MasterSource { index })?;
+    }
+    Ok(())
 }
 
 fn verify_source(source: &PipelineSource, input: PipelineInput) -> Result<(), StrictPipelineError> {
@@ -1393,14 +1820,16 @@ fn process_tile(
     let dark = read_tile(
         request.dark.path(),
         PipelineInput::Dark,
-        request,
+        request.header_options,
+        request.validation_mode,
         dimensions,
         region,
     )?;
     let flat = read_tile(
         request.normalized_flat.path(),
         PipelineInput::NormalizedFlat,
-        request,
+        request.header_options,
+        request.validation_mode,
         dimensions,
         region,
     )?;
@@ -1418,7 +1847,8 @@ fn process_tile(
         let signal = read_tile(
             source.path(),
             PipelineInput::Signal { index },
-            request,
+            request.header_options,
+            request.validation_mode,
             dimensions,
             region,
         )?;
@@ -1438,6 +1868,52 @@ fn process_tile(
     let integration = integrate_mean(&references).map_err(StrictPipelineError::Integration)?;
     let (image, _support) = integration.into_parts();
     Ok((image, false))
+}
+
+fn process_master_tile(
+    request: &StrictMasterRequest,
+    cancellation: &CancellationToken,
+    dimensions: Dimensions,
+    tile: Tile,
+) -> Result<ScientificImage, StrictPipelineError> {
+    let core = tile.core();
+    let region = ImageRegion::new(
+        u64::try_from(tile.plane()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
+        u64::try_from(core.x()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
+        u64::try_from(core.y()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
+        u64::try_from(core.width()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
+        u64::try_from(core.height()).map_err(|_| StrictPipelineError::WorkSizeOverflow)?,
+    );
+    let mut source_tiles = Vec::new();
+    source_tiles
+        .try_reserve_exact(request.sources.len())
+        .map_err(|_| StrictPipelineError::AllocationFailed {
+            elements: request.sources.len(),
+        })?;
+    for (index, source) in request.sources.iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        source_tiles.push(read_tile(
+            source.path(),
+            PipelineInput::MasterSource { index },
+            request.header_options,
+            request.validation_mode,
+            dimensions,
+            region,
+        )?);
+    }
+
+    let mut references = Vec::new();
+    references
+        .try_reserve_exact(source_tiles.len())
+        .map_err(|_| StrictPipelineError::AllocationFailed {
+            elements: source_tiles.len(),
+        })?;
+    references.extend(source_tiles.iter());
+    let integration = integrate_mean(&references).map_err(StrictPipelineError::Integration)?;
+    let (image, _support) = integration.into_parts();
+    Ok(image)
 }
 
 fn load_cached_tile(
@@ -1706,11 +2182,12 @@ fn tile_header_u64(
 fn read_tile(
     path: &Path,
     input: PipelineInput,
-    request: &StrictPipelineRequest,
+    options: HeaderReadOptions,
+    mode: ValidationMode,
     expected: Dimensions,
     region: ImageRegion,
 ) -> Result<ScientificImage, StrictPipelineError> {
-    let mut reader = open_reader(path, input, request.header_options, request.validation_mode)?;
+    let mut reader = open_reader(path, input, options, mode)?;
     let actual = dimensions_from_axes(input, reader.descriptor().axes())?;
     if actual != expected {
         return Err(StrictPipelineError::DimensionMismatch {
@@ -1776,6 +2253,63 @@ fn planned_working_set_bytes(
         .checked_mul(size_of::<PixelSupport>().max(size_of::<SampleStatus>()))
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
     let vector_storage = signal_count
+        .checked_mul(
+            size_of::<ScientificImage>()
+                .checked_add(size_of::<&ScientificImage>())
+                .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+        )
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+
+    output_band_bytes
+        .checked_add(tile_images)
+        .and_then(|bytes| bytes.checked_add(tile_auxiliary))
+        .and_then(|bytes| bytes.checked_add(vector_storage))
+        .and_then(|bytes| bytes.checked_add(statistics_buffers))
+        .and_then(|bytes| bytes.checked_add(OUTPUT_BUFFER_BYTES))
+        .ok_or(StrictPipelineError::WorkSizeOverflow)
+}
+
+fn planned_master_working_set_bytes(
+    dimensions: Dimensions,
+    tile_width: usize,
+    tile_height: usize,
+    source_count: usize,
+) -> Result<usize, StrictPipelineError> {
+    let image_sample_bytes = size_of::<f64>()
+        .checked_add(size_of::<PixelFlags>())
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let output_band_bytes = dimensions
+        .width()
+        .checked_mul(tile_height.min(dimensions.height()))
+        .and_then(|samples| samples.checked_mul(image_sample_bytes))
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let maximum_tile_samples = tile_width
+        .min(dimensions.width())
+        .checked_mul(tile_height.min(dimensions.height()))
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let statistics_samples = (OUTPUT_BUFFER_BYTES / size_of::<f64>()).max(1);
+    let statistics_buffers = statistics_samples
+        .checked_mul(
+            size_of::<f64>()
+                .checked_add(size_of::<SampleStatus>())
+                .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+        )
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+
+    // All source tiles remain live for the deterministic mean reduction. Its
+    // output image and support map coexist at the peak. Region decoding may
+    // also hold one temporary status per sample while a source tile is read.
+    let tile_image_count = source_count
+        .checked_add(1)
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let tile_images = maximum_tile_samples
+        .checked_mul(image_sample_bytes)
+        .and_then(|bytes| bytes.checked_mul(tile_image_count))
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let tile_auxiliary = maximum_tile_samples
+        .checked_mul(size_of::<PixelSupport>().max(size_of::<SampleStatus>()))
+        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let vector_storage = source_count
         .checked_mul(
             size_of::<ScientificImage>()
                 .checked_add(size_of::<&ScientificImage>())
@@ -1863,6 +2397,10 @@ mod tests {
         )?)
     }
 
+    fn master_provenance(source_count: u32) -> TestResult<FitsOutputProvenance> {
+        Ok(provenance(source_count, STRICT_MEAN_ALGORITHM_ID)?.with_plan_sha256("c".repeat(64))?)
+    }
+
     fn pipeline_source(path: PathBuf) -> TestResult<PipelineSource> {
         let mut file = File::open(&path)?;
         let fingerprint = fingerprint_reader(&mut file)?;
@@ -1904,6 +2442,255 @@ mod tests {
             pipeline_source(dark)?,
             pipeline_source(flat)?,
         ])
+    }
+
+    #[test]
+    fn builds_a_plan_bound_dark_master_with_bounded_tiles() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let output = directory.path.join("master-dark.fits");
+        let request = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![paths[0].clone(), paths[1].clone()],
+            output.clone(),
+            master_provenance(2)?,
+        )?
+        .with_tile_shape(2, 1)?;
+        let cancellation = CancellationToken::new();
+        let memory = MemoryBudget::new(1_048_576)?;
+        let mut events = Vec::new();
+
+        let result = run_strict_master_pipeline(&request, &cancellation, &memory, |event| {
+            events.push(event);
+        })?;
+        let expected = [12.0, 21.0, 29.0, 41.0, 48.0, 61.0, 72.0, 79.0];
+        let expected_statistics = image_statistics(&ScientificImage::from_pixels(
+            Dimensions::new(4, 2, 1)?,
+            expected.to_vec(),
+        )?)?;
+
+        assert_eq!(request.kind(), CalibrationMasterKind::Dark);
+        assert_eq!(request.sources().len(), 2);
+        assert_eq!(request.output(), output);
+        assert_eq!(result.tiles_processed(), 4);
+        assert_eq!(result.tiles_reused(), 0);
+        assert_eq!(result.write_summary().samples_written(), 8);
+        assert_eq!(result.statistics().usable_samples(), 8);
+        assert_eq!(
+            result.statistics().mean().to_bits(),
+            expected_statistics.mean().to_bits()
+        );
+        assert_eq!(memory.used(), 0);
+        assert_eq!(memory.peak(), result.reserved_bytes());
+
+        assert_eq!(events.len(), 8);
+        assert_eq!(events[0].state(), ProgressState::Started);
+        assert_eq!(events[0].stage().as_str(), MASTER_PIPELINE_STAGE_ID);
+        assert_eq!(events[7].state(), ProgressState::Completed);
+        assert_eq!(events[7].completed_units(), 7);
+        assert_eq!(events[7].total_units(), Some(7));
+        for (index, event) in events.iter().enumerate() {
+            assert_eq!(event.sequence(), (index + 1) as u64);
+        }
+
+        let mut reader =
+            PrimaryImageReader::open(File::open(&output)?, HeaderReadOptions::default())?;
+        assert!(reader.report().is_conformant());
+        assert_eq!(
+            reader.report().header().string("AETHALG"),
+            Some(STRICT_MEAN_ALGORITHM_ID)
+        );
+        assert_eq!(reader.report().header().integer("AETHSRC"), Some(2));
+        assert_eq!(
+            reader.report().header().string("AETHPLN"),
+            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+        );
+        let integrated = reader.read_region_image(ImageRegion::new(0, 0, 0, 4, 2))?;
+        assert_eq!(
+            integrated
+                .pixels()
+                .iter()
+                .copied()
+                .map(f64::to_bits)
+                .collect::<Vec<_>>(),
+            expected.map(f64::to_bits)
+        );
+        assert!(
+            integrated
+                .mask()
+                .as_slice()
+                .iter()
+                .all(|flags| flags.is_clear())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn direct_master_request_rejects_flats_and_unbound_provenance() -> TestResult {
+        let source = placeholder_source("source.fits")?;
+        let flat = StrictMasterRequest::new(
+            CalibrationMasterKind::Flat,
+            vec![source.clone()],
+            PathBuf::from("master-flat.fits"),
+            master_provenance(1)?,
+        );
+        assert!(matches!(
+            flat,
+            Err(StrictPipelineError::FlatMasterRequiresCalibration)
+        ));
+
+        let unbound = StrictMasterRequest::new(
+            CalibrationMasterKind::Bias,
+            vec![source],
+            PathBuf::from("master-bias.fits"),
+            provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
+        );
+        assert!(matches!(
+            unbound,
+            Err(StrictPipelineError::MissingMasterPlanProvenance)
+        ));
+
+        let mismatch = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![placeholder_source("source.fits")?],
+            PathBuf::from("master-dark.fits"),
+            master_provenance(2)?,
+        );
+        assert!(matches!(
+            mismatch,
+            Err(StrictPipelineError::ProvenanceSourceCountMismatch { .. })
+        ));
+
+        let wrong_algorithm = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![placeholder_source("source.fits")?],
+            PathBuf::from("master-dark.fits"),
+            provenance(1, "other-v1")?.with_plan_sha256("c".repeat(64))?,
+        );
+        assert!(matches!(
+            wrong_algorithm,
+            Err(StrictPipelineError::ProvenanceAlgorithmMismatch)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn direct_master_bytes_do_not_depend_on_tile_shape() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let small_output = directory.path.join("small-master.fits");
+        let whole_output = directory.path.join("whole-master.fits");
+        let small = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![paths[0].clone(), paths[1].clone()],
+            small_output.clone(),
+            master_provenance(2)?,
+        )?
+        .with_tile_shape(1, 1)?;
+        let whole = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![paths[0].clone(), paths[1].clone()],
+            whole_output.clone(),
+            master_provenance(2)?,
+        )?
+        .with_tile_shape(4, 2)?;
+        let memory = MemoryBudget::new(1_048_576)?;
+
+        run_strict_master_pipeline(&small, &CancellationToken::new(), &memory, |_| {})?;
+        run_strict_master_pipeline(&whole, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(fs::read(small_output)?, fs::read(whole_output)?);
+        assert_eq!(memory.used(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_master_memory_failure_and_cancellation_publish_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let memory_output = directory.path.join("memory-master.fits");
+        let memory_request = StrictMasterRequest::new(
+            CalibrationMasterKind::Bias,
+            vec![paths[0].clone(), paths[1].clone()],
+            memory_output.clone(),
+            master_provenance(2)?,
+        )?;
+        let memory_result = run_strict_master_pipeline(
+            &memory_request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(1)?,
+            |_| {},
+        );
+        assert!(matches!(memory_result, Err(StrictPipelineError::Memory(_))));
+        assert!(!memory_output.exists());
+
+        let cancelled_output = directory.path.join("cancelled-master.fits");
+        let cancelled_request = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![paths[0].clone(), paths[1].clone()],
+            cancelled_output.clone(),
+            master_provenance(2)?,
+        )?;
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+        let mut events = Vec::new();
+        let cancelled_result = run_strict_master_pipeline(
+            &cancelled_request,
+            &cancellation,
+            &MemoryBudget::new(1_048_576)?,
+            |event| events.push(event),
+        );
+        assert!(matches!(
+            cancelled_result,
+            Err(StrictPipelineError::Cancelled(_))
+        ));
+        assert!(!cancelled_output.exists());
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].state(), ProgressState::Cancelled);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_master_revalidates_sources_before_publication() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let changed_path = paths[0].path().to_owned();
+        let output = directory.path.join("mutated-master.fits");
+        let request = StrictMasterRequest::new(
+            CalibrationMasterKind::Dark,
+            vec![paths[0].clone(), paths[1].clone()],
+            output.clone(),
+            master_provenance(2)?,
+        )?
+        .with_tile_shape(4, 2)?;
+        let mut mutation_error = None;
+
+        let result = run_strict_master_pipeline(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(1_048_576)?,
+            |event| {
+                if event.state() == ProgressState::Running
+                    && event.completed_units() == 1
+                    && let Err(error) = fs::write(&changed_path, b"changed during master creation")
+                {
+                    mutation_error = Some(error);
+                }
+            },
+        );
+
+        if let Some(error) = mutation_error {
+            return Err(error.into());
+        }
+        assert!(matches!(
+            result,
+            Err(StrictPipelineError::SourceFingerprintMismatch {
+                input: PipelineInput::MasterSource { index: 0 },
+                ..
+            })
+        ));
+        assert!(!output.exists());
+        Ok(())
     }
 
     #[test]

@@ -84,3 +84,25 @@ master plan subtracted. The flat master is then normalized with the guarded
 exact-median primitive. This ordering is covered by a synthetic equation test.
 Rejection and weighting are not silently implied by `strict-mean-v1`; they will
 be separate versioned algorithms.
+
+### Bounded FITS execution
+
+`run_strict_master_pipeline` executes direct bias and dark master construction
+from a canonical source list. The request requires an `AETHPLN` binding to the
+exact master-plan SHA-256 and an `AETHSRC` count equal to the complete source
+list. Every source is fingerprinted before reading and again after calculation,
+so a frame that changes during a run prevents publication.
+
+The executor traverses a deterministic spatial-plane tile grid, reserves the
+derived peak working set before allocating, integrates each tile with
+`strict-mean-v1`, and streams full-width bands to a private binary64 FITS file.
+It then performs bounded readback statistics and atomically publishes with
+create-new semantics. Cancellation, malformed FITS input, dimension mismatch,
+memory exhaustion, source mutation, and output collision leave no partial
+destination.
+
+This direct path rejects `Flat` requests. Raw flats must first use the one
+pedestal selected by the master plan for their group, then integrate, and only
+then normalize the master with the guarded exact-median operation. Refusing the
+shortcut prevents an apparently valid but scientifically incomplete flat
+master.

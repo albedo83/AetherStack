@@ -445,7 +445,11 @@ safety reasoning. They do not narrate obvious syntax.
     exact-median flat normalization primitives are complete, including mask
     propagation, per-pixel and global support diagnostics, allocation failures,
     numerical edge cases, and a synthetic subtract-integrate-normalize equation
-    test. Plan-driven bounded FITS execution remains next.
+    test. Plan-bound, tiled FITS execution is complete for direct bias and dark
+    masters, including memory reservations, cancellation, exact source
+    fingerprint revalidation, readback statistics, and atomic create-new
+    publication. The corresponding calibrated-and-normalized flat FITS executor
+    remains next.
 17. Begin the frame-review foundation with strict bounded-memory FITS pixel
     statistics and deterministic batch output. The three-pass library operation,
     separate invalid-sample accounting, JSON Lines tool output, synthetic tests,
