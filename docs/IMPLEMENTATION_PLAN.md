@@ -439,7 +439,7 @@ safety reasoning. They do not narrate obvious syntax.
     subtracted blindly. Matching tolerances, rejected-candidate evidence,
     ambiguity, schema validation, deterministic serialization, and memory bounds
     are explicit.~~
-16. Implement deterministic strict-mean master construction from these plans,
+16. ~~Implement deterministic strict-mean master construction from these plans,
     followed by guarded flat normalization and synthetic equation recovery tests.
     Role-tagged strict-mean construction, exclusive pedestal subtraction, and
     exact-median flat normalization primitives are complete, including mask
@@ -448,8 +448,10 @@ safety reasoning. They do not narrate obvious syntax.
     test. Plan-bound, tiled FITS execution is complete for direct bias and dark
     masters, including memory reservations, cancellation, exact source
     fingerprint revalidation, readback statistics, and atomic create-new
-    publication. The corresponding calibrated-and-normalized flat FITS executor
-    remains next.
+    publication. The calibrated flat executor now enforces exclusive pedestal
+    subtraction before integration, reserves the complete exact-median peak,
+    applies one global normalization scalar, revalidates raw-flat and pedestal
+    fingerprints, and publishes the normalized FITS atomically.~~
 17. Begin the frame-review foundation with strict bounded-memory FITS pixel
     statistics and deterministic batch output. The three-pass library operation,
     separate invalid-sample accounting, JSON Lines tool output, synthetic tests,

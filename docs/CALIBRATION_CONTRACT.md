@@ -101,8 +101,24 @@ create-new semantics. Cancellation, malformed FITS input, dimension mismatch,
 memory exhaustion, source mutation, and output collision leave no partial
 destination.
 
-This direct path rejects `Flat` requests. Raw flats must first use the one
-pedestal selected by the master plan for their group, then integrate, and only
-then normalize the master with the guarded exact-median operation. Refusing the
-shortcut prevents an apparently valid but scientifically incomplete flat
-master.
+This direct path rejects `Flat` requests. `run_strict_flat_master_pipeline`
+provides the separate required sequence: it reads the single pedestal selected
+by the plan, subtracts it once from every raw flat tile, integrates the corrected
+tiles in canonical source order, derives one exact positive-sample median from
+the complete integrated master, and normalizes every output pixel by that one
+scalar. The pedestal is fingerprinted before use and revalidated with the raw
+flats before publication.
+
+Normalized flat outputs use the distinct provenance algorithm identifier
+`strict-flat-v1`; they are never mislabeled as a direct `strict-mean-v1`
+product.
+
+Exact global median selection requires storage proportional to the integrated
+image. The flat executor therefore derives and reserves its worst-case peak
+before allocating: the integrated image, normalized image, exact-median scratch,
+tile working set, statistics buffers, and writer buffer are all included. This
+is intentionally an in-memory performance path for current astronomy-camera
+dimensions. An insufficient configured budget fails before output creation;
+the runtime never substitutes a histogram approximation or per-tile
+normalization. Refusing those shortcuts prevents an apparently valid but
+scientifically inconsistent flat master.

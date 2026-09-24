@@ -44,9 +44,10 @@ optimized CPU and GPU paths must match.
   normalization with complete support accounting and explicit safety guards;
 - role-tagged, versioned strict-mean bias, dark, and pedestal-corrected flat
   master construction with exact per-pixel contribution accounting;
-- bounded plan-driven FITS execution for direct bias and dark masters, with
-  deterministic tiling, pre/post source fingerprint verification, exact
-  readback statistics, and atomic create-new publication;
+- bounded plan-driven FITS execution for bias, dark, and pedestal-corrected
+  normalized-flat masters, with deterministic tiling, explicit peak-memory
+  reservations, pre/post source verification, exact readback statistics, and
+  atomic create-new publication;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
 - strict three-pass FITS pixel statistics with fixed-size decoding buffers,
