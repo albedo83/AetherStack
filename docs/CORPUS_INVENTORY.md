@@ -13,6 +13,32 @@ The production scanner reads files as a stream, limits open descriptors, does
 not follow symbolic links, and reads only the primary FITS header during this
 phase. Pixel arrays are not loaded.
 
+## Focused processing-validation session
+
+A separate local-only session is the current end-to-end comparison corpus. It
+contains 135 raw ZWO ASI294MC Pro FITS files: 10 light frames, 50 long-exposure
+darks, 25 flats, and 50 short-exposure darks intended to calibrate the flats.
+All 135 primary headers pass strict parsing and describe 4,144 × 2,822,
+16-bit, `RGGB` data acquired by N.I.N.A.
+
+The 25 flat files declare a light frame type in their headers while their exact
+directory role is flat. Strict classification therefore reports 25 evidence
+conflicts. The comparison manifest must record an explicit directory-preference
+override rather than hiding this acquisition-software inconsistency.
+
+Short-exposure calibration frames remain classified as darks. Exposure and the
+other acquisition fields separate them from the long-exposure dark group and
+allow a future calibration planner to associate them with flats. This model
+also leaves Bias as a distinct supported role for sessions containing genuine
+bias frames.
+
+The local reference processing export contains calibrated, debayered,
+registered, master, log, and project-metadata products. Its final integrated
+product is in the master category; there is no required `integration` category.
+Comparison tooling must discover products from validated metadata and content,
+not from a hard-coded directory layout. No source or reference product is
+committed to the repository.
+
 ## Corpus size
 
 | Extension | Count |

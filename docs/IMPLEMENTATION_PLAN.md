@@ -254,7 +254,7 @@ Exit criterion: priority-camera raw files and processed `float32` products can b
 read reproducibly, classified without hidden assumptions, and compared against an
 independent FITS implementation.
 
-### Phase 3 — Runtime, cache, and vertical CPU slice
+### Phase 3 — Runtime, cache, and vertical CPU slice (`complete`)
 
 Build a minimal end-to-end CPU pipeline: ingest one group, read tiles, apply a
 simple calibration, calculate statistics, integrate by mean, and write FITS.
@@ -421,12 +421,20 @@ safety reasoning. They do not narrate obvious syntax.
     complete. Validated output provenance and tiled end-to-end orchestration are
     complete, including cancellation, logical working-set enforcement, and
     before/after verification of every immutable source fingerprint.
-13. Add verified content-addressed checkpoints, restart tests, and streaming
+13. ~~Add verified content-addressed checkpoints, restart tests, and streaming
     output so large integrations no longer retain the complete final image.
     The immutable artifact store, operation-key derivation, streaming payload
     digest, collision detection, verified lookup, integrated-tile checkpointing,
     and interruption/restart equivalence tests are complete. Streaming output
-    remains.
+    now writes bounded scan-line bands to a private FITS stream. Exact statistics
+    are calculated by bounded readback before atomic publication.~~
+14. Implement and independently verify FITS `DATASUM` and `CHECKSUM`, then add
+    corruption and interoperability tests before enabling those cards by
+    default.
+15. Begin Phase 4 with versioned bias, dark, and flat master plans, including
+    short-exposure dark matching. The planner must support real bias frames while
+    allowing a matched short dark to calibrate a flat without subtracting both
+    sources blindly.
 
 ## 11. Stable-release definition
 

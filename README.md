@@ -20,9 +20,10 @@ optimized CPU and GPU paths must match.
 - checked image-HDU layouts and bounded random-access decoding into `f64`
   scientific tiles for 16-bit integer, 32-bit floating-point, and 64-bit
   floating-point data, including scaling and invalid-pixel mask propagation;
-- conformant big-endian binary64 primary-FITS stream output with deterministic
-  NaN substitution, exact block padding, atomic create-new publication, and
-  validated path-free processing provenance;
+- conformant big-endian binary64 primary-FITS output with incremental sample
+  encoding, deterministic NaN substitution, exact block padding, private
+  pre-publication readback, atomic create-new publication, and validated
+  path-free processing provenance;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
 - exact, hashable session-grouping keys with explicit missing-field reports;
@@ -40,9 +41,10 @@ optimized CPU and GPU paths must match.
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
-  calibration, integrates in stable order, calculates output statistics, and
-  atomically publishes a provenance-bearing binary64 FITS product only after
-  full pre-run and pre-publication source-fingerprint verification;
+  calibration, integrates in stable order, streams scan-line bands without a
+  full final-image allocation, calculates exact three-pass output statistics,
+  and atomically publishes a provenance-bearing binary64 FITS product only
+  after full pre-run and pre-publication source-fingerprint verification;
 - immutable, sharded cache artifacts with domain-separated operation keys,
   streaming payload digests, atomic create-new publication, collision handling,
   mandatory full verification on lookup, and restartable integrated-tile
@@ -73,6 +75,10 @@ sample eligibility, output masks, and support maps. The
 encoding and unavailable-sample representation. The
 [cache contract](docs/CACHE_CONTRACT.md) defines immutable operation keys,
 artifact verification, and publication failure boundaries.
+The [reference feature inventory](docs/WBPP_FEATURE_INVENTORY.md) records the
+preprocessing controls that must be considered for scientific parity, while the
+[UX principles](docs/UX_PRINCIPLES.md) define the modern dark interface,
+progressive disclosure, diagnostics, and accessibility requirements.
 
 ## Build and test
 
