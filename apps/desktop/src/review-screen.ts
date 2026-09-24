@@ -1,6 +1,7 @@
 import type {
   ReviewActions,
   ReviewFrame,
+  ReviewRejectionReason,
   ReviewState,
   ReviewViewModel,
   SortDirection,
@@ -42,6 +43,7 @@ export function mountReviewScreen(
       "[data-session-status-label]",
     ),
     importSession: required<HTMLButtonElement>(root, "[data-import-session]"),
+    undo: required<HTMLButtonElement>(root, '[data-action="undo"]'),
     roleTabs: required<HTMLElement>(root, "[data-role-tabs]"),
     roleHeading: required<HTMLElement>(root, "[data-role-heading]"),
     frameTable: required<HTMLTableElement>(root, "[data-frame-table]"),
@@ -90,6 +92,12 @@ export function mountReviewScreen(
       root,
       "[data-decision-action]",
     ),
+    clearDecision: required<HTMLButtonElement>(
+      root,
+      '[data-action="clear-decision"]',
+    ),
+    accept: required<HTMLButtonElement>(root, '[data-action="accept"]'),
+    decisionControls: required<HTMLElement>(root, "[data-decision-controls]"),
     rejectDialog: required<HTMLElement>(root, "[data-reject-dialog]"),
     rejectFrame: required<HTMLElement>(root, "[data-reject-frame]"),
     statisticsDialog: required<HTMLElement>(root, "[data-statistics-dialog]"),
@@ -181,7 +189,7 @@ export function mountReviewScreen(
     }
     if (action === "reject-reason") {
       const reason = actionElement.dataset.reason;
-      if (pendingRejectFrameId && reason) {
+      if (pendingRejectFrameId && isReviewRejectionReason(reason)) {
         actions.onSetDecision(pendingRejectFrameId, "rejected", reason);
         closeRejectDialog();
       }
@@ -313,6 +321,8 @@ export function mountReviewScreen(
     elements.sessionStatus.dataset.tone = model.sessionStatus.tone;
     elements.sessionStatusLabel.textContent = model.sessionStatus.label;
     const importing = model.sessionStatus.tone === "busy";
+    const decisionBusy = model.decisionPending || importing;
+    const decisionsAvailable = model.reviewSessionReady && !decisionBusy;
     elements.importSession.disabled = importing;
     elements.importSession.textContent = importing
       ? "Scanning FITS…"
@@ -404,8 +414,26 @@ export function mountReviewScreen(
       button.disabled = model.frames.length < 2;
     }
     for (const button of elements.decisionButtons) {
-      button.disabled = frame === null;
+      button.disabled = frame === null || !decisionsAvailable;
     }
+    elements.accept.disabled ||= frame?.state === "accepted";
+    elements.clearDecision.disabled ||= frame?.state === "undecided";
+    elements.undo.disabled = !model.canUndo || !decisionsAvailable;
+    elements.undo.setAttribute(
+      "aria-label",
+      decisionBusy
+        ? "Review decision transaction in progress"
+        : model.canUndo
+          ? "Undo last review decision"
+          : "No review decision to undo",
+    );
+    elements.undo.title = model.canUndo
+      ? "Undo the last native review transaction"
+      : "No review decision to undo";
+    elements.decisionControls.setAttribute("aria-busy", String(decisionBusy));
+    elements.decisionControls.title = model.reviewSessionReady
+      ? "Manual decisions are committed by the native review engine"
+      : "Import a FITS session to enable manual review decisions";
     elements.play.setAttribute(
       "aria-label",
       model.playing ? "Pause Blink playback" : "Start Blink playback",
@@ -428,6 +456,12 @@ export function mountReviewScreen(
   update(initialModel);
 
   return { update, destroy };
+}
+
+function isReviewRejectionReason(
+  value: string | undefined,
+): value is ReviewRejectionReason {
+  return rejectionReasons.some(([code]) => code === value);
 }
 
 function qualityButtonLabel(frame: ReviewFrame | null): string {
@@ -783,7 +817,7 @@ function shellMarkup(): string {
               <h2 id="frames-heading">Review acquisition data</h2>
             </div>
             <div class="workspace-heading__actions">
-              <button class="icon-button" type="button" data-action="undo" aria-label="Undo is not available in this build" title="Transactional undo will be enabled with persistent review decisions" disabled>↶</button>
+              <button class="icon-button" type="button" data-action="undo" aria-label="No review decision to undo" title="No review decision to undo" disabled>↶</button>
               <button class="button button--quiet" type="button" data-action="import-session" data-import-session>＋ Import session</button>
             </div>
           </div>
@@ -867,7 +901,7 @@ function shellMarkup(): string {
                   <button class="transport-button" type="button" data-action="next" data-step-action aria-label="Next frame">›</button>
                   <span class="frame-position" data-frame-position></span>
                 </div>
-                <div class="decision-controls" aria-label="Frame decision">
+                <div class="decision-controls" aria-label="Frame decision" data-decision-controls aria-busy="false">
                   <span class="state-chip" data-review-state data-state="undecided">Undecided</span>
                   <button class="button button--quiet" type="button" data-action="clear-decision" data-decision-action>Clear</button>
                   <button class="button button--danger" type="button" data-action="open-reject" data-decision-action>Reject</button>

@@ -5,6 +5,7 @@ import type {
   FitsStatistics,
   FrameRole,
   ReviewFrame,
+  ReviewRejectionReason,
   ReviewState,
   ReviewViewModel,
 } from "./model.ts";
@@ -18,7 +19,13 @@ import {
   inspectCfaFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
-import { reorderReviewFrames, sortReviewFrames } from "./review-bridge.ts";
+import {
+  applyReviewDecision,
+  reorderReviewFrames,
+  sortReviewFrames,
+  undoReviewDecision,
+  type ReviewDecisionUpdate,
+} from "./review-bridge.ts";
 import { mountReviewScreen } from "./review-screen.ts";
 import {
   selectAndImportSession,
@@ -52,7 +59,13 @@ let statisticsTicket = 0;
 const statisticsCache = new Map<string, FitsStatistics>();
 const qualityCache = new Map<string, FrameQualityResult>();
 const qualityPending = new Set<string>();
+const decisionCache = new Map<
+  string,
+  Pick<ReviewFrame, "state" | "rejectionReason">
+>();
 let qualitySessionRevision = 0;
+let decisionSessionRevision = 0;
+let decisionGeneration = 0;
 let blinkTimer: number | null = null;
 
 const screen = mountReviewScreen(root, model, {
@@ -69,14 +82,13 @@ const screen = mountReviewScreen(root, model, {
     void applySort(field, direction);
   },
   onSetDecision(frameId, state, reason) {
-    updateDecision(frameId, state, reason);
+    void setDecision(frameId, state, reason);
   },
   onClearDecision(frameId) {
-    updateDecision(frameId, "undecided", null);
+    void clearDecision(frameId);
   },
   onUndo() {
-    // Transactional undo is already implemented by aether-review and will be
-    // exposed with the review-model adapter rather than duplicated here.
+    void undoDecision();
   },
   onSetPlaying(playing) {
     setPlaying(playing);
@@ -138,6 +150,9 @@ function installImportedSession(session: ImportedSession): void {
   qualitySessionRevision += 1;
   qualityCache.clear();
   qualityPending.clear();
+  decisionSessionRevision += 1;
+  decisionGeneration = 0;
+  decisionCache.clear();
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -171,6 +186,9 @@ function installImportedSession(session: ImportedSession): void {
     frames,
     selectedFrameId: frames[0]?.id ?? null,
     playing: false,
+    reviewSessionReady: session.frames.length > 0,
+    canUndo: false,
+    decisionPending: false,
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
@@ -189,6 +207,7 @@ function reviewFramesForRole(
 
 function importedReviewFrame(frame: ImportedFrame): ReviewFrame {
   const cachedQuality = qualityCache.get(frame.id);
+  const cachedDecision = decisionCache.get(frame.id);
   const qualityAvailable =
     frame.role === "light" && frame.bayerPattern !== null;
   const qualityState = cachedQuality
@@ -219,8 +238,8 @@ function importedReviewFrame(frame: ImportedFrame): ReviewFrame {
             ? "Blocked · no supported CFA phase"
             : "Quality metrics apply to light frames",
     qualityProfileId: cachedQuality?.profileId ?? null,
-    state: "undecided",
-    rejectionReason: null,
+    state: cachedDecision?.state ?? "undecided",
+    rejectionReason: cachedDecision?.rejectionReason ?? null,
     metrics: cachedQuality
       ? qualityMetrics(cachedQuality)
       : emptyQualityMetrics(),
@@ -574,6 +593,7 @@ function disposeRuntimeResources(): void {
   sortTicket += 1;
   statisticsTicket += 1;
   qualitySessionRevision += 1;
+  decisionSessionRevision += 1;
   stopBlinkTimer();
   releasePreview();
 }
@@ -583,17 +603,77 @@ function update(next: ReviewViewModel): void {
   screen.update(model);
 }
 
-function updateDecision(
+async function setDecision(
   frameId: string,
-  state: ReviewState,
-  reason: string | null,
-): void {
+  state: Exclude<ReviewState, "undecided">,
+  reason: ReviewRejectionReason | null,
+): Promise<void> {
+  if (!importedSession || model.decisionPending) return;
+  if (state === "accepted") {
+    await runDecisionTransaction(() =>
+      applyReviewDecision(frameId, { kind: "accept" }),
+    );
+    return;
+  }
+  if (reason === null) return;
+  await runDecisionTransaction(() =>
+    applyReviewDecision(frameId, { kind: "reject", reason }),
+  );
+}
+
+async function clearDecision(frameId: string): Promise<void> {
+  if (!importedSession || model.decisionPending) return;
+  await runDecisionTransaction(() =>
+    applyReviewDecision(frameId, { kind: "clear" }),
+  );
+}
+
+async function undoDecision(): Promise<void> {
+  if (!importedSession || model.decisionPending || !model.canUndo) return;
+  await runDecisionTransaction(undoReviewDecision);
+}
+
+async function runDecisionTransaction(
+  transaction: () => Promise<ReviewDecisionUpdate>,
+): Promise<void> {
+  const sessionRevision = decisionSessionRevision;
+  update({ ...model, decisionPending: true });
+  try {
+    const result = await transaction();
+    if (sessionRevision !== decisionSessionRevision) return;
+    applyDecisionUpdate(result);
+  } catch {
+    if (sessionRevision !== decisionSessionRevision) return;
+    update({
+      ...model,
+      decisionPending: false,
+      sessionStatus: {
+        tone: "error",
+        label: "Review transaction failed · state preserved",
+      },
+    });
+  }
+}
+
+function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
+  if (result.generation < decisionGeneration) {
+    update({ ...model, decisionPending: false });
+    return;
+  }
+  decisionGeneration = result.generation;
+  for (const change of result.changes) {
+    decisionCache.set(change.frameId, {
+      state: change.state,
+      rejectionReason: change.rejectionReason,
+    });
+  }
   update({
     ...model,
-    frames: model.frames.map((frame) =>
-      frame.id === frameId
-        ? { ...frame, state, rejectionReason: reason }
-        : frame,
-    ),
+    canUndo: result.canUndo,
+    decisionPending: false,
+    frames: model.frames.map((frame) => {
+      const decision = decisionCache.get(frame.id);
+      return decision ? { ...frame, ...decision } : frame;
+    }),
   });
 }

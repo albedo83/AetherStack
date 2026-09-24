@@ -2,7 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoReviewModel } from "./demo-data.ts";
-import { reorderReviewFrames, sortReviewFrames } from "./review-bridge.ts";
+import {
+  applyReviewDecision,
+  reorderReviewFrames,
+  sortReviewFrames,
+  undoReviewDecision,
+} from "./review-bridge.ts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -11,6 +16,43 @@ afterEach(() => {
 });
 
 describe("native review bridge", () => {
+  it("sends explicit decision actions to the Rust transaction engine", async () => {
+    const frameId = "a".repeat(64);
+    const response = {
+      generation: 7,
+      canUndo: true,
+      changes: [
+        {
+          frameId,
+          state: "rejected" as const,
+          rejectionReason: "trailing" as const,
+        },
+      ],
+    };
+    vi.mocked(invoke).mockResolvedValue(response);
+
+    await expect(
+      applyReviewDecision(frameId, {
+        kind: "reject",
+        reason: "trailing",
+      }),
+    ).resolves.toBe(response);
+    expect(invoke).toHaveBeenCalledWith("apply_review_decision", {
+      request: {
+        frameId,
+        action: { kind: "reject", reason: "trailing" },
+      },
+    });
+  });
+
+  it("requests undo without reconstructing history in the browser", async () => {
+    const response = { generation: 8, canUndo: false, changes: [] };
+    vi.mocked(invoke).mockResolvedValue(response);
+
+    await expect(undoReviewDecision()).resolves.toBe(response);
+    expect(invoke).toHaveBeenCalledWith("undo_review_decision");
+  });
+
   it("sends identities, labels, and optional metrics to the Rust sorter", async () => {
     const expected = [...demoReviewModel.frames]
       .reverse()

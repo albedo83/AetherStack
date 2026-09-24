@@ -11,6 +11,9 @@ export const demoReviewModel: ReviewViewModel = {
   sessionStatus: { tone: "ready", label: "Demo ready" },
   activeRole: "light",
   playing: false,
+  reviewSessionReady: false,
+  canUndo: false,
+  decisionPending: false,
   selectedFrameId: frameId("b"),
   sharedStretchLabel: "Shared stretch · locked",
   preview: null,
@@ -84,7 +87,7 @@ export const demoReviewModel: ReviewViewModel = {
       qualityMessage: "Synthetic diagnostic metrics",
       qualityProfileId: "demo-quality-v1",
       state: "rejected",
-      rejectionReason: "Trailing",
+      rejectionReason: "trailing",
       metrics: {
         fwhmPixels: 5.84,
         eccentricity: 0.71,

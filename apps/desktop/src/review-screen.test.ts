@@ -179,7 +179,8 @@ describe("frame review workspace", () => {
   });
 
   it("commits decisions against the exact confirmed selected identity", () => {
-    const { root, actions, controller } = fixture();
+    const reviewReady = { ...demoReviewModel, reviewSessionReady: true };
+    const { root, actions, controller } = fixture(reviewReady);
     const target = demoReviewModel.frames[2];
     expect(target).toBeDefined();
     if (!target) return;
@@ -187,7 +188,7 @@ describe("frame review workspace", () => {
     fireEvent.click(getByText(root, target.label));
     expect(actions.onSelectFrame).toHaveBeenCalledWith(target.id);
 
-    controller.update({ ...demoReviewModel, selectedFrameId: target.id });
+    controller.update({ ...reviewReady, selectedFrameId: target.id });
     fireEvent.click(getByRole(root, "button", { name: "Accept" }));
     expect(actions.onSetDecision).toHaveBeenCalledWith(
       target.id,
@@ -197,7 +198,10 @@ describe("frame review workspace", () => {
   });
 
   it("requires a visible stable reason before manual rejection", () => {
-    const { root, actions } = fixture();
+    const { root, actions } = fixture({
+      ...demoReviewModel,
+      reviewSessionReady: true,
+    });
     const selected = demoReviewModel.frames[1];
     expect(selected).toBeDefined();
     if (!selected) return;
@@ -217,6 +221,31 @@ describe("frame review workspace", () => {
     expect(dialog.closest("[data-reject-dialog]")?.hasAttribute("hidden")).toBe(
       true,
     );
+  });
+
+  it("enables native undo only while a transaction is available", () => {
+    const undoable = {
+      ...demoReviewModel,
+      reviewSessionReady: true,
+      canUndo: true,
+    };
+    const { root, actions, controller } = fixture(undoable);
+    const undo = getByRole(root, "button", {
+      name: "Undo last review decision",
+    });
+
+    expect(undo.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(undo);
+    expect(actions.onUndo).toHaveBeenCalledOnce();
+
+    controller.update({ ...undoable, decisionPending: true });
+    expect(undo.hasAttribute("disabled")).toBe(true);
+    expect(
+      root.querySelector("[data-decision-controls]")?.getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      getByRole(root, "button", { name: "Reject" }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("supports arrow-key table review and named playback controls", () => {
@@ -267,12 +296,24 @@ describe("frame review workspace", () => {
       "Diagnostics",
       "Review plan",
       "Clipping overlay is not available in this build",
-      "Undo is not available in this build",
     ]) {
       expect(getByRole(root, "button", { name }).hasAttribute("disabled")).toBe(
         true,
       );
     }
+  });
+
+  it("keeps manual decisions unavailable before native session import", () => {
+    const { root } = fixture();
+
+    for (const name of ["Accept", "Reject", "Clear"]) {
+      expect(getByRole(root, "button", { name }).hasAttribute("disabled")).toBe(
+        true,
+      );
+    }
+    expect(
+      root.querySelector<HTMLElement>("[data-decision-controls]")?.title,
+    ).toContain("Import a FITS session");
   });
 
   it("presents exact FITS statistics only for a real selected source", () => {

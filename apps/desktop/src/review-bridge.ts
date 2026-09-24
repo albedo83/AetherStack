@@ -1,6 +1,43 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { ReviewFrame, SortDirection, SortField } from "./model.ts";
+import type {
+  ReviewFrame,
+  ReviewRejectionReason,
+  SortDirection,
+  SortField,
+} from "./model.ts";
+
+export type ReviewDecisionAction =
+  | { readonly kind: "accept" }
+  | { readonly kind: "reject"; readonly reason: ReviewRejectionReason }
+  | { readonly kind: "clear" };
+
+export interface ReviewDecisionEntry {
+  readonly frameId: string;
+  readonly state: "undecided" | "accepted" | "rejected";
+  readonly rejectionReason: ReviewRejectionReason | null;
+}
+
+export interface ReviewDecisionUpdate {
+  readonly generation: number;
+  readonly canUndo: boolean;
+  readonly changes: readonly ReviewDecisionEntry[];
+}
+
+/** Applies one explicit decision through the native transaction engine. */
+export function applyReviewDecision(
+  frameId: string,
+  action: ReviewDecisionAction,
+): Promise<ReviewDecisionUpdate> {
+  return invoke<ReviewDecisionUpdate>("apply_review_decision", {
+    request: { frameId, action },
+  });
+}
+
+/** Reverts the latest native decision transaction for the imported session. */
+export function undoReviewDecision(): Promise<ReviewDecisionUpdate> {
+  return invoke<ReviewDecisionUpdate>("undo_review_decision");
+}
 
 /**
  * Requests a view-only deterministic order from the Rust review model.

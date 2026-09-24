@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::{Read, Seek};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions, ImageRegion,
@@ -27,8 +28,10 @@ use aether_quality::{
     measure_frame_quality, prepare_cfa_cell_mean,
 };
 use aether_review::{
-    DisplayTransform, FrameId, FrameMetrics, FrameSpec, MissingPlacement, ReviewBook,
-    SortDirection as ReviewSortDirection, SortField as ReviewSortField, SortSpec, TransferFunction,
+    DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics, FrameSpec,
+    MAX_UNDO_DEPTH, ManualDecision, ManualRejectionReason, MissingPlacement, ReviewBook,
+    ReviewError, ReviewState, SortDirection as ReviewSortDirection, SortField as ReviewSortField,
+    SortSpec, TransferFunction,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport, ManifestFile,
@@ -246,6 +249,60 @@ enum ReviewSortFieldWire {
 enum ReviewSortDirectionWire {
     Ascending,
     Descending,
+}
+
+/// Native owner of the current session's manual review decisions.
+///
+/// The browser presenter receives small immutable updates, while the audited
+/// transaction history remains in Rust and cannot be bypassed by local DOM
+/// state. Re-importing a session replaces this book atomically.
+#[derive(Debug, Default)]
+struct DesktopReviewState {
+    book: Mutex<Option<ReviewBook>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReviewDecisionRequest {
+    frame_id: String,
+    action: ReviewDecisionAction,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
+enum ReviewDecisionAction {
+    Accept,
+    Reject { reason: ReviewRejectionReasonWire },
+    Clear,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ReviewRejectionReasonWire {
+    Blur,
+    Trailing,
+    Cloud,
+    IntrusiveTrail,
+    Gradient,
+    Framing,
+    Saturation,
+}
+
+/// Minimal decision patch returned to the presenter after one transaction.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewDecisionEntry {
+    frame_id: String,
+    state: ReviewState,
+    rejection_reason: Option<ManualRejectionReason>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewDecisionUpdate {
+    generation: u64,
+    can_undo: bool,
+    changes: Vec<ReviewDecisionEntry>,
 }
 
 impl PreviewCommandError {
@@ -548,21 +605,225 @@ const fn fits_statistics_configuration_error() -> PreviewCommandError {
 }
 
 #[tauri::command]
-async fn import_session_directory(path: PathBuf) -> Result<ImportedSession, PreviewCommandError> {
+async fn import_session_directory(
+    path: PathBuf,
+    review_state: tauri::State<'_, DesktopReviewState>,
+) -> Result<ImportedSession, PreviewCommandError> {
     if !path.is_absolute() {
         return Err(PreviewCommandError::new(
             "session_path_not_absolute",
             "The selected session directory must use an absolute path.",
         ));
     }
-    tauri::async_runtime::spawn_blocking(move || import_session_directory_sync(&path))
-        .await
-        .map_err(|_| {
-            PreviewCommandError::new(
-                "session_import_interrupted",
-                "The session import worker stopped before producing a result.",
-            )
-        })?
+    let imported =
+        tauri::async_runtime::spawn_blocking(move || import_session_directory_sync(&path))
+            .await
+            .map_err(|_| {
+                PreviewCommandError::new(
+                    "session_import_interrupted",
+                    "The session import worker stopped before producing a result.",
+                )
+            })??;
+    install_review_book(&review_state, &imported)?;
+    Ok(imported)
+}
+
+#[tauri::command]
+fn apply_review_decision(
+    request: ReviewDecisionRequest,
+    review_state: tauri::State<'_, DesktopReviewState>,
+) -> Result<ReviewDecisionUpdate, PreviewCommandError> {
+    apply_review_decision_sync(&review_state, request)
+}
+
+#[tauri::command]
+fn undo_review_decision(
+    review_state: tauri::State<'_, DesktopReviewState>,
+) -> Result<ReviewDecisionUpdate, PreviewCommandError> {
+    undo_review_decision_sync(&review_state)
+}
+
+fn install_review_book(
+    review_state: &DesktopReviewState,
+    imported: &ImportedSession,
+) -> Result<(), PreviewCommandError> {
+    let mut frames = review_entry_buffer(imported.frames.len())?;
+    for frame in &imported.frames {
+        let id = FrameId::new(frame.id.clone()).map_err(|_| review_state_input_error())?;
+        frames.push(
+            FrameSpec::new(id, frame.label.clone(), FrameMetrics::default())
+                .map_err(|_| review_state_input_error())?,
+        );
+    }
+    let book = if frames.is_empty() {
+        None
+    } else {
+        Some(ReviewBook::new(frames, MAX_UNDO_DEPTH).map_err(|_| review_state_input_error())?)
+    };
+    *lock_review_state(review_state)? = book;
+    Ok(())
+}
+
+fn apply_review_decision_sync(
+    review_state: &DesktopReviewState,
+    request: ReviewDecisionRequest,
+) -> Result<ReviewDecisionUpdate, PreviewCommandError> {
+    let frame_id = FrameId::new(request.frame_id).map_err(|_| review_decision_input_error())?;
+    let change = match request.action {
+        ReviewDecisionAction::Accept => DecisionChange::set(
+            frame_id.clone(),
+            ManualDecision::accept(None).map_err(|_| review_decision_input_error())?,
+        ),
+        ReviewDecisionAction::Reject { reason } => DecisionChange::set(
+            frame_id.clone(),
+            ManualDecision::reject(rejection_reason(reason), None)
+                .map_err(|_| review_decision_input_error())?,
+        ),
+        ReviewDecisionAction::Clear => DecisionChange::clear(frame_id.clone()),
+    };
+    let mut state = lock_review_state(review_state)?;
+    let book = state.as_mut().ok_or_else(review_state_missing_error)?;
+    let preview = match book.preview_changes(&[change]) {
+        Ok(preview) => preview,
+        Err(ReviewError::NoEffectiveChanges) => {
+            let mut changes = review_entry_buffer(1)?;
+            changes.push(review_decision_entry(book, &frame_id)?);
+            return Ok(review_decision_update(book, changes));
+        }
+        Err(_) => return Err(review_decision_failed_error()),
+    };
+
+    // Reserve the outbound patch before mutating the transaction engine. If
+    // memory is exhausted, the browser and native state remain synchronized.
+    let mut changes = review_entry_buffer(preview.changes().len())?;
+    for delta in preview.changes() {
+        changes.push(review_decision_entry_from_delta(delta));
+    }
+    book.apply_preview(preview)
+        .map_err(|_| review_decision_failed_error())?;
+    Ok(review_decision_update(book, changes))
+}
+
+fn undo_review_decision_sync(
+    review_state: &DesktopReviewState,
+) -> Result<ReviewDecisionUpdate, PreviewCommandError> {
+    let mut state = lock_review_state(review_state)?;
+    let book = state.as_mut().ok_or_else(review_state_missing_error)?;
+    let change_count = book
+        .pending_undo_change_count()
+        .ok_or_else(review_nothing_to_undo_error)?;
+    let mut changes = review_entry_buffer(change_count)?;
+    let inverse = book.undo_with_deltas().map_err(|error| match error {
+        ReviewError::NothingToUndo => review_nothing_to_undo_error(),
+        _ => review_decision_failed_error(),
+    })?;
+    changes.extend(inverse.iter().map(review_decision_entry_from_delta));
+    Ok(review_decision_update(book, changes))
+}
+
+fn review_decision_update(
+    book: &ReviewBook,
+    changes: Vec<ReviewDecisionEntry>,
+) -> ReviewDecisionUpdate {
+    ReviewDecisionUpdate {
+        generation: book.generation(),
+        can_undo: book.can_undo(),
+        changes,
+    }
+}
+
+fn review_decision_entry(
+    book: &ReviewBook,
+    frame_id: &FrameId,
+) -> Result<ReviewDecisionEntry, PreviewCommandError> {
+    let state = book
+        .state(frame_id)
+        .ok_or_else(review_decision_input_error)?;
+    Ok(ReviewDecisionEntry {
+        frame_id: frame_id.as_str().to_owned(),
+        state,
+        rejection_reason: book
+            .decision(frame_id)
+            .and_then(ManualDecision::rejection_reason),
+    })
+}
+
+fn review_decision_entry_from_delta(delta: &DecisionDelta) -> ReviewDecisionEntry {
+    let decision = delta.after();
+    ReviewDecisionEntry {
+        frame_id: delta.frame_id().as_str().to_owned(),
+        state: decision.map_or(ReviewState::Undecided, ManualDecision::state),
+        rejection_reason: decision.and_then(ManualDecision::rejection_reason),
+    }
+}
+
+fn rejection_reason(reason: ReviewRejectionReasonWire) -> ManualRejectionReason {
+    match reason {
+        ReviewRejectionReasonWire::Blur => ManualRejectionReason::Blur,
+        ReviewRejectionReasonWire::Trailing => ManualRejectionReason::Trailing,
+        ReviewRejectionReasonWire::Cloud => ManualRejectionReason::Cloud,
+        ReviewRejectionReasonWire::IntrusiveTrail => ManualRejectionReason::IntrusiveTrail,
+        ReviewRejectionReasonWire::Gradient => ManualRejectionReason::Gradient,
+        ReviewRejectionReasonWire::Framing => ManualRejectionReason::Framing,
+        ReviewRejectionReasonWire::Saturation => ManualRejectionReason::Saturation,
+    }
+}
+
+fn review_entry_buffer<T>(elements: usize) -> Result<Vec<T>, PreviewCommandError> {
+    let mut output = Vec::new();
+    output.try_reserve_exact(elements).map_err(|_| {
+        PreviewCommandError::new(
+            "review_state_allocation_failed",
+            "The native review state could not reserve its bounded response buffer.",
+        )
+    })?;
+    Ok(output)
+}
+
+fn lock_review_state(
+    state: &DesktopReviewState,
+) -> Result<MutexGuard<'_, Option<ReviewBook>>, PreviewCommandError> {
+    state.book.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "review_state_unavailable",
+            "The native review state is unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
+const fn review_state_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "review_state_input_invalid",
+        "The imported session cannot initialize a valid native review state.",
+    )
+}
+
+const fn review_state_missing_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "review_state_missing",
+        "Import a non-empty FITS session before editing review decisions.",
+    )
+}
+
+const fn review_decision_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "review_decision_input_invalid",
+        "The requested review decision contains an invalid or unknown frame identity.",
+    )
+}
+
+const fn review_decision_failed_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "review_decision_failed",
+        "The native review transaction could not be applied atomically.",
+    )
+}
+
+const fn review_nothing_to_undo_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "review_nothing_to_undo",
+        "No applied review transaction remains to undo.",
+    )
 }
 
 #[tauri::command]
@@ -982,13 +1243,16 @@ const fn preview_worker_error() -> PreviewCommandError {
 pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(DesktopReviewState::default())
         .invoke_handler(tauri::generate_handler![
+            apply_review_decision,
             estimate_fits_preview_transform,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
             render_fits_preview,
-            sort_review_frames
+            sort_review_frames,
+            undo_review_decision
         ])
         .run(tauri::generate_context!())
 }
@@ -1274,6 +1538,97 @@ mod tests {
         assert_eq!(frame.id.len(), 64);
         assert_eq!(frame.path, source_path.to_string_lossy());
         Ok(())
+    }
+
+    #[test]
+    fn applies_idempotent_review_decisions_and_undoes_native_transactions() -> TestResult {
+        let imported = ImportedSession {
+            name: "transaction test".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![
+                imported_review_test_frame('a', "first.fits"),
+                imported_review_test_frame('b', "second.fits"),
+            ],
+            files_considered: 2,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+        };
+        let state = DesktopReviewState::default();
+        install_review_book(&state, &imported)?;
+
+        let accepted = apply_review_decision_sync(
+            &state,
+            ReviewDecisionRequest {
+                frame_id: "a".repeat(64),
+                action: ReviewDecisionAction::Accept,
+            },
+        )?;
+        assert_eq!(accepted.generation, 1);
+        assert!(accepted.can_undo);
+        assert_eq!(accepted.changes.len(), 1);
+        assert_eq!(accepted.changes[0].state, ReviewState::Accepted);
+
+        let repeated = apply_review_decision_sync(
+            &state,
+            ReviewDecisionRequest {
+                frame_id: "a".repeat(64),
+                action: ReviewDecisionAction::Accept,
+            },
+        )?;
+        assert_eq!(repeated.generation, 1);
+        assert_eq!(repeated.changes[0].state, ReviewState::Accepted);
+
+        let rejected = apply_review_decision_sync(
+            &state,
+            ReviewDecisionRequest {
+                frame_id: "b".repeat(64),
+                action: ReviewDecisionAction::Reject {
+                    reason: ReviewRejectionReasonWire::Trailing,
+                },
+            },
+        )?;
+        assert_eq!(rejected.generation, 2);
+        assert_eq!(rejected.changes[0].state, ReviewState::Rejected);
+        assert_eq!(
+            rejected.changes[0].rejection_reason,
+            Some(ManualRejectionReason::Trailing)
+        );
+
+        let first_undo = undo_review_decision_sync(&state)?;
+        assert_eq!(first_undo.generation, 3);
+        assert!(first_undo.can_undo);
+        assert_eq!(first_undo.changes[0].frame_id, "b".repeat(64));
+        assert_eq!(first_undo.changes[0].state, ReviewState::Undecided);
+
+        let second_undo = undo_review_decision_sync(&state)?;
+        assert_eq!(second_undo.generation, 4);
+        assert!(!second_undo.can_undo);
+        assert_eq!(second_undo.changes[0].frame_id, "a".repeat(64));
+        assert_eq!(second_undo.changes[0].state, ReviewState::Undecided);
+        let Err(error) = undo_review_decision_sync(&state) else {
+            return Err("an empty undo history was accepted".into());
+        };
+        assert_eq!(error.code, "review_nothing_to_undo");
+        Ok(())
+    }
+
+    fn imported_review_test_frame(digit: char, label: &str) -> ImportedFrame {
+        ImportedFrame {
+            id: digit.to_string().repeat(64),
+            role: "light",
+            label: label.to_owned(),
+            relative_path: format!("LIGHTS/{label}"),
+            path: format!("/runtime-only/LIGHTS/{label}"),
+            exposure_seconds: Some(60.0),
+            temperature_celsius: Some(-5.0),
+            camera: Some("Synthetic camera".to_owned()),
+            filter: None,
+            bayer_pattern: Some("rggb"),
+            axes: vec![4, 2],
+            fits_diagnostic_count: 0,
+            classification_conflict: false,
+        }
     }
 
     #[test]

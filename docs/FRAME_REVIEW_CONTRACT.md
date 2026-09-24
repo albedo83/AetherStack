@@ -22,6 +22,15 @@ discards undo history, and permanently blocks mutation. Automatic rule evidence
 and its precedence model remain a separate planned addition; they are not
 simulated by overloading manual decisions.
 
+The desktop adapter initializes one native review book after a successful
+session import. Accept, reject, clear, and undo commands mutate that book under a
+single synchronization boundary and return only identity-scoped confirmed
+patches. Repeating an already-active decision is idempotent and does not consume
+an undo slot. The browser disables decision actions while a transaction is in
+flight and never constructs its own undo history. This history is currently
+process-local; durable restart recovery must be tied to the future session plan
+and provenance format rather than browser storage.
+
 Pixel minimum, maximum, mean, dispersion, and invalid counts are useful
 diagnostics but are not quality scores. Ranking requires versioned astronomical
 metrics with declared units and tested validity domains:

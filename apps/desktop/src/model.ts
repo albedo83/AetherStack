@@ -2,6 +2,15 @@ export type FrameRole = "bias" | "dark" | "flat" | "light";
 
 export type ReviewState = "undecided" | "accepted" | "rejected";
 
+export type ReviewRejectionReason =
+  | "blur"
+  | "trailing"
+  | "cloud"
+  | "intrusive_trail"
+  | "gradient"
+  | "framing"
+  | "saturation";
+
 export type MetricValue = number | null;
 
 export type BayerPattern = "rggb" | "bggr" | "grbg" | "gbrg";
@@ -30,7 +39,7 @@ export interface ReviewFrame {
   readonly qualityMessage: string;
   readonly qualityProfileId: string | null;
   readonly state: ReviewState;
-  readonly rejectionReason: string | null;
+  readonly rejectionReason: ReviewRejectionReason | null;
   readonly metrics: FrameMetrics;
 }
 
@@ -88,6 +97,9 @@ export interface ReviewViewModel {
   readonly frames: readonly ReviewFrame[];
   readonly selectedFrameId: string | null;
   readonly playing: boolean;
+  readonly reviewSessionReady: boolean;
+  readonly canUndo: boolean;
+  readonly decisionPending: boolean;
   readonly sharedStretchLabel: string;
   readonly preview: FramePreview | null;
   readonly viewerScale: "fit" | "actual";
@@ -112,7 +124,7 @@ export interface ReviewActions {
   readonly onSetDecision: (
     frameId: string,
     state: Exclude<ReviewState, "undecided">,
-    reason: string | null,
+    reason: ReviewRejectionReason | null,
   ) => void;
   readonly onClearDecision: (frameId: string) => void;
   readonly onUndo: () => void;

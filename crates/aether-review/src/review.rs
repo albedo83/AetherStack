@@ -583,6 +583,29 @@ impl ReviewBook {
         self.sealed
     }
 
+    /// Whether one previously applied decision transaction can be undone.
+    ///
+    /// Sealed books deliberately report `false`, even if their internal
+    /// history representation changes in the future, because mutation is no
+    /// longer legal once a review plan is being constructed.
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        !self.sealed && !self.undo_history.is_empty()
+    }
+
+    /// Number of frame decisions affected by the next undo transaction.
+    ///
+    /// Adapters can use this bound to reserve response storage before the
+    /// transaction mutates state. A sealed book exposes no undo operation.
+    #[must_use]
+    pub fn pending_undo_change_count(&self) -> Option<usize> {
+        if self.sealed {
+            None
+        } else {
+            self.undo_history.last().map(Vec::len)
+        }
+    }
+
     /// Frame identities in immutable processing order.
     pub fn processing_order(&self) -> impl ExactSizeIterator<Item = &FrameId> {
         self.entries.iter().map(|entry| &entry.spec.id)
@@ -718,6 +741,25 @@ impl ReviewBook {
     /// Returns a typed error if the book is sealed, no undo transaction exists,
     /// or the generation counter is exhausted.
     pub fn undo(&mut self) -> Result<(), ReviewError> {
+        self.undo_with_deltas().map(drop)
+    }
+
+    /// Reverts the most recently applied transaction and returns its inverse.
+    ///
+    /// The returned deltas describe the transition that was just performed:
+    /// `before` is the decision that was active immediately before undo and
+    /// `after` is the restored decision. This lets adapters update only the
+    /// affected rows without copying the complete review book.
+    ///
+    /// All fallible allocation and invariant checks happen before the book is
+    /// mutated. An error therefore leaves both decisions and history intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if the book is sealed, no undo transaction exists,
+    /// the inverse delta buffer cannot be allocated, an internal identity is no
+    /// longer compatible, or the generation counter is exhausted.
+    pub fn undo_with_deltas(&mut self) -> Result<Vec<DecisionDelta>, ReviewError> {
         if self.sealed {
             return Err(ReviewError::Sealed);
         }
@@ -725,15 +767,32 @@ impl ReviewBook {
             .generation
             .checked_add(1)
             .ok_or(ReviewError::GenerationExhausted)?;
-        let changes = self.undo_history.pop().ok_or(ReviewError::NothingToUndo)?;
-        for change in &changes {
-            let Some(entry) = self.find_entry_mut(&change.frame_id) else {
+        let changes = self.undo_history.last().ok_or(ReviewError::NothingToUndo)?;
+        let mut entry_indices = try_vec(changes.len())?;
+        for change in changes {
+            let Some(index) = self
+                .entries
+                .iter()
+                .position(|entry| entry.spec.id == change.frame_id)
+            else {
                 return Err(ReviewError::IncompatiblePreview);
             };
-            entry.decision.clone_from(&change.before);
+            entry_indices.push(index);
+        }
+        let mut inverse = try_vec(changes.len())?;
+        inverse.extend(changes.iter().map(|change| DecisionDelta {
+            frame_id: change.frame_id.clone(),
+            before: change.after.clone(),
+            after: change.before.clone(),
+        }));
+
+        // The history was verified above and no fallible work remains.
+        let changes = self.undo_history.pop().ok_or(ReviewError::NothingToUndo)?;
+        for (index, change) in entry_indices.into_iter().zip(&changes) {
+            self.entries[index].decision.clone_from(&change.before);
         }
         self.generation = next_generation;
-        Ok(())
+        Ok(inverse)
     }
 
     /// Permanently prevents further decision mutation for plan construction.
@@ -1227,6 +1286,7 @@ mod tests {
     #[test]
     fn previews_applies_and_undoes_a_batch_atomically() -> TestResult {
         let mut review = book()?;
+        assert!(!review.can_undo());
         let accepted = ManualDecision::accept(None)?;
         let rejected = ManualDecision::reject(
             ManualRejectionReason::Trailing,
@@ -1245,11 +1305,20 @@ mod tests {
         assert_eq!(review.state(&id('a')?), Some(ReviewState::Accepted));
         assert_eq!(review.state(&id('b')?), Some(ReviewState::Rejected));
         assert_eq!(review.generation(), 1);
+        assert!(review.can_undo());
+        assert_eq!(review.pending_undo_change_count(), Some(2));
 
-        review.undo()?;
+        let inverse = review.undo_with_deltas()?;
+        assert_eq!(inverse.len(), 2);
+        assert_eq!(inverse[0].before(), Some(&accepted));
+        assert_eq!(inverse[0].after(), None);
+        assert_eq!(inverse[1].before(), Some(&rejected));
+        assert_eq!(inverse[1].after(), None);
         assert_eq!(review.state(&id('a')?), Some(ReviewState::Undecided));
         assert_eq!(review.state(&id('b')?), Some(ReviewState::Undecided));
         assert_eq!(review.generation(), 2);
+        assert!(!review.can_undo());
+        assert_eq!(review.pending_undo_change_count(), None);
         Ok(())
     }
 

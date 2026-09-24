@@ -490,10 +490,12 @@ safety reasoning. They do not narrate obvious syntax.
     Unfinished commands are exposed as unavailable instead of inert controls.
     Declared standard CFA lights can now request strict diagnostic background,
     noise, stellar count, FWHM, and eccentricity without using display pixels;
-    the table and instrument badges expose completion and limitations. Arbitrary-
-    file import, progress events, multi-frame stretch estimation, spatial
-    quality modeling, ToupTek validation, and persistent decision/undo
-    synchronization remain next.
+    the table and instrument badges expose completion and limitations. Manual
+    accept, reject, clear, and undo operations now execute against the native
+    generation-bound transaction engine and return identity-scoped patches to
+    the presenter. Arbitrary-file import, progress events, durable decision
+    recovery, multi-frame stretch estimation, spatial quality modeling, and
+    ToupTek validation remain next.
 
 ## 11. Stable-release definition
 

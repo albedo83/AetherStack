@@ -64,7 +64,7 @@ optimized CPU and GPU paths must match.
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,
   identity-safe real FITS preview loading, and Rust-owned deterministic review
-  sorting;
+  sorting, transactional manual decisions, and bounded undo;
 - an on-demand desktop FITS inspector exposing exact three-pass primary-array
   moments and invalid-sample accounting without loading the array into the web
   presenter;

@@ -40,9 +40,10 @@ The detailed behavior is defined in
 The shared Rust interaction model owns review transactions, undo, sealing, table
 order, locked display state, and Blink identity transitions without depending on
 a desktop toolkit. The initial Tauri surface already delegates deterministic
-table sorting to that model and uses identity-bound native previews. Persistent
-decision transactions and undo stay visibly unavailable in the desktop surface
-until their adapter is connected; these invariants must not be approximated in
+table sorting, manual decision transactions, and bounded undo to that model and
+uses identity-bound native previews. Decision history currently lives for the
+lifetime of the imported desktop session; durable restart recovery remains a
+separate provenance feature. These invariants must not be approximated in
 frontend state.
 
 ## Three disclosure levels
