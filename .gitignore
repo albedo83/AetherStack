@@ -13,3 +13,8 @@
 *.fts
 *.xisf
 *.ser
+
+# Local scientific validation corpora and processor exports are private inputs.
+# Keep them outside version control even when temporarily copied beside the code.
+/ASI294MC-Pro/
+*.xpsm
