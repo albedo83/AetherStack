@@ -248,6 +248,67 @@ describe("frame review workspace", () => {
     ).toBe(true);
   });
 
+  it("provides guarded keyboard shortcuts for rapid manual review", () => {
+    const reviewReady = {
+      ...demoReviewModel,
+      reviewSessionReady: true,
+      canUndo: true,
+    };
+    const { root, actions, controller } = fixture(reviewReady);
+    const selected = demoReviewModel.frames[1];
+    const accepted = demoReviewModel.frames[0];
+    expect(selected).toBeDefined();
+    expect(accepted).toBeDefined();
+    if (!selected || !accepted) return;
+
+    fireEvent.keyDown(root, { key: "a" });
+    expect(actions.onSetDecision).toHaveBeenCalledWith(
+      selected.id,
+      "accepted",
+      null,
+    );
+
+    fireEvent.keyDown(root, { key: "r" });
+    expect(
+      getByRole(root, "dialog", { name: "Why reject this frame?" }),
+    ).toBeDefined();
+    fireEvent.keyDown(root, { key: "a" });
+    expect(actions.onSetDecision).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(root, { key: "Escape" });
+
+    fireEvent.keyDown(root, { key: "z", metaKey: true });
+    expect(actions.onUndo).toHaveBeenCalledOnce();
+
+    controller.update({
+      ...reviewReady,
+      selectedFrameId: accepted.id,
+    });
+    fireEvent.keyDown(root, { key: "c" });
+    expect(actions.onClearDecision).toHaveBeenCalledWith(accepted.id);
+
+    const input = document.createElement("input");
+    root.append(input);
+    fireEvent.keyDown(input, { key: "r" });
+    expect(
+      root.querySelector("[data-reject-dialog]")?.hasAttribute("hidden"),
+    ).toBe(true);
+  });
+
+  it("publishes review shortcuts to assistive technology", () => {
+    const { root } = fixture();
+
+    expect(
+      getByRole(root, "button", { name: "Accept" }).getAttribute(
+        "aria-keyshortcuts",
+      ),
+    ).toBe("A");
+    expect(
+      getByRole(root, "button", {
+        name: "No review decision to undo",
+      }).getAttribute("aria-keyshortcuts"),
+    ).toContain("Meta+Z");
+  });
+
   it("supports arrow-key table review and named playback controls", () => {
     const { root, actions } = fixture();
     const selected = root.querySelector<HTMLElement>(

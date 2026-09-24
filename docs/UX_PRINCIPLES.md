@@ -37,6 +37,11 @@ states are explicit, keyboard accessible, undoable, and carry a visible reason.
 The detailed behavior is defined in
 [`FRAME_REVIEW_CONTRACT.md`](FRAME_REVIEW_CONTRACT.md).
 
+High-frequency review uses visible buttons and discoverable keyboard shortcuts;
+neither path bypasses the native transaction engine. Modal dialogs and text
+entry suspend global shortcuts so an expert workflow never comes at the cost of
+predictable keyboard behavior.
+
 The shared Rust interaction model owns review transactions, undo, sealing, table
 order, locked display state, and Blink identity transitions without depending on
 a desktop toolkit. The initial Tauri surface already delegates deterministic

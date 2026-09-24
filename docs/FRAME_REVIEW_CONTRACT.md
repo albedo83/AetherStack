@@ -98,6 +98,12 @@ committing the visible frame identity. Screen readers announce file position,
 review state, important metrics, and playback state; status is never encoded by
 color alone.
 
+The initial desktop review surface exposes `A` for accept, `R` to open the
+mandatory rejection-reason dialog, `C` to clear a decision, and platform undo
+(`Command+Z` or `Control+Z`). The same commands remain visible buttons with
+`aria-keyshortcuts`; shortcuts are ignored during text entry, key repeat,
+imports, pending transactions, and modal dialogs.
+
 The initial Blink state machine separates the visible frame from a pending
 preview request. A decoded preview becomes current only when its stable identity
 exactly matches the pending identity. Stale renderer responses leave both states

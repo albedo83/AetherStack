@@ -254,6 +254,43 @@ export function mountReviewScreen(
       return;
     }
     const target = event.target instanceof Element ? event.target : null;
+    if (!elements.rejectDialog.hidden || !elements.statisticsDialog.hidden) {
+      return;
+    }
+    if (!event.repeat && !isTextEntryTarget(target)) {
+      const frame = selectedFrame(model);
+      const reviewAvailable = reviewCommandsAvailable(model);
+      const key = event.key.toLocaleLowerCase("en-US");
+      if (
+        key === "z" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        reviewAvailable &&
+        model.canUndo
+      ) {
+        event.preventDefault();
+        actions.onUndo();
+        return;
+      }
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && frame) {
+        if (key === "a" && reviewAvailable && frame.state !== "accepted") {
+          event.preventDefault();
+          actions.onSetDecision(frame.id, "accepted", null);
+          return;
+        }
+        if (key === "r" && reviewAvailable) {
+          event.preventDefault();
+          openRejectDialog(frame);
+          return;
+        }
+        if (key === "c" && reviewAvailable && frame.state !== "undecided") {
+          event.preventDefault();
+          actions.onClearDecision(frame.id);
+          return;
+        }
+      }
+    }
     const row = target?.closest<HTMLElement>('[role="row"][data-frame-id]');
     if (row && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
@@ -322,7 +359,7 @@ export function mountReviewScreen(
     elements.sessionStatusLabel.textContent = model.sessionStatus.label;
     const importing = model.sessionStatus.tone === "busy";
     const decisionBusy = model.decisionPending || importing;
-    const decisionsAvailable = model.reviewSessionReady && !decisionBusy;
+    const decisionsAvailable = reviewCommandsAvailable(model);
     elements.importSession.disabled = importing;
     elements.importSession.textContent = importing
       ? "Scanning FITS…"
@@ -428,7 +465,7 @@ export function mountReviewScreen(
           : "No review decision to undo",
     );
     elements.undo.title = model.canUndo
-      ? "Undo the last native review transaction"
+      ? "Undo the last native review transaction (⌘Z / Ctrl+Z)"
       : "No review decision to undo";
     elements.decisionControls.setAttribute("aria-busy", String(decisionBusy));
     elements.decisionControls.title = model.reviewSessionReady
@@ -462,6 +499,23 @@ function isReviewRejectionReason(
   value: string | undefined,
 ): value is ReviewRejectionReason {
   return rejectionReasons.some(([code]) => code === value);
+}
+
+function reviewCommandsAvailable(model: ReviewViewModel): boolean {
+  return (
+    model.reviewSessionReady &&
+    !model.decisionPending &&
+    model.sessionStatus.tone !== "busy"
+  );
+}
+
+function isTextEntryTarget(target: Element | null): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    (target?.closest('[contenteditable="true"]') ?? null) !== null
+  );
 }
 
 function qualityButtonLabel(frame: ReviewFrame | null): string {
@@ -817,7 +871,7 @@ function shellMarkup(): string {
               <h2 id="frames-heading">Review acquisition data</h2>
             </div>
             <div class="workspace-heading__actions">
-              <button class="icon-button" type="button" data-action="undo" aria-label="No review decision to undo" title="No review decision to undo" disabled>↶</button>
+              <button class="icon-button" type="button" data-action="undo" aria-label="No review decision to undo" aria-keyshortcuts="Meta+Z Control+Z" title="No review decision to undo" disabled>↶</button>
               <button class="button button--quiet" type="button" data-action="import-session" data-import-session>＋ Import session</button>
             </div>
           </div>
@@ -903,9 +957,9 @@ function shellMarkup(): string {
                 </div>
                 <div class="decision-controls" aria-label="Frame decision" data-decision-controls aria-busy="false">
                   <span class="state-chip" data-review-state data-state="undecided">Undecided</span>
-                  <button class="button button--quiet" type="button" data-action="clear-decision" data-decision-action>Clear</button>
-                  <button class="button button--danger" type="button" data-action="open-reject" data-decision-action>Reject</button>
-                  <button class="button button--success" type="button" data-action="accept" data-decision-action>Accept</button>
+                  <button class="button button--quiet" type="button" data-action="clear-decision" data-decision-action aria-keyshortcuts="C" title="Clear decision (C)">Clear</button>
+                  <button class="button button--danger" type="button" data-action="open-reject" data-decision-action aria-keyshortcuts="R" title="Reject with a reason (R)">Reject</button>
+                  <button class="button button--success" type="button" data-action="accept" data-decision-action aria-keyshortcuts="A" title="Accept selected frame (A)">Accept</button>
                 </div>
               </div>
             </section>
