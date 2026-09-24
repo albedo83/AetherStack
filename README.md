@@ -58,7 +58,8 @@ optimized CPU and GPU paths must match.
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, and a bounded
-  identity-and-transform-keyed desktop artifact cache;
+  identity-and-transform-keyed desktop artifact cache with generation-cancelled
+  adjacent-frame prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
   workspace, separate acquisition roles, diagnostic metrics, explicit manual
   decisions, and a presenter boundary that leaves scientific state in Rust;

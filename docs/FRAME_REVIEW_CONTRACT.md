@@ -92,6 +92,12 @@ replaced by an unresolved or partially decoded preview. Slow I/O reduces the
 cadence instead of dropping silently to a lower-fidelity transform. Playback can
 move forward, backward, bounce, or follow a manually selected comparison set.
 
+The desktop adapter prefetches a symmetric neighbourhood in deterministic order,
+favoring the next playback frame. Equal work is coalesced, foreground selection
+can join an in-flight request, and a session or role change invalidates its whole
+generation. Every late or uncached browser resource is revoked; accepted entries
+remain inside the five-entry and 32 MiB encoded-artifact cache bounds.
+
 Keyboard actions cover previous/next frame, play/pause, accept, reject, undo,
 zoom reset, fit, and overlay toggles. Rejection never advances without first
 committing the visible frame identity. Screen readers announce file position,

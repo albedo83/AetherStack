@@ -18,6 +18,10 @@ import {
 } from "./preview-bridge.ts";
 import { BoundedPreviewCache, previewCacheKey } from "./preview-cache.ts";
 import {
+  adjacentPreviewFrames,
+  PreviewPrefetchCoordinator,
+} from "./preview-prefetch.ts";
+import {
   inspectCfaFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
@@ -49,6 +53,8 @@ const roleLabels: Readonly<Record<FrameRole, string>> = {
 const previewBounds = { maximumWidth: 1_600, maximumHeight: 1_200 } as const;
 const maximumCachedPreviews = 5;
 const maximumCachedPreviewBytes = 32 * 1_024 * 1_024;
+// One frame in each direction warms Blink without saturating the FITS worker pool.
+const maximumAdjacentPrefetches = 2;
 
 let model = demoReviewModel;
 let importedSession: ImportedSession | null = null;
@@ -60,6 +66,7 @@ const previewCache = new BoundedPreviewCache(
   maximumCachedPreviews,
   maximumCachedPreviewBytes,
 );
+const previewPrefetch = new PreviewPrefetchCoordinator<PreviewResource>();
 let ephemeralPreviewResource: PreviewResource | null = null;
 let previewTicket = 0;
 let sortTicket = 0;
@@ -523,11 +530,18 @@ async function loadSelectedPreview(): Promise<void> {
       transfer: { kind: "midtones" },
     };
     const cacheKey = previewCacheKey(request, transform.algorithmId);
-    const cached = previewCache.get(cacheKey);
+    let cached = previewCache.get(cacheKey);
+    const pendingPrefetch = previewPrefetch.pending(cacheKey);
+    if (!cached && pendingPrefetch) {
+      await pendingPrefetch;
+      if (ticket !== previewTicket) return;
+      cached = previewCache.get(cacheKey);
+    }
     if (cached) {
       if (ticket !== previewTicket) return;
       releaseEphemeralPreview();
       update({ ...model, preview: cached.preview });
+      scheduleAdjacentPreviewPrefetch(transform);
       return;
     }
 
@@ -541,6 +555,7 @@ async function loadSelectedPreview(): Promise<void> {
       ephemeralPreviewResource = resource;
     }
     update({ ...model, preview: resource.preview });
+    scheduleAdjacentPreviewPrefetch(transform);
   } catch {
     if (ticket !== previewTicket) return;
     update({
@@ -548,6 +563,37 @@ async function loadSelectedPreview(): Promise<void> {
       sharedStretchLabel: "Preview unavailable · inspect Diagnostics",
       preview: null,
     });
+  }
+}
+
+function scheduleAdjacentPreviewPrefetch(
+  transform: EstimatedDisplayTransform,
+): void {
+  const selectedId = model.selectedFrameId;
+  if (!selectedId) return;
+  for (const frame of adjacentPreviewFrames(
+    model.frames,
+    selectedId,
+    maximumAdjacentPrefetches,
+  )) {
+    if (!frame.sourcePath) continue;
+    const request: FitsPreviewRequest = {
+      frameId: frame.id,
+      path: frame.sourcePath,
+      plane: 0,
+      ...previewBounds,
+      blackPoint: transform.blackPoint,
+      whitePoint: transform.whitePoint,
+      midtone: transform.midtone,
+      transfer: { kind: "midtones" },
+    };
+    const cacheKey = previewCacheKey(request, transform.algorithmId);
+    if (previewCache.has(cacheKey)) continue;
+    void previewPrefetch.schedule(
+      cacheKey,
+      () => requestFitsPreview(request),
+      (resource) => previewCache.put(cacheKey, resource),
+    );
   }
 }
 
@@ -609,6 +655,7 @@ function releaseEphemeralPreview(): void {
 }
 
 function clearPreviewResources(): void {
+  previewPrefetch.cancel();
   releaseEphemeralPreview();
   previewCache.clear();
 }

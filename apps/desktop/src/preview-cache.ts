@@ -45,6 +45,11 @@ export class BoundedPreviewCache {
     return this.#encodedBytes;
   }
 
+  /** Tests membership without changing least-recently-used order. */
+  has(key: string): boolean {
+    return this.#entries.has(key);
+  }
+
   /** Returns and promotes one artifact, or `undefined` on a cache miss. */
   get(key: string): PreviewResource | undefined {
     const resource = this.#entries.get(key);

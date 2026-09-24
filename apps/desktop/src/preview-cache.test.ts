@@ -38,6 +38,7 @@ describe("bounded preview cache", () => {
 
     expect(cache.put("first", first)).toBe(true);
     expect(cache.put("second", second)).toBe(true);
+    expect(cache.has("first")).toBe(true);
     expect(cache.get("first")).toBe(first);
     expect(cache.put("third", third)).toBe(true);
 
@@ -77,6 +78,21 @@ describe("bounded preview cache", () => {
     expect(second.revoke).not.toHaveBeenCalled();
     expect(cache.size).toBe(1);
     expect(cache.encodedBytes).toBe(30);
+  });
+
+  it("checks membership without promoting an entry", () => {
+    const cache = new BoundedPreviewCache(2, 100);
+    const first = resource("a", 20);
+    const second = resource("b", 20);
+    const third = resource("c", 20);
+    cache.put("first", first);
+    cache.put("second", second);
+
+    expect(cache.has("first")).toBe(true);
+    cache.put("third", third);
+
+    expect(first.revoke).toHaveBeenCalledOnce();
+    expect(second.revoke).not.toHaveBeenCalled();
   });
 
   it("leaves an oversized artifact under caller ownership", () => {

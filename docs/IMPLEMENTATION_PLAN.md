@@ -493,9 +493,12 @@ safety reasoning. They do not narrate obvious syntax.
     the table and instrument badges expose completion and limitations. Manual
     accept, reject, clear, and undo operations now execute against the native
     generation-bound transaction engine and return identity-scoped patches to
-    the presenter. Arbitrary-file import, progress events, durable decision
-    recovery, multi-frame stretch estimation, spatial quality modeling, and
-    ToupTek validation remain next.
+    the presenter. The Blink presenter owns a five-entry/32 MiB LRU artifact
+    cache and generation-cancelled adjacent-frame prefetch; foreground selection
+    joins matching speculative work without weakening exact frame identity.
+    Arbitrary-file import, progress events, durable decision recovery,
+    multi-frame stretch estimation, spatial quality modeling, and ToupTek
+    validation remain next.
 
 ## 11. Stable-release definition
 
