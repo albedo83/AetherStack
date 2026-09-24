@@ -19,6 +19,12 @@ unknown groups do not. The plan is bound to the canonical session manifest by
 its SHA-256 digest, sorted by stable group identifier, encoded as bounded JSON,
 and tagged with `schema_version = 1`.
 
+`canonical_sha256` hashes the exact deterministic pretty JSON bytes, including
+their final newline. Every emitted master must store this digest in its FITS
+`AETHPLN` card. This makes changes to matching policy, tolerances, selections,
+candidate evidence, or group identifiers visible in product provenance and
+runtime cache identities.
+
 ## Exclusive flat pedestal correction
 
 A flat must have exactly one of these states:

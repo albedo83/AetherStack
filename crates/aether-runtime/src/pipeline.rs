@@ -1510,6 +1510,13 @@ fn tile_cache_key(
         })?;
 
     append_text(&mut descriptor, request.provenance.manifest_sha256())?;
+    match request.provenance.plan_sha256() {
+        Some(plan_sha256) => {
+            descriptor.push(1);
+            append_text(&mut descriptor, plan_sha256)?;
+        }
+        None => descriptor.push(0),
+    }
     append_text(&mut descriptor, request.provenance.group_id())?;
     append_text(&mut descriptor, request.provenance.algorithm_id())?;
     descriptor.extend_from_slice(
@@ -2280,6 +2287,14 @@ mod tests {
             provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
             CalibrationParameters::new(1.0e-12)?,
         )?;
+        let changed_plan = StrictPipelineRequest::new(
+            vec![placeholder_source("moved/signal.fits")?],
+            placeholder_source("moved/dark.fits")?,
+            placeholder_source("moved/flat.fits")?,
+            PathBuf::from("other-output.fits"),
+            provenance(1, STRICT_MEAN_ALGORITHM_ID)?.with_plan_sha256("c".repeat(64))?,
+            CalibrationParameters::new(0.0)?,
+        )?;
         let changed_signal = PipelineSource::new(
             PathBuf::from("moved/signal.fits"),
             SourceFingerprint::new(1, "b".repeat(64))?,
@@ -2299,6 +2314,7 @@ mod tests {
             first_key,
             tile_cache_key(&changed_parameter, dimensions, tile)?
         );
+        assert_ne!(first_key, tile_cache_key(&changed_plan, dimensions, tile)?);
         assert_ne!(first_key, tile_cache_key(&changed_input, dimensions, tile)?);
         Ok(())
     }

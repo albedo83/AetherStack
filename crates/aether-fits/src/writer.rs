@@ -14,7 +14,7 @@ const INITIAL_CHECKSUM_VALUE: &str = "0000000000000000";
 /// Canonical quiet-NaN payload used for unavailable floating FITS samples.
 pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 /// Version of the provenance cards emitted by this writer.
-pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 1;
+pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 2;
 /// Maximum byte length of a canonical output algorithm identifier.
 pub const MAX_FITS_ALGORITHM_ID_BYTES: usize = 32;
 /// Maximum byte length of a portable session group identifier.
@@ -24,6 +24,7 @@ pub const MAX_FITS_GROUP_ID_BYTES: usize = 64;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FitsOutputProvenance {
     manifest_sha256: String,
+    plan_sha256: Option<String>,
     group_id: String,
     algorithm_id: String,
     source_count: u32,
@@ -63,6 +64,7 @@ impl FitsOutputProvenance {
         }
         Ok(Self {
             manifest_sha256,
+            plan_sha256: None,
             group_id,
             algorithm_id,
             source_count,
@@ -73,6 +75,34 @@ impl FitsOutputProvenance {
     #[must_use]
     pub fn manifest_sha256(&self) -> &str {
         &self.manifest_sha256
+    }
+
+    /// Adds the SHA-256 of the exact canonical master-plan bytes.
+    ///
+    /// This binding is optional because products that do not depend on a master
+    /// plan, such as a direct light integration, still use the same provenance
+    /// type. Master products should always attach it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FitsProvenanceError::InvalidPlanSha256`] unless the value is
+    /// exactly 64 lowercase hexadecimal digits.
+    pub fn with_plan_sha256(
+        mut self,
+        plan_sha256: impl Into<String>,
+    ) -> Result<Self, FitsProvenanceError> {
+        let plan_sha256 = plan_sha256.into();
+        if !is_lower_sha256(&plan_sha256) {
+            return Err(FitsProvenanceError::InvalidPlanSha256);
+        }
+        self.plan_sha256 = Some(plan_sha256);
+        Ok(self)
+    }
+
+    /// SHA-256 of the exact canonical master-plan bytes, when applicable.
+    #[must_use]
+    pub fn plan_sha256(&self) -> Option<&str> {
+        self.plan_sha256.as_deref()
     }
 
     /// Exact session group identifier.
@@ -99,6 +129,8 @@ impl FitsOutputProvenance {
 pub enum FitsProvenanceError {
     /// Manifest fingerprint is not 64 lowercase hexadecimal digits.
     InvalidManifestSha256,
+    /// Master-plan fingerprint is not 64 lowercase hexadecimal digits.
+    InvalidPlanSha256,
     /// Group identifier is empty, oversized, or non-portable.
     InvalidGroupId,
     /// Algorithm identifier is empty, oversized, or non-canonical.
@@ -112,6 +144,9 @@ impl Display for FitsProvenanceError {
         match self {
             Self::InvalidManifestSha256 => {
                 formatter.write_str("manifest SHA-256 must be 64 lowercase hexadecimal digits")
+            }
+            Self::InvalidPlanSha256 => {
+                formatter.write_str("master-plan SHA-256 must be 64 lowercase hexadecimal digits")
             }
             Self::InvalidGroupId => formatter.write_str("group identifier is not portable"),
             Self::InvalidAlgorithmId => {
@@ -520,8 +555,9 @@ pub fn write_f64_primary<W: Write>(
 /// Writes a binary64 primary FITS image with validated processing provenance.
 ///
 /// In addition to [`write_f64_primary`]'s image contract, this emits `CREATOR`,
-/// `AETHVER`, `AETHMAN`, `AETHGRP`, `AETHALG`, and `AETHSRC` cards. Identifiers
-/// are validated by [`FitsOutputProvenance`] before any output is accepted.
+/// `AETHVER`, `AETHMAN`, optional `AETHPLN`, `AETHGRP`, `AETHALG`, and `AETHSRC`
+/// cards. Identifiers are validated by [`FitsOutputProvenance`] before any
+/// output is accepted.
 ///
 /// # Errors
 ///
@@ -614,6 +650,9 @@ fn write_primary_header<W: Write>(
             provenance.manifest_sha256(),
             &mut header_bytes,
         )?;
+        if let Some(plan_sha256) = provenance.plan_sha256() {
+            write_string_card(&mut header, "AETHPLN", plan_sha256, &mut header_bytes)?;
+        }
         write_string_card(
             &mut header,
             "AETHGRP",
@@ -985,6 +1024,7 @@ mod tests {
             FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 3)?;
 
         assert_eq!(provenance.manifest_sha256(), "a".repeat(64));
+        assert_eq!(provenance.plan_sha256(), None);
         assert_eq!(provenance.group_id(), "b".repeat(64));
         assert_eq!(provenance.algorithm_id(), "strict-mean-v1");
         assert_eq!(provenance.source_count(), 3);
@@ -1019,6 +1059,16 @@ mod tests {
             FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 0),
             Err(FitsProvenanceError::ZeroSourceCount)
         ));
+
+        let plan_digest = "c".repeat(64);
+        let with_plan = provenance.clone().with_plan_sha256(plan_digest.clone())?;
+        assert_eq!(with_plan.plan_sha256(), Some(plan_digest.as_str()));
+        for invalid in ["", &"C".repeat(64), &"c".repeat(63), &"g".repeat(64)] {
+            assert!(matches!(
+                provenance.clone().with_plan_sha256(invalid),
+                Err(FitsProvenanceError::InvalidPlanSha256)
+            ));
+        }
         Ok(())
     }
 
@@ -1026,7 +1076,8 @@ mod tests {
     fn writes_validated_provenance_cards() -> Result<(), Box<dyn Error>> {
         let image = image()?;
         let provenance =
-            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 3)?;
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 3)?
+                .with_plan_sha256("c".repeat(64))?;
         let mut output = Vec::new();
 
         write_f64_primary_with_provenance(&mut output, &image, &provenance)?;
@@ -1043,6 +1094,7 @@ mod tests {
             Some(i64::from(FITS_OUTPUT_PROVENANCE_VERSION))
         );
         assert_eq!(header.string("AETHMAN"), Some(provenance.manifest_sha256()));
+        assert_eq!(header.string("AETHPLN"), provenance.plan_sha256());
         assert_eq!(header.string("AETHGRP"), Some(provenance.group_id()));
         assert_eq!(header.string("AETHALG"), Some(provenance.algorithm_id()));
         assert_eq!(

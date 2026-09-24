@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use aether_metadata::FrameType;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{ManifestError, ManifestGroup, SessionManifest, StrictGroupingKey};
 
@@ -480,6 +481,23 @@ impl MasterPlan {
         let mut output = serde_json::to_vec_pretty(self).map_err(MasterPlanError::Json)?;
         output.push(b'\n');
         Ok(output)
+    }
+
+    /// Computes SHA-256 over the exact canonical master-plan JSON bytes.
+    ///
+    /// The hashed representation is exactly [`Self::to_json_pretty`], including
+    /// its terminating newline. The digest therefore binds an output product to
+    /// every serialized planning decision: matching policy, tolerances,
+    /// selected pedestal, rejected candidates, and source group identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation or encoding failure as
+    /// [`Self::to_json_pretty`].
+    pub fn canonical_sha256(&self) -> Result<String, MasterPlanError> {
+        let encoded = self.to_json_pretty()?;
+        let digest = Sha256::digest(encoded);
+        Ok(crate::fingerprint::encode_lower_hex(&digest))
     }
 
     /// Master-plan schema version.
@@ -1741,9 +1759,18 @@ mod tests {
         assert_eq!(plan.manifest_sha256(), session.canonical_sha256()?);
         let encoded = plan.to_json_pretty()?;
         assert_eq!(encoded.last(), Some(&b'\n'));
+        let expected_digest = crate::fingerprint::encode_lower_hex(&Sha256::digest(&encoded));
+        assert_eq!(plan.canonical_sha256()?, expected_digest);
         let decoded = MasterPlan::from_json_slice(&encoded)?;
         assert_eq!(decoded, plan);
         assert_eq!(decoded.to_json_pretty()?, encoded);
+        assert_eq!(decoded.canonical_sha256()?, expected_digest);
+
+        let changed = MasterPlan::from_manifest(
+            &session,
+            MasterPlanOptions::new(FlatPedestalPolicy::PreferMatchedDarkThenBias, 0.25, 1.0)?,
+        )?;
+        assert_ne!(changed.canonical_sha256()?, expected_digest);
         Ok(())
     }
 

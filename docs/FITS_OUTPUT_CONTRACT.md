@@ -49,16 +49,21 @@ or `-`. The versioned algorithm identifier is limited to 32 ASCII bytes and uses
 only lowercase letters, digits, `.`, `_`, and `-`. Its first byte must be a
 lowercase letter or digit. A product must represent at least one source image.
 
-`write_f64_primary_with_provenance` emits these cards before `END`:
+`write_f64_primary_with_provenance` emits version 2 of these cards before `END`:
 
 | Card | Meaning |
 | --- | --- |
 | `CREATOR` | AetherStack package name and version |
 | `AETHVER` | Version of this provenance-card contract |
 | `AETHMAN` | SHA-256 of the canonical session-manifest bytes |
+| `AETHPLN` | Optional SHA-256 of the canonical master-plan bytes |
 | `AETHGRP` | Exact session group identifier |
 | `AETHALG` | Versioned integration algorithm identifier |
 | `AETHSRC` | Number of source images represented by the product |
+
+`AETHPLN` is mandatory for master calibration products and absent for products
+that do not depend on a master plan. It binds the pixels to the exact matching
+policy, tolerances, selected pedestal, and recorded candidate diagnostics.
 
 The corresponding atomic API places the same cards in the synchronized
 temporary stream before publication. Provenance deliberately contains stable

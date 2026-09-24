@@ -604,7 +604,8 @@ mod tests {
         let directory = TestDirectory::new()?;
         let path = directory.path.join("result.fits");
         let provenance =
-            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 2)?;
+            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 2)?
+                .with_plan_sha256("c".repeat(64))?;
 
         write_f64_primary_atomic_new_with_provenance(&path, &image(10.0)?, &provenance)?;
         let reader = PrimaryImageReader::open(File::open(&path)?, HeaderReadOptions::default())?;
@@ -613,6 +614,10 @@ mod tests {
         assert_eq!(
             reader.report().header().string("AETHMAN"),
             Some(provenance.manifest_sha256())
+        );
+        assert_eq!(
+            reader.report().header().string("AETHPLN"),
+            provenance.plan_sha256()
         );
         assert_eq!(
             reader.report().header().string("AETHALG"),
