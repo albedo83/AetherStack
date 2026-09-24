@@ -37,11 +37,13 @@ No composite score exists until its expression, normalization, missing-value
 policy, and direction are visible. The default table keeps the individual
 metrics available beside any weight.
 
-The initial strict backend implements global median/MAD background clipping and
-local-maximum stellar moments for a prepared monochrome detection plane. These
-metrics remain disabled for raw CFA camera presets until a CFA-neutral transform
-and real ASI294MC Pro/ToupTek 585C validation satisfy the
-[`QUALITY_CONTRACT.md`](QUALITY_CONTRACT.md) release gates.
+The strict backend implements global median/MAD background clipping and
+local-maximum stellar moments for a prepared monochrome detection plane. The
+desktop may explicitly measure declared standard Bayer lights through the
+versioned complete-cell transform in
+[`QUALITY_CONTRACT.md`](QUALITY_CONTRACT.md). Results are visibly diagnostic and
+cannot trigger automatic rejection. Automatic camera presets remain disabled
+until both ASI294MC Pro and ToupTek 585C validation satisfy every release gate.
 
 ## Viewer fidelity
 

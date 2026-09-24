@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 aether-fits = { path = "../../../crates/aether-fits" }
 aether-metadata = { path = "../../../crates/aether-metadata" }
 aether-preview = { path = "../../../crates/aether-preview" }
+aether-quality = { path = "../../../crates/aether-quality" }
 aether-review = { path = "../../../crates/aether-review" }
 aether-session = { path = "../../../crates/aether-session" }
 png = "0.18"

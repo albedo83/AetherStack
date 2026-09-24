@@ -4,6 +4,11 @@ export type ReviewState = "undecided" | "accepted" | "rejected";
 
 export type MetricValue = number | null;
 
+export type BayerPattern = "rggb" | "bggr" | "grbg" | "gbrg";
+
+export type QualityState =
+  "unavailable" | "idle" | "loading" | "ready" | "error";
+
 export interface FrameMetrics {
   readonly fwhmPixels: MetricValue;
   readonly eccentricity: MetricValue;
@@ -20,6 +25,10 @@ export interface ReviewFrame {
   readonly exposureSeconds: number | null;
   readonly temperatureCelsius: number | null;
   readonly classificationWarning: string | null;
+  readonly bayerPattern: BayerPattern | null;
+  readonly qualityState: QualityState;
+  readonly qualityMessage: string;
+  readonly qualityProfileId: string | null;
   readonly state: ReviewState;
   readonly rejectionReason: string | null;
   readonly metrics: FrameMetrics;
@@ -112,4 +121,5 @@ export interface ReviewActions {
   readonly onSetViewerScale: (scale: "fit" | "actual") => void;
   readonly onOpenStatistics: (frameId: string) => void;
   readonly onCloseStatistics: () => void;
+  readonly onMeasureQuality: (frameId: string) => void;
 }

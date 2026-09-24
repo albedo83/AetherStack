@@ -5,12 +5,14 @@
 //! these measurements; callers provide immutable linear scientific pixels.
 
 mod background;
+mod cfa;
 mod stars;
 
 pub use background::{
     BackgroundError, BackgroundEstimate, BackgroundParameters, estimate_background,
     estimate_plane_background,
 };
+pub use cfa::{CFA_CELL_MEAN_ALGORITHM_ID, CfaDetectionError, prepare_cfa_cell_mean};
 pub use stars::{
     FrameQuality, FrameQualityError, StarMeasurement, StarMeasurementParameters,
     measure_frame_quality,

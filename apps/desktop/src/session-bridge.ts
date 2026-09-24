@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { FrameRole } from "./model.ts";
+import type { BayerPattern, FrameRole } from "./model.ts";
 
 export interface ImportedFrame {
   readonly id: string;
@@ -13,6 +13,7 @@ export interface ImportedFrame {
   readonly temperatureCelsius: number | null;
   readonly camera: string | null;
   readonly filter: string | null;
+  readonly bayerPattern: BayerPattern | null;
   readonly axes: readonly number[];
   readonly fitsDiagnosticCount: number;
   readonly classificationConflict: boolean;

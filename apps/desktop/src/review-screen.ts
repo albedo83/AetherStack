@@ -71,6 +71,12 @@ export function mountReviewScreen(
       root,
       '[data-action="open-statistics"]',
     ),
+    qualityButton: required<HTMLButtonElement>(
+      root,
+      '[data-action="measure-quality"]',
+    ),
+    qualityBadge: required<HTMLElement>(root, "[data-quality-badge]"),
+    cfaBadge: required<HTMLElement>(root, "[data-cfa-badge]"),
     state: required<HTMLElement>(root, "[data-review-state]"),
     fwhm: required<HTMLElement>(root, "[data-metric-fwhm]"),
     eccentricity: required<HTMLElement>(root, "[data-metric-eccentricity]"),
@@ -216,6 +222,11 @@ export function mountReviewScreen(
           ).focus();
         });
       }
+      return;
+    }
+    if (action === "measure-quality") {
+      const frame = selectedFrame(model);
+      if (frame) actions.onMeasureQuality(frame.id);
       return;
     }
     if (action === "close-statistics") {
@@ -369,6 +380,21 @@ export function mountReviewScreen(
       String(model.viewerScale === "actual"),
     );
     elements.statisticsButton.disabled = !frame?.sourcePath;
+    const qualityActionable =
+      model.activeRole === "light" &&
+      !!frame?.sourcePath &&
+      !!frame.bayerPattern &&
+      (frame.qualityState === "idle" || frame.qualityState === "error");
+    elements.qualityButton.disabled = !qualityActionable;
+    elements.qualityButton.textContent = qualityButtonLabel(frame);
+    elements.qualityButton.title = frame?.qualityMessage ?? "No frame selected";
+    elements.cfaBadge.textContent = frame?.bayerPattern
+      ? `RAW CFA · ${frame.bayerPattern.toUpperCase()}`
+      : "LINEAR · UNRESOLVED";
+    elements.qualityBadge.hidden = frame === null;
+    elements.qualityBadge.dataset.state = frame?.qualityState ?? "unavailable";
+    elements.qualityBadge.textContent = qualityBadgeLabel(frame);
+    elements.qualityBadge.title = frame?.qualityMessage ?? "";
     renderStatisticsPanel(elements, model);
     elements.stretch.textContent = model.sharedStretchLabel;
     renderSelectedMetrics(elements, frame);
@@ -387,7 +413,7 @@ export function mountReviewScreen(
     required<HTMLElement>(elements.play, "[data-play-icon]").textContent =
       model.playing ? "Ⅱ" : "▶";
     if (frame) {
-      elements.liveRegion.textContent = `${frame.label}, ${stateLabel(frame.state)}, frame ${position} of ${model.frames.length}`;
+      elements.liveRegion.textContent = `${frame.label}, ${stateLabel(frame.state)}, ${frame.qualityMessage}, frame ${position} of ${model.frames.length}`;
     }
   };
 
@@ -402,6 +428,37 @@ export function mountReviewScreen(
   update(initialModel);
 
   return { update, destroy };
+}
+
+function qualityButtonLabel(frame: ReviewFrame | null): string {
+  switch (frame?.qualityState) {
+    case "loading":
+      return "Measuring…";
+    case "ready":
+      return "Quality measured";
+    case "error":
+      return "Retry quality";
+    case "idle":
+    case "unavailable":
+    case undefined:
+      return "Measure quality";
+  }
+}
+
+function qualityBadgeLabel(frame: ReviewFrame | null): string {
+  switch (frame?.qualityState) {
+    case "loading":
+      return "QUALITY · MEASURING";
+    case "ready":
+      return "QUALITY · DIAGNOSTIC";
+    case "error":
+      return "QUALITY · FAILED";
+    case "idle":
+      return "QUALITY · NOT MEASURED";
+    case "unavailable":
+    case undefined:
+      return "QUALITY · BLOCKED";
+  }
 }
 
 function renderRoles(container: HTMLElement, model: ReviewViewModel): void {
@@ -774,6 +831,7 @@ function shellMarkup(): string {
                 <div class="viewer__tools" aria-label="Viewer controls">
                   <button class="tool-button" type="button" data-action="viewer-fit" aria-label="Fit preview to viewer" aria-pressed="true">Fit</button>
                   <button class="tool-button" type="button" data-action="viewer-actual" aria-label="Show preview pixels at one hundred percent" aria-pressed="false">1:1</button>
+                  <button class="tool-button" type="button" data-action="measure-quality" aria-label="Measure diagnostic frame quality">Measure quality</button>
                   <button class="tool-button" type="button" data-action="open-statistics" aria-label="Inspect exact FITS statistics">Statistics</button>
                   <button class="tool-button" type="button" aria-label="Clipping overlay is not available in this build" title="Clipping requires rejection maps" disabled>Clipping</button>
                 </div>
@@ -789,7 +847,8 @@ function shellMarkup(): string {
                   </div>
                 </div>
                 <div class="preview-badges" data-preview-badges>
-                  <span class="viewer-chip">RAW CFA</span>
+                  <span class="viewer-chip" data-cfa-badge></span>
+                  <span class="viewer-chip viewer-chip--quality" data-quality-badge></span>
                   <span class="viewer-chip viewer-chip--lock" data-stretch-label></span>
                 </div>
                 <dl class="metric-strip" aria-label="Selected frame metrics">

@@ -12,14 +12,19 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use aether_fits::{
-    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions,
+    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions, ImageRegion,
     PrimaryImageReader, StoredSampleFormat, primary_image_statistics,
 };
-use aether_metadata::FrameType;
+use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
     AUTO_STRETCH_ALGORITHM_ID, AutomaticDisplayTransform, FitsPreviewParameters, MissingPixelStyle,
     PreviewLimits, RgbaPreview, ScalarPreview, build_fits_preview, choose_reduction_level,
     estimate_display_transform, render_grayscale_rgba8,
+};
+use aether_quality::{
+    BackgroundParameters, CFA_CELL_MEAN_ALGORITHM_ID, FrameQualityError,
+    GLOBAL_BACKGROUND_ALGORITHM_ID, STAR_MEASUREMENT_ALGORITHM_ID, StarMeasurementParameters,
+    measure_frame_quality, prepare_cfa_cell_mean,
 };
 use aether_review::{
     DisplayTransform, FrameId, FrameMetrics, FrameSpec, MissingPlacement, ReviewBook,
@@ -34,6 +39,8 @@ use tauri::ipc::Response;
 
 const MAX_DESKTOP_PREVIEW_PIXELS: usize = 2 * 1_024 * 1_024;
 const DESKTOP_PREVIEW_IO_CHUNK_SAMPLES: usize = 256 * 1_024;
+const MAX_DESKTOP_QUALITY_SOURCE_PIXELS: u64 = 64 * 1_024 * 1_024;
+const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -96,6 +103,56 @@ struct FitsStatisticsResponse {
     sample_standard_deviation: Option<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrameQualityRequest {
+    path: PathBuf,
+    interpretation: QualityInterpretation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
+enum QualityInterpretation {
+    Monochrome,
+    BayerCellMean { pattern: BayerPatternWire },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BayerPatternWire {
+    Rggb,
+    Bggr,
+    Grbg,
+    Gbrg,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrameQualityResponse {
+    profile_id: &'static str,
+    background_algorithm_id: &'static str,
+    star_algorithm_id: &'static str,
+    detection_plane_algorithm_id: &'static str,
+    interpretation: &'static str,
+    source_pixel_scale: f64,
+    diagnostic_only: bool,
+    background: f64,
+    noise: f64,
+    initial_usable_samples: usize,
+    retained_background_samples: usize,
+    masked_samples: usize,
+    non_finite_samples: usize,
+    detected_stars: usize,
+    usable_stars: usize,
+    saturation_level: Option<f64>,
+    saturated_stars: Option<usize>,
+    raw_candidates: usize,
+    suppressed_candidates: usize,
+    rejected_measurements: usize,
+    fwhm_pixels: Option<f64>,
+    eccentricity: Option<f64>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
 enum PreviewTransfer {
@@ -140,6 +197,7 @@ struct ImportedFrame {
     temperature_celsius: Option<f64>,
     camera: Option<String>,
     filter: Option<String>,
+    bayer_pattern: Option<&'static str>,
     axes: Vec<u64>,
     fits_diagnostic_count: usize,
     classification_conflict: bool,
@@ -254,6 +312,21 @@ async fn inspect_fits_statistics(
         })?
 }
 
+#[tauri::command]
+async fn inspect_frame_quality(
+    request: FrameQualityRequest,
+) -> Result<FrameQualityResponse, PreviewCommandError> {
+    validate_runtime_source_path(&request.path)?;
+    tauri::async_runtime::spawn_blocking(move || inspect_frame_quality_sync(&request))
+        .await
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "frame_quality_interrupted",
+                "The frame-quality worker stopped before producing a result.",
+            )
+        })?
+}
+
 fn validate_runtime_source_path(path: &Path) -> Result<(), PreviewCommandError> {
     if path.is_absolute() {
         Ok(())
@@ -310,6 +383,150 @@ fn inspect_fits_statistics_sync(
         population_standard_deviation: moments.population_standard_deviation(),
         sample_standard_deviation: moments.sample_standard_deviation(),
     })
+}
+
+fn inspect_frame_quality_sync(
+    request: &FrameQualityRequest,
+) -> Result<FrameQualityResponse, PreviewCommandError> {
+    let file = File::open(&request.path).map_err(|_| {
+        PreviewCommandError::new(
+            "fits_open_failed",
+            "The selected FITS file could not be opened.",
+        )
+    })?;
+    let mut reader =
+        PrimaryImageReader::open(file, HeaderReadOptions::default()).map_err(|_| {
+            PreviewCommandError::new(
+                "frame_quality_header_failed",
+                "The selected FITS primary header could not be inspected for quality measurement.",
+            )
+        })?;
+    let [width, height] = reader.descriptor().axes() else {
+        return Err(PreviewCommandError::new(
+            "frame_quality_axes_unsupported",
+            "Frame quality currently requires one two-dimensional FITS primary array.",
+        ));
+    };
+    let source_samples = width.checked_mul(*height).ok_or_else(|| {
+        PreviewCommandError::new(
+            "frame_quality_size_overflow",
+            "The frame dimensions exceed the supported quality-measurement range.",
+        )
+    })?;
+    if source_samples > MAX_DESKTOP_QUALITY_SOURCE_PIXELS {
+        return Err(PreviewCommandError::new(
+            "frame_quality_source_too_large",
+            "The frame exceeds the documented in-memory quality-measurement limit.",
+        ));
+    }
+    let source = reader
+        .read_region_image(ImageRegion::new(0, 0, 0, *width, *height))
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "frame_quality_decode_failed",
+                "The complete linear FITS plane could not be decoded for quality measurement.",
+            )
+        })?;
+    let (detection_plane, detection_plane_algorithm_id, interpretation, source_pixel_scale) =
+        match request.interpretation {
+            QualityInterpretation::Monochrome => {
+                (source, "identity-monochrome-v1", "monochrome", 1.0)
+            }
+            QualityInterpretation::BayerCellMean { pattern } => {
+                let interpretation = bayer_interpretation_name(pattern);
+                let plane = prepare_cfa_cell_mean(source).map_err(|_| {
+                    PreviewCommandError::new(
+                        "frame_quality_cfa_preparation_failed",
+                        "The raw CFA source could not be converted into complete Bayer-cell means.",
+                    )
+                })?;
+                (plane, CFA_CELL_MEAN_ALGORITHM_ID, interpretation, 2.0)
+            }
+        };
+    let background =
+        BackgroundParameters::new(3.0, 8, 100).map_err(|_| frame_quality_configuration_error())?;
+    let parameters = StarMeasurementParameters::new(background, 6.0, 2.0, 8, 4, 6, 100_000, None)
+        .map_err(|_| frame_quality_configuration_error())?;
+    let quality = measure_frame_quality(&detection_plane, 0, parameters)
+        .map_err(frame_quality_measurement_error)?;
+    let background = quality.background();
+    let detected_stars = quality.stars().len();
+    Ok(FrameQualityResponse {
+        profile_id: DESKTOP_QUALITY_PROFILE_ID,
+        background_algorithm_id: GLOBAL_BACKGROUND_ALGORITHM_ID,
+        star_algorithm_id: STAR_MEASUREMENT_ALGORITHM_ID,
+        detection_plane_algorithm_id,
+        interpretation,
+        source_pixel_scale,
+        diagnostic_only: true,
+        background: background.location(),
+        noise: background.noise_sigma(),
+        initial_usable_samples: background.initial_usable_samples(),
+        retained_background_samples: background.retained_samples(),
+        masked_samples: background.masked_samples(),
+        non_finite_samples: background.non_finite_samples(),
+        detected_stars,
+        usable_stars: detected_stars,
+        saturation_level: None,
+        saturated_stars: None,
+        raw_candidates: quality.raw_candidates(),
+        suppressed_candidates: quality.suppressed_candidates(),
+        rejected_measurements: quality.rejected_measurements(),
+        fwhm_pixels: quality
+            .median_fwhm_major_pixels()
+            .map(|value| value * source_pixel_scale),
+        eccentricity: quality.median_eccentricity(),
+    })
+}
+
+const fn bayer_interpretation_name(pattern: BayerPatternWire) -> &'static str {
+    match pattern {
+        BayerPatternWire::Rggb => "raw CFA · RGGB",
+        BayerPatternWire::Bggr => "raw CFA · BGGR",
+        BayerPatternWire::Grbg => "raw CFA · GRBG",
+        BayerPatternWire::Gbrg => "raw CFA · GBRG",
+    }
+}
+
+const fn frame_quality_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_quality_configuration_invalid",
+        "The built-in diagnostic quality profile is invalid.",
+    )
+}
+
+const fn frame_quality_measurement_error(error: FrameQualityError) -> PreviewCommandError {
+    match error {
+        FrameQualityError::TooManyCandidates { .. } => PreviewCommandError::new(
+            "frame_quality_candidate_limit",
+            "The frame exceeds the diagnostic profile's explicit stellar-candidate limit.",
+        ),
+        FrameQualityError::ZeroNoiseScale => PreviewCommandError::new(
+            "frame_quality_zero_noise",
+            "The prepared detection plane has no measurable robust noise scale.",
+        ),
+        FrameQualityError::Background(_) => PreviewCommandError::new(
+            "frame_quality_background_failed",
+            "The prepared detection plane has insufficient valid support for robust background estimation.",
+        ),
+        FrameQualityError::AllocationFailed { .. } => PreviewCommandError::new(
+            "frame_quality_allocation_failed",
+            "The diagnostic quality measurement could not reserve its bounded work buffers.",
+        ),
+        FrameQualityError::NumericalOverflow => PreviewCommandError::new(
+            "frame_quality_numerical_failure",
+            "The diagnostic quality measurement exceeded its finite numerical domain.",
+        ),
+        FrameQualityError::PlaneOutOfBounds { .. }
+        | FrameQualityError::InvalidDetectionSigma { .. }
+        | FrameQualityError::InvalidMeasurementFloorSigma { .. }
+        | FrameQualityError::InvalidMeasurementRadius { .. }
+        | FrameQualityError::ZeroMinimumSeparation
+        | FrameQualityError::InvalidMinimumMeasurementPixels { .. }
+        | FrameQualityError::ZeroMaximumCandidates
+        | FrameQualityError::InvalidSaturationLevel
+        | FrameQualityError::ImageTooSmall { .. } => frame_quality_configuration_error(),
+    }
 }
 
 const fn stored_format_name(format: StoredSampleFormat) -> &'static str {
@@ -552,10 +769,24 @@ fn imported_frame(
             .filter
             .as_ref()
             .map(|value| value.value().to_owned()),
+        bayer_pattern: metadata
+            .bayer_pattern
+            .as_ref()
+            .and_then(|value| standard_bayer_pattern(value.value())),
         axes: file.axes().to_vec(),
         fits_diagnostic_count: file.fits_diagnostics().len(),
         classification_conflict: file.classification().has_conflict(),
     }))
+}
+
+const fn standard_bayer_pattern(pattern: &BayerPattern) -> Option<&'static str> {
+    match pattern {
+        BayerPattern::Rggb => Some("rggb"),
+        BayerPattern::Bggr => Some("bggr"),
+        BayerPattern::Grbg => Some("grbg"),
+        BayerPattern::Gbrg => Some("gbrg"),
+        BayerPattern::Other(_) => None,
+    }
 }
 
 /// Rebuilds an operating-system path from the manifest's portable separator.
@@ -754,6 +985,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .invoke_handler(tauri::generate_handler![
             estimate_fits_preview_transform,
             import_session_directory,
+            inspect_frame_quality,
             inspect_fits_statistics,
             render_fits_preview,
             sort_review_frames
@@ -835,6 +1067,30 @@ mod tests {
         Ok(bytes)
     }
 
+    fn quality_fits_bytes() -> TestResult<Vec<u8>> {
+        const CELL_WIDTH: usize = 64;
+        const CELL_HEIGHT: usize = 64;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(CELL_WIDTH * CELL_HEIGHT * 4)?;
+        for source_y in 0..CELL_HEIGHT * 2 {
+            for source_x in 0..CELL_WIDTH * 2 {
+                let x = (source_x / 2) as f64;
+                let y = (source_y / 2) as f64;
+                let dx = x - 31.75;
+                let dy = y - 32.25;
+                let noise = ((source_x / 2 + 3 * (source_y / 2)) % 5) as f64 - 2.0;
+                pixels.push(1_000.0 + noise + 500.0 * (-(dx * dx + dy * dy) / 18.0).exp());
+            }
+        }
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(CELL_WIDTH * 2, CELL_HEIGHT * 2, 1)?,
+            pixels,
+        )?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+        Ok(bytes)
+    }
+
     #[test]
     fn renders_a_png_with_the_bounded_preview_dimensions() -> TestResult {
         let encoded = render_fits_preview_png(
@@ -884,6 +1140,18 @@ mod tests {
     }
 
     #[test]
+    fn exposes_only_supported_standard_bayer_patterns() {
+        assert_eq!(standard_bayer_pattern(&BayerPattern::Rggb), Some("rggb"));
+        assert_eq!(standard_bayer_pattern(&BayerPattern::Bggr), Some("bggr"));
+        assert_eq!(standard_bayer_pattern(&BayerPattern::Grbg), Some("grbg"));
+        assert_eq!(standard_bayer_pattern(&BayerPattern::Gbrg), Some("gbrg"));
+        assert_eq!(
+            standard_bayer_pattern(&BayerPattern::Other("XTRANS".to_owned())),
+            None
+        );
+    }
+
+    #[test]
     fn estimates_an_inspectable_automatic_transform() -> TestResult {
         let estimate = estimate_fits_preview_transform_from_reader(
             Cursor::new(fits_bytes()?),
@@ -921,6 +1189,36 @@ mod tests {
         assert_eq!(statistics.mean.to_bits(), 3.5_f64.to_bits());
         assert!(statistics.population_standard_deviation > 2.0);
         assert!(statistics.sample_standard_deviation.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn measures_a_bayer_frame_on_a_phase_neutral_detection_plane() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let path = directory.path().join("quality.fits");
+        fs::write(&path, quality_fits_bytes()?)?;
+        let request = FrameQualityRequest {
+            path,
+            interpretation: QualityInterpretation::BayerCellMean {
+                pattern: BayerPatternWire::Rggb,
+            },
+        };
+
+        let quality = inspect_frame_quality_sync(&request)?;
+
+        assert_eq!(quality.profile_id, DESKTOP_QUALITY_PROFILE_ID);
+        assert_eq!(
+            quality.detection_plane_algorithm_id,
+            CFA_CELL_MEAN_ALGORITHM_ID
+        );
+        assert_eq!(quality.interpretation, "raw CFA · RGGB");
+        assert_eq!(quality.source_pixel_scale.to_bits(), 2.0_f64.to_bits());
+        assert!(quality.diagnostic_only);
+        assert!(quality.noise > 0.0);
+        assert_eq!(quality.detected_stars, 1);
+        assert_eq!(quality.usable_stars, 1);
+        assert!(quality.fwhm_pixels.is_some_and(|value| value > 10.0));
+        assert!(quality.eccentricity.is_some_and(|value| value < 0.2));
         Ok(())
     }
 
@@ -1031,9 +1329,29 @@ mod tests {
         assert_eq!(statistics.undefined_samples, 0);
         assert_eq!(statistics.non_finite_samples, 0);
         assert!(statistics.maximum > statistics.minimum);
+        assert_eq!(light.bayer_pattern, Some("rggb"));
         if let Some(output) = std::env::var_os("AETHERSTACK_TEST_PREVIEW_OUTPUT") {
             fs::write(output, encoded)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires AETHERSTACK_TEST_QUALITY_FRAME to reference a representative CFA light"]
+    fn measures_an_external_cfa_light() -> TestResult {
+        let path = std::env::var_os("AETHERSTACK_TEST_QUALITY_FRAME")
+            .ok_or("AETHERSTACK_TEST_QUALITY_FRAME is not configured")?;
+        let quality = inspect_frame_quality_sync(&FrameQualityRequest {
+            path: PathBuf::from(path),
+            interpretation: QualityInterpretation::BayerCellMean {
+                pattern: BayerPatternWire::Rggb,
+            },
+        })?;
+
+        assert!(quality.detected_stars > 0);
+        assert!(quality.usable_stars > 0);
+        assert!(quality.fwhm_pixels.is_some());
+        assert!(quality.eccentricity.is_some());
         Ok(())
     }
 }

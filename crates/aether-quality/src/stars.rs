@@ -796,9 +796,7 @@ fn measure_candidate(
         return Ok(None);
     }
     let truncation_u = (peak_signal / measurement_floor).ln();
-    let excluded_fraction = (-truncation_u).exp();
-    let denominator = 1.0 - excluded_fraction;
-    let correction = 1.0 - ((truncation_u + 1.0) * excluded_fraction / denominator);
+    let correction = truncated_gaussian_variance_fraction(truncation_u);
     if !correction.is_finite() || correction <= 0.0 {
         return Err(FrameQualityError::NumericalOverflow);
     }
@@ -845,6 +843,21 @@ fn measure_candidate(
         measurement_pixels: support,
         saturated,
     }))
+}
+
+/// Fraction of an isotropic Gaussian variance retained inside one isophote.
+///
+/// For truncation radius `u = ln(peak / floor)`, the exact fraction is
+/// `(1 - (u + 1) exp(-u)) / (1 - exp(-u))`. The series avoids subtracting two
+/// nearly equal values when a caller configures very close detection and
+/// measurement thresholds.
+fn truncated_gaussian_variance_fraction(u: f64) -> f64 {
+    if u.abs() < 1.0e-3 {
+        return u.mul_add(-u / 12.0, u * 0.5);
+    }
+    let excluded = (-u).exp();
+    let denominator = -(-u).exp_m1();
+    (denominator - u * excluded) / denominator
 }
 
 fn mark_suppressed(
@@ -1030,6 +1043,20 @@ mod tests {
         );
         assert_eq!(quality.median_eccentricity(), Some(measured.eccentricity()));
         Ok(())
+    }
+
+    #[test]
+    fn truncation_correction_stays_positive_near_the_detection_floor() {
+        let u = 3.0_f64.ln();
+        let expected = 1.0 - u * 0.5;
+        let correction = truncated_gaussian_variance_fraction(u);
+        assert!((correction - expected).abs() < 1.0e-15);
+
+        let small = 1.0e-6;
+        let series = truncated_gaussian_variance_fraction(small);
+        assert!(series.is_finite());
+        assert!(series > 0.0);
+        assert!((series - small * 0.5).abs() < 1.0e-12);
     }
 
     #[test]

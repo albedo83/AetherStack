@@ -45,15 +45,30 @@ suppressed candidate counts, rejected measurements, measurement support, and the
 exact detection threshold. Candidate count and every major allocation have
 explicit failure bounds.
 
-## Current limitations are blocking, not implicit
+## CFA-neutral diagnostic plane
 
-Raw Bayer mosaics are not valid direct detection planes for this algorithm:
-channel response differences can create phase-dependent structure and biased
-moments. A camera preset must not enable automatic quality selection until a
-versioned CFA-neutral detection transform is implemented and validated. The
-same rule applies to strong spatial gradients: the global estimator is a strict
-baseline, while production selection requires a tested spatial background/noise
-model.
+Raw Bayer mosaics are never passed directly to the stellar detector: channel
+response differences would create phase-dependent structure and biased moments.
+`cfa-cell-mean-v1` instead collapses each complete origin-aligned 2 by 2 Bayer
+cell into one compensated arithmetic mean. Every standard Bayer phase contains
+the same one red, two green, and one blue samples in that cell, so their storage
+order cannot alternate the detection signal. Output coordinates have a scale of
+two source pixels, and reported FWHM is converted back to source-pixel units.
+
+The transform accepts only a one-plane image with even axes and a separately
+verified standard Bayer declaration. It requires all four inputs: any mask or
+non-finite value invalidates the complete output cell and retains the union of
+quality flags. This keeps the effective channel weights constant rather than
+silently averaging partial cells. It is a detection plane, not a debayered color
+product.
+
+The initial desktop profile exposes this transform only as an explicit expert
+diagnostic. It does not authorize automatic rejection. Strong spatial gradients
+also remain a release blocker: the global estimator is a strict baseline, while
+production selection requires a tested spatial background/noise model.
+The native adapter rejects sources above 64 Mi samples before allocation. Its
+first diagnostic profile does not infer a saturation level from container type;
+saturation count and threshold therefore remain explicitly unavailable.
 
 The initial estimator does not deblend overlapping sources or fit a full PSF
 family. Minimum separation prevents duplicate peaks, but crowded or nebulous
@@ -77,3 +92,9 @@ validation must additionally cover:
 
 Until those gates pass, the measurements are diagnostics for expert review and
 Blink, not silent automatic rejection authority.
+
+The current synthetic suite covers all four standard Bayer phase permutations,
+complete-cell mask and non-finite propagation, compensated cell arithmetic,
+partial-cell rejection, and the low-isophote truncation correction. One declared
+RGGB ASI294MC Pro light also passes the complete native diagnostic path. The
+ToupTek 585C comparison and independent-reference tolerances remain open gates.

@@ -23,6 +23,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSetViewerScale: vi.fn(),
     onOpenStatistics: vi.fn(),
     onCloseStatistics: vi.fn(),
+    onMeasureQuality: vi.fn(),
   };
   const controller = mountReviewScreen(root, model, actions);
   return { root, actions, controller };
@@ -333,6 +334,70 @@ describe("frame review workspace", () => {
       getByRole(dialog, "button", { name: "Close FITS statistics" }),
     );
     expect(actions.onCloseStatistics).toHaveBeenCalledOnce();
+  });
+
+  it("requests strict CFA quality and presents its diagnostic state", () => {
+    const selectedFrameId = demoReviewModel.selectedFrameId;
+    expect(selectedFrameId).not.toBeNull();
+    if (!selectedFrameId) return;
+    const frames = demoReviewModel.frames.map((frame) =>
+      frame.id === selectedFrameId
+        ? {
+            ...frame,
+            sourcePath: "/session/LIGHTS/light_0002.fits",
+            bayerPattern: "rggb" as const,
+            qualityState: "idle" as const,
+            qualityMessage: "Ready for phase-neutral CFA diagnostics",
+            qualityProfileId: null,
+            metrics: {
+              fwhmPixels: null,
+              eccentricity: null,
+              detectedStars: null,
+              background: null,
+              noise: null,
+            },
+          }
+        : frame,
+    );
+    const { root, actions, controller } = fixture({
+      ...demoReviewModel,
+      frames,
+    });
+    const measure = getByRole(root, "button", {
+      name: "Measure diagnostic frame quality",
+    });
+    expect(measure.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(measure);
+    expect(actions.onMeasureQuality).toHaveBeenCalledWith(selectedFrameId);
+
+    controller.update({
+      ...demoReviewModel,
+      frames: frames.map((frame) =>
+        frame.id === selectedFrameId
+          ? {
+              ...frame,
+              qualityState: "ready" as const,
+              qualityMessage:
+                "812 measured stars · raw CFA · RGGB · cfa-cell-mean-v1 + local-max-moments-v1 · saturation unclassified · diagnostic only",
+              qualityProfileId: "desktop-diagnostic-quality-v1",
+              metrics: {
+                fwhmPixels: 3.42,
+                eccentricity: 0.41,
+                detectedStars: 817,
+                background: 1_921.8,
+                noise: 19.1,
+              },
+            }
+          : frame,
+      ),
+    });
+
+    expect(measure.textContent).toBe("Quality measured");
+    expect(measure.hasAttribute("disabled")).toBe(true);
+    expect(root.textContent).toContain("QUALITY · DIAGNOSTIC");
+    expect(root.textContent).toContain("3.42");
+    expect(root.textContent).toContain("817");
   });
 
   it("has no automatically detectable accessibility violations", async () => {

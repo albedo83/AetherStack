@@ -126,6 +126,7 @@ dependencies = [
  "aether-fits",
  "aether-metadata",
  "aether-preview",
+ "aether-quality",
  "aether-review",
  "aether-session",
  "png 0.18.1",

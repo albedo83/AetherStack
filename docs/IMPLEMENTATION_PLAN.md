@@ -454,9 +454,12 @@ safety reasoning. They do not narrate obvious syntax.
 18. Begin strict astronomical quality measurement. Exact iterative median/MAD
     background clipping and deterministic local-maximum stellar measurements now
     report centroids, threshold-corrected major/minor FWHM, eccentricity,
-    background SNR, saturation, and support with explicit work bounds. CFA-aware
-    detection, spatial background modeling, real-camera validation, preview
-    pyramids, and UI integration remain release gates.
+    background SNR, saturation, and support with explicit work bounds. A
+    versioned complete-cell CFA detection plane now covers every standard Bayer
+    phase, propagates invalid support strictly, and exposes manual diagnostic
+    measurements in Review. A real ASI294MC Pro light passes the complete path.
+    Spatial background modeling, ToupTek 585C comparison, independent-reference
+    tolerances, and automatic-selection authorization remain release gates.
 19. Establish the toolkit-independent Review/Blink interaction model. Stable
     frame identities, validated quality-table summaries, view-only deterministic
     sorting, previewed decision batches, bounded transactional undo, sealing,
@@ -485,9 +488,12 @@ safety reasoning. They do not narrate obvious syntax.
     deterministic table sorting delegates to the Rust review model, and
     an on-demand inspector exposes exact fixed-buffer three-pass FITS moments.
     Unfinished commands are exposed as unavailable instead of inert controls.
-    Arbitrary-file import, progress events, multi-frame stretch estimation,
-    camera-aware quality metrics, and persistent decision/undo synchronization
-    remain next.
+    Declared standard CFA lights can now request strict diagnostic background,
+    noise, stellar count, FWHM, and eccentricity without using display pixels;
+    the table and instrument badges expose completion and limitations. Arbitrary-
+    file import, progress events, multi-frame stretch estimation, spatial
+    quality modeling, ToupTek validation, and persistent decision/undo
+    synchronization remain next.
 
 ## 11. Stable-release definition
 

@@ -857,6 +857,38 @@ button:active:not(:disabled) {
   color: var(--accent);
 }
 
+.viewer-chip--quality {
+  box-shadow:
+    inset 0 1px #ffffff12,
+    0 0 0 1px #0008;
+}
+
+.viewer-chip--quality::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  content: "";
+  background: #77869a;
+  border-radius: 50%;
+  box-shadow: inset 0 -1px 2px #000a;
+}
+
+.viewer-chip--quality[data-state="loading"]::before {
+  background: var(--accent-strong);
+  box-shadow: 0 0 10px #78aefc;
+}
+
+.viewer-chip--quality[data-state="ready"]::before {
+  background: var(--success);
+  box-shadow: 0 0 9px #6bd6a875;
+}
+
+.viewer-chip--quality[data-state="error"]::before {
+  background: var(--danger);
+  box-shadow: 0 0 9px #ef7d8275;
+}
+
 .metric-strip {
   position: absolute;
   z-index: 2;

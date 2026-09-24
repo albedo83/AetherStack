@@ -14,6 +14,10 @@ import {
   type EstimatedDisplayTransform,
   type PreviewResource,
 } from "./preview-bridge.ts";
+import {
+  inspectCfaFrameQuality,
+  type FrameQualityResult,
+} from "./quality-bridge.ts";
 import { reorderReviewFrames, sortReviewFrames } from "./review-bridge.ts";
 import { mountReviewScreen } from "./review-screen.ts";
 import {
@@ -46,6 +50,9 @@ let previewTicket = 0;
 let sortTicket = 0;
 let statisticsTicket = 0;
 const statisticsCache = new Map<string, FitsStatistics>();
+const qualityCache = new Map<string, FrameQualityResult>();
+const qualityPending = new Set<string>();
+let qualitySessionRevision = 0;
 let blinkTimer: number | null = null;
 
 const screen = mountReviewScreen(root, model, {
@@ -86,6 +93,9 @@ const screen = mountReviewScreen(root, model, {
   onCloseStatistics() {
     closeStatistics();
   },
+  onMeasureQuality(frameId) {
+    void measureQuality(frameId);
+  },
 });
 
 window.addEventListener("beforeunload", disposeRuntimeResources, {
@@ -125,6 +135,9 @@ function installImportedSession(session: ImportedSession): void {
   sortTicket += 1;
   statisticsTicket += 1;
   statisticsCache.clear();
+  qualitySessionRevision += 1;
+  qualityCache.clear();
+  qualityPending.clear();
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -175,6 +188,16 @@ function reviewFramesForRole(
 }
 
 function importedReviewFrame(frame: ImportedFrame): ReviewFrame {
+  const cachedQuality = qualityCache.get(frame.id);
+  const qualityAvailable =
+    frame.role === "light" && frame.bayerPattern !== null;
+  const qualityState = cachedQuality
+    ? "ready"
+    : qualityPending.has(frame.id)
+      ? "loading"
+      : qualityAvailable
+        ? "idle"
+        : "unavailable";
   return {
     id: frame.id,
     label: frame.label,
@@ -184,16 +207,119 @@ function importedReviewFrame(frame: ImportedFrame): ReviewFrame {
     classificationWarning: frame.classificationConflict
       ? "Header and directory frame types conflict; the directory role was applied"
       : null,
+    bayerPattern: frame.bayerPattern,
+    qualityState,
+    qualityMessage: cachedQuality
+      ? qualityResultMessage(cachedQuality)
+      : qualityState === "loading"
+        ? "Measuring immutable linear pixels…"
+        : qualityAvailable
+          ? "Ready for phase-neutral CFA diagnostics"
+          : frame.role === "light"
+            ? "Blocked · no supported CFA phase"
+            : "Quality metrics apply to light frames",
+    qualityProfileId: cachedQuality?.profileId ?? null,
     state: "undecided",
     rejectionReason: null,
-    metrics: {
-      fwhmPixels: null,
-      eccentricity: null,
-      detectedStars: null,
-      background: null,
-      noise: null,
-    },
+    metrics: cachedQuality
+      ? qualityMetrics(cachedQuality)
+      : emptyQualityMetrics(),
   };
+}
+
+function emptyQualityMetrics(): ReviewFrame["metrics"] {
+  return {
+    fwhmPixels: null,
+    eccentricity: null,
+    detectedStars: null,
+    background: null,
+    noise: null,
+  };
+}
+
+function qualityMetrics(result: FrameQualityResult): ReviewFrame["metrics"] {
+  return {
+    fwhmPixels: result.fwhmPixels,
+    eccentricity: result.eccentricity,
+    detectedStars: result.detectedStars,
+    background: result.background,
+    noise: result.noise,
+  };
+}
+
+function qualityResultMessage(result: FrameQualityResult): string {
+  return `${result.usableStars.toLocaleString("en-US")} measured stars · ${result.interpretation} · ${result.detectionPlaneAlgorithmId} + ${result.starAlgorithmId} · saturation unclassified · diagnostic only`;
+}
+
+async function measureQuality(frameId: string): Promise<void> {
+  const frame = model.frames.find((candidate) => candidate.id === frameId);
+  if (
+    !frame?.sourcePath ||
+    !frame.bayerPattern ||
+    model.activeRole !== "light" ||
+    qualityPending.has(frame.id)
+  ) {
+    return;
+  }
+
+  const cached = qualityCache.get(frame.id);
+  if (cached) {
+    applyQualityResult(frame.id, cached);
+    return;
+  }
+
+  const sessionRevision = qualitySessionRevision;
+  qualityPending.add(frame.id);
+  updateQualityFrame(frame.id, {
+    qualityState: "loading",
+    qualityMessage: "Measuring immutable linear pixels…",
+  });
+  try {
+    const result = await inspectCfaFrameQuality(
+      frame.sourcePath,
+      frame.bayerPattern,
+    );
+    if (sessionRevision !== qualitySessionRevision) return;
+    qualityCache.set(frame.id, result);
+    applyQualityResult(frame.id, result);
+  } catch {
+    if (sessionRevision !== qualitySessionRevision) return;
+    updateQualityFrame(frame.id, {
+      qualityState: "error",
+      qualityMessage: "Strict quality diagnostics could not be completed",
+      qualityProfileId: null,
+      metrics: emptyQualityMetrics(),
+    });
+  } finally {
+    qualityPending.delete(frame.id);
+  }
+}
+
+function applyQualityResult(frameId: string, result: FrameQualityResult): void {
+  updateQualityFrame(frameId, {
+    qualityState: "ready",
+    qualityMessage: qualityResultMessage(result),
+    qualityProfileId: result.profileId,
+    metrics: qualityMetrics(result),
+  });
+}
+
+function updateQualityFrame(
+  frameId: string,
+  patch: Partial<
+    Pick<
+      ReviewFrame,
+      "qualityState" | "qualityMessage" | "qualityProfileId" | "metrics"
+    >
+  >,
+): void {
+  if (!model.frames.some((frame) => frame.id === frameId)) return;
+  update({
+    ...model,
+    frames: model.frames.map((frame) =>
+      frame.id === frameId ? { ...frame, ...patch } : frame,
+    ),
+  });
 }
 
 function selectRole(role: FrameRole): void {
@@ -447,6 +573,7 @@ function disposeRuntimeResources(): void {
   previewTicket += 1;
   sortTicket += 1;
   statisticsTicket += 1;
+  qualitySessionRevision += 1;
   stopBlinkTimer();
   releasePreview();
 }
