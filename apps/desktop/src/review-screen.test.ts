@@ -11,6 +11,9 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
   root.id = "root";
   document.body.append(root);
   const actions: ReviewActions = {
+    onSelectWorkspace: vi.fn(),
+    onUpdateCalibrationSettings: vi.fn(),
+    onRefreshMasterPlan: vi.fn(),
     onImportSession: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -84,6 +87,45 @@ describe("frame review workspace", () => {
     expect(
       getByRole(tabs, "tab", { name: /Lights/ }).getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  it("opens the calibration laboratory and presents separate master roles", () => {
+    const ready = { ...demoReviewModel, reviewSessionReady: true };
+    const { root, actions, controller } = fixture(ready);
+
+    fireEvent.click(getByRole(root, "button", { name: "Calibration" }));
+    expect(actions.onSelectWorkspace).toHaveBeenCalledWith("calibration");
+    controller.update({ ...ready, activeWorkspace: "calibration" });
+
+    expect(
+      getByRole(root, "heading", { name: "Build exact master frames" }),
+    ).not.toBeNull();
+    expect(root.textContent).toContain("Master Dark");
+    expect(root.textContent).toContain("Master Flat");
+    expect(root.textContent).toContain("Matched dark selected");
+    expect(root.textContent).toContain("all dependencies resolved");
+  });
+
+  it("sends explicit matching controls back for native replanning", () => {
+    const ready = {
+      ...demoReviewModel,
+      activeWorkspace: "calibration" as const,
+      reviewSessionReady: true,
+    };
+    const { root, actions } = fixture(ready);
+    const policy = getByRole<HTMLSelectElement>(root, "combobox", {
+      name: "Selection policy",
+    });
+
+    fireEvent.change(policy, { target: { value: "require_bias" } });
+
+    expect(actions.onUpdateCalibrationSettings).toHaveBeenCalledWith({
+      flatPedestalPolicy: "require_bias",
+      maximumExposureDeltaSeconds: 0.25,
+      maximumTemperatureDeltaC: 2,
+    });
+    fireEvent.click(getByRole(root, "button", { name: "↻ Rebuild plan" }));
+    expect(actions.onRefreshMasterPlan).toHaveBeenCalledOnce();
   });
 
   it("requests role changes and supports tab arrow navigation", () => {

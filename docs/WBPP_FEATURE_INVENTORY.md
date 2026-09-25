@@ -38,7 +38,7 @@ versioned policy. It never subtracts both blindly.
 
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
-| Separate Bias, Dark, Flat, and Light views | Preserve roles during import and expose independent counts, groups, masters, and diagnostics. | Initial desktop views and native directory import implemented; group/master panels planned |
+| Separate Bias, Dark, Flat, and Light views | Preserve roles during import and expose independent counts, groups, masters, and diagnostics. | Native directory import, four role tabs, and separate Bias/Dark/Flat master cards implemented; deeper group editing planned |
 | Add a directory, arbitrary files, or a role-specific selection | Support drag-and-drop, folder import, and explicit role assignment without losing header evidence. | Native structured-directory import implemented; arbitrary files, drag-and-drop, and explicit reassignment planned |
 | Hierarchical groups | Group by checked dimensions, binning, exposure, filter, gain, offset, temperature policy, camera, and configurable keywords. | Grouping core implemented; UI planned |
 | Master detection | Detect a master from metadata and product provenance, never from a filename alone. | Planned |
@@ -113,21 +113,21 @@ evidence, not automatically an AetherStack default.
 | CFA flat state | Preserve CFA pattern and phase through calibration. | Planned |
 | Large-scale rejection high/low | Define structures eligible for rejection without suppressing real illumination gradients. | Research-gated |
 | Large-scale layers and growth | Bind scale parameters to image dimensions and test synthetic gradients and dust shadows. | Research-gated |
-| Flat normalization | Use robust finite unmasked statistics and fail on unsafe normalization support. | Exact positive-sample median primitive implemented; plan execution and UI planned |
+| Flat normalization | Use robust finite unmasked statistics and fail on unsafe normalization support. | Exact positive-sample median, bounded plan execution, provenance, and native plan preview implemented; run controls planned |
 
 ## Light calibration controls
 
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
 | Calibration association matrix | Display status for bias, dark, flat, optimization, CFA, and output pedestal for every light group. | Planned |
-| Automatic bias, dark, and flat selection | Produce an inspectable plan with deterministic tie-breaking and no silent fallback. | Planned |
+| Automatic bias, dark, and flat selection | Produce an inspectable plan with deterministic tie-breaking and no silent fallback. | Deterministic native plan, explicit policy/tolerances, exclusive selection, candidate evidence, and desktop preview implemented |
 | Output pedestal: automatic or explicit | Define storage purpose, units, clipping interaction, and reversibility. | Research-gated |
 | Cosmetic correction: automatic | Generate a defect model with evidence and a before/after diagnostic map. | Planned |
 | Cosmetic high-sigma threshold | Define the estimator and preserve rejected-pixel reasons in masks. | Planned |
 | Cosmetic correction template | Use a versioned reusable profile whose applicability is validated against camera metadata. | Planned |
 | CFA images and mosaic pattern | Auto-detection must show raw keyword evidence and allow an explicit override. | Metadata core partially implemented |
 | Debayer method | Provide versioned methods with CFA-phase, edge, color, and artifact tests. | Planned |
-| Calibration diagram | Show the actual dependency graph, selected masters, parameters, warnings, and cache reuse. | Planned |
+| Calibration diagram | Show the actual dependency graph, selected masters, parameters, warnings, and cache reuse. | Native dependency cards, selected pedestal, warnings, plan digest, and candidate disclosure implemented; graphical edges and cache reuse planned |
 
 ## Light post-calibration pipeline
 

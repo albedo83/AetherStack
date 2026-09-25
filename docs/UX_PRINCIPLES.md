@@ -29,6 +29,13 @@ Counts, unresolved conflicts, blocking errors, and master readiness remain
 visible without opening a settings dialog. Short darks stay under Darks; the
 calibration graph shows when a short-exposure dark group calibrates flats.
 
+The Calibration workspace derives its visible products from the native imported
+manifest, never from browser-reconstructed groups. Its essential view separates
+Bias, Dark, and Flat master cards and shows the exclusive flat pedestal choice.
+Advanced disclosure lists every compatible or rejected pedestal candidate and
+the stable mismatch reasons. Policy and tolerance edits request a fresh native
+plan and visibly replace its digest.
+
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch
 fixed while switching frames, so a visual comparison cannot be improved or

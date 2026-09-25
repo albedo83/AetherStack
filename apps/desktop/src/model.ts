@@ -1,4 +1,11 @@
+import type {
+  MasterPlanPreview,
+  MasterPlanSettings,
+} from "./calibration-bridge.ts";
+
 export type FrameRole = "bias" | "dark" | "flat" | "light";
+
+export type WorkspaceView = "frames" | "calibration";
 
 export type ReviewState = "undecided" | "accepted" | "rejected";
 
@@ -95,6 +102,7 @@ export interface QualityBatchProgress {
 }
 
 export interface ReviewViewModel {
+  readonly activeWorkspace: WorkspaceView;
   readonly sessionName: string;
   readonly sessionStatus: SessionStatus;
   readonly roles: readonly RoleSummary[];
@@ -111,6 +119,14 @@ export interface ReviewViewModel {
   readonly preview: FramePreview | null;
   readonly viewerScale: "fit" | "actual";
   readonly statisticsPanel: StatisticsPanel;
+  readonly calibration: CalibrationViewModel;
+}
+
+export interface CalibrationViewModel {
+  readonly state: "idle" | "loading" | "ready" | "error";
+  readonly settings: MasterPlanSettings;
+  readonly plan: MasterPlanPreview | null;
+  readonly message: string;
 }
 
 export type SortField =
@@ -124,6 +140,9 @@ export type SortField =
 export type SortDirection = "ascending" | "descending";
 
 export interface ReviewActions {
+  readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
+  readonly onUpdateCalibrationSettings: (settings: MasterPlanSettings) => void;
+  readonly onRefreshMasterPlan: () => void;
   readonly onImportSession: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
   readonly onSelectFrame: (frameId: string) => void;

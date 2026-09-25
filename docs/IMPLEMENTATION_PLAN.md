@@ -509,7 +509,13 @@ safety reasoning. They do not narrate obvious syntax.
     Blink presenter owns a five-entry/32 MiB LRU artifact
     cache and generation-cancelled adjacent-frame prefetch; foreground selection
     joins matching speculative work without weakening exact frame identity.
-    Arbitrary-file import, progress events, durable decision recovery,
+    The second desktop workspace now keeps the exact imported manifest in native
+    memory and derives a plan-digest-bound Calibration view from explicit
+    pedestal policy and tolerances. Its separate Bias/Dark/Flat product cards
+    expose metadata, exclusive selected dependencies, blocking reasons, and all
+    compatible or rejected candidates through progressive disclosure; the web
+    presenter never reconstructs scientific groups. Arbitrary-file import,
+    master execution progress and cancellation, durable decision recovery,
     multi-frame stretch estimation, spatial quality modeling, and ToupTek
     validation remain next.
 

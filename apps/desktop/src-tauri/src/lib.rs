@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{Read, Seek};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions, ImageRegion,
@@ -34,8 +34,11 @@ use aether_review::{
     SortSpec, TransferFunction,
 };
 use aether_session::{
-    ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport, ManifestFile,
-    generate_manifest_from_directory,
+    ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
+    FlatPedestalAssociation, FlatPedestalBlockingReason, FlatPedestalPolicy, ManifestFile,
+    ManifestGroup, MasterPlan, MasterPlanOptions, MasterProductKind,
+    PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason, PedestalSourceKind,
+    SessionManifest, TemperatureBasis, generate_manifest_from_directory,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Response;
@@ -259,6 +262,110 @@ enum ReviewSortDirectionWire {
 #[derive(Debug, Default)]
 struct DesktopReviewState {
     book: Mutex<Option<ReviewBook>>,
+}
+
+/// Native owner of the exact imported manifest and its runtime-only root.
+///
+/// The browser never sends a reconstructed manifest back for scientific
+/// planning. Every preview is derived from this immutable native snapshot.
+#[derive(Debug, Default)]
+struct DesktopSessionState {
+    session: Mutex<Option<Arc<ImportedNativeSession>>>,
+}
+
+#[derive(Debug)]
+struct ImportedNativeSession {
+    root: PathBuf,
+    manifest: SessionManifest,
+}
+
+#[derive(Debug)]
+struct ImportedSessionBundle {
+    presentation: ImportedSession,
+    native: ImportedNativeSession,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FlatPedestalPolicyWire {
+    RequireMatchedDark,
+    RequireBias,
+    PreferMatchedDarkThenBias,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MasterPlanPreviewRequest {
+    flat_pedestal_policy: FlatPedestalPolicyWire,
+    maximum_exposure_delta_seconds: f64,
+    maximum_temperature_delta_c: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterPlanPreviewResponse {
+    schema_version: u32,
+    manifest_sha256: String,
+    plan_sha256: String,
+    ready: bool,
+    products: Vec<MasterProductPreview>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterProductPreview {
+    group_id: String,
+    kind: &'static str,
+    frame_count: usize,
+    camera: Option<String>,
+    axes: Vec<u64>,
+    exposure_seconds: Option<f64>,
+    sensor_temperature_celsius: Option<f64>,
+    set_temperature_celsius: Option<f64>,
+    gain: Option<f64>,
+    offset: Option<f64>,
+    binning: Option<MasterBinningPreview>,
+    filter: Option<String>,
+    bayer_pattern: Option<String>,
+    pedestal: MasterPedestalPreview,
+    candidates: Vec<MasterPedestalCandidatePreview>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct MasterBinningPreview {
+    x: u32,
+    y: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterPedestalPreview {
+    status: &'static str,
+    selected_group_id: Option<String>,
+    exposure_delta_seconds: Option<f64>,
+    temperature_basis: Option<&'static str>,
+    temperature_delta_celsius: Option<f64>,
+    blocking_reason: Option<&'static str>,
+    ambiguous_group_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterPedestalCandidatePreview {
+    group_id: String,
+    source_kind: &'static str,
+    status: &'static str,
+    exposure_delta_seconds: Option<f64>,
+    temperature_basis: Option<&'static str>,
+    temperature_delta_celsius: Option<f64>,
+    mismatches: Vec<MasterPedestalMismatchPreview>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterPedestalMismatchPreview {
+    field: &'static str,
+    reason: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -608,6 +715,7 @@ const fn fits_statistics_configuration_error() -> PreviewCommandError {
 async fn import_session_directory(
     path: PathBuf,
     review_state: tauri::State<'_, DesktopReviewState>,
+    session_state: tauri::State<'_, DesktopSessionState>,
 ) -> Result<ImportedSession, PreviewCommandError> {
     if !path.is_absolute() {
         return Err(PreviewCommandError::new(
@@ -615,17 +723,33 @@ async fn import_session_directory(
             "The selected session directory must use an absolute path.",
         ));
     }
-    let imported =
-        tauri::async_runtime::spawn_blocking(move || import_session_directory_sync(&path))
-            .await
-            .map_err(|_| {
-                PreviewCommandError::new(
-                    "session_import_interrupted",
-                    "The session import worker stopped before producing a result.",
-                )
-            })??;
-    install_review_book(&review_state, &imported)?;
-    Ok(imported)
+    let imported = tauri::async_runtime::spawn_blocking(move || scan_session_directory_sync(&path))
+        .await
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "session_import_interrupted",
+                "The session import worker stopped before producing a result.",
+            )
+        })??;
+    install_imported_session(&session_state, &review_state, imported)
+}
+
+#[tauri::command]
+async fn preview_master_plan(
+    request: MasterPlanPreviewRequest,
+    session_state: tauri::State<'_, DesktopSessionState>,
+) -> Result<MasterPlanPreviewResponse, PreviewCommandError> {
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    tauri::async_runtime::spawn_blocking(move || preview_master_plan_sync(&session, request))
+        .await
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "master_plan_interrupted",
+                "The master-planning worker stopped before producing a result.",
+            )
+        })?
 }
 
 #[tauri::command]
@@ -643,10 +767,22 @@ fn undo_review_decision(
     undo_review_decision_sync(&review_state)
 }
 
-fn install_review_book(
+fn install_imported_session(
+    session_state: &DesktopSessionState,
     review_state: &DesktopReviewState,
+    imported: ImportedSessionBundle,
+) -> Result<ImportedSession, PreviewCommandError> {
+    let book = prepare_review_book(&imported.presentation)?;
+    let mut native_state = lock_session_state(session_state)?;
+    let mut native_review = lock_review_state(review_state)?;
+    *native_state = Some(Arc::new(imported.native));
+    *native_review = book;
+    Ok(imported.presentation)
+}
+
+fn prepare_review_book(
     imported: &ImportedSession,
-) -> Result<(), PreviewCommandError> {
+) -> Result<Option<ReviewBook>, PreviewCommandError> {
     let mut frames = review_entry_buffer(imported.frames.len())?;
     for frame in &imported.frames {
         let id = FrameId::new(frame.id.clone()).map_err(|_| review_state_input_error())?;
@@ -660,7 +796,15 @@ fn install_review_book(
     } else {
         Some(ReviewBook::new(frames, MAX_UNDO_DEPTH).map_err(|_| review_state_input_error())?)
     };
-    *lock_review_state(review_state)? = book;
+    Ok(book)
+}
+
+#[cfg(test)]
+fn install_review_book(
+    review_state: &DesktopReviewState,
+    imported: &ImportedSession,
+) -> Result<(), PreviewCommandError> {
+    *lock_review_state(review_state)? = prepare_review_book(imported)?;
     Ok(())
 }
 
@@ -791,6 +935,24 @@ fn lock_review_state(
     })
 }
 
+fn lock_session_state(
+    state: &DesktopSessionState,
+) -> Result<MutexGuard<'_, Option<Arc<ImportedNativeSession>>>, PreviewCommandError> {
+    state.session.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "session_state_unavailable",
+            "The native session is unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
+const fn session_state_missing_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_state_missing",
+        "Import a FITS session before planning calibration masters.",
+    )
+}
+
 const fn review_state_input_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "review_state_input_invalid",
@@ -823,6 +985,285 @@ const fn review_nothing_to_undo_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "review_nothing_to_undo",
         "No applied review transaction remains to undo.",
+    )
+}
+
+fn preview_master_plan_sync(
+    session: &ImportedNativeSession,
+    request: MasterPlanPreviewRequest,
+) -> Result<MasterPlanPreviewResponse, PreviewCommandError> {
+    if !session.root.is_absolute() {
+        return Err(PreviewCommandError::new(
+            "session_state_invalid",
+            "The native session root is not absolute.",
+        ));
+    }
+    let policy = match request.flat_pedestal_policy {
+        FlatPedestalPolicyWire::RequireMatchedDark => FlatPedestalPolicy::RequireMatchedDark,
+        FlatPedestalPolicyWire::RequireBias => FlatPedestalPolicy::RequireBias,
+        FlatPedestalPolicyWire::PreferMatchedDarkThenBias => {
+            FlatPedestalPolicy::PreferMatchedDarkThenBias
+        }
+    };
+    let options = MasterPlanOptions::new(
+        policy,
+        request.maximum_exposure_delta_seconds,
+        request.maximum_temperature_delta_c,
+    )
+    .map_err(|_| master_plan_options_error())?;
+    let plan = MasterPlan::from_manifest(&session.manifest, options)
+        .map_err(|_| master_plan_generation_error())?;
+    master_plan_preview(&session.manifest, &plan)
+}
+
+fn master_plan_preview(
+    manifest: &SessionManifest,
+    plan: &MasterPlan,
+) -> Result<MasterPlanPreviewResponse, PreviewCommandError> {
+    let mut products = Vec::new();
+    products
+        .try_reserve_exact(plan.products().len())
+        .map_err(|_| master_plan_allocation_error())?;
+    for product in plan.products() {
+        let group = manifest
+            .groups()
+            .iter()
+            .find(|group| group.id() == product.source_group_id())
+            .ok_or_else(master_plan_generation_error)?;
+        products.push(master_product_preview(group, product)?);
+    }
+    Ok(MasterPlanPreviewResponse {
+        schema_version: plan.schema_version(),
+        manifest_sha256: manifest
+            .canonical_sha256()
+            .map_err(|_| master_plan_generation_error())?,
+        plan_sha256: plan
+            .canonical_sha256()
+            .map_err(|_| master_plan_generation_error())?,
+        ready: plan.is_ready(),
+        products,
+    })
+}
+
+fn master_product_preview(
+    group: &ManifestGroup,
+    product: &aether_session::MasterProductPlan,
+) -> Result<MasterProductPreview, PreviewCommandError> {
+    let key = group.key();
+    let mut candidates = Vec::new();
+    candidates
+        .try_reserve_exact(product.pedestal_candidates().len())
+        .map_err(|_| master_plan_allocation_error())?;
+    for candidate in product.pedestal_candidates() {
+        candidates.push(master_candidate_preview(candidate)?);
+    }
+    Ok(MasterProductPreview {
+        group_id: group.id().to_owned(),
+        kind: master_product_kind_name(product.kind()),
+        frame_count: group.files().len(),
+        camera: key
+            .camera()
+            .map(|camera| camera.canonical_name().to_owned()),
+        axes: key.axes().to_vec(),
+        exposure_seconds: key.exposure_seconds(),
+        sensor_temperature_celsius: key.sensor_temperature_c(),
+        set_temperature_celsius: key.set_temperature_c(),
+        gain: key.gain(),
+        offset: key.offset(),
+        binning: key.binning().map(|binning| MasterBinningPreview {
+            x: binning.x,
+            y: binning.y,
+        }),
+        filter: key.filter().map(str::to_owned),
+        bayer_pattern: key.bayer_pattern().map(bayer_pattern_name),
+        pedestal: master_pedestal_preview(product.flat_pedestal()),
+        candidates,
+    })
+}
+
+fn master_candidate_preview(
+    candidate: &aether_session::PedestalCandidateEvaluation,
+) -> Result<MasterPedestalCandidatePreview, PreviewCommandError> {
+    let source_kind = match candidate.source_kind() {
+        PedestalSourceKind::Dark => "dark",
+        PedestalSourceKind::Bias => "bias",
+    };
+    match candidate.compatibility() {
+        PedestalCandidateCompatibility::Compatible {
+            exposure_delta_seconds,
+            temperature_basis,
+            temperature_delta_c,
+        } => Ok(MasterPedestalCandidatePreview {
+            group_id: candidate.group_id().to_owned(),
+            source_kind,
+            status: "compatible",
+            exposure_delta_seconds: *exposure_delta_seconds,
+            temperature_basis: Some(temperature_basis_name(*temperature_basis)),
+            temperature_delta_celsius: Some(*temperature_delta_c),
+            mismatches: Vec::new(),
+        }),
+        PedestalCandidateCompatibility::Rejected { mismatches } => {
+            let mut preview = Vec::new();
+            preview
+                .try_reserve_exact(mismatches.len())
+                .map_err(|_| master_plan_allocation_error())?;
+            preview.extend(
+                mismatches
+                    .iter()
+                    .map(|mismatch| MasterPedestalMismatchPreview {
+                        field: pedestal_match_field_name(mismatch.field()),
+                        reason: pedestal_mismatch_reason_name(mismatch.reason()),
+                    }),
+            );
+            Ok(MasterPedestalCandidatePreview {
+                group_id: candidate.group_id().to_owned(),
+                source_kind,
+                status: "rejected",
+                exposure_delta_seconds: None,
+                temperature_basis: None,
+                temperature_delta_celsius: None,
+                mismatches: preview,
+            })
+        }
+    }
+}
+
+fn master_pedestal_preview(association: Option<&FlatPedestalAssociation>) -> MasterPedestalPreview {
+    match association {
+        None => MasterPedestalPreview {
+            status: "not_applicable",
+            selected_group_id: None,
+            exposure_delta_seconds: None,
+            temperature_basis: None,
+            temperature_delta_celsius: None,
+            blocking_reason: None,
+            ambiguous_group_ids: Vec::new(),
+        },
+        Some(FlatPedestalAssociation::MatchedDark {
+            group_id,
+            exposure_delta_seconds,
+            temperature_basis,
+            temperature_delta_c,
+        }) => MasterPedestalPreview {
+            status: "matched_dark",
+            selected_group_id: Some(group_id.clone()),
+            exposure_delta_seconds: Some(*exposure_delta_seconds),
+            temperature_basis: Some(temperature_basis_name(*temperature_basis)),
+            temperature_delta_celsius: Some(*temperature_delta_c),
+            blocking_reason: None,
+            ambiguous_group_ids: Vec::new(),
+        },
+        Some(FlatPedestalAssociation::Bias {
+            group_id,
+            temperature_basis,
+            temperature_delta_c,
+        }) => MasterPedestalPreview {
+            status: "bias",
+            selected_group_id: Some(group_id.clone()),
+            exposure_delta_seconds: None,
+            temperature_basis: Some(temperature_basis_name(*temperature_basis)),
+            temperature_delta_celsius: Some(*temperature_delta_c),
+            blocking_reason: None,
+            ambiguous_group_ids: Vec::new(),
+        },
+        Some(FlatPedestalAssociation::Unresolved { blocking_reason }) => {
+            let ambiguous_group_ids = match blocking_reason {
+                FlatPedestalBlockingReason::AmbiguousDark { group_ids }
+                | FlatPedestalBlockingReason::AmbiguousBias { group_ids } => group_ids.clone(),
+                FlatPedestalBlockingReason::MissingFlatMetadata { .. }
+                | FlatPedestalBlockingReason::NoCompatibleDark
+                | FlatPedestalBlockingReason::NoCompatibleBias
+                | FlatPedestalBlockingReason::NoCompatibleDarkOrBias => Vec::new(),
+            };
+            MasterPedestalPreview {
+                status: "unresolved",
+                selected_group_id: None,
+                exposure_delta_seconds: None,
+                temperature_basis: None,
+                temperature_delta_celsius: None,
+                blocking_reason: Some(flat_blocking_reason_name(blocking_reason)),
+                ambiguous_group_ids,
+            }
+        }
+    }
+}
+
+const fn master_product_kind_name(kind: MasterProductKind) -> &'static str {
+    match kind {
+        MasterProductKind::Bias => "bias",
+        MasterProductKind::Dark => "dark",
+        MasterProductKind::Flat => "flat",
+    }
+}
+
+fn bayer_pattern_name(pattern: &BayerPattern) -> String {
+    match pattern {
+        BayerPattern::Rggb => "RGGB".to_owned(),
+        BayerPattern::Bggr => "BGGR".to_owned(),
+        BayerPattern::Grbg => "GRBG".to_owned(),
+        BayerPattern::Gbrg => "GBRG".to_owned(),
+        BayerPattern::Other(name) => name.clone(),
+    }
+}
+
+const fn temperature_basis_name(basis: TemperatureBasis) -> &'static str {
+    match basis {
+        TemperatureBasis::Sensor => "sensor",
+        TemperatureBasis::SetPoint => "set_point",
+    }
+}
+
+const fn pedestal_match_field_name(field: PedestalMatchField) -> &'static str {
+    match field {
+        PedestalMatchField::Camera => "camera",
+        PedestalMatchField::Axes => "axes",
+        PedestalMatchField::Exposure => "exposure",
+        PedestalMatchField::SensorTemperature => "sensor_temperature",
+        PedestalMatchField::SetTemperature => "set_temperature",
+        PedestalMatchField::Gain => "gain",
+        PedestalMatchField::Offset => "offset",
+        PedestalMatchField::Binning => "binning",
+        PedestalMatchField::BayerPattern => "bayer_pattern",
+    }
+}
+
+const fn pedestal_mismatch_reason_name(reason: PedestalMismatchReason) -> &'static str {
+    match reason {
+        PedestalMismatchReason::Missing => "missing",
+        PedestalMismatchReason::Different => "different",
+        PedestalMismatchReason::OutsideTolerance => "outside_tolerance",
+    }
+}
+
+const fn flat_blocking_reason_name(reason: &FlatPedestalBlockingReason) -> &'static str {
+    match reason {
+        FlatPedestalBlockingReason::MissingFlatMetadata { .. } => "missing_flat_metadata",
+        FlatPedestalBlockingReason::NoCompatibleDark => "no_compatible_dark",
+        FlatPedestalBlockingReason::NoCompatibleBias => "no_compatible_bias",
+        FlatPedestalBlockingReason::NoCompatibleDarkOrBias => "no_compatible_dark_or_bias",
+        FlatPedestalBlockingReason::AmbiguousDark { .. } => "ambiguous_dark",
+        FlatPedestalBlockingReason::AmbiguousBias { .. } => "ambiguous_bias",
+    }
+}
+
+const fn master_plan_options_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "master_plan_options_invalid",
+        "Master-calibration tolerances must be finite non-negative values.",
+    )
+}
+
+const fn master_plan_generation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "master_plan_generation_failed",
+        "The imported manifest could not produce a coherent master plan.",
+    )
+}
+
+const fn master_plan_allocation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "master_plan_allocation_failed",
+        "The master-plan preview could not reserve its bounded response buffers.",
     )
 }
 
@@ -898,7 +1339,7 @@ const fn review_sort_input_error() -> PreviewCommandError {
     )
 }
 
-fn import_session_directory_sync(root: &Path) -> Result<ImportedSession, PreviewCommandError> {
+fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, PreviewCommandError> {
     let root_path = root.to_str().ok_or_else(|| {
         PreviewCommandError::new(
             "session_path_not_unicode",
@@ -918,7 +1359,19 @@ fn import_session_directory_sync(root: &Path) -> Result<ImportedSession, Preview
             "The selected directory could not be scanned into a complete session.",
         )
     })?;
-    imported_session_from_report(root, root_path, &report)
+    let presentation = imported_session_from_report(root, root_path, &report)?;
+    Ok(ImportedSessionBundle {
+        presentation,
+        native: ImportedNativeSession {
+            root: root.to_owned(),
+            manifest: report.manifest().clone(),
+        },
+    })
+}
+
+#[cfg(test)]
+fn import_session_directory_sync(root: &Path) -> Result<ImportedSession, PreviewCommandError> {
+    Ok(scan_session_directory_sync(root)?.presentation)
 }
 
 fn imported_session_from_report(
@@ -1244,12 +1697,14 @@ pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(DesktopReviewState::default())
+        .manage(DesktopSessionState::default())
         .invoke_handler(tauri::generate_handler![
             apply_review_decision,
             estimate_fits_preview_transform,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
+            preview_master_plan,
             render_fits_preview,
             sort_review_frames,
             undo_review_decision
@@ -1266,6 +1721,8 @@ mod tests {
 
     use aether_core::{Dimensions, ScientificImage};
     use aether_fits::write_f64_primary;
+    use aether_metadata::{Binning, CameraModel, CanonicalMetadata, CanonicalValue, Confidence};
+    use aether_session::{ManifestGroup, StrictGroupingKey, classify_frame, fingerprint_reader};
 
     use super::*;
 
@@ -1329,6 +1786,87 @@ mod tests {
         let mut bytes = Vec::new();
         write_f64_primary(&mut bytes, &image)?;
         Ok(bytes)
+    }
+
+    fn exact<T>(value: T, keyword: &str) -> CanonicalValue<T> {
+        CanonicalValue::new(value, keyword, Confidence::Exact)
+    }
+
+    fn planning_metadata(frame_type: FrameType) -> CanonicalMetadata {
+        CanonicalMetadata {
+            camera: Some(exact(CameraModel::ZwoAsi294McPro, "INSTRUME")),
+            frame_type: Some(exact(frame_type, "IMAGETYP")),
+            exposure_seconds: Some(exact(2.0, "EXPTIME")),
+            sensor_temperature_c: Some(exact(-10.0, "CCD-TEMP")),
+            set_temperature_c: Some(exact(-10.0, "SET-TEMP")),
+            gain: Some(exact(120.0, "GAIN")),
+            offset: Some(exact(30.0, "OFFSET")),
+            binning: Some(exact(Binning { x: 1, y: 1 }, "XBINNING")),
+            filter: Some(exact("UVIR".to_owned(), "FILTER")),
+            bayer_pattern: Some(exact(BayerPattern::Rggb, "BAYERPAT")),
+            issues: Vec::new(),
+        }
+    }
+
+    fn planning_file(
+        root: &Path,
+        relative_path: &str,
+        frame_type: FrameType,
+    ) -> TestResult<ManifestFile> {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let image = ScientificImage::from_pixels(Dimensions::new(4, 2, 1)?, vec![1.0; 8])?;
+        let mut output = File::create(&path)?;
+        write_f64_primary(&mut output, &image)?;
+        drop(output);
+        let mut source = File::open(path)?;
+        let fingerprint = fingerprint_reader(&mut source)?;
+        let metadata = planning_metadata(frame_type);
+        let classification = classify_frame(Path::new(relative_path), &metadata);
+        Ok(ManifestFile::from_analysis(
+            relative_path,
+            fingerprint,
+            vec![4, 2],
+            metadata,
+            Vec::new(),
+            classification,
+            ClassificationPolicy::RequireAgreement,
+        )?)
+    }
+
+    fn planning_session(root: &Path) -> TestResult<ImportedNativeSession> {
+        let dark = planning_file(root, "DARKS/dark.fits", FrameType::Dark)?;
+        let flat = planning_file(root, "FLATS/flat.fits", FrameType::Flat)?;
+        let dark_key =
+            StrictGroupingKey::from_metadata(FrameType::Dark, dark.metadata(), dark.axes())?;
+        let flat_key =
+            StrictGroupingKey::from_metadata(FrameType::Flat, flat.metadata(), flat.axes())?;
+        let groups = vec![
+            ManifestGroup::new(
+                "dark-2s",
+                dark_key,
+                vec![dark.relative_path().to_owned()],
+                Vec::new(),
+                None,
+            )?,
+            ManifestGroup::new(
+                "flat-uvir",
+                flat_key,
+                vec![flat.relative_path().to_owned()],
+                Vec::new(),
+                None,
+            )?,
+        ];
+        Ok(ImportedNativeSession {
+            root: root.to_owned(),
+            manifest: SessionManifest::new(
+                ClassificationPolicy::RequireAgreement,
+                vec![dark, flat],
+                groups,
+            )?,
+        })
     }
 
     fn quality_fits_bytes() -> TestResult<Vec<u8>> {
@@ -1400,6 +1938,65 @@ mod tests {
             .ok_or("relative source paths must be rejected")?;
 
         assert_eq!(error.code, "fits_path_not_absolute");
+        Ok(())
+    }
+
+    #[test]
+    fn previews_native_master_groups_and_exclusive_flat_dependencies() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = planning_session(directory.path())?;
+        let preview = preview_master_plan_sync(
+            &session,
+            MasterPlanPreviewRequest {
+                flat_pedestal_policy: FlatPedestalPolicyWire::PreferMatchedDarkThenBias,
+                maximum_exposure_delta_seconds: 0.01,
+                maximum_temperature_delta_c: 1.0,
+            },
+        )?;
+
+        assert!(preview.ready);
+        assert_eq!(preview.schema_version, 1);
+        assert_eq!(preview.manifest_sha256.len(), 64);
+        assert_eq!(preview.plan_sha256.len(), 64);
+        assert_eq!(preview.products.len(), 2);
+        assert_eq!(preview.products[0].group_id, "dark-2s");
+        assert_eq!(preview.products[0].kind, "dark");
+        assert_eq!(preview.products[0].pedestal.status, "not_applicable");
+        assert_eq!(preview.products[1].group_id, "flat-uvir");
+        assert_eq!(preview.products[1].kind, "flat");
+        assert_eq!(preview.products[1].frame_count, 1);
+        assert_eq!(
+            preview.products[1].camera.as_deref(),
+            Some("ZWO ASI294MC Pro")
+        );
+        assert_eq!(preview.products[1].axes, [4, 2]);
+        assert_eq!(preview.products[1].pedestal.status, "matched_dark");
+        assert_eq!(
+            preview.products[1].pedestal.selected_group_id.as_deref(),
+            Some("dark-2s")
+        );
+        assert_eq!(preview.products[1].candidates.len(), 1);
+        assert_eq!(preview.products[1].candidates[0].status, "compatible");
+        assert!(preview.products[1].candidates[0].mismatches.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_master_tolerances_before_planning() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = planning_session(directory.path())?;
+        let error = preview_master_plan_sync(
+            &session,
+            MasterPlanPreviewRequest {
+                flat_pedestal_policy: FlatPedestalPolicyWire::RequireMatchedDark,
+                maximum_exposure_delta_seconds: -0.01,
+                maximum_temperature_delta_c: 1.0,
+            },
+        )
+        .err()
+        .ok_or("negative plan tolerance was accepted")?;
+
+        assert_eq!(error.code, "master_plan_options_invalid");
         Ok(())
     }
 

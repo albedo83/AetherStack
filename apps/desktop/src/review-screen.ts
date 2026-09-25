@@ -1,4 +1,8 @@
 import type {
+  MasterPlanSettings,
+  MasterProductPlan,
+} from "./calibration-bridge.ts";
+import type {
   ReviewActions,
   ReviewFrame,
   ReviewRejectionReason,
@@ -36,6 +40,31 @@ export function mountReviewScreen(
   root.innerHTML = shellMarkup();
 
   const elements = {
+    workspaceNavigation: requiredAll<HTMLElement>(root, "[data-workspace]"),
+    framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
+    calibrationWorkspace: required<HTMLElement>(
+      root,
+      "[data-calibration-workspace]",
+    ),
+    calibrationStatus: required<HTMLElement>(root, "[data-calibration-status]"),
+    calibrationProducts: required<HTMLElement>(
+      root,
+      "[data-calibration-products]",
+    ),
+    calibrationDigest: required<HTMLElement>(root, "[data-calibration-digest]"),
+    pedestalPolicy: required<HTMLSelectElement>(root, "[data-pedestal-policy]"),
+    exposureTolerance: required<HTMLInputElement>(
+      root,
+      "[data-exposure-tolerance]",
+    ),
+    temperatureTolerance: required<HTMLInputElement>(
+      root,
+      "[data-temperature-tolerance]",
+    ),
+    refreshMasterPlan: required<HTMLButtonElement>(
+      root,
+      '[data-action="refresh-master-plan"]',
+    ),
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
     sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
     sessionStatusLabel: required<HTMLElement>(
@@ -144,6 +173,18 @@ export function mountReviewScreen(
     if (!actionElement) return;
     const action = actionElement.dataset.action;
 
+    if (action === "select-workspace") {
+      const workspace = actionElement.dataset.workspace;
+      if (workspace === "frames" || workspace === "calibration") {
+        actions.onSelectWorkspace(workspace);
+      }
+      return;
+    }
+    if (action === "refresh-master-plan") {
+      actions.onRefreshMasterPlan();
+      return;
+    }
+
     if (action === "select-role") {
       const role = actionElement.dataset.role;
       if (isFrameRole(role)) actions.onSelectRole(role);
@@ -249,6 +290,19 @@ export function mountReviewScreen(
       actions.onCloseStatistics();
       queueMicrotask(() => elements.statisticsButton.focus());
     }
+  };
+
+  const onChange = (event: Event): void => {
+    const target = event.target;
+    if (
+      target !== elements.pedestalPolicy &&
+      target !== elements.exposureTolerance &&
+      target !== elements.temperatureTolerance
+    ) {
+      return;
+    }
+    const settings = calibrationSettings(elements);
+    if (settings) actions.onUpdateCalibrationSettings(settings);
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -368,6 +422,15 @@ export function mountReviewScreen(
     const importing = model.sessionStatus.tone === "busy";
     const decisionBusy = model.decisionPending || importing;
     const decisionsAvailable = reviewCommandsAvailable(model);
+    const framesActive = model.activeWorkspace === "frames";
+    elements.framesWorkspace.hidden = !framesActive;
+    elements.calibrationWorkspace.hidden = framesActive;
+    for (const item of elements.workspaceNavigation) {
+      const selected = item.dataset.workspace === model.activeWorkspace;
+      item.toggleAttribute("aria-current", selected);
+      item.classList.toggle("nav-item--active", selected);
+    }
+    renderCalibration(elements, model);
     elements.importSession.disabled = importing;
     elements.importSession.textContent = importing
       ? "Scanning FITS…"
@@ -527,11 +590,13 @@ export function mountReviewScreen(
 
   const destroy = (): void => {
     root.removeEventListener("click", onClick);
+    root.removeEventListener("change", onChange);
     root.removeEventListener("keydown", onKeyDown);
     root.replaceChildren();
   };
 
   root.addEventListener("click", onClick);
+  root.addEventListener("change", onChange);
   root.addEventListener("keydown", onKeyDown);
   update(initialModel);
 
@@ -775,6 +840,241 @@ function renderStatisticsPanel(
       : formatScientificValue(statistics.sampleStandardDeviation);
 }
 
+interface CalibrationElements {
+  readonly calibrationStatus: HTMLElement;
+  readonly calibrationProducts: HTMLElement;
+  readonly calibrationDigest: HTMLElement;
+  readonly pedestalPolicy: HTMLSelectElement;
+  readonly exposureTolerance: HTMLInputElement;
+  readonly temperatureTolerance: HTMLInputElement;
+  readonly refreshMasterPlan: HTMLButtonElement;
+}
+
+function calibrationSettings(
+  elements: Pick<
+    CalibrationElements,
+    "pedestalPolicy" | "exposureTolerance" | "temperatureTolerance"
+  >,
+): MasterPlanSettings | null {
+  const policy = elements.pedestalPolicy.value;
+  if (
+    policy !== "prefer_matched_dark_then_bias" &&
+    policy !== "require_matched_dark" &&
+    policy !== "require_bias"
+  ) {
+    return null;
+  }
+  const maximumExposureDeltaSeconds = elements.exposureTolerance.valueAsNumber;
+  const maximumTemperatureDeltaC = elements.temperatureTolerance.valueAsNumber;
+  if (
+    !Number.isFinite(maximumExposureDeltaSeconds) ||
+    maximumExposureDeltaSeconds < 0 ||
+    !Number.isFinite(maximumTemperatureDeltaC) ||
+    maximumTemperatureDeltaC < 0
+  ) {
+    return null;
+  }
+  return {
+    flatPedestalPolicy: policy,
+    maximumExposureDeltaSeconds,
+    maximumTemperatureDeltaC,
+  };
+}
+
+function renderCalibration(
+  elements: CalibrationElements,
+  model: ReviewViewModel,
+): void {
+  const calibration = model.calibration;
+  elements.pedestalPolicy.value = calibration.settings.flatPedestalPolicy;
+  elements.exposureTolerance.value = String(
+    calibration.settings.maximumExposureDeltaSeconds,
+  );
+  elements.temperatureTolerance.value = String(
+    calibration.settings.maximumTemperatureDeltaC,
+  );
+  elements.calibrationStatus.dataset.state = calibration.state;
+  elements.calibrationStatus.textContent = calibration.message;
+  elements.refreshMasterPlan.disabled =
+    calibration.state === "loading" || !model.reviewSessionReady;
+  const plan = calibration.plan;
+  elements.calibrationDigest.textContent = plan
+    ? `PLAN ${plan.planSha256.slice(0, 12)}`
+    : "PLAN —";
+  elements.calibrationDigest.title = plan?.planSha256 ?? "No native plan yet";
+
+  const products = plan?.products ?? [];
+  const nodes = products.map(masterProductCard);
+  if (nodes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "master-empty";
+    const aperture = document.createElement("span");
+    aperture.className = "master-empty__aperture";
+    aperture.setAttribute("aria-hidden", "true");
+    const title = document.createElement("strong");
+    title.textContent =
+      calibration.state === "loading"
+        ? "Resolving calibration groups"
+        : "No master groups available";
+    const detail = document.createElement("span");
+    detail.textContent = model.reviewSessionReady
+      ? "Check imported metadata and grouping diagnostics"
+      : "Import a FITS session to build the native dependency graph";
+    empty.append(aperture, title, detail);
+    nodes.push(empty);
+  }
+  elements.calibrationProducts.replaceChildren(...nodes);
+}
+
+function masterProductCard(product: MasterProductPlan): HTMLElement {
+  const card = document.createElement("article");
+  card.className = "master-card";
+  card.dataset.kind = product.kind;
+  card.dataset.status = product.pedestal.status;
+
+  const header = document.createElement("header");
+  const identity = document.createElement("div");
+  const role = document.createElement("span");
+  role.className = "master-card__role";
+  role.textContent = masterKindLabel(product.kind);
+  const name = document.createElement("h4");
+  name.textContent = product.groupId;
+  identity.append(role, name);
+  const count = document.createElement("span");
+  count.className = "master-card__count";
+  count.textContent = `${formatCount(product.frameCount)} frame${product.frameCount === 1 ? "" : "s"}`;
+  header.append(identity, count);
+
+  const metadata = document.createElement("dl");
+  metadata.className = "master-card__metadata";
+  appendCompactMetric(metadata, "Camera", product.camera ?? "Unresolved");
+  appendCompactMetric(metadata, "Axes", product.axes.join(" × "));
+  appendCompactMetric(
+    metadata,
+    "Exposure",
+    product.exposureSeconds === null ? "—" : `${product.exposureSeconds} s`,
+  );
+  appendCompactMetric(
+    metadata,
+    "Temperature",
+    product.sensorTemperatureCelsius === null
+      ? "—"
+      : `${product.sensorTemperatureCelsius.toFixed(1)} °C`,
+  );
+  appendCompactMetric(
+    metadata,
+    "Gain / offset",
+    `${product.gain ?? "—"} / ${product.offset ?? "—"}`,
+  );
+  appendCompactMetric(
+    metadata,
+    "Sampling",
+    `${product.binning ? `${product.binning.x}×${product.binning.y}` : "—"} · ${product.bayerPattern ?? "Mono / unknown"}`,
+  );
+
+  const dependency = document.createElement("div");
+  dependency.className = "master-card__dependency";
+  const dependencyLight = document.createElement("span");
+  dependencyLight.className = "dependency-light";
+  dependencyLight.setAttribute("aria-hidden", "true");
+  const dependencyText = document.createElement("div");
+  const dependencyTitle = document.createElement("strong");
+  dependencyTitle.textContent = pedestalTitle(product);
+  const dependencyDetail = document.createElement("span");
+  dependencyDetail.textContent = pedestalDetail(product);
+  dependencyText.append(dependencyTitle, dependencyDetail);
+  dependency.append(dependencyLight, dependencyText);
+
+  card.append(header, metadata, dependency);
+  if (product.kind === "flat" && product.candidates.length > 0) {
+    card.append(candidateDisclosure(product));
+  }
+  return card;
+}
+
+function appendCompactMetric(
+  container: HTMLDListElement,
+  label: string,
+  value: string,
+): void {
+  const item = document.createElement("div");
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const description = document.createElement("dd");
+  description.textContent = value;
+  item.append(term, description);
+  container.append(item);
+}
+
+function candidateDisclosure(product: MasterProductPlan): HTMLDetailsElement {
+  const details = document.createElement("details");
+  details.className = "candidate-evidence";
+  const summary = document.createElement("summary");
+  const compatible = product.candidates.filter(
+    (candidate) => candidate.status === "compatible",
+  ).length;
+  summary.textContent = `${product.candidates.length} pedestal candidate${product.candidates.length === 1 ? "" : "s"} · ${compatible} compatible`;
+  const list = document.createElement("ul");
+  for (const candidate of product.candidates) {
+    const item = document.createElement("li");
+    item.dataset.status = candidate.status;
+    const title = document.createElement("strong");
+    title.textContent = `${candidate.sourceKind.toUpperCase()} · ${candidate.groupId}`;
+    const reason = document.createElement("span");
+    reason.textContent =
+      candidate.status === "compatible"
+        ? `Compatible · Δt ${candidate.exposureDeltaSeconds ?? 0} s · ΔT ${candidate.temperatureDeltaCelsius ?? 0} °C`
+        : candidate.mismatches
+            .map(
+              (mismatch) =>
+                `${humanize(mismatch.field)} ${humanize(mismatch.reason)}`,
+            )
+            .join(" · ");
+    item.append(title, reason);
+    list.append(item);
+  }
+  details.append(summary, list);
+  return details;
+}
+
+function masterKindLabel(kind: MasterProductPlan["kind"]): string {
+  switch (kind) {
+    case "bias":
+      return "Master Bias";
+    case "dark":
+      return "Master Dark";
+    case "flat":
+      return "Master Flat";
+  }
+}
+
+function pedestalTitle(product: MasterProductPlan): string {
+  switch (product.pedestal.status) {
+    case "not_applicable":
+      return "Direct strict-mean integration";
+    case "matched_dark":
+      return "Matched dark selected";
+    case "bias":
+      return "True bias selected";
+    case "unresolved":
+      return "Pedestal unresolved";
+  }
+}
+
+function pedestalDetail(product: MasterProductPlan): string {
+  const pedestal = product.pedestal;
+  if (pedestal.status === "not_applicable") {
+    return "No pedestal subtraction is applied to this source role";
+  }
+  if (pedestal.status === "unresolved") {
+    const ambiguity = pedestal.ambiguousGroupIds.length
+      ? ` · ${pedestal.ambiguousGroupIds.join(", ")}`
+      : "";
+    return `${humanize(pedestal.blockingReason ?? "manual decision required")}${ambiguity}`;
+  }
+  return `${pedestal.selectedGroupId ?? "Unknown group"} · Δt ${pedestal.exposureDeltaSeconds ?? 0} s · ΔT ${pedestal.temperatureDeltaCelsius ?? 0} °C`;
+}
+
 function selectedFrame(model: ReviewViewModel): ReviewFrame | null {
   return (
     model.frames.find((frame) => frame.id === model.selectedFrameId) ?? null
@@ -823,7 +1123,7 @@ function formatScientificValue(value: number): string {
   return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
 
-function humanize(field: SortField): string {
+function humanize(field: string): string {
   return field.replaceAll("_", " ");
 }
 
@@ -883,7 +1183,7 @@ function shellMarkup(): string {
         </div>
         <nav class="primary-nav" aria-label="Workflow">
           ${navigationItem("frames", "Frames", "▦", true)}
-          ${navigationItem("calibration", "Calibration", "◫", false)}
+          ${navigationItem("calibration", "Calibration", "◫", true)}
           ${navigationItem("pipeline", "Pipeline", "⌁", false)}
           ${navigationItem("run", "Run", "▷", false)}
           ${navigationItem("results", "Results", "◉", false)}
@@ -907,7 +1207,7 @@ function shellMarkup(): string {
           </div>
         </header>
 
-        <section class="frames-workspace" aria-labelledby="frames-heading">
+        <section class="frames-workspace" aria-labelledby="frames-heading" data-frames-workspace>
           <div class="workspace-heading">
             <div>
               <p class="eyebrow">Frames</p>
@@ -1011,6 +1311,66 @@ function shellMarkup(): string {
             </section>
           </div>
         </section>
+
+        <section class="calibration-workspace" aria-labelledby="calibration-heading" data-calibration-workspace hidden>
+          <div class="workspace-heading calibration-heading">
+            <div>
+              <p class="eyebrow">Calibration laboratory</p>
+              <h2 id="calibration-heading">Build exact master frames</h2>
+              <p class="workspace-intro">Bias, darks and flats remain separate. The native planner binds every flat to one exclusive pedestal source.</p>
+            </div>
+            <div class="workspace-heading__actions">
+              <span class="calibration-readiness" data-calibration-status role="status" aria-live="polite"></span>
+              <button class="button button--quiet" type="button" data-action="refresh-master-plan">↻ Rebuild plan</button>
+            </div>
+          </div>
+
+          <div class="calibration-layout">
+            <aside class="calibration-console" aria-labelledby="matching-heading">
+              <div class="panel-heading panel-heading--compact">
+                <div>
+                  <p class="eyebrow">Matching controls</p>
+                  <h3 id="matching-heading">Flat pedestal</h3>
+                </div>
+                <span class="hardware-light" aria-hidden="true"></span>
+              </div>
+              <label class="control-field">
+                <span>Selection policy</span>
+                <select data-pedestal-policy>
+                  <option value="prefer_matched_dark_then_bias">Prefer matched dark, then bias</option>
+                  <option value="require_matched_dark">Require matched dark</option>
+                  <option value="require_bias">Require true bias</option>
+                </select>
+              </label>
+              <div class="control-pair">
+                <label class="control-field">
+                  <span>Exposure tolerance</span>
+                  <span class="number-control"><input data-exposure-tolerance type="number" min="0" step="0.01" inputmode="decimal" /><b>s</b></span>
+                </label>
+                <label class="control-field">
+                  <span>Temperature tolerance</span>
+                  <span class="number-control"><input data-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><b>°C</b></span>
+                </label>
+              </div>
+              <p class="control-note">Exact camera, axes, gain, offset, binning and CFA phase are always required. Filter is not used to match darks or biases.</p>
+              <details class="advanced-settings">
+                <summary>Advanced matching evidence</summary>
+                <p>Every compatible and rejected candidate is retained below with stable machine-readable reasons.</p>
+              </details>
+            </aside>
+
+            <section class="master-rack" aria-labelledby="master-rack-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Native dependency graph</p>
+                  <h3 id="master-rack-heading">Planned masters</h3>
+                </div>
+                <code class="plan-digest" data-calibration-digest></code>
+              </div>
+              <div class="master-product-list" data-calibration-products></div>
+            </section>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -1057,12 +1417,12 @@ function navigationItem(
   id: string,
   label: string,
   icon: string,
-  current: boolean,
+  enabled: boolean,
 ): string {
-  if (current) {
-    return `<span class="nav-item" data-workspace="${id}" aria-current="page">
+  if (enabled) {
+    return `<button class="nav-item" type="button" data-action="select-workspace" data-workspace="${id}">
       <span class="nav-item__icon" aria-hidden="true">${icon}</span><span>${label}</span>
-    </span>`;
+    </button>`;
   }
   return `<button class="nav-item" type="button" data-workspace="${id}" aria-label="${label}, not available in this build" title="${label} workspace is not connected yet" disabled>
     <span class="nav-item__icon" aria-hidden="true">${icon}</span><span>${label}</span>

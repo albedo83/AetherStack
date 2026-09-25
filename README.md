@@ -65,8 +65,10 @@ optimized CPU and GPU paths must match.
   identity-and-transform-keyed desktop artifact cache with generation-cancelled
   adjacent-frame prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
-  workspace, separate acquisition roles, diagnostic metrics, explicit manual
-  decisions, and a presenter boundary that leaves scientific state in Rust;
+  workspace and an instrument-inspired Calibration laboratory, separate
+  acquisition roles and master products, inspectable flat-pedestal evidence,
+  diagnostic metrics, explicit manual decisions, and a presenter boundary that
+  leaves scientific state in Rust;
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,
   identity-safe real FITS preview loading, and Rust-owned deterministic review

@@ -1,5 +1,9 @@
 import "./styles.css";
 
+import {
+  previewMasterPlan,
+  type MasterPlanSettings,
+} from "./calibration-bridge.ts";
 import { demoReviewModel } from "./demo-data.ts";
 import type {
   FitsStatistics,
@@ -8,6 +12,7 @@ import type {
   ReviewRejectionReason,
   ReviewState,
   ReviewViewModel,
+  WorkspaceView,
 } from "./model.ts";
 import {
   estimateFitsPreviewTransform,
@@ -84,8 +89,18 @@ let qualityBatchTicket = 0;
 let decisionSessionRevision = 0;
 let decisionGeneration = 0;
 let blinkTimer: number | null = null;
+let masterPlanTicket = 0;
 
 const screen = mountReviewScreen(root, model, {
+  onSelectWorkspace(workspace) {
+    selectWorkspace(workspace);
+  },
+  onUpdateCalibrationSettings(settings) {
+    updateCalibrationSettings(settings);
+  },
+  onRefreshMasterPlan() {
+    void refreshMasterPlan();
+  },
   onImportSession() {
     void importSession();
   },
@@ -174,6 +189,7 @@ function installImportedSession(session: ImportedSession): void {
   decisionSessionRevision += 1;
   decisionGeneration = 0;
   decisionCache.clear();
+  masterPlanTicket += 1;
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -215,8 +231,79 @@ function installImportedSession(session: ImportedSession): void {
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
+    calibration: {
+      ...model.calibration,
+      state: "loading",
+      plan: null,
+      message: "Building native calibration graph…",
+    },
   });
   void loadSelectedPreview();
+  void refreshMasterPlan();
+}
+
+function selectWorkspace(workspace: WorkspaceView): void {
+  if (workspace === model.activeWorkspace) return;
+  if (workspace !== "frames") setPlaying(false);
+  update({ ...model, activeWorkspace: workspace });
+}
+
+function updateCalibrationSettings(settings: MasterPlanSettings): void {
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      settings,
+      state: importedSession ? "loading" : "idle",
+      message: importedSession
+        ? "Rebuilding native calibration graph…"
+        : "Import a session to build a calibration graph",
+    },
+  });
+  if (importedSession) void refreshMasterPlan();
+}
+
+async function refreshMasterPlan(): Promise<void> {
+  if (!importedSession) return;
+  const ticket = ++masterPlanTicket;
+  const settings = model.calibration.settings;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      state: "loading",
+      message: "Resolving Bias, Darks and Flats…",
+    },
+  });
+  try {
+    const plan = await previewMasterPlan(settings);
+    if (ticket !== masterPlanTicket) return;
+    const unresolved = plan.products.filter(
+      (product) => product.pedestal.status === "unresolved",
+    ).length;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        state: "ready",
+        plan,
+        message: plan.ready
+          ? `${plan.products.length} master groups · all dependencies resolved`
+          : `${unresolved} flat group${unresolved === 1 ? "" : "s"} require attention`,
+      },
+    });
+  } catch {
+    if (ticket !== masterPlanTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        state: "error",
+        plan: null,
+        message: "Calibration planning failed · imported session preserved",
+      },
+    });
+  }
 }
 
 function reviewFramesForRole(
@@ -728,6 +815,7 @@ function disposeRuntimeResources(): void {
   qualitySessionRevision += 1;
   qualityBatchTicket += 1;
   decisionSessionRevision += 1;
+  masterPlanTicket += 1;
   stopBlinkTimer();
   clearPreviewResources();
 }
