@@ -15,6 +15,7 @@ aether-calibration = { path = "../aether-calibration" }
 aether-core = { path = "../aether-core" }
 aether-fits = { path = "../aether-fits" }
 aether-integration = { path = "../aether-integration" }
+aether-metadata = { path = "../aether-metadata" }
 aether-session = { path = "../aether-session" }
 serde.workspace = true
 

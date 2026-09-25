@@ -93,6 +93,7 @@ dependencies = [
  "aether-core",
  "aether-fits",
  "aether-integration",
+ "aether-metadata",
  "aether-session",
  "serde",
  "serde_json",

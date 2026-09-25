@@ -47,7 +47,7 @@ optimized CPU and GPU paths must match.
 - bounded plan-driven FITS execution for bias, dark, and pedestal-corrected
   normalized-flat masters, with deterministic tiling, explicit peak-memory
   reservations, pre/post source verification, exact readback statistics, and
-  atomic create-new publication;
+  private whole-plan staging followed by create-new publication with rollback;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
 - strict three-pass FITS pixel statistics with fixed-size decoding buffers,

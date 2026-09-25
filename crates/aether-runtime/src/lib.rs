@@ -4,11 +4,16 @@
 //! executors and exposes the first deliberately narrow strict CPU pipeline.
 
 mod cancellation;
+mod master_plan;
 mod memory;
 mod pipeline;
 mod progress;
 
 pub use cancellation::{CancellationToken, Cancelled};
+pub use master_plan::{
+    MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,
+    MasterPlanProgressEvent, MasterProductExecutionResult, run_master_plan,
+};
 pub use memory::{MemoryBudget, MemoryBudgetError, MemoryReservation};
 pub use pipeline::{
     PipelineInput, PipelineSource, STRICT_FLAT_MASTER_ALGORITHM_ID, STRICT_MEAN_ALGORITHM_ID,

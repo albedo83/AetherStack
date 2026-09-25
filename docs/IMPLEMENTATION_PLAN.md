@@ -451,7 +451,11 @@ safety reasoning. They do not narrate obvious syntax.
     publication. The calibrated flat executor now enforces exclusive pedestal
     subtraction before integration, reserves the complete exact-median peak,
     applies one global normalization scalar, revalidates raw-flat and pedestal
-    fingerprints, and publishes the normalized FITS atomically.~~
+    fingerprints, and publishes the normalized FITS atomically. The complete
+    dependency graph now executes as one bounded transaction: products remain
+    private until every calculation succeeds, final paths are create-new links,
+    publication failures roll back only this run, and every FITS product embeds
+    the exact manifest and plan digests.~~
 17. Begin the frame-review foundation with strict bounded-memory FITS pixel
     statistics and deterministic batch output. The three-pass library operation,
     separate invalid-sample accounting, JSON Lines tool output, synthetic tests,

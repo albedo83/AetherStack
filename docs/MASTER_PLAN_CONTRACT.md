@@ -2,9 +2,10 @@
 
 The master planner converts exact session groups into a deterministic,
 versioned description of the bias, dark, and flat masters to build. It plans
-scientific dependencies only; master pixel integration, rejection, flat
-normalization, uncertainty propagation, and defect-map generation remain later
-Phase 4 work.
+scientific dependencies without touching pixels. The runtime now consumes that
+exact plan for strict-mean bias and dark integration and pedestal-corrected,
+exact-median-normalized flat integration. Statistical rejection, uncertainty
+propagation, and defect-map generation remain later Phase 4 work.
 
 ## Roles remain distinct
 
@@ -77,6 +78,24 @@ flat-to-pedestal evaluations and fails before allocation when that bound would b
 exceeded. Major plan vectors use fallible exact reservations. A plan is ready
 only when every flat has one unambiguous pedestal source.
 
+## Transactional execution
+
+Execution revalidates the manifest digest, product roles, selected dependencies,
+source fingerprints, physical session root, and destination directory. Bias and
+dark dependencies run before flats even though the serialized plan remains in
+canonical group order. Every product is tiled under one explicit memory budget,
+written and read back in a private sibling directory, and tagged with both the
+manifest and plan digests.
+
+No public product is created while calculations are running. Once the complete
+set has succeeded, create-new hard links publish each already complete FITS file
+without overwriting an existing path. A publication or cancellation failure
+rolls back only links created by that execution, and the output directory is
+durably synchronized where the platform supports directory synchronization.
+Multi-file publication is not claimed to be one indivisible filesystem
+operation: a concurrent observer can see a short prefix while links are being
+created, but a failed call does not intentionally leave a partial product set.
+
 ## Validation coverage
 
 Unit tests cover dark preference, bias fallback, dark-only and bias-only policy,
@@ -84,4 +103,6 @@ inclusive tolerance boundaries, missing metadata, cross-camera and geometry
 mismatches, measured-versus-set-point temperature behavior, dark and bias ties,
 manifest binding, deterministic JSON round trips, schema and size rejection,
 candidate-matrix bounds, and rejection of a serialized selection that
-contradicts its policy.
+contradicts its policy. Runtime tests additionally cover dependency-first
+execution, provenance binding, normalized pixel recovery, destination
+preflight, cancellation, and cleanup after a late flat failure.
