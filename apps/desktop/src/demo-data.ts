@@ -11,6 +11,7 @@ export const demoReviewModel: ReviewViewModel = {
   sessionName: "M31 · Session 01",
   sessionStatus: { tone: "ready", label: "Demo ready" },
   activeRole: "light",
+  lightFrameView: "raw",
   playing: false,
   reviewSessionReady: false,
   canUndo: false,

@@ -21,6 +21,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelLightPlan: vi.fn(),
     onImportSession: vi.fn(),
     onSelectRole: vi.fn(),
+    onSelectLightFrameView: vi.fn(),
     onSelectFrame: vi.fn(),
     onSort: vi.fn(),
     onSetDecision: vi.fn(),
@@ -91,6 +92,86 @@ describe("frame review workspace", () => {
     );
     expect(
       getByRole(tabs, "tab", { name: /Lights/ }).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("switches between raw and identity-bound calibrated Light pixels", () => {
+    const calibratedFrame = {
+      groupId: "light-uvir",
+      sourceIndex: 0,
+      sourceFrameId: demoReviewModel.frames[0]?.id ?? "a".repeat(64),
+      sourceLabel: "light_0001.fits",
+      sourceSha256: "f".repeat(64),
+      outputPath: "/runtime/calibrated-light-000000.fits",
+      totalSamples: 8,
+      usableSamples: 8,
+      maskedSamples: 0,
+      nonFiniteSamples: 0,
+      minimum: 1,
+      maximum: 8,
+      mean: 4.5,
+      populationStandardDeviation: 2.29,
+      samplesWritten: 8,
+      substitutedSamples: 0,
+      bytesWritten: 5760,
+      tilesProcessed: 1,
+      tilesReused: 0,
+    };
+    const { root, actions } = fixture({
+      ...demoReviewModel,
+      calibration: {
+        ...demoReviewModel.calibration,
+        lightExecution: {
+          ...demoReviewModel.calibration.lightExecution,
+          result: {
+            manifestSha256: "a".repeat(64),
+            masterPlanSha256: "b".repeat(64),
+            lightPlanSha256: "c".repeat(64),
+            memoryLimitBytes: 1_024,
+            peakReservedBytes: 512,
+            outputMode: "calibrated_frames",
+            products: [],
+            calibratedFrames: [calibratedFrame],
+          },
+        },
+      },
+    });
+
+    const calibrated = getByRole(root, "button", {
+      name: "Calibrated · 1",
+    });
+    expect(calibrated.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(calibrated);
+    expect(actions.onSelectLightFrameView).toHaveBeenCalledWith("calibrated");
+
+    const calibratedView = fixture({
+      ...demoReviewModel,
+      lightFrameView: "calibrated",
+      frames: demoReviewModel.frames.slice(0, 1),
+      selectedFrameId: demoReviewModel.frames[0]?.id ?? null,
+      calibration: {
+        ...demoReviewModel.calibration,
+        lightExecution: {
+          ...demoReviewModel.calibration.lightExecution,
+          result: {
+            manifestSha256: "a".repeat(64),
+            masterPlanSha256: "b".repeat(64),
+            lightPlanSha256: "c".repeat(64),
+            memoryLimitBytes: 1_024,
+            peakReservedBytes: 512,
+            outputMode: "calibrated_frames",
+            products: [],
+            calibratedFrames: [calibratedFrame],
+          },
+        },
+      },
+    });
+    expect(calibratedView.root.textContent).toContain("Calibrated Lights");
+    expect(calibratedView.root.textContent).toContain("CALIBRATED CFA · RGGB");
+    expect(
+      getByRole(calibratedView.root, "button", {
+        name: "Calibrated · 1",
+      }).getAttribute("aria-pressed"),
     ).toBe("true");
   });
 

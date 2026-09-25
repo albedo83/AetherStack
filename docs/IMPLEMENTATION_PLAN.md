@@ -581,6 +581,17 @@ safety reasoning. They do not narrate obvious syntax.
     width. Native and DOM tests cover both modes and the selection boundary.
     Next, feed calibrated products directly into Blink, then add debayering,
     quality weighting, and registration.
+28. Feed calibrated Light products directly into Blink. Every native result now
+    carries the stable review identity and label of its exact manifest source.
+    After successful publication, the desktop atomically opens the complete
+    calibrated set in the Frames workspace while retaining the raw acquisition
+    set behind an explicit Raw/Calibrated stage switch. Manual decisions remain
+    attached to the shared source identity; display previews, exact statistics,
+    diagnostic quality, and locked stretches are isolated by pixel-source path.
+    The presenter rejects the complete stage transition on a missing,
+    duplicated, or non-Light identity. Native, binding, DOM, accessibility, and
+    cache-separation tests cover the handoff. Debayering is the next processing
+    stage, followed by quality weighting and registration.
 
 ## 11. Stable-release definition
 

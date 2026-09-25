@@ -80,6 +80,14 @@ Each individual product also stores its exact source SHA-256 as `AETHINP`. The
 Light plan itself stores the canonical master-plan digest, providing a complete
 transitive provenance chain without embedding local paths.
 
+The desktop response binds every individual product to the stable review-frame
+identity derived from that same manifest source. Blink may therefore exchange
+raw pixels for calibrated pixels without changing the decision identity. The
+presenter verifies the complete binding before showing any calibrated frame;
+missing, duplicated, or non-Light identities reject the whole view transition.
+Preview, statistics, quality, and shared-stretch caches include the exact pixel
+source, so results measured on raw data cannot be reused for calibrated data.
+
 ## Covered failure cases
 
 Unit tests cover numerical Dark/Flat calibration and mean integration, exact

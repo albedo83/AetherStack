@@ -133,6 +133,15 @@ export function mountReviewScreen(
     undo: required<HTMLButtonElement>(root, '[data-action="undo"]'),
     roleTabs: required<HTMLElement>(root, "[data-role-tabs]"),
     roleHeading: required<HTMLElement>(root, "[data-role-heading]"),
+    lightFrameView: required<HTMLElement>(root, "[data-light-frame-view]"),
+    rawLightView: required<HTMLButtonElement>(
+      root,
+      '[data-action="select-light-frame-view"][data-light-frame-view-value="raw"]',
+    ),
+    calibratedLightView: required<HTMLButtonElement>(
+      root,
+      '[data-action="select-light-frame-view"][data-light-frame-view-value="calibrated"]',
+    ),
     frameTable: required<HTMLTableElement>(root, "[data-frame-table]"),
     filter: required<HTMLButtonElement>(root, "[data-filter-frames]"),
     tableBody: required<HTMLTableSectionElement>(root, "[data-frame-rows]"),
@@ -262,6 +271,13 @@ export function mountReviewScreen(
     if (action === "select-role") {
       const role = actionElement.dataset.role;
       if (isFrameRole(role)) actions.onSelectRole(role);
+      return;
+    }
+    if (action === "select-light-frame-view") {
+      const view = actionElement.dataset.lightFrameViewValue;
+      if (view === "raw" || view === "calibrated") {
+        actions.onSelectLightFrameView(view);
+      }
       return;
     }
     if (action === "import-session") {
@@ -525,12 +541,32 @@ export function mountReviewScreen(
     const activeRole = model.roles.find(
       (role) => role.role === model.activeRole,
     );
-    const activeRoleLabel = activeRole?.label ?? "Frames";
+    const calibratedLightView =
+      model.activeRole === "light" && model.lightFrameView === "calibrated";
+    const activeRoleLabel = calibratedLightView
+      ? "Calibrated Lights"
+      : (activeRole?.label ?? "Frames");
     const frame = selectedFrame(model);
     const position = frame
       ? model.frames.findIndex((candidate) => candidate.id === frame.id) + 1
       : 0;
     elements.roleHeading.textContent = activeRoleLabel;
+    const calibratedFrameCount =
+      model.calibration.lightExecution.result?.calibratedFrames.length ?? 0;
+    elements.lightFrameView.hidden = model.activeRole !== "light";
+    elements.rawLightView.setAttribute(
+      "aria-pressed",
+      String(model.lightFrameView === "raw"),
+    );
+    elements.calibratedLightView.setAttribute(
+      "aria-pressed",
+      String(model.lightFrameView === "calibrated"),
+    );
+    elements.calibratedLightView.disabled = calibratedFrameCount === 0;
+    elements.calibratedLightView.textContent =
+      calibratedFrameCount > 0
+        ? `Calibrated · ${calibratedFrameCount}`
+        : "Calibrated";
     elements.frameTable.setAttribute(
       "aria-label",
       `${activeRoleLabel} review metrics`,
@@ -627,7 +663,7 @@ export function mountReviewScreen(
             : "All eligible light frames have diagnostic quality measurements",
     );
     elements.cfaBadge.textContent = frame?.bayerPattern
-      ? `RAW CFA · ${frame.bayerPattern.toUpperCase()}`
+      ? `${calibratedLightView ? "CALIBRATED CFA" : "RAW CFA"} · ${frame.bayerPattern.toUpperCase()}`
       : "LINEAR · UNRESOLVED";
     elements.qualityBadge.hidden = frame === null;
     elements.qualityBadge.dataset.state = frame?.qualityState ?? "unavailable";
@@ -1590,6 +1626,10 @@ function shellMarkup(): string {
                   <p><span data-selection-count></span> · metrics are diagnostic</p>
                 </div>
                 <div class="panel-heading__actions">
+                  <div class="frame-stage-switch" role="group" aria-label="Light pixel stage" data-light-frame-view>
+                    <button class="tool-button" type="button" data-action="select-light-frame-view" data-light-frame-view-value="raw" aria-pressed="true">Raw</button>
+                    <button class="tool-button" type="button" data-action="select-light-frame-view" data-light-frame-view-value="calibrated" aria-pressed="false" disabled>Calibrated</button>
+                  </div>
                   <button class="tool-button" type="button" data-action="measure-all-quality" aria-label="All eligible light frames have diagnostic quality measurements" aria-live="polite" aria-atomic="true" disabled>Quality complete</button>
                   <button class="icon-button" type="button" data-filter-frames aria-label="Frame filtering is not available in this build" title="Frame filtering is not connected yet" disabled>⌕</button>
                 </div>

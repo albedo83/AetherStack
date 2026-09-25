@@ -215,6 +215,9 @@ export interface LightExecutionResult {
 export interface ExecutedCalibratedLightFrame {
   readonly groupId: string;
   readonly sourceIndex: number;
+  /** Stable identity of the exact raw source in the native review book. */
+  readonly sourceFrameId: string;
+  readonly sourceLabel: string;
   readonly sourceSha256: string;
   readonly outputPath: string;
   readonly totalSamples: number;

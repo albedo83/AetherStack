@@ -485,6 +485,8 @@ struct LightPlanExecutionResponse {
 struct ExecutedCalibratedLightFrame {
     group_id: String,
     source_index: usize,
+    source_frame_id: String,
+    source_label: String,
     source_sha256: String,
     output_path: String,
     total_samples: usize,
@@ -1644,11 +1646,19 @@ where
                 .try_reserve_exact(result.frames().len())
                 .map_err(|_| light_execution_allocation_error())?;
             for frame in result.frames() {
+                let (source_frame_id, source_label) = calibrated_source_identity(
+                    &session.manifest,
+                    frame.group_id(),
+                    frame.source_index(),
+                    frame.source_sha256(),
+                )?;
                 let statistics = frame.statistics();
                 let write = frame.write_summary();
                 calibrated_frames.push(ExecutedCalibratedLightFrame {
                     group_id: frame.group_id().to_owned(),
                     source_index: frame.source_index(),
+                    source_frame_id,
+                    source_label,
                     source_sha256: frame.source_sha256().to_owned(),
                     output_path: light_output_path(frame.output())?,
                     total_samples: statistics.total_samples(),
@@ -1687,6 +1697,53 @@ fn light_output_path(path: &Path) -> Result<String, PreviewCommandError> {
             "A generated Light path cannot be represented as Unicode.",
         )
     })
+}
+
+/// Resolves a published calibrated artifact back to the stable review identity
+/// of its exact raw source. The browser can therefore show calibrated pixels
+/// without inventing a second identity or bypassing the native decision book.
+fn calibrated_source_identity(
+    manifest: &SessionManifest,
+    group_id: &str,
+    source_index: usize,
+    expected_sha256: &str,
+) -> Result<(String, String), PreviewCommandError> {
+    let group = manifest
+        .groups()
+        .iter()
+        .find(|group| group.id() == group_id)
+        .ok_or_else(calibrated_source_identity_error)?;
+    let relative_path = group
+        .files()
+        .get(source_index)
+        .ok_or_else(calibrated_source_identity_error)?;
+    let file = manifest
+        .files()
+        .iter()
+        .find(|file| file.relative_path() == relative_path)
+        .ok_or_else(calibrated_source_identity_error)?;
+    if file.fingerprint().sha256() != expected_sha256 {
+        return Err(calibrated_source_identity_error());
+    }
+    let frame_id = FrameId::derive(
+        file.relative_path(),
+        file.fingerprint().byte_length(),
+        file.fingerprint().sha256(),
+    )
+    .map_err(|_| calibrated_source_identity_error())?;
+    let label = Path::new(relative_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(relative_path)
+        .to_owned();
+    Ok((frame_id.as_str().to_owned(), label))
+}
+
+const fn calibrated_source_identity_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "calibrated_source_identity_invalid",
+        "A calibrated Light output cannot be bound to its exact imported source.",
+    )
 }
 
 fn build_light_plan(
@@ -3196,6 +3253,22 @@ mod tests {
         assert_eq!(calibrated.calibrated_frames.len(), 1);
         assert_eq!(calibrated.calibrated_frames[0].group_id, "light-uvir");
         assert_eq!(calibrated.calibrated_frames[0].source_index, 0);
+        let source = session
+            .manifest
+            .files()
+            .iter()
+            .find(|file| file.relative_path() == "LIGHTS/light.fits")
+            .ok_or("test Light source missing")?;
+        let expected_frame_id = FrameId::derive(
+            source.relative_path(),
+            source.fingerprint().byte_length(),
+            source.fingerprint().sha256(),
+        )?;
+        assert_eq!(
+            calibrated.calibrated_frames[0].source_frame_id,
+            expected_frame_id.as_str()
+        );
+        assert_eq!(calibrated.calibrated_frames[0].source_label, "light.fits");
         assert_eq!(calibrated.calibrated_frames[0].source_sha256.len(), 64);
         assert!(Path::new(&calibrated.calibrated_frames[0].output_path).is_file());
         assert!(

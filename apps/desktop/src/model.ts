@@ -13,6 +13,8 @@ export type FrameRole = "bias" | "dark" | "flat" | "light";
 
 export type WorkspaceView = "frames" | "calibration";
 
+export type LightFrameView = "raw" | "calibrated";
+
 export type ReviewState = "undecided" | "accepted" | "rejected";
 
 export type ReviewRejectionReason =
@@ -113,6 +115,8 @@ export interface ReviewViewModel {
   readonly sessionStatus: SessionStatus;
   readonly roles: readonly RoleSummary[];
   readonly activeRole: FrameRole;
+  /** Pixel stage currently shown for Lights; review identities stay stable. */
+  readonly lightFrameView: LightFrameView;
   readonly frames: readonly ReviewFrame[];
   readonly selectedFrameId: string | null;
   readonly playing: boolean;
@@ -179,6 +183,7 @@ export interface ReviewActions {
   readonly onCancelLightPlan: () => void;
   readonly onImportSession: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
+  readonly onSelectLightFrameView: (view: LightFrameView) => void;
   readonly onSelectFrame: (frameId: string) => void;
   readonly onSort: (field: SortField, direction: SortDirection) => void;
   readonly onSetDecision: (

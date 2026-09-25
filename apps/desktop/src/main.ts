@@ -8,14 +8,20 @@ import {
   previewMasterPlan,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
+  type ExecutedCalibratedLightFrame,
   type LightExecutionProgress,
   type MasterExecutionProgress,
   type MasterPlanSettings,
 } from "./calibration-bridge.ts";
+import {
+  bindCalibratedLightFrames,
+  frameArtifactKey,
+} from "./calibrated-review.ts";
 import { demoReviewModel } from "./demo-data.ts";
 import type {
   FitsStatistics,
   FrameRole,
+  LightFrameView,
   ReviewFrame,
   ReviewRejectionReason,
   ReviewState,
@@ -142,6 +148,9 @@ const screen = mountReviewScreen(root, model, {
   onSelectRole(role) {
     selectRole(role);
   },
+  onSelectLightFrameView(view) {
+    selectLightFrameView(view);
+  },
   onSelectFrame(frameId) {
     selectFrame(frameId);
   },
@@ -263,6 +272,7 @@ function installImportedSession(session: ImportedSession): void {
           },
     roles,
     activeRole,
+    lightFrameView: "raw",
     frames,
     selectedFrameId: frames[0]?.id ?? null,
     playing: false,
@@ -304,6 +314,9 @@ function selectWorkspace(workspace: WorkspaceView): void {
   if (workspace === model.activeWorkspace) return;
   if (workspace !== "frames") setPlaying(false);
   update({ ...model, activeWorkspace: workspace });
+  if (workspace === "frames" && model.preview === null) {
+    void loadSelectedPreview();
+  }
 }
 
 function updateCalibrationSettings(settings: MasterPlanSettings): void {
@@ -517,8 +530,42 @@ async function executeLights(): Promise<void> {
   }
   const ticket = ++lightExecutionTicket;
   const outputMode = model.calibration.lightSettings.outputMode;
+  const leavingCalibratedView = model.lightFrameView === "calibrated";
+  const rawFrames = leavingCalibratedView
+    ? reviewFramesForRole(selectedSession, "light")
+    : model.frames;
+  if (leavingCalibratedView) {
+    stopBlinkTimer();
+    clearPreviewResources();
+    sharedTransform = null;
+    previewTicket += 1;
+    sortTicket += 1;
+    statisticsTicket += 1;
+    qualitySessionRevision += 1;
+    qualityBatchTicket += 1;
+    qualityPending.clear();
+  }
   update({
     ...model,
+    lightFrameView: leavingCalibratedView ? "raw" : model.lightFrameView,
+    frames: rawFrames,
+    selectedFrameId: leavingCalibratedView
+      ? (rawFrames[0]?.id ?? null)
+      : model.selectedFrameId,
+    playing: leavingCalibratedView ? false : model.playing,
+    qualityBatchRunning: leavingCalibratedView
+      ? false
+      : model.qualityBatchRunning,
+    qualityBatchProgress: leavingCalibratedView
+      ? null
+      : model.qualityBatchProgress,
+    sharedStretchLabel: leavingCalibratedView
+      ? "Reference stretch · resolving"
+      : model.sharedStretchLabel,
+    preview: leavingCalibratedView ? null : model.preview,
+    statisticsPanel: leavingCalibratedView
+      ? closedStatisticsPanel()
+      : model.statisticsPanel,
     calibration: {
       ...model.calibration,
       lightExecution: {
@@ -579,6 +626,9 @@ async function executeLights(): Promise<void> {
         },
       },
     });
+    if (result.outputMode === "calibrated_frames") {
+      selectLightFrameView("calibrated");
+    }
   } catch (error) {
     if (ticket !== lightExecutionTicket) return;
     const cancelled = nativeErrorCode(error) === "light_execution_cancelled";
@@ -743,21 +793,30 @@ function reviewFramesForRole(
 }
 
 function importedReviewFrame(frame: ImportedFrame): ReviewFrame {
-  const cachedQuality = qualityCache.get(frame.id);
+  return reviewFrameFromImported(frame, frame.path, frame.label);
+}
+
+function reviewFrameFromImported(
+  frame: ImportedFrame,
+  sourcePath: string,
+  label: string,
+): ReviewFrame {
+  const artifactKey = frameArtifactKey(frame.id, sourcePath);
+  const cachedQuality = qualityCache.get(artifactKey);
   const cachedDecision = decisionCache.get(frame.id);
   const qualityAvailable =
     frame.role === "light" && frame.bayerPattern !== null;
   const qualityState = cachedQuality
     ? "ready"
-    : qualityPending.has(frame.id)
+    : qualityPending.has(artifactKey)
       ? "loading"
       : qualityAvailable
         ? "idle"
         : "unavailable";
   return {
     id: frame.id,
-    label: frame.label,
-    sourcePath: frame.path,
+    label,
+    sourcePath,
     exposureSeconds: frame.exposureSeconds,
     temperatureCelsius: frame.temperatureCelsius,
     classificationWarning: frame.classificationConflict
@@ -781,6 +840,17 @@ function importedReviewFrame(frame: ImportedFrame): ReviewFrame {
       ? qualityMetrics(cachedQuality)
       : emptyQualityMetrics(),
   };
+}
+
+function calibratedReviewFrames(
+  session: ImportedSession,
+  calibrated: readonly ExecutedCalibratedLightFrame[],
+): readonly ReviewFrame[] | null {
+  const bound = bindCalibratedLightFrames(session.frames, calibrated);
+  if (!bound) return null;
+  return bound.map(({ source, artifact }) =>
+    reviewFrameFromImported(source, artifact.outputPath, artifact.sourceLabel),
+  );
 }
 
 function emptyQualityMetrics(): ReviewFrame["metrics"] {
@@ -855,23 +925,27 @@ async function measureAllQuality(): Promise<void> {
 
 async function measureQuality(frameId: string): Promise<void> {
   const frame = model.frames.find((candidate) => candidate.id === frameId);
+  const artifactKey = frame?.sourcePath
+    ? frameArtifactKey(frame.id, frame.sourcePath)
+    : null;
   if (
     !frame?.sourcePath ||
     !frame.bayerPattern ||
     model.activeRole !== "light" ||
-    qualityPending.has(frame.id)
+    !artifactKey ||
+    qualityPending.has(artifactKey)
   ) {
     return;
   }
 
-  const cached = qualityCache.get(frame.id);
+  const cached = qualityCache.get(artifactKey);
   if (cached) {
     applyQualityResult(frame.id, cached);
     return;
   }
 
   const sessionRevision = qualitySessionRevision;
-  qualityPending.add(frame.id);
+  qualityPending.add(artifactKey);
   updateQualityFrame(frame.id, {
     qualityState: "loading",
     qualityMessage: "Measuring immutable linear pixels…",
@@ -882,7 +956,7 @@ async function measureQuality(frameId: string): Promise<void> {
       frame.bayerPattern,
     );
     if (sessionRevision !== qualitySessionRevision) return;
-    qualityCache.set(frame.id, result);
+    qualityCache.set(artifactKey, result);
     applyQualityResult(frame.id, result);
   } catch {
     if (sessionRevision !== qualitySessionRevision) return;
@@ -893,7 +967,7 @@ async function measureQuality(frameId: string): Promise<void> {
       metrics: emptyQualityMetrics(),
     });
   } finally {
-    qualityPending.delete(frame.id);
+    qualityPending.delete(artifactKey);
   }
 }
 
@@ -926,6 +1000,8 @@ function updateQualityFrame(
 
 function selectRole(role: FrameRole): void {
   qualityBatchTicket += 1;
+  qualitySessionRevision += 1;
+  qualityPending.clear();
   stopBlinkTimer();
   clearPreviewResources();
   sharedTransform = null;
@@ -937,6 +1013,7 @@ function selectRole(role: FrameRole): void {
       update({
         ...model,
         activeRole: role,
+        lightFrameView: "raw",
         frames: demoReviewModel.frames,
         selectedFrameId: demoReviewModel.selectedFrameId,
         preview: null,
@@ -960,10 +1037,80 @@ function selectRole(role: FrameRole): void {
     return;
   }
 
-  const frames = reviewFramesForRole(importedSession, role);
+  const calibrated =
+    model.calibration.lightExecution.result?.calibratedFrames ?? [];
+  const requestedLightFrameView =
+    role === "light" &&
+    model.lightFrameView === "calibrated" &&
+    calibrated.length > 0
+      ? "calibrated"
+      : "raw";
+  const calibratedFrames =
+    role === "light" && requestedLightFrameView === "calibrated"
+      ? calibratedReviewFrames(importedSession, calibrated)
+      : null;
+  const lightFrameView =
+    requestedLightFrameView === "calibrated" && calibratedFrames
+      ? "calibrated"
+      : "raw";
+  const frames = calibratedFrames ?? reviewFramesForRole(importedSession, role);
   update({
     ...model,
     activeRole: role,
+    lightFrameView,
+    frames,
+    selectedFrameId: frames[0]?.id ?? null,
+    playing: false,
+    qualityBatchRunning: false,
+    qualityBatchProgress: null,
+    sharedStretchLabel: "Reference stretch · resolving",
+    preview: null,
+    statisticsPanel: closedStatisticsPanel(),
+  });
+  void loadSelectedPreview();
+}
+
+function selectLightFrameView(view: LightFrameView): void {
+  if (!importedSession) return;
+  const calibrated =
+    model.calibration.lightExecution.result?.calibratedFrames ?? [];
+  if (view === "calibrated" && calibrated.length === 0) return;
+  if (view === model.lightFrameView && model.activeWorkspace === "frames") {
+    return;
+  }
+
+  stopBlinkTimer();
+  clearPreviewResources();
+  sharedTransform = null;
+  previewTicket += 1;
+  sortTicket += 1;
+  statisticsTicket += 1;
+  qualitySessionRevision += 1;
+  qualityBatchTicket += 1;
+  qualityPending.clear();
+  const frames =
+    view === "calibrated"
+      ? calibratedReviewFrames(importedSession, calibrated)
+      : reviewFramesForRole(importedSession, "light");
+  if (!frames) {
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        lightExecution: {
+          ...model.calibration.lightExecution,
+          message:
+            "Calibrated frames published, but their source identities could not be verified for Blink",
+        },
+      },
+    });
+    return;
+  }
+  update({
+    ...model,
+    activeWorkspace: "frames",
+    activeRole: "light",
+    lightFrameView: view,
     frames,
     selectedFrameId: frames[0]?.id ?? null,
     playing: false,
@@ -992,7 +1139,8 @@ async function openStatistics(frameId: string): Promise<void> {
   const frame = model.frames.find((candidate) => candidate.id === frameId);
   if (!frame?.sourcePath) return;
 
-  const cached = statisticsCache.get(frame.id);
+  const artifactKey = frameArtifactKey(frame.id, frame.sourcePath);
+  const cached = statisticsCache.get(artifactKey);
   if (cached) {
     update({
       ...model,
@@ -1024,7 +1172,7 @@ async function openStatistics(frameId: string): Promise<void> {
     const statistics = await inspectFitsStatistics(frame.sourcePath);
     if (ticket !== statisticsTicket || model.selectedFrameId !== frame.id)
       return;
-    statisticsCache.set(frame.id, statistics);
+    statisticsCache.set(artifactKey, statistics);
     update({
       ...model,
       statisticsPanel: {

@@ -82,7 +82,9 @@ optimized CPU and GPU paths must match.
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,
   explicit manual decisions, a single bounded native calibration slot,
   transactional master execution plus selectable per-frame or integrated-Light
-  output, source-aware live progress, cooperative cancellation, and a
+  output, source-aware live progress, direct identity-preserving calibrated
+  Blink review with an explicit raw/calibrated switch, cooperative cancellation,
+  and a
   presenter boundary that leaves scientific state in Rust;
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,

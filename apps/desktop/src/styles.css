@@ -1246,6 +1246,30 @@ tr[data-state="blocked"] .association-state {
   gap: 8px;
 }
 
+.frame-stage-switch {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  background: linear-gradient(180deg, #080c11, #141b24);
+  border: 1px solid #354253;
+  border-radius: 10px;
+  box-shadow:
+    inset 0 3px 8px #000c,
+    0 1px #ffffff0b;
+}
+
+.frame-stage-switch .tool-button {
+  min-height: 30px;
+  border-radius: 6px;
+}
+
+.frame-stage-switch .tool-button:disabled {
+  color: #657181;
+  background: #111720;
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .table-scroll {
   min-height: 0;
   overflow: auto;
