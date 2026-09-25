@@ -8,6 +8,7 @@ export interface MasterPlanSettings {
   readonly flatPedestalPolicy: FlatPedestalPolicy;
   readonly maximumExposureDeltaSeconds: number;
   readonly maximumTemperatureDeltaC: number;
+  readonly maximumLightDarkTemperatureDeltaC: number;
 }
 
 export type MasterProductKind = "bias" | "dark" | "flat";
@@ -68,6 +69,47 @@ export interface MasterPlanPreview {
   readonly planSha256: string;
   readonly ready: boolean;
   readonly products: readonly MasterProductPlan[];
+  readonly lightPlan: LightCalibrationPlan | null;
+}
+
+export type LightMasterKind = "dark" | "flat";
+
+export interface LightMasterAssociation {
+  readonly kind: LightMasterKind;
+  readonly status: "matched" | "unresolved";
+  readonly selectedGroupId: string | null;
+  readonly temperatureBasis: "sensor" | "set_point" | null;
+  readonly temperatureDeltaCelsius: number | null;
+  readonly blockingReason:
+    | "missing_light_metadata"
+    | "no_compatible_candidate"
+    | "ambiguous_candidates"
+    | null;
+  readonly ambiguousGroupIds: readonly string[];
+  readonly missingFields: readonly string[];
+}
+
+export interface LightMasterCandidate {
+  readonly groupId: string;
+  readonly kind: LightMasterKind;
+  readonly status: "compatible" | "rejected";
+  readonly temperatureBasis: "sensor" | "set_point" | null;
+  readonly temperatureDeltaCelsius: number | null;
+  readonly mismatches: readonly MasterPedestalMismatch[];
+}
+
+export interface LightCalibrationProduct {
+  readonly groupId: string;
+  readonly dark: LightMasterAssociation;
+  readonly flat: LightMasterAssociation;
+  readonly candidates: readonly LightMasterCandidate[];
+}
+
+export interface LightCalibrationPlan {
+  readonly schemaVersion: number;
+  readonly planSha256: string;
+  readonly ready: boolean;
+  readonly products: readonly LightCalibrationProduct[];
 }
 
 export interface MasterBuildSettings {

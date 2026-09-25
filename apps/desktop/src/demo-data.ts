@@ -35,12 +35,61 @@ export const demoReviewModel: ReviewViewModel = {
       flatPedestalPolicy: "prefer_matched_dark_then_bias",
       maximumExposureDeltaSeconds: 0.25,
       maximumTemperatureDeltaC: 2,
+      maximumLightDarkTemperatureDeltaC: 2,
     },
     plan: {
       schemaVersion: 1,
       manifestSha256: "a".repeat(64),
       planSha256: "b".repeat(64),
       ready: true,
+      lightPlan: {
+        schemaVersion: 1,
+        planSha256: "c".repeat(64),
+        ready: true,
+        products: [
+          {
+            groupId: "light-uvir-2s-g120-o30",
+            dark: {
+              kind: "dark",
+              status: "matched",
+              selectedGroupId: "dark-2s-g120-o30",
+              temperatureBasis: "sensor",
+              temperatureDeltaCelsius: 0.4,
+              blockingReason: null,
+              ambiguousGroupIds: [],
+              missingFields: [],
+            },
+            flat: {
+              kind: "flat",
+              status: "matched",
+              selectedGroupId: "flat-uvir-2s-g120-o30",
+              temperatureBasis: null,
+              temperatureDeltaCelsius: null,
+              blockingReason: null,
+              ambiguousGroupIds: [],
+              missingFields: [],
+            },
+            candidates: [
+              {
+                groupId: "dark-2s-g120-o30",
+                kind: "dark",
+                status: "compatible",
+                temperatureBasis: "sensor",
+                temperatureDeltaCelsius: 0.4,
+                mismatches: [],
+              },
+              {
+                groupId: "flat-uvir-2s-g120-o30",
+                kind: "flat",
+                status: "compatible",
+                temperatureBasis: null,
+                temperatureDeltaCelsius: null,
+                mismatches: [],
+              },
+            ],
+          },
+        ],
+      },
       products: [
         {
           groupId: "dark-2s-g120-o30",
@@ -104,7 +153,7 @@ export const demoReviewModel: ReviewViewModel = {
         },
       ],
     },
-    message: "2 master groups · all dependencies resolved",
+    message: "2 master groups · 1 Light group ready",
     buildSettings: {
       minimumFlatNormalizationSamples: 1_024,
       minimumPositiveFlatMedian: 1e-12,

@@ -119,7 +119,7 @@ evidence, not automatically an AetherStack default.
 
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
-| Calibration association matrix | Display status for bias, dark, flat, optimization, CFA, and output pedestal for every light group. | Bounded Dark/Flat association model implemented; desktop matrix pending |
+| Calibration association matrix | Display status for bias, dark, flat, optimization, CFA, and output pedestal for every light group. | Native Dark/Flat association matrix implemented with Ready/Blocked states and complete candidate evidence; optimization and output-pedestal columns remain research-gated |
 | Automatic bias, dark, and flat selection | Produce an inspectable plan with deterministic tie-breaking and no silent fallback. | Deterministic master and Light plans, explicit policies/tolerances, exclusive selection, candidate evidence, and master desktop preview implemented |
 | Output pedestal: automatic or explicit | Define storage purpose, units, clipping interaction, and reversibility. | Research-gated |
 | Cosmetic correction: automatic | Generate a defect model with evidence and a before/after diagnostic map. | Planned |

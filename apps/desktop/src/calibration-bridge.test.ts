@@ -30,12 +30,14 @@ describe("native calibration bridge", () => {
       planSha256: "b".repeat(64),
       ready: true,
       products: [],
+      lightPlan: null,
     };
     vi.mocked(invoke).mockResolvedValue(expected);
     const settings = {
       flatPedestalPolicy: "prefer_matched_dark_then_bias" as const,
       maximumExposureDeltaSeconds: 0.1,
       maximumTemperatureDeltaC: 2,
+      maximumLightDarkTemperatureDeltaC: 2,
     };
 
     await expect(previewMasterPlan(settings)).resolves.toBe(expected);
@@ -59,6 +61,7 @@ describe("native calibration bridge", () => {
       flatPedestalPolicy: "prefer_matched_dark_then_bias" as const,
       maximumExposureDeltaSeconds: 0.1,
       maximumTemperatureDeltaC: 2,
+      maximumLightDarkTemperatureDeltaC: 2,
     };
     const build = {
       minimumFlatNormalizationSamples: 1_024,

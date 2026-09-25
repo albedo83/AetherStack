@@ -482,6 +482,8 @@ button:active:not(:disabled) {
 }
 
 .master-rack {
+  display: grid;
+  grid-template-rows: max-content minmax(220px, 1fr) minmax(250px, 0.8fr);
   min-height: 620px;
 }
 
@@ -672,9 +674,143 @@ button:active:not(:disabled) {
   display: grid;
   align-content: start;
   gap: 12px;
-  max-height: calc(100vh - 230px);
+  min-height: 0;
   padding: 14px;
   overflow: auto;
+}
+
+.light-association-panel {
+  min-height: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0d141c, #090d12);
+  border-top: 1px solid #3b4858;
+  box-shadow: inset 0 1px #ffffff08;
+}
+
+.light-association-panel__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 16px;
+  background: linear-gradient(180deg, #1a2531, #111821);
+  border-bottom: 1px solid #303c4a;
+}
+
+.light-association-panel__heading h3,
+.light-association-panel__heading p {
+  margin: 0;
+}
+
+.light-matrix-scroll {
+  height: calc(100% - 65px);
+  overflow: auto;
+}
+
+.light-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.light-matrix th,
+.light-matrix td {
+  max-width: 260px;
+  padding: 10px 12px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  border-bottom: 1px solid #293440;
+}
+
+.light-matrix thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: #aebfd1;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #111923;
+  box-shadow: inset 0 -1px #3a4756;
+}
+
+.light-matrix tbody tr {
+  background: #0d131a;
+}
+
+.light-matrix tbody tr:nth-child(even) {
+  background: #111821;
+}
+
+.light-matrix tbody tr[data-state="blocked"] {
+  background: linear-gradient(90deg, #2a2114, #121820 42%);
+}
+
+.light-matrix th[scope="row"],
+.light-matrix td > strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.light-matrix td > small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.association-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  color: #a9efd0;
+  font-size: 10px;
+  font-weight: 750;
+  background: #15372d;
+  border: 1px solid #2b735b;
+  border-radius: 999px;
+  box-shadow: inset 0 1px #ffffff12;
+}
+
+tr[data-state="blocked"] .association-state {
+  color: #f5d79b;
+  background: #3d2d13;
+  border-color: #7a5b24;
+}
+
+.light-matrix .candidate-evidence summary {
+  white-space: nowrap;
+}
+
+.light-matrix .candidate-evidence ul {
+  min-width: 300px;
+  padding-left: 16px;
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.light-matrix__empty {
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  min-height: 180px;
+  padding: 24px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.light-matrix__empty strong {
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .master-card {

@@ -531,6 +531,13 @@ safety reasoning. They do not narrate obvious syntax.
     evidence, tamper rejection, and role-specific tests are complete. Native
     preview, calibrated-Light publication, dark scaling, defect correction, and
     uncertainty propagation remain next.
+23. Expose Light associations in the desktop calibration laboratory. The native
+    preview now constructs the exact digest-bound Light plan only after every
+    master dependency is ready, and projects selected Dark/Flat identities,
+    temperature evidence, missing fields, ambiguities, and every rejected
+    candidate through typed IPC. The dark UI renders a responsive execution-gate
+    matrix with explicit Ready/Blocked states and expandable evidence. Native
+    calibrated-Light publication remains next.
 
 ## 11. Stable-release definition
 

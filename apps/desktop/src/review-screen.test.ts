@@ -105,7 +105,49 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("Master Dark");
     expect(root.textContent).toContain("Master Flat");
     expect(root.textContent).toContain("Matched dark selected");
-    expect(root.textContent).toContain("all dependencies resolved");
+    expect(root.textContent).toContain("Light calibration matrix");
+    expect(root.textContent).toContain("light-uvir-2s-g120-o30");
+    expect(root.textContent).toContain("dark-2s-g120-o30");
+    expect(root.textContent).toContain("1 Light group ready");
+  });
+
+  it("keeps ambiguous Light associations visibly blocked", () => {
+    const lightPlan = demoReviewModel.calibration.plan?.lightPlan;
+    if (!lightPlan) throw new Error("demo Light plan is missing");
+    const source = lightPlan.products[0];
+    if (!source) throw new Error("demo Light product is missing");
+    const blocked = {
+      ...demoReviewModel,
+      activeWorkspace: "calibration" as const,
+      calibration: {
+        ...demoReviewModel.calibration,
+        plan: {
+          ...demoReviewModel.calibration.plan!,
+          lightPlan: {
+            ...lightPlan,
+            ready: false,
+            products: [
+              {
+                ...source,
+                dark: {
+                  ...source.dark,
+                  status: "unresolved" as const,
+                  selectedGroupId: null,
+                  temperatureBasis: null,
+                  temperatureDeltaCelsius: null,
+                  blockingReason: "ambiguous_candidates" as const,
+                  ambiguousGroupIds: ["dark-a", "dark-b"],
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const { root } = fixture(blocked);
+
+    expect(root.textContent).toContain("Blocked");
+    expect(root.textContent).toContain("Ambiguous · 2 candidates");
   });
 
   it("sends explicit matching controls back for native replanning", () => {
@@ -125,6 +167,7 @@ describe("frame review workspace", () => {
       flatPedestalPolicy: "require_bias",
       maximumExposureDeltaSeconds: 0.25,
       maximumTemperatureDeltaC: 2,
+      maximumLightDarkTemperatureDeltaC: 2,
     });
     fireEvent.click(getByRole(root, "button", { name: "↻ Rebuild plan" }));
     expect(actions.onRefreshMasterPlan).toHaveBeenCalledOnce();
@@ -631,12 +674,26 @@ describe("frame review workspace", () => {
   });
 
   it("has no automatically detectable accessibility violations", async () => {
-    const { root } = fixture();
-    const report = await axe.run(root, {
+    const frames = fixture();
+    const { root } = frames;
+    const framesReport = await axe.run(root, {
       rules: {
         "color-contrast": { enabled: false },
       },
     });
-    expect(report.violations).toEqual([]);
+    expect(framesReport.violations).toEqual([]);
+    frames.controller.destroy();
+    frames.root.remove();
+
+    const calibration = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "calibration",
+    });
+    const calibrationReport = await axe.run(calibration.root, {
+      rules: {
+        "color-contrast": { enabled: false },
+      },
+    });
+    expect(calibrationReport.violations).toEqual([]);
   });
 });

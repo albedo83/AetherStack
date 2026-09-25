@@ -40,10 +40,12 @@ use aether_runtime::{
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
-    FlatPedestalAssociation, FlatPedestalBlockingReason, FlatPedestalPolicy, ManifestFile,
-    ManifestGroup, MasterPlan, MasterPlanOptions, MasterProductKind,
-    PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason, PedestalSourceKind,
-    SessionManifest, TemperatureBasis, generate_manifest_from_directory,
+    FlatPedestalAssociation, FlatPedestalBlockingReason, FlatPedestalPolicy, LightCalibrationPlan,
+    LightCalibrationPlanOptions, LightMasterAssociation, LightMasterBlockingReason,
+    LightMasterCandidateCompatibility, LightMasterKind, LightMasterMatchField,
+    LightMasterMismatchReason, ManifestFile, ManifestGroup, MasterPlan, MasterPlanOptions,
+    MasterProductKind, PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason,
+    PedestalSourceKind, SessionManifest, TemperatureBasis, generate_manifest_from_directory,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Response;
@@ -313,6 +315,7 @@ struct MasterPlanPreviewRequest {
     flat_pedestal_policy: FlatPedestalPolicyWire,
     maximum_exposure_delta_seconds: f64,
     maximum_temperature_delta_c: f64,
+    maximum_light_dark_temperature_delta_c: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -337,6 +340,57 @@ struct MasterPlanPreviewResponse {
     plan_sha256: String,
     ready: bool,
     products: Vec<MasterProductPreview>,
+    light_plan: Option<LightCalibrationPlanPreview>,
+}
+
+/// Display projection of the immutable Light-to-master association plan.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightCalibrationPlanPreview {
+    schema_version: u32,
+    plan_sha256: String,
+    ready: bool,
+    products: Vec<LightCalibrationProductPreview>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightCalibrationProductPreview {
+    group_id: String,
+    dark: LightMasterAssociationPreview,
+    flat: LightMasterAssociationPreview,
+    candidates: Vec<LightMasterCandidatePreview>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightMasterAssociationPreview {
+    kind: &'static str,
+    status: &'static str,
+    selected_group_id: Option<String>,
+    temperature_basis: Option<&'static str>,
+    temperature_delta_celsius: Option<f64>,
+    blocking_reason: Option<&'static str>,
+    ambiguous_group_ids: Vec<String>,
+    missing_fields: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightMasterCandidatePreview {
+    group_id: String,
+    kind: &'static str,
+    status: &'static str,
+    temperature_basis: Option<&'static str>,
+    temperature_delta_celsius: Option<f64>,
+    mismatches: Vec<LightMasterMismatchPreview>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightMasterMismatchPreview {
+    field: &'static str,
+    reason: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1153,7 +1207,11 @@ fn preview_master_plan_sync(
         ));
     }
     let plan = build_master_plan(&session.manifest, request)?;
-    master_plan_preview(&session.manifest, &plan)
+    master_plan_preview(
+        &session.manifest,
+        &plan,
+        request.maximum_light_dark_temperature_delta_c,
+    )
 }
 
 fn build_master_plan(
@@ -1292,6 +1350,7 @@ where
 fn master_plan_preview(
     manifest: &SessionManifest,
     plan: &MasterPlan,
+    maximum_light_dark_temperature_delta_c: f64,
 ) -> Result<MasterPlanPreviewResponse, PreviewCommandError> {
     let mut products = Vec::new();
     products
@@ -1305,6 +1364,16 @@ fn master_plan_preview(
             .ok_or_else(master_plan_generation_error)?;
         products.push(master_product_preview(group, product)?);
     }
+    let light_plan = if plan.is_ready() {
+        let options = LightCalibrationPlanOptions::new(maximum_light_dark_temperature_delta_c)
+            .map_err(|_| light_plan_options_error())?;
+        let light_plan =
+            LightCalibrationPlan::from_manifest_and_master_plan(manifest, plan, options)
+                .map_err(|_| light_plan_generation_error())?;
+        Some(light_calibration_plan_preview(&light_plan)?)
+    } else {
+        None
+    };
     Ok(MasterPlanPreviewResponse {
         schema_version: plan.schema_version(),
         manifest_sha256: manifest
@@ -1315,7 +1384,139 @@ fn master_plan_preview(
             .map_err(|_| master_plan_generation_error())?,
         ready: plan.is_ready(),
         products,
+        light_plan,
     })
+}
+
+fn light_calibration_plan_preview(
+    plan: &LightCalibrationPlan,
+) -> Result<LightCalibrationPlanPreview, PreviewCommandError> {
+    let mut products = Vec::new();
+    products
+        .try_reserve_exact(plan.products().len())
+        .map_err(|_| master_plan_allocation_error())?;
+    for product in plan.products() {
+        let mut candidates = Vec::new();
+        candidates
+            .try_reserve_exact(product.candidates().len())
+            .map_err(|_| master_plan_allocation_error())?;
+        for candidate in product.candidates() {
+            candidates.push(light_master_candidate_preview(candidate)?);
+        }
+        products.push(LightCalibrationProductPreview {
+            group_id: product.source_group_id().to_owned(),
+            dark: light_master_association_preview(product.dark())?,
+            flat: light_master_association_preview(product.flat())?,
+            candidates,
+        });
+    }
+    Ok(LightCalibrationPlanPreview {
+        schema_version: plan.schema_version(),
+        plan_sha256: plan
+            .canonical_sha256()
+            .map_err(|_| light_plan_generation_error())?,
+        ready: plan.is_ready(),
+        products,
+    })
+}
+
+fn light_master_association_preview(
+    association: &LightMasterAssociation,
+) -> Result<LightMasterAssociationPreview, PreviewCommandError> {
+    match association {
+        LightMasterAssociation::Matched {
+            group_id,
+            kind,
+            temperature_basis,
+            temperature_delta_c,
+        } => Ok(LightMasterAssociationPreview {
+            kind: light_master_kind_name(*kind),
+            status: "matched",
+            selected_group_id: Some(group_id.clone()),
+            temperature_basis: temperature_basis.map(temperature_basis_name),
+            temperature_delta_celsius: *temperature_delta_c,
+            blocking_reason: None,
+            ambiguous_group_ids: Vec::new(),
+            missing_fields: Vec::new(),
+        }),
+        LightMasterAssociation::Unresolved {
+            kind,
+            blocking_reason,
+        } => {
+            let mut preview = LightMasterAssociationPreview {
+                kind: light_master_kind_name(*kind),
+                status: "unresolved",
+                selected_group_id: None,
+                temperature_basis: None,
+                temperature_delta_celsius: None,
+                blocking_reason: Some(light_master_blocking_reason_name(blocking_reason)),
+                ambiguous_group_ids: Vec::new(),
+                missing_fields: Vec::new(),
+            };
+            match blocking_reason {
+                LightMasterBlockingReason::MissingLightMetadata { fields } => {
+                    preview
+                        .missing_fields
+                        .try_reserve_exact(fields.len())
+                        .map_err(|_| master_plan_allocation_error())?;
+                    preview
+                        .missing_fields
+                        .extend(fields.iter().copied().map(light_master_match_field_name));
+                }
+                LightMasterBlockingReason::AmbiguousCandidates { group_ids } => {
+                    preview
+                        .ambiguous_group_ids
+                        .try_reserve_exact(group_ids.len())
+                        .map_err(|_| master_plan_allocation_error())?;
+                    preview
+                        .ambiguous_group_ids
+                        .extend(group_ids.iter().cloned());
+                }
+                LightMasterBlockingReason::NoCompatibleCandidate => {}
+            }
+            Ok(preview)
+        }
+    }
+}
+
+fn light_master_candidate_preview(
+    candidate: &aether_session::LightMasterCandidateEvaluation,
+) -> Result<LightMasterCandidatePreview, PreviewCommandError> {
+    match candidate.compatibility() {
+        LightMasterCandidateCompatibility::Compatible {
+            temperature_basis,
+            temperature_delta_c,
+        } => Ok(LightMasterCandidatePreview {
+            group_id: candidate.group_id().to_owned(),
+            kind: light_master_kind_name(candidate.kind()),
+            status: "compatible",
+            temperature_basis: temperature_basis.map(temperature_basis_name),
+            temperature_delta_celsius: *temperature_delta_c,
+            mismatches: Vec::new(),
+        }),
+        LightMasterCandidateCompatibility::Rejected { mismatches } => {
+            let mut preview = Vec::new();
+            preview
+                .try_reserve_exact(mismatches.len())
+                .map_err(|_| master_plan_allocation_error())?;
+            preview.extend(
+                mismatches
+                    .iter()
+                    .map(|mismatch| LightMasterMismatchPreview {
+                        field: light_master_match_field_name(mismatch.field()),
+                        reason: light_master_mismatch_reason_name(mismatch.reason()),
+                    }),
+            );
+            Ok(LightMasterCandidatePreview {
+                group_id: candidate.group_id().to_owned(),
+                kind: light_master_kind_name(candidate.kind()),
+                status: "rejected",
+                temperature_basis: None,
+                temperature_delta_celsius: None,
+                mismatches: preview,
+            })
+        }
+    }
 }
 
 fn master_product_preview(
@@ -1529,6 +1730,44 @@ const fn flat_blocking_reason_name(reason: &FlatPedestalBlockingReason) -> &'sta
     }
 }
 
+const fn light_master_kind_name(kind: LightMasterKind) -> &'static str {
+    match kind {
+        LightMasterKind::Dark => "dark",
+        LightMasterKind::Flat => "flat",
+    }
+}
+
+const fn light_master_match_field_name(field: LightMasterMatchField) -> &'static str {
+    match field {
+        LightMasterMatchField::Camera => "camera",
+        LightMasterMatchField::Axes => "axes",
+        LightMasterMatchField::Exposure => "exposure",
+        LightMasterMatchField::SensorTemperature => "sensor_temperature",
+        LightMasterMatchField::SetTemperature => "set_temperature",
+        LightMasterMatchField::Gain => "gain",
+        LightMasterMatchField::Offset => "offset",
+        LightMasterMatchField::Binning => "binning",
+        LightMasterMatchField::Filter => "filter",
+        LightMasterMatchField::BayerPattern => "bayer_pattern",
+    }
+}
+
+const fn light_master_mismatch_reason_name(reason: LightMasterMismatchReason) -> &'static str {
+    match reason {
+        LightMasterMismatchReason::Missing => "missing",
+        LightMasterMismatchReason::Different => "different",
+        LightMasterMismatchReason::OutsideTolerance => "outside_tolerance",
+    }
+}
+
+const fn light_master_blocking_reason_name(reason: &LightMasterBlockingReason) -> &'static str {
+    match reason {
+        LightMasterBlockingReason::MissingLightMetadata { .. } => "missing_light_metadata",
+        LightMasterBlockingReason::NoCompatibleCandidate => "no_compatible_candidate",
+        LightMasterBlockingReason::AmbiguousCandidates { .. } => "ambiguous_candidates",
+    }
+}
+
 const fn master_plan_options_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "master_plan_options_invalid",
@@ -1540,6 +1779,20 @@ const fn master_plan_generation_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "master_plan_generation_failed",
         "The imported manifest could not produce a coherent master plan.",
+    )
+}
+
+const fn light_plan_options_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "light_plan_options_invalid",
+        "Light-to-Dark temperature tolerance must be finite and non-negative.",
+    )
+}
+
+const fn light_plan_generation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "light_plan_generation_failed",
+        "The reviewed master plan could not produce coherent Light associations.",
     )
 }
 
@@ -2199,10 +2452,13 @@ mod tests {
     fn planning_session(root: &Path) -> TestResult<ImportedNativeSession> {
         let dark = planning_file(root, "DARKS/dark.fits", FrameType::Dark)?;
         let flat = planning_file(root, "FLATS/flat.fits", FrameType::Flat)?;
+        let light = planning_file(root, "LIGHTS/light.fits", FrameType::Light)?;
         let dark_key =
             StrictGroupingKey::from_metadata(FrameType::Dark, dark.metadata(), dark.axes())?;
         let flat_key =
             StrictGroupingKey::from_metadata(FrameType::Flat, flat.metadata(), flat.axes())?;
+        let light_key =
+            StrictGroupingKey::from_metadata(FrameType::Light, light.metadata(), light.axes())?;
         let groups = vec![
             ManifestGroup::new(
                 "dark-2s",
@@ -2218,12 +2474,19 @@ mod tests {
                 Vec::new(),
                 None,
             )?,
+            ManifestGroup::new(
+                "light-uvir",
+                light_key,
+                vec![light.relative_path().to_owned()],
+                Vec::new(),
+                None,
+            )?,
         ];
         Ok(ImportedNativeSession {
             root: root.to_owned(),
             manifest: Arc::new(SessionManifest::new(
                 ClassificationPolicy::RequireAgreement,
-                vec![dark, flat],
+                vec![dark, flat, light],
                 groups,
             )?),
         })
@@ -2238,6 +2501,7 @@ mod tests {
             flat_pedestal_policy: policy,
             maximum_exposure_delta_seconds: 0.01,
             maximum_temperature_delta_c: 1.0,
+            maximum_light_dark_temperature_delta_c: 2.0,
         };
         let preview = preview_master_plan_sync(session, planning)?;
         Ok(MasterPlanExecutionCommandRequest {
@@ -2335,6 +2599,7 @@ mod tests {
                 flat_pedestal_policy: FlatPedestalPolicyWire::PreferMatchedDarkThenBias,
                 maximum_exposure_delta_seconds: 0.01,
                 maximum_temperature_delta_c: 1.0,
+                maximum_light_dark_temperature_delta_c: 2.0,
             },
         )?;
 
@@ -2362,6 +2627,22 @@ mod tests {
         assert_eq!(preview.products[1].candidates.len(), 1);
         assert_eq!(preview.products[1].candidates[0].status, "compatible");
         assert!(preview.products[1].candidates[0].mismatches.is_empty());
+        let light_plan = preview.light_plan.ok_or("light plan missing")?;
+        assert!(light_plan.ready);
+        assert_eq!(light_plan.schema_version, 1);
+        assert_eq!(light_plan.plan_sha256.len(), 64);
+        assert_eq!(light_plan.products.len(), 1);
+        assert_eq!(light_plan.products[0].group_id, "light-uvir");
+        assert_eq!(light_plan.products[0].dark.status, "matched");
+        assert_eq!(
+            light_plan.products[0].dark.selected_group_id.as_deref(),
+            Some("dark-2s")
+        );
+        assert_eq!(light_plan.products[0].flat.status, "matched");
+        assert_eq!(
+            light_plan.products[0].flat.selected_group_id.as_deref(),
+            Some("flat-uvir")
+        );
         Ok(())
     }
 
@@ -2519,12 +2800,26 @@ mod tests {
                 flat_pedestal_policy: FlatPedestalPolicyWire::RequireMatchedDark,
                 maximum_exposure_delta_seconds: -0.01,
                 maximum_temperature_delta_c: 1.0,
+                maximum_light_dark_temperature_delta_c: 2.0,
             },
         )
         .err()
         .ok_or("negative plan tolerance was accepted")?;
 
         assert_eq!(error.code, "master_plan_options_invalid");
+
+        let error = preview_master_plan_sync(
+            &session,
+            MasterPlanPreviewRequest {
+                flat_pedestal_policy: FlatPedestalPolicyWire::RequireMatchedDark,
+                maximum_exposure_delta_seconds: 0.01,
+                maximum_temperature_delta_c: 1.0,
+                maximum_light_dark_temperature_delta_c: f64::NAN,
+            },
+        )
+        .err()
+        .ok_or("non-finite Light-to-Dark tolerance was accepted")?;
+        assert_eq!(error.code, "light_plan_options_invalid");
         Ok(())
     }
 

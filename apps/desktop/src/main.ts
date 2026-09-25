@@ -480,15 +480,24 @@ async function refreshMasterPlan(): Promise<void> {
     const unresolved = plan.products.filter(
       (product) => product.pedestal.status === "unresolved",
     ).length;
+    const unresolvedLights =
+      plan.lightPlan?.products.filter(
+        (product) =>
+          product.dark.status === "unresolved" ||
+          product.flat.status === "unresolved",
+      ).length ?? 0;
+    const lightCount = plan.lightPlan?.products.length ?? 0;
     update({
       ...model,
       calibration: {
         ...model.calibration,
         state: "ready",
         plan,
-        message: plan.ready
-          ? `${plan.products.length} master groups · all dependencies resolved`
-          : `${unresolved} flat group${unresolved === 1 ? "" : "s"} require attention`,
+        message: !plan.ready
+          ? `${unresolved} flat group${unresolved === 1 ? "" : "s"} require attention`
+          : unresolvedLights > 0
+            ? `${unresolvedLights} Light group${unresolvedLights === 1 ? "" : "s"} require master attention`
+            : `${plan.products.length} master groups · ${lightCount} Light group${lightCount === 1 ? "" : "s"} ready`,
       },
     });
   } catch {

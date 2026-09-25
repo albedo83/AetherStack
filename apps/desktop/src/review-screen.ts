@@ -1,4 +1,6 @@
 import type {
+  LightCalibrationProduct,
+  LightMasterAssociation,
   MasterPlanSettings,
   MasterProductPlan,
 } from "./calibration-bridge.ts";
@@ -61,6 +63,12 @@ export function mountReviewScreen(
       root,
       "[data-temperature-tolerance]",
     ),
+    lightTemperatureTolerance: required<HTMLInputElement>(
+      root,
+      "[data-light-temperature-tolerance]",
+    ),
+    lightAssociations: required<HTMLElement>(root, "[data-light-associations]"),
+    lightDigest: required<HTMLElement>(root, "[data-light-digest]"),
     refreshMasterPlan: required<HTMLButtonElement>(
       root,
       '[data-action="refresh-master-plan"]',
@@ -326,7 +334,8 @@ export function mountReviewScreen(
     if (
       target !== elements.pedestalPolicy &&
       target !== elements.exposureTolerance &&
-      target !== elements.temperatureTolerance
+      target !== elements.temperatureTolerance &&
+      target !== elements.lightTemperatureTolerance
     ) {
       return;
     }
@@ -879,6 +888,9 @@ interface CalibrationElements {
   readonly pedestalPolicy: HTMLSelectElement;
   readonly exposureTolerance: HTMLInputElement;
   readonly temperatureTolerance: HTMLInputElement;
+  readonly lightTemperatureTolerance: HTMLInputElement;
+  readonly lightAssociations: HTMLElement;
+  readonly lightDigest: HTMLElement;
   readonly refreshMasterPlan: HTMLButtonElement;
   readonly executeMasterPlan: HTMLButtonElement;
   readonly cancelMasterPlan: HTMLButtonElement;
@@ -891,7 +903,10 @@ interface CalibrationElements {
 function calibrationSettings(
   elements: Pick<
     CalibrationElements,
-    "pedestalPolicy" | "exposureTolerance" | "temperatureTolerance"
+    | "pedestalPolicy"
+    | "exposureTolerance"
+    | "temperatureTolerance"
+    | "lightTemperatureTolerance"
   >,
 ): MasterPlanSettings | null {
   const policy = elements.pedestalPolicy.value;
@@ -904,11 +919,15 @@ function calibrationSettings(
   }
   const maximumExposureDeltaSeconds = elements.exposureTolerance.valueAsNumber;
   const maximumTemperatureDeltaC = elements.temperatureTolerance.valueAsNumber;
+  const maximumLightDarkTemperatureDeltaC =
+    elements.lightTemperatureTolerance.valueAsNumber;
   if (
     !Number.isFinite(maximumExposureDeltaSeconds) ||
     maximumExposureDeltaSeconds < 0 ||
     !Number.isFinite(maximumTemperatureDeltaC) ||
-    maximumTemperatureDeltaC < 0
+    maximumTemperatureDeltaC < 0 ||
+    !Number.isFinite(maximumLightDarkTemperatureDeltaC) ||
+    maximumLightDarkTemperatureDeltaC < 0
   ) {
     return null;
   }
@@ -916,6 +935,7 @@ function calibrationSettings(
     flatPedestalPolicy: policy,
     maximumExposureDeltaSeconds,
     maximumTemperatureDeltaC,
+    maximumLightDarkTemperatureDeltaC,
   };
 }
 
@@ -931,6 +951,9 @@ function renderCalibration(
   elements.temperatureTolerance.value = String(
     calibration.settings.maximumTemperatureDeltaC,
   );
+  elements.lightTemperatureTolerance.value = String(
+    calibration.settings.maximumLightDarkTemperatureDeltaC,
+  );
   elements.calibrationStatus.dataset.state = calibration.state;
   elements.calibrationStatus.textContent = calibration.message;
   const execution = calibration.execution;
@@ -943,6 +966,7 @@ function renderCalibration(
   elements.pedestalPolicy.disabled = executionBusy;
   elements.exposureTolerance.disabled = executionBusy;
   elements.temperatureTolerance.disabled = executionBusy;
+  elements.lightTemperatureTolerance.disabled = executionBusy;
   elements.executeMasterPlan.disabled =
     !calibration.plan?.ready || executionBusy || !model.reviewSessionReady;
   elements.executeMasterPlan.hidden = executionBusy;
@@ -976,6 +1000,154 @@ function renderCalibration(
     nodes.push(empty);
   }
   elements.calibrationProducts.replaceChildren(...nodes);
+  renderLightAssociations(elements, plan);
+}
+
+function renderLightAssociations(
+  elements: Pick<CalibrationElements, "lightAssociations" | "lightDigest">,
+  plan: ReviewViewModel["calibration"]["plan"],
+): void {
+  const lightPlan = plan?.lightPlan ?? null;
+  elements.lightDigest.textContent = lightPlan
+    ? `LIGHT ${lightPlan.planSha256.slice(0, 12)}`
+    : "LIGHT —";
+  elements.lightDigest.title =
+    lightPlan?.planSha256 ?? "Light associations wait for a ready master plan";
+
+  if (!lightPlan) {
+    const blocked = document.createElement("div");
+    blocked.className = "light-matrix__empty";
+    const title = document.createElement("strong");
+    title.textContent = "Light associations are gated";
+    const detail = document.createElement("span");
+    detail.textContent =
+      "Resolve every Flat pedestal before matching Lights to generated masters.";
+    blocked.append(title, detail);
+    elements.lightAssociations.replaceChildren(blocked);
+    return;
+  }
+
+  if (lightPlan.products.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "light-matrix__empty";
+    const title = document.createElement("strong");
+    title.textContent = "No Light groups in this session";
+    const detail = document.createElement("span");
+    detail.textContent =
+      "The master plan remains valid and can be built independently.";
+    empty.append(title, detail);
+    elements.lightAssociations.replaceChildren(empty);
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "light-matrix";
+  table.setAttribute("aria-label", "Light calibration associations");
+  const head = document.createElement("thead");
+  const heading = document.createElement("tr");
+  for (const label of [
+    "Light group",
+    "Dark master",
+    "Flat master",
+    "State",
+    "Evidence",
+  ]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    heading.append(cell);
+  }
+  head.append(heading);
+  const body = document.createElement("tbody");
+  for (const product of lightPlan.products)
+    body.append(lightAssociationRow(product));
+  table.append(head, body);
+  elements.lightAssociations.replaceChildren(table);
+}
+
+function lightAssociationRow(
+  product: LightCalibrationProduct,
+): HTMLTableRowElement {
+  const row = document.createElement("tr");
+  row.dataset.state =
+    product.dark.status === "matched" && product.flat.status === "matched"
+      ? "ready"
+      : "blocked";
+  const identity = document.createElement("th");
+  identity.scope = "row";
+  identity.textContent = product.groupId;
+  identity.title = product.groupId;
+  row.append(
+    identity,
+    lightAssociationCell(product.dark),
+    lightAssociationCell(product.flat),
+  );
+  const state = document.createElement("td");
+  const badge = document.createElement("span");
+  badge.className = "association-state";
+  badge.textContent = row.dataset.state === "ready" ? "Ready" : "Blocked";
+  state.append(badge);
+
+  const evidence = document.createElement("td");
+  const details = document.createElement("details");
+  details.className = "candidate-evidence";
+  const summary = document.createElement("summary");
+  const compatible = product.candidates.filter(
+    (candidate) => candidate.status === "compatible",
+  ).length;
+  summary.textContent =
+    product.candidates.length === 0
+      ? "No master candidates"
+      : `${compatible}/${product.candidates.length} compatible`;
+  const list = document.createElement("ul");
+  for (const candidate of product.candidates) {
+    const item = document.createElement("li");
+    const reasons = candidate.mismatches
+      .map(
+        (mismatch) =>
+          `${humanize(mismatch.field)}: ${humanize(mismatch.reason)}`,
+      )
+      .join(", ");
+    item.textContent = `${candidate.kind.toUpperCase()} · ${candidate.groupId} · ${
+      candidate.status === "compatible" ? "compatible" : reasons
+    }`;
+    list.append(item);
+  }
+  details.append(summary, list);
+  evidence.append(details);
+  row.append(state, evidence);
+  return row;
+}
+
+function lightAssociationCell(
+  association: LightMasterAssociation,
+): HTMLTableCellElement {
+  const output = document.createElement("td");
+  const name = document.createElement("strong");
+  name.textContent =
+    association.selectedGroupId ?? associationBlockingLabel(association);
+  name.title = association.selectedGroupId ?? "Unresolved association";
+  output.append(name);
+  if (association.temperatureDeltaCelsius !== null) {
+    const temperature = document.createElement("small");
+    temperature.textContent = `${association.temperatureDeltaCelsius.toFixed(2)} °C · ${
+      association.temperatureBasis === "sensor" ? "sensor" : "set point"
+    }`;
+    output.append(temperature);
+  }
+  return output;
+}
+
+function associationBlockingLabel(association: LightMasterAssociation): string {
+  if (association.ambiguousGroupIds.length > 0) {
+    return `Ambiguous · ${association.ambiguousGroupIds.length} candidates`;
+  }
+  if (association.missingFields.length > 0) {
+    return `Missing · ${association.missingFields.map(humanize).join(", ")}`;
+  }
+  return association.blockingReason === "no_compatible_candidate"
+    ? "No compatible master"
+    : "Unresolved";
 }
 
 function renderMasterExecution(
@@ -1398,7 +1570,7 @@ function shellMarkup(): string {
             <div>
               <p class="eyebrow">Calibration laboratory</p>
               <h2 id="calibration-heading">Build exact master frames</h2>
-              <p class="workspace-intro">Bias, darks and flats remain separate. The native planner binds every flat to one exclusive pedestal source.</p>
+              <p class="workspace-intro">Bias, Darks, Flats and Lights remain separate. The native planner binds every Flat to one pedestal, then every Light to one exact Dark and one normalized Flat.</p>
             </div>
             <div class="workspace-heading__actions">
               <span class="calibration-readiness" data-calibration-status role="status" aria-live="polite"></span>
@@ -1435,6 +1607,10 @@ function shellMarkup(): string {
                   <span class="number-control"><input data-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><b>°C</b></span>
                 </label>
               </div>
+              <label class="control-field">
+                <span>Light ↔ Dark temperature tolerance</span>
+                <span class="number-control"><input data-light-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><b>°C</b></span>
+              </label>
               <p class="control-note">Exact camera, axes, gain, offset, binning and CFA phase are always required. Filter is not used to match darks or biases.</p>
               <details class="advanced-settings">
                 <summary>Advanced matching evidence</summary>
@@ -1460,6 +1636,16 @@ function shellMarkup(): string {
                 <code class="plan-digest" data-calibration-digest></code>
               </div>
               <div class="master-product-list" data-calibration-products></div>
+              <section class="light-association-panel" aria-labelledby="light-association-heading">
+                <div class="light-association-panel__heading">
+                  <div>
+                    <p class="eyebrow">Execution gate</p>
+                    <h3 id="light-association-heading">Light calibration matrix</h3>
+                  </div>
+                  <code class="plan-digest" data-light-digest></code>
+                </div>
+                <div class="light-matrix-scroll" data-light-associations></div>
+              </section>
             </section>
           </div>
         </section>
