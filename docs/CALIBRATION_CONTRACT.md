@@ -45,7 +45,9 @@ failures are typed errors and no partially calibrated image is returned.
 and writes one binary64 FITS image without integrating it with another frame.
 The request requires `AETHSRC = 1` and the distinct algorithm identifier
 `strict-calibrated-light-v1`, so a calibrated exposure cannot be mistaken for a
-stack. It uses the same strict FITS validation, source fingerprints, bounded
+stack. It also requires `AETHINP` to equal the source fingerprint SHA-256, so
+the product retains an exact path-free identity. It uses the same strict FITS
+validation, source fingerprints, bounded
 spatial tiling, exact complete-image statistics, verified checkpoints, final
 source revalidation, and atomic create-new publication as the integration path.
 

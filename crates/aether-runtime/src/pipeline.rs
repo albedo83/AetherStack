@@ -289,6 +289,9 @@ impl StrictCalibrationRequest {
         if provenance.algorithm_id() != STRICT_CALIBRATED_LIGHT_ALGORITHM_ID {
             return Err(StrictPipelineError::CalibrationProvenanceAlgorithmMismatch);
         }
+        if provenance.source_sha256() != Some(signal.fingerprint().sha256()) {
+            return Err(StrictPipelineError::CalibrationSourceProvenanceMismatch);
+        }
         Ok(Self {
             pipeline: StrictPipelineRequest {
                 signals: vec![signal],
@@ -679,6 +682,8 @@ pub enum StrictPipelineError {
     ProvenanceAlgorithmMismatch,
     /// Single-frame provenance names an algorithm other than strict calibration.
     CalibrationProvenanceAlgorithmMismatch,
+    /// Single-frame provenance does not identify the exact signal bytes.
+    CalibrationSourceProvenanceMismatch,
     /// Flat provenance names an algorithm other than the normalized-flat path.
     FlatProvenanceAlgorithmMismatch,
     /// A master product is not bound to the canonical master plan.
@@ -818,6 +823,7 @@ impl StrictPipelineError {
             Self::ProvenanceSourceCountMismatch { .. } => "provenance-source-count",
             Self::ProvenanceAlgorithmMismatch => "provenance-algorithm",
             Self::CalibrationProvenanceAlgorithmMismatch => "calibration-provenance-algorithm",
+            Self::CalibrationSourceProvenanceMismatch => "calibration-provenance-source",
             Self::FlatProvenanceAlgorithmMismatch => "flat-provenance-algorithm",
             Self::MissingMasterPlanProvenance => "master-plan-provenance",
             Self::FlatMasterRequiresCalibration => "flat-master-calibration",
@@ -884,6 +890,9 @@ impl Display for StrictPipelineError {
                 formatter,
                 "calibration provenance algorithm must be {STRICT_CALIBRATED_LIGHT_ALGORITHM_ID}"
             ),
+            Self::CalibrationSourceProvenanceMismatch => {
+                formatter.write_str("calibration provenance must contain the exact signal SHA-256")
+            }
             Self::FlatProvenanceAlgorithmMismatch => write!(
                 formatter,
                 "flat provenance algorithm must be {STRICT_FLAT_MASTER_ALGORITHM_ID}"
@@ -1024,6 +1033,7 @@ impl Error for StrictPipelineError {
             | Self::ProvenanceSourceCountMismatch { .. }
             | Self::ProvenanceAlgorithmMismatch
             | Self::CalibrationProvenanceAlgorithmMismatch
+            | Self::CalibrationSourceProvenanceMismatch
             | Self::FlatProvenanceAlgorithmMismatch
             | Self::MissingMasterPlanProvenance
             | Self::FlatMasterRequiresCalibration
@@ -3936,7 +3946,8 @@ mod tests {
         let paths = write_standard_inputs(&directory)?;
         let output = directory.path.join("calibrated-light.fits");
         let provenance = provenance(1, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)?
-            .with_plan_sha256("c".repeat(64))?;
+            .with_plan_sha256("c".repeat(64))?
+            .with_source_sha256(paths[0].fingerprint().sha256())?;
         let request = StrictCalibrationRequest::new(
             paths[0].clone(),
             paths[2].clone(),
@@ -4005,7 +4016,8 @@ mod tests {
                 paths[3].clone(),
                 output,
                 provenance(1, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)
-                    .and_then(|value| Ok(value.with_plan_sha256("c".repeat(64))?))?,
+                    .and_then(|value| Ok(value.with_plan_sha256("c".repeat(64))?))?
+                    .with_source_sha256(paths[0].fingerprint().sha256())?,
                 CalibrationParameters::new(1.0e-12)?,
             )
             .map_err(|error| Box::new(error) as Box<dyn StdError>)
@@ -4613,6 +4625,19 @@ mod tests {
         assert!(matches!(
             calibration_wrong_source_count,
             Err(StrictPipelineError::ProvenanceSourceCountMismatch { .. })
+        ));
+
+        let calibration_missing_source_digest = StrictCalibrationRequest::new(
+            placeholder_source("signal.fits")?,
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
+            PathBuf::from("calibrated.fits"),
+            provenance(1, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)?,
+            calibration,
+        );
+        assert!(matches!(
+            calibration_missing_source_digest,
+            Err(StrictPipelineError::CalibrationSourceProvenanceMismatch)
         ));
 
         let valid = StrictPipelineRequest::new(

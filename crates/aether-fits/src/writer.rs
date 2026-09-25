@@ -14,7 +14,7 @@ const INITIAL_CHECKSUM_VALUE: &str = "0000000000000000";
 /// Canonical quiet-NaN payload used for unavailable floating FITS samples.
 pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 /// Version of the provenance cards emitted by this writer.
-pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 2;
+pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 3;
 /// Maximum byte length of a canonical output algorithm identifier.
 pub const MAX_FITS_ALGORITHM_ID_BYTES: usize = 32;
 /// Maximum byte length of a portable session group identifier.
@@ -28,6 +28,7 @@ pub struct FitsOutputProvenance {
     group_id: String,
     algorithm_id: String,
     source_count: u32,
+    source_sha256: Option<String>,
 }
 
 impl FitsOutputProvenance {
@@ -68,6 +69,7 @@ impl FitsOutputProvenance {
             group_id,
             algorithm_id,
             source_count,
+            source_sha256: None,
         })
     }
 
@@ -122,6 +124,28 @@ impl FitsOutputProvenance {
     pub const fn source_count(&self) -> u32 {
         self.source_count
     }
+
+    /// Binds a single-frame product to the SHA-256 of its exact input bytes.
+    pub fn with_source_sha256(
+        mut self,
+        source_sha256: impl Into<String>,
+    ) -> Result<Self, FitsProvenanceError> {
+        if self.source_count != 1 {
+            return Err(FitsProvenanceError::SourceDigestRequiresSingleSource);
+        }
+        let source_sha256 = source_sha256.into();
+        if !is_lower_sha256(&source_sha256) {
+            return Err(FitsProvenanceError::InvalidSourceSha256);
+        }
+        self.source_sha256 = Some(source_sha256);
+        Ok(self)
+    }
+
+    /// Exact input digest for a single-frame product, when present.
+    #[must_use]
+    pub fn source_sha256(&self) -> Option<&str> {
+        self.source_sha256.as_deref()
+    }
 }
 
 /// Failure to construct canonical FITS output provenance.
@@ -137,6 +161,10 @@ pub enum FitsProvenanceError {
     InvalidAlgorithmId,
     /// A processed output must represent at least one source.
     ZeroSourceCount,
+    /// Per-source identity is not full lowercase SHA-256 hex.
+    InvalidSourceSha256,
+    /// Per-source identity cannot describe a multi-source product.
+    SourceDigestRequiresSingleSource,
 }
 
 impl Display for FitsProvenanceError {
@@ -153,6 +181,12 @@ impl Display for FitsProvenanceError {
                 formatter.write_str("algorithm identifier is not canonical")
             }
             Self::ZeroSourceCount => formatter.write_str("source count must be greater than zero"),
+            Self::InvalidSourceSha256 => {
+                formatter.write_str("source SHA-256 must be 64 lowercase hexadecimal digits")
+            }
+            Self::SourceDigestRequiresSingleSource => {
+                formatter.write_str("source SHA-256 requires exactly one represented source")
+            }
         }
     }
 }
@@ -555,7 +589,8 @@ pub fn write_f64_primary<W: Write>(
 /// Writes a binary64 primary FITS image with validated processing provenance.
 ///
 /// In addition to [`write_f64_primary`]'s image contract, this emits `CREATOR`,
-/// `AETHVER`, `AETHMAN`, optional `AETHPLN`, `AETHGRP`, `AETHALG`, and `AETHSRC`
+/// `AETHVER`, `AETHMAN`, optional `AETHPLN`, `AETHGRP`, `AETHALG`, `AETHSRC`,
+/// and optional single-source `AETHINP`
 /// cards. Identifiers are validated by [`FitsOutputProvenance`] before any
 /// output is accepted.
 ///
@@ -671,6 +706,9 @@ fn write_primary_header<W: Write>(
             &provenance.source_count().to_string(),
             &mut header_bytes,
         )?;
+        if let Some(source_sha256) = provenance.source_sha256() {
+            write_string_card(&mut header, "AETHINP", source_sha256, &mut header_bytes)?;
+        }
     }
     let checksum_offsets = if include_checksums {
         let datasum_card_offset = header_bytes;
@@ -1028,6 +1066,7 @@ mod tests {
         assert_eq!(provenance.group_id(), "b".repeat(64));
         assert_eq!(provenance.algorithm_id(), "strict-mean-v1");
         assert_eq!(provenance.source_count(), 3);
+        assert_eq!(provenance.source_sha256(), None);
 
         let explicit_group =
             FitsOutputProvenance::new("a".repeat(64), "light-001", "strict-mean-v1", 3)?;
@@ -1069,15 +1108,38 @@ mod tests {
                 Err(FitsProvenanceError::InvalidPlanSha256)
             ));
         }
+        assert!(matches!(
+            provenance.clone().with_source_sha256("d".repeat(64)),
+            Err(FitsProvenanceError::SourceDigestRequiresSingleSource)
+        ));
+        let single = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "light-001",
+            "strict-calibrated-light-v1",
+            1,
+        )?;
+        assert!(matches!(
+            single.clone().with_source_sha256("D".repeat(64)),
+            Err(FitsProvenanceError::InvalidSourceSha256)
+        ));
+        assert_eq!(
+            single.with_source_sha256("d".repeat(64))?.source_sha256(),
+            Some("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+        );
         Ok(())
     }
 
     #[test]
     fn writes_validated_provenance_cards() -> Result<(), Box<dyn Error>> {
         let image = image()?;
-        let provenance =
-            FitsOutputProvenance::new("a".repeat(64), "b".repeat(64), "strict-mean-v1", 3)?
-                .with_plan_sha256("c".repeat(64))?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "b".repeat(64),
+            "strict-calibrated-light-v1",
+            1,
+        )?
+        .with_plan_sha256("c".repeat(64))?
+        .with_source_sha256("d".repeat(64))?;
         let mut output = Vec::new();
 
         write_f64_primary_with_provenance(&mut output, &image, &provenance)?;
@@ -1101,6 +1163,7 @@ mod tests {
             header.integer("AETHSRC"),
             Some(i64::from(provenance.source_count()))
         );
+        assert_eq!(header.string("AETHINP"), provenance.source_sha256());
         Ok(())
     }
 

@@ -562,10 +562,11 @@ safety reasoning. They do not narrate obvious syntax.
 26. Begin lossless post-calibration frame products. The runtime now has a
     dedicated single-Light `f64` executor with distinct provenance, exact
     statistics, operation-separated verified checkpoints, bounded memory,
-    source revalidation, and atomic publication. Its pixels are invariant to
-    tile shape and it deliberately performs no integration. The next slice
-    binds deterministic per-frame identity into whole-plan transactional export,
-    then feeds those products to debayering, quality weighting, and registration.
+    source revalidation, and atomic publication. Provenance version 3 adds the
+    optional `AETHINP` exact source digest, which this path requires. Its pixels
+    are invariant to tile shape and it deliberately performs no integration.
+    The next slice binds these products into whole-plan transactional export,
+    then feeds them to debayering, quality weighting, and registration.
 
 ## 11. Stable-release definition
 

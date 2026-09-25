@@ -49,7 +49,7 @@ or `-`. The versioned algorithm identifier is limited to 32 ASCII bytes and uses
 only lowercase letters, digits, `.`, `_`, and `-`. Its first byte must be a
 lowercase letter or digit. A product must represent at least one source image.
 
-`write_f64_primary_with_provenance` emits version 2 of these cards before `END`:
+`write_f64_primary_with_provenance` emits version 3 of these cards before `END`:
 
 | Card | Meaning |
 | --- | --- |
@@ -60,6 +60,7 @@ lowercase letter or digit. A product must represent at least one source image.
 | `AETHGRP` | Exact session group identifier |
 | `AETHALG` | Versioned integration algorithm identifier |
 | `AETHSRC` | Number of source images represented by the product |
+| `AETHINP` | Optional exact source SHA-256 for a single-frame product |
 
 `AETHPLN` is mandatory for plan-driven calibration products and absent for
 products that do not depend on a plan. A master product stores its canonical
@@ -67,6 +68,11 @@ master-plan digest. A calibrated integrated Light product stores its canonical
 Light-plan digest; that plan already binds the exact master-plan digest. The
 card therefore binds pixels transitively to every matching policy, tolerance,
 selected master, selected pedestal, and recorded candidate diagnostic.
+
+`AETHINP` is accepted only when `AETHSRC = 1`. It makes a calibrated individual
+frame self-identifying without exposing its local path or acquisition filename.
+The runtime requires it to equal the signal fingerprint before single-Light
+calibration begins.
 
 The corresponding atomic API places the same cards in the synchronized
 temporary stream before publication. Provenance deliberately contains stable
