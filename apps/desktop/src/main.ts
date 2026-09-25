@@ -417,7 +417,8 @@ async function executeMasters(): Promise<void> {
           outputDirectory: null,
           progress: null,
           result: null,
-          message: "Verified masters ready · choose an output directory for Lights",
+          message:
+            "Verified masters ready · choose an output directory for Lights",
         },
       },
     });
