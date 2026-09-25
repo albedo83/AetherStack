@@ -1,4 +1,7 @@
 import type {
+  LightExecutionProgress,
+  LightExecutionResult,
+  LightExecutionSettings,
   MasterBuildSettings,
   MasterExecutionProgress,
   MasterExecutionResult,
@@ -132,6 +135,8 @@ export interface CalibrationViewModel {
   readonly message: string;
   readonly buildSettings: MasterBuildSettings;
   readonly execution: CalibrationExecutionViewModel;
+  readonly lightSettings: LightExecutionSettings;
+  readonly lightExecution: LightCalibrationExecutionViewModel;
 }
 
 export interface CalibrationExecutionViewModel {
@@ -139,6 +144,15 @@ export interface CalibrationExecutionViewModel {
   readonly outputDirectory: string | null;
   readonly progress: MasterExecutionProgress | null;
   readonly result: MasterExecutionResult | null;
+  readonly message: string;
+}
+
+export interface LightCalibrationExecutionViewModel {
+  readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+  readonly masterDirectory: string | null;
+  readonly outputDirectory: string | null;
+  readonly progress: LightExecutionProgress | null;
+  readonly result: LightExecutionResult | null;
   readonly message: string;
 }
 
@@ -158,6 +172,8 @@ export interface ReviewActions {
   readonly onRefreshMasterPlan: () => void;
   readonly onExecuteMasterPlan: () => void;
   readonly onCancelMasterPlan: () => void;
+  readonly onExecuteLightPlan: () => void;
+  readonly onCancelLightPlan: () => void;
   readonly onImportSession: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
   readonly onSelectFrame: (frameId: string) => void;

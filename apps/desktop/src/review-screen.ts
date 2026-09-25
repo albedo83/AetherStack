@@ -81,6 +81,14 @@ export function mountReviewScreen(
       root,
       '[data-action="cancel-master-plan"]',
     ),
+    executeLightPlan: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-light-plan"]',
+    ),
+    cancelLightPlan: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-light-plan"]',
+    ),
     masterExecution: required<HTMLElement>(root, "[data-master-execution]"),
     masterExecutionMessage: required<HTMLElement>(
       root,
@@ -93,6 +101,19 @@ export function mountReviewScreen(
     masterExecutionOutput: required<HTMLElement>(
       root,
       "[data-master-execution-output]",
+    ),
+    lightExecution: required<HTMLElement>(root, "[data-light-execution]"),
+    lightExecutionMessage: required<HTMLElement>(
+      root,
+      "[data-light-execution-message]",
+    ),
+    lightExecutionProgress: required<HTMLProgressElement>(
+      root,
+      "[data-light-execution-progress]",
+    ),
+    lightExecutionOutput: required<HTMLElement>(
+      root,
+      "[data-light-execution-output]",
     ),
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
     sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
@@ -219,6 +240,14 @@ export function mountReviewScreen(
     }
     if (action === "cancel-master-plan") {
       actions.onCancelMasterPlan();
+      return;
+    }
+    if (action === "execute-light-plan") {
+      actions.onExecuteLightPlan();
+      return;
+    }
+    if (action === "cancel-light-plan") {
+      actions.onCancelLightPlan();
       return;
     }
 
@@ -894,10 +923,16 @@ interface CalibrationElements {
   readonly refreshMasterPlan: HTMLButtonElement;
   readonly executeMasterPlan: HTMLButtonElement;
   readonly cancelMasterPlan: HTMLButtonElement;
+  readonly executeLightPlan: HTMLButtonElement;
+  readonly cancelLightPlan: HTMLButtonElement;
   readonly masterExecution: HTMLElement;
   readonly masterExecutionMessage: HTMLElement;
   readonly masterExecutionProgress: HTMLProgressElement;
   readonly masterExecutionOutput: HTMLElement;
+  readonly lightExecution: HTMLElement;
+  readonly lightExecutionMessage: HTMLElement;
+  readonly lightExecutionProgress: HTMLProgressElement;
+  readonly lightExecutionOutput: HTMLElement;
 }
 
 function calibrationSettings(
@@ -957,8 +992,12 @@ function renderCalibration(
   elements.calibrationStatus.dataset.state = calibration.state;
   elements.calibrationStatus.textContent = calibration.message;
   const execution = calibration.execution;
-  const executionBusy =
+  const masterBusy =
     execution.state === "running" || execution.state === "cancelling";
+  const lightExecution = calibration.lightExecution;
+  const lightBusy =
+    lightExecution.state === "running" || lightExecution.state === "cancelling";
+  const executionBusy = masterBusy || lightBusy;
   elements.refreshMasterPlan.disabled =
     calibration.state === "loading" ||
     !model.reviewSessionReady ||
@@ -969,10 +1008,21 @@ function renderCalibration(
   elements.lightTemperatureTolerance.disabled = executionBusy;
   elements.executeMasterPlan.disabled =
     !calibration.plan?.ready || executionBusy || !model.reviewSessionReady;
-  elements.executeMasterPlan.hidden = executionBusy;
-  elements.cancelMasterPlan.hidden = !executionBusy;
+  elements.executeMasterPlan.hidden = masterBusy;
+  elements.cancelMasterPlan.hidden = !masterBusy;
   elements.cancelMasterPlan.disabled = execution.state === "cancelling";
+  const lightPlan = calibration.plan?.lightPlan;
+  elements.executeLightPlan.disabled =
+    !lightPlan?.ready ||
+    lightPlan.products.length === 0 ||
+    !lightExecution.masterDirectory ||
+    executionBusy ||
+    !model.reviewSessionReady;
+  elements.executeLightPlan.hidden = lightBusy;
+  elements.cancelLightPlan.hidden = !lightBusy;
+  elements.cancelLightPlan.disabled = lightExecution.state === "cancelling";
   renderMasterExecution(elements, model);
+  renderLightExecution(elements, model);
   const plan = calibration.plan;
   elements.calibrationDigest.textContent = plan
     ? `PLAN ${plan.planSha256.slice(0, 12)}`
@@ -1176,6 +1226,37 @@ function renderMasterExecution(
     elements.masterExecutionProgress.max = 1;
   }
   elements.masterExecutionProgress.hidden =
+    execution.state !== "running" && execution.state !== "cancelling";
+}
+
+function renderLightExecution(
+  elements: Pick<
+    CalibrationElements,
+    | "lightExecution"
+    | "lightExecutionMessage"
+    | "lightExecutionProgress"
+    | "lightExecutionOutput"
+  >,
+  model: ReviewViewModel,
+): void {
+  const execution = model.calibration.lightExecution;
+  elements.lightExecution.dataset.state = execution.state;
+  elements.lightExecutionMessage.textContent = execution.message;
+  elements.lightExecutionOutput.textContent = execution.outputDirectory
+    ? execution.outputDirectory
+    : execution.masterDirectory
+      ? "Output directory selected at run time"
+      : "Build masters to unlock Light execution";
+  elements.lightExecutionOutput.title = execution.outputDirectory ?? "";
+  const progress = execution.progress;
+  if (progress?.totalUnits) {
+    elements.lightExecutionProgress.max = progress.totalUnits;
+    elements.lightExecutionProgress.value = progress.completedUnits;
+  } else {
+    elements.lightExecutionProgress.removeAttribute("value");
+    elements.lightExecutionProgress.max = 1;
+  }
+  elements.lightExecutionProgress.hidden =
     execution.state !== "running" && execution.state !== "cancelling";
 }
 
@@ -1642,9 +1723,22 @@ function shellMarkup(): string {
                     <p class="eyebrow">Execution gate</p>
                     <h3 id="light-association-heading">Light calibration matrix</h3>
                   </div>
-                  <code class="plan-digest" data-light-digest></code>
+                  <div class="light-association-panel__actions">
+                    <code class="plan-digest" data-light-digest></code>
+                    <button class="button button--primary" type="button" data-action="execute-light-plan">Calibrate &amp; integrate</button>
+                    <button class="button button--danger" type="button" data-action="cancel-light-plan" hidden>Cancel Lights</button>
+                  </div>
                 </div>
                 <div class="light-matrix-scroll" data-light-associations></div>
+                <section class="light-execution" data-light-execution data-state="idle" aria-labelledby="light-execution-heading">
+                  <div>
+                    <p class="eyebrow">Atomic Light run</p>
+                    <h4 id="light-execution-heading">Calibrate + strict integration</h4>
+                  </div>
+                  <p data-light-execution-message></p>
+                  <progress data-light-execution-progress aria-label="Light calibration progress" hidden></progress>
+                  <code data-light-execution-output></code>
+                </section>
               </section>
             </section>
           </div>

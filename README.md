@@ -76,8 +76,9 @@ optimized CPU and GPU paths must match.
   workspace and an instrument-inspired Calibration laboratory, separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,
-  explicit manual decisions, a single bounded native
-  master-build slot, live typed progress, cooperative cancellation, and a
+  explicit manual decisions, a single bounded native calibration slot,
+  transactional master and integrated-Light execution, live typed progress,
+  cooperative cancellation, and a
   presenter boundary that leaves scientific state in Rust;
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,

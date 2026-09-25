@@ -549,6 +549,16 @@ safety reasoning. They do not narrate obvious syntax.
     product failure publishes nothing. The calibrated product stores the Light
     plan digest, which transitively binds its master plan. Desktop execution
     controls and progress presentation remain next.
+25. Expose Light execution through the desktop calibration laboratory. The
+    command adapter rebuilds the manifest-bound master and Light plans, compares
+    all three reviewed digests, and accepts only explicit master/output
+    directories, flat-divisor floor, tile shape, and memory budget. Master and
+    Light tasks share one native cancellation slot so their memory budgets
+    cannot overlap. The dark responsive UI unlocks calibrated integration only
+    after the reviewed masters were successfully published, then reports typed
+    progress, peak reserved memory, final product count, safe cancellation, and
+    failure-without-partial-publication. Native and presenter tests cover the
+    bridge, state gating, progress, and cancellation controls.
 
 ## 11. Stable-release definition
 

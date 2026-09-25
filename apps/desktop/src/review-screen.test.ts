@@ -16,6 +16,8 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onRefreshMasterPlan: vi.fn(),
     onExecuteMasterPlan: vi.fn(),
     onCancelMasterPlan: vi.fn(),
+    onExecuteLightPlan: vi.fn(),
+    onCancelLightPlan: vi.fn(),
     onImportSession: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -221,6 +223,61 @@ describe("frame review workspace", () => {
     ).toBe(true);
     fireEvent.click(getByRole(root, "button", { name: "Cancel build" }));
     expect(actions.onCancelMasterPlan).toHaveBeenCalledOnce();
+  });
+
+  it("unlocks and cancels the transactional Light run independently", () => {
+    const ready = {
+      ...demoReviewModel,
+      activeWorkspace: "calibration" as const,
+      reviewSessionReady: true,
+      calibration: {
+        ...demoReviewModel.calibration,
+        lightExecution: {
+          ...demoReviewModel.calibration.lightExecution,
+          masterDirectory: "/session/masters",
+          message: "Verified masters ready",
+        },
+      },
+    };
+    const mounted = fixture(ready);
+    fireEvent.click(
+      getByRole(mounted.root, "button", { name: "Calibrate & integrate" }),
+    );
+    expect(mounted.actions.onExecuteLightPlan).toHaveBeenCalledOnce();
+
+    mounted.controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        lightExecution: {
+          state: "running",
+          masterDirectory: "/session/masters",
+          outputDirectory: "/session/lights",
+          progress: {
+            productIndex: 0,
+            productCount: 1,
+            groupId: "light-uvir-2s-g120-o30",
+            sequence: 3,
+            stage: "pipeline.integrate",
+            state: "running",
+            completedUnits: 6,
+            totalUnits: 10,
+            code: null,
+          },
+          result: null,
+          message: "Light 1/1 · pipeline.integrate · 6/10",
+        },
+      },
+    });
+    expect(
+      mounted.root.querySelector<HTMLProgressElement>(
+        "[data-light-execution-progress]",
+      )?.value,
+    ).toBe(6);
+    fireEvent.click(
+      getByRole(mounted.root, "button", { name: "Cancel Lights" }),
+    );
+    expect(mounted.actions.onCancelLightPlan).toHaveBeenCalledOnce();
   });
 
   it("requests role changes and supports tab arrow navigation", () => {

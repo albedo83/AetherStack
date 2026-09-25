@@ -168,6 +168,20 @@ export const demoReviewModel: ReviewViewModel = {
       result: null,
       message: "Choose an output directory when the plan is ready",
     },
+    lightSettings: {
+      minimumAbsoluteFlat: 1e-12,
+      tileWidth: 256,
+      tileHeight: 256,
+      memoryLimitBytes: 1_073_741_824,
+    },
+    lightExecution: {
+      state: "idle",
+      masterDirectory: null,
+      outputDirectory: null,
+      progress: null,
+      result: null,
+      message: "Build the reviewed masters before integrating Lights",
+    },
   },
   roles: [
     { role: "bias", label: "Bias", count: 0, unresolved: 0 },

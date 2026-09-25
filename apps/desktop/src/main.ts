@@ -1,10 +1,14 @@
 import "./styles.css";
 
 import {
+  cancelLightPlan,
   cancelMasterPlan,
+  executeLightPlan,
   executeMasterPlan,
   previewMasterPlan,
+  selectLightOutputDirectory,
   selectMasterOutputDirectory,
+  type LightExecutionProgress,
   type MasterExecutionProgress,
   type MasterPlanSettings,
 } from "./calibration-bridge.ts";
@@ -95,6 +99,7 @@ let decisionGeneration = 0;
 let blinkTimer: number | null = null;
 let masterPlanTicket = 0;
 let masterExecutionTicket = 0;
+let lightExecutionTicket = 0;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -111,6 +116,12 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelMasterPlan() {
     void cancelMasters();
+  },
+  onExecuteLightPlan() {
+    void executeLights();
+  },
+  onCancelLightPlan() {
+    void cancelLights();
   },
   onImportSession() {
     void importSession();
@@ -163,7 +174,8 @@ window.addEventListener("beforeunload", disposeRuntimeResources, {
 async function importSession(): Promise<void> {
   if (
     model.calibration.execution.state === "running" ||
-    model.calibration.execution.state === "cancelling"
+    model.calibration.execution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.lightExecution.state)
   ) {
     return;
   }
@@ -261,6 +273,14 @@ function installImportedSession(session: ImportedSession): void {
         result: null,
         message: "Choose an output directory when the plan is ready",
       },
+      lightExecution: {
+        state: "idle",
+        masterDirectory: null,
+        outputDirectory: null,
+        progress: null,
+        result: null,
+        message: "Build the reviewed masters before integrating Lights",
+      },
     },
   });
   void loadSelectedPreview();
@@ -276,7 +296,9 @@ function selectWorkspace(workspace: WorkspaceView): void {
 function updateCalibrationSettings(settings: MasterPlanSettings): void {
   if (
     model.calibration.execution.state === "running" ||
-    model.calibration.execution.state === "cancelling"
+    model.calibration.execution.state === "cancelling" ||
+    model.calibration.lightExecution.state === "running" ||
+    model.calibration.lightExecution.state === "cancelling"
   ) {
     return;
   }
@@ -296,6 +318,14 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
         result: null,
         message: "Plan changed · choose an output directory after validation",
       },
+      lightExecution: {
+        state: "idle",
+        masterDirectory: null,
+        outputDirectory: null,
+        progress: null,
+        result: null,
+        message: "Plan changed · rebuild masters before integrating Lights",
+      },
     },
   });
   if (importedSession) void refreshMasterPlan();
@@ -308,7 +338,9 @@ async function executeMasters(): Promise<void> {
     !importedSession ||
     !plan?.ready ||
     execution.state === "running" ||
-    execution.state === "cancelling"
+    execution.state === "cancelling" ||
+    model.calibration.lightExecution.state === "running" ||
+    model.calibration.lightExecution.state === "cancelling"
   ) {
     return;
   }
@@ -323,7 +355,8 @@ async function executeMasters(): Promise<void> {
     importedSession !== selectedSession ||
     model.calibration.plan?.planSha256 !== selectedPlanSha256 ||
     model.calibration.execution.state === "running" ||
-    model.calibration.execution.state === "cancelling"
+    model.calibration.execution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.lightExecution.state)
   ) {
     return;
   }
@@ -378,6 +411,14 @@ async function executeMasters(): Promise<void> {
           result,
           message: `${result.products.length} master${result.products.length === 1 ? "" : "s"} published · peak ${formatMemory(result.peakReservedBytes)}`,
         },
+        lightExecution: {
+          state: "idle",
+          masterDirectory: outputDirectory,
+          outputDirectory: null,
+          progress: null,
+          result: null,
+          message: "Verified masters ready · choose an output directory for Lights",
+        },
       },
     });
   } catch (error) {
@@ -430,6 +471,151 @@ async function cancelMasters(): Promise<void> {
   }
 }
 
+async function executeLights(): Promise<void> {
+  const plan = model.calibration.plan;
+  const lightPlan = plan?.lightPlan;
+  const execution = model.calibration.lightExecution;
+  if (
+    !importedSession ||
+    !plan?.ready ||
+    !lightPlan?.ready ||
+    lightPlan.products.length === 0 ||
+    !execution.masterDirectory ||
+    execution.state === "running" ||
+    execution.state === "cancelling" ||
+    model.calibration.execution.state === "running" ||
+    model.calibration.execution.state === "cancelling"
+  ) {
+    return;
+  }
+  const selectedSession = importedSession;
+  const selectedMasterPlanSha256 = plan.planSha256;
+  const selectedLightPlanSha256 = lightPlan.planSha256;
+  const masterDirectory = execution.masterDirectory;
+  const outputDirectory = await selectLightOutputDirectory();
+  if (!outputDirectory) return;
+  if (
+    importedSession !== selectedSession ||
+    model.calibration.plan?.planSha256 !== selectedMasterPlanSha256 ||
+    model.calibration.plan?.lightPlan?.planSha256 !== selectedLightPlanSha256
+  ) {
+    return;
+  }
+  const ticket = ++lightExecutionTicket;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      lightExecution: {
+        state: "running",
+        masterDirectory,
+        outputDirectory,
+        progress: null,
+        result: null,
+        message: "Preparing transactional Light calibration…",
+      },
+    },
+  });
+  const onProgress = (progress: LightExecutionProgress): void => {
+    if (ticket !== lightExecutionTicket) return;
+    const state = model.calibration.lightExecution.state;
+    if (state !== "running" && state !== "cancelling") return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        lightExecution: {
+          ...model.calibration.lightExecution,
+          state,
+          progress,
+          message: lightProgressMessage(progress),
+        },
+      },
+    });
+  };
+  try {
+    const result = await executeLightPlan(
+      masterDirectory,
+      outputDirectory,
+      model.calibration.settings,
+      model.calibration.lightSettings,
+      plan,
+      lightPlan,
+      onProgress,
+    );
+    if (ticket !== lightExecutionTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        lightExecution: {
+          state: "completed",
+          masterDirectory,
+          outputDirectory,
+          progress: model.calibration.lightExecution.progress,
+          result,
+          message: `${result.products.length} Light product${result.products.length === 1 ? "" : "s"} published · peak ${formatMemory(result.peakReservedBytes)}`,
+        },
+      },
+    });
+  } catch (error) {
+    if (ticket !== lightExecutionTicket) return;
+    const cancelled = nativeErrorCode(error) === "light_execution_cancelled";
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        lightExecution: {
+          ...model.calibration.lightExecution,
+          state: cancelled ? "idle" : "error",
+          result: null,
+          message: cancelled
+            ? "Light run cancelled · no partial product set published"
+            : "Light calibration failed safely · no existing output was modified",
+        },
+      },
+    });
+  }
+}
+
+async function cancelLights(): Promise<void> {
+  if (model.calibration.lightExecution.state !== "running") return;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      lightExecution: {
+        ...model.calibration.lightExecution,
+        state: "cancelling",
+        message: "Cancellation requested · finishing the current bounded unit…",
+      },
+    },
+  });
+  try {
+    await cancelLightPlan();
+  } catch {
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        lightExecution: {
+          ...model.calibration.lightExecution,
+          state: "error",
+          message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
+function lightProgressMessage(progress: LightExecutionProgress): string {
+  const product = progress.productIndex + 1;
+  const units = progress.totalUnits
+    ? ` · ${progress.completedUnits}/${progress.totalUnits}`
+    : "";
+  return `Light ${product}/${progress.productCount} · ${progress.groupId} · ${progress.stage}${units}`;
+}
+
 function masterProgressMessage(progress: MasterExecutionProgress): string {
   const product = progress.productIndex + 1;
   const units = progress.totalUnits
@@ -440,6 +626,12 @@ function masterProgressMessage(progress: MasterExecutionProgress): string {
 
 function formatMemory(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
+}
+
+function isActiveExecutionState(
+  state: ReviewViewModel["calibration"]["execution"]["state"],
+): boolean {
+  return state === "running" || state === "cancelling";
 }
 
 function nativeErrorCode(error: unknown): string | null {
@@ -453,7 +645,9 @@ async function refreshMasterPlan(): Promise<void> {
   if (
     !importedSession ||
     model.calibration.execution.state === "running" ||
-    model.calibration.execution.state === "cancelling"
+    model.calibration.execution.state === "cancelling" ||
+    model.calibration.lightExecution.state === "running" ||
+    model.calibration.lightExecution.state === "cancelling"
   ) {
     return;
   }
@@ -1025,11 +1219,18 @@ function disposeRuntimeResources(): void {
   decisionSessionRevision += 1;
   masterPlanTicket += 1;
   masterExecutionTicket += 1;
+  lightExecutionTicket += 1;
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling"
   ) {
     void cancelMasterPlan();
+  }
+  if (
+    model.calibration.lightExecution.state === "running" ||
+    model.calibration.lightExecution.state === "cancelling"
+  ) {
+    void cancelLightPlan();
   }
   stopBlinkTimer();
   clearPreviewResources();

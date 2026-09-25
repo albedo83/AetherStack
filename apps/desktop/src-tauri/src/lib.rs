@@ -12,7 +12,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use aether_calibration::FlatNormalizationParameters;
+use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions, ImageRegion,
     PrimaryImageReader, StoredSampleFormat, primary_image_statistics,
@@ -35,8 +35,9 @@ use aether_review::{
     SortSpec, TransferFunction,
 };
 use aether_runtime::{
-    CancellationToken, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
-    ProgressState, run_master_plan,
+    CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
+    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, ProgressState,
+    run_light_plan, run_master_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -280,12 +281,12 @@ struct DesktopSessionState {
     session: Mutex<Option<Arc<ImportedNativeSession>>>,
 }
 
-/// Single active master-build slot for bounded execution and cancellation.
+/// Single active calibration slot for bounded execution and cancellation.
 ///
-/// Serializing master builds avoids accidental memory-budget multiplication and
-/// makes the visible Cancel control unambiguous.
+/// Serializing master and Light work avoids accidental memory-budget
+/// multiplication and makes each visible Cancel control unambiguous.
 #[derive(Debug, Default)]
-struct DesktopMasterExecutionState {
+struct DesktopCalibrationExecutionState {
     cancellation: Mutex<Option<CancellationToken>>,
 }
 
@@ -327,6 +328,21 @@ struct MasterPlanExecutionCommandRequest {
     expected_plan_sha256: String,
     minimum_flat_normalization_samples: usize,
     minimum_positive_flat_median: f64,
+    tile_width: usize,
+    tile_height: usize,
+    memory_limit_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LightPlanExecutionCommandRequest {
+    master_directory: PathBuf,
+    output_directory: PathBuf,
+    planning: MasterPlanPreviewRequest,
+    expected_manifest_sha256: String,
+    expected_master_plan_sha256: String,
+    expected_light_plan_sha256: String,
+    minimum_absolute_flat: f64,
     tile_width: usize,
     tile_height: usize,
     memory_limit_bytes: u64,
@@ -408,6 +424,20 @@ struct MasterExecutionProgress {
     code: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightExecutionProgress {
+    product_index: usize,
+    product_count: usize,
+    group_id: String,
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MasterPlanExecutionResponse {
@@ -416,6 +446,39 @@ struct MasterPlanExecutionResponse {
     memory_limit_bytes: usize,
     peak_reserved_bytes: usize,
     products: Vec<ExecutedMasterProduct>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LightPlanExecutionResponse {
+    manifest_sha256: String,
+    master_plan_sha256: String,
+    light_plan_sha256: String,
+    memory_limit_bytes: usize,
+    peak_reserved_bytes: usize,
+    products: Vec<ExecutedLightProduct>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutedLightProduct {
+    group_id: String,
+    dark_group_id: String,
+    flat_group_id: String,
+    output_path: String,
+    total_samples: usize,
+    usable_samples: usize,
+    masked_samples: usize,
+    non_finite_samples: usize,
+    minimum: f64,
+    maximum: f64,
+    mean: f64,
+    population_standard_deviation: f64,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    tiles_processed: u64,
+    tiles_reused: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -884,7 +947,7 @@ async fn execute_master_plan(
     request: MasterPlanExecutionCommandRequest,
     on_progress: tauri::ipc::Channel<MasterExecutionProgress>,
     session_state: tauri::State<'_, DesktopSessionState>,
-    execution_state: tauri::State<'_, DesktopMasterExecutionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
 ) -> Result<MasterPlanExecutionResponse, PreviewCommandError> {
     if !request.output_directory.is_absolute() {
         return Err(PreviewCommandError::new(
@@ -895,7 +958,7 @@ async fn execute_master_plan(
     let session = lock_session_state(&session_state)?
         .clone()
         .ok_or_else(session_state_missing_error)?;
-    let cancellation = begin_master_execution(&execution_state)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
     let worker_cancellation = cancellation.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
         execute_master_plan_sync(&session, request, &worker_cancellation, |event| {
@@ -906,7 +969,7 @@ async fn execute_master_plan(
         })
     })
     .await;
-    finish_master_execution(&execution_state)?;
+    finish_calibration_execution(&execution_state)?;
     execution.map_err(|_| {
         PreviewCommandError::new(
             "master_execution_interrupted",
@@ -917,14 +980,55 @@ async fn execute_master_plan(
 
 #[tauri::command]
 fn cancel_master_plan(
-    execution_state: tauri::State<'_, DesktopMasterExecutionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
 ) -> Result<bool, PreviewCommandError> {
-    let state = lock_master_execution(&execution_state)?;
-    let cancellation = state.as_ref().ok_or_else(|| {
+    cancel_calibration_execution(&execution_state, "master_execution_missing")
+}
+
+#[tauri::command]
+async fn execute_light_plan(
+    request: LightPlanExecutionCommandRequest,
+    on_progress: tauri::ipc::Channel<LightExecutionProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<LightPlanExecutionResponse, PreviewCommandError> {
+    if !request.master_directory.is_absolute() || !request.output_directory.is_absolute() {
+        return Err(light_execution_configuration_error());
+    }
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_light_plan_sync(&session, request, &worker_cancellation, |event| {
+            let _ignored = on_progress.send(event);
+        })
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
         PreviewCommandError::new(
-            "master_execution_missing",
-            "No master-build task is currently running.",
+            "light_execution_interrupted",
+            "The Light calibration worker stopped before producing a result.",
         )
+    })?
+}
+
+#[tauri::command]
+fn cancel_light_plan(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "light_execution_missing")
+}
+
+fn cancel_calibration_execution(
+    execution_state: &DesktopCalibrationExecutionState,
+    missing_code: &'static str,
+) -> Result<bool, PreviewCommandError> {
+    let state = lock_calibration_execution(execution_state)?;
+    let cancellation = state.as_ref().ok_or_else(|| {
+        PreviewCommandError::new(missing_code, "No calibration task is currently running.")
     })?;
     Ok(cancellation.cancel())
 }
@@ -1123,25 +1227,25 @@ fn lock_session_state(
     })
 }
 
-fn lock_master_execution(
-    state: &DesktopMasterExecutionState,
+fn lock_calibration_execution(
+    state: &DesktopCalibrationExecutionState,
 ) -> Result<MutexGuard<'_, Option<CancellationToken>>, PreviewCommandError> {
     state.cancellation.lock().map_err(|_| {
         PreviewCommandError::new(
-            "master_execution_state_unavailable",
-            "Master execution is unavailable after an internal synchronization failure.",
+            "calibration_execution_state_unavailable",
+            "Calibration execution is unavailable after an internal synchronization failure.",
         )
     })
 }
 
-fn begin_master_execution(
-    state: &DesktopMasterExecutionState,
+fn begin_calibration_execution(
+    state: &DesktopCalibrationExecutionState,
 ) -> Result<CancellationToken, PreviewCommandError> {
-    let mut active = lock_master_execution(state)?;
+    let mut active = lock_calibration_execution(state)?;
     if active.is_some() {
         return Err(PreviewCommandError::new(
-            "master_execution_busy",
-            "A master-build task is already running.",
+            "calibration_execution_busy",
+            "A calibration task is already running.",
         ));
     }
     let cancellation = CancellationToken::new();
@@ -1149,8 +1253,10 @@ fn begin_master_execution(
     Ok(cancellation)
 }
 
-fn finish_master_execution(state: &DesktopMasterExecutionState) -> Result<(), PreviewCommandError> {
-    *lock_master_execution(state)? = None;
+fn finish_calibration_execution(
+    state: &DesktopCalibrationExecutionState,
+) -> Result<(), PreviewCommandError> {
+    *lock_calibration_execution(state)? = None;
     Ok(())
 }
 
@@ -1347,6 +1453,141 @@ where
     })
 }
 
+fn execute_light_plan_sync<F>(
+    session: &ImportedNativeSession,
+    request: LightPlanExecutionCommandRequest,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<LightPlanExecutionResponse, PreviewCommandError>
+where
+    F: FnMut(LightExecutionProgress),
+{
+    if !session.root.is_absolute() {
+        return Err(PreviewCommandError::new(
+            "session_state_invalid",
+            "The native session root is not absolute.",
+        ));
+    }
+    request.master_directory.to_str().ok_or_else(|| {
+        PreviewCommandError::new(
+            "light_master_path_not_unicode",
+            "The selected master directory cannot be represented as Unicode.",
+        )
+    })?;
+    request.output_directory.to_str().ok_or_else(|| {
+        PreviewCommandError::new(
+            "light_output_path_not_unicode",
+            "The selected Light output directory cannot be represented as Unicode.",
+        )
+    })?;
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| light_execution_configuration_error())?;
+    let memory =
+        MemoryBudget::new(memory_limit).map_err(|_| light_execution_configuration_error())?;
+    let calibration = CalibrationParameters::new(request.minimum_absolute_flat)
+        .map_err(|_| light_execution_configuration_error())?;
+    let master_plan = build_master_plan(&session.manifest, request.planning)?;
+    let light_plan = build_light_plan(
+        &session.manifest,
+        &master_plan,
+        request.planning.maximum_light_dark_temperature_delta_c,
+    )?;
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| light_plan_generation_error())?;
+    let master_plan_sha256 = master_plan
+        .canonical_sha256()
+        .map_err(|_| light_plan_generation_error())?;
+    let light_plan_sha256 = light_plan
+        .canonical_sha256()
+        .map_err(|_| light_plan_generation_error())?;
+    if manifest_sha256 != request.expected_manifest_sha256
+        || master_plan_sha256 != request.expected_master_plan_sha256
+        || light_plan_sha256 != request.expected_light_plan_sha256
+    {
+        return Err(light_plan_stale_error());
+    }
+    let execution_request = LightPlanExecutionRequest::new_shared(
+        session.root.clone(),
+        request.master_directory,
+        request.output_directory,
+        Arc::clone(&session.manifest),
+        master_plan,
+        light_plan,
+        calibration,
+    )
+    .and_then(|execution| execution.with_tile_shape(request.tile_width, request.tile_height))
+    .map_err(light_execution_error)?;
+    let result = run_light_plan(&execution_request, cancellation, &memory, |event| {
+        let stage = event.stage();
+        progress(LightExecutionProgress {
+            product_index: event.product_index(),
+            product_count: event.product_count(),
+            group_id: event.group_id().to_owned(),
+            sequence: stage.sequence(),
+            stage: stage.stage().as_str().to_owned(),
+            state: progress_state_name(stage.state()),
+            completed_units: stage.completed_units(),
+            total_units: stage.total_units(),
+            code: stage.code().map(str::to_owned),
+        });
+    })
+    .map_err(light_execution_error)?;
+    let mut products = Vec::new();
+    products
+        .try_reserve_exact(result.products().len())
+        .map_err(|_| light_execution_allocation_error())?;
+    for product in result.products() {
+        let output_path = product.output().to_str().ok_or_else(|| {
+            PreviewCommandError::new(
+                "light_output_path_not_unicode",
+                "A generated Light path cannot be represented as Unicode.",
+            )
+        })?;
+        let statistics = product.statistics();
+        let write = product.write_summary();
+        products.push(ExecutedLightProduct {
+            group_id: product.group_id().to_owned(),
+            dark_group_id: product.dark_group_id().to_owned(),
+            flat_group_id: product.flat_group_id().to_owned(),
+            output_path: output_path.to_owned(),
+            total_samples: statistics.total_samples(),
+            usable_samples: statistics.usable_samples(),
+            masked_samples: statistics.masked_samples(),
+            non_finite_samples: statistics.non_finite_samples(),
+            minimum: statistics.minimum(),
+            maximum: statistics.maximum(),
+            mean: statistics.mean(),
+            population_standard_deviation: statistics.population_standard_deviation(),
+            samples_written: write.samples_written(),
+            substituted_samples: write.substituted_samples(),
+            bytes_written: write.bytes_written(),
+            tiles_processed: product.tiles_processed(),
+            tiles_reused: product.tiles_reused(),
+        });
+    }
+    Ok(LightPlanExecutionResponse {
+        manifest_sha256: result.manifest_sha256().to_owned(),
+        master_plan_sha256: result.master_plan_sha256().to_owned(),
+        light_plan_sha256: result.light_plan_sha256().to_owned(),
+        memory_limit_bytes: memory.limit(),
+        peak_reserved_bytes: memory.peak(),
+        products,
+    })
+}
+
+fn build_light_plan(
+    manifest: &SessionManifest,
+    master_plan: &MasterPlan,
+    maximum_dark_temperature_delta_c: f64,
+) -> Result<LightCalibrationPlan, PreviewCommandError> {
+    let options = LightCalibrationPlanOptions::new(maximum_dark_temperature_delta_c)
+        .map_err(|_| light_plan_options_error())?;
+    LightCalibrationPlan::from_manifest_and_master_plan(manifest, master_plan, options)
+        .map_err(|_| light_plan_generation_error())
+}
+
 fn master_plan_preview(
     manifest: &SessionManifest,
     plan: &MasterPlan,
@@ -1365,11 +1606,7 @@ fn master_plan_preview(
         products.push(master_product_preview(group, product)?);
     }
     let light_plan = if plan.is_ready() {
-        let options = LightCalibrationPlanOptions::new(maximum_light_dark_temperature_delta_c)
-            .map_err(|_| light_plan_options_error())?;
-        let light_plan =
-            LightCalibrationPlan::from_manifest_and_master_plan(manifest, plan, options)
-                .map_err(|_| light_plan_generation_error())?;
+        let light_plan = build_light_plan(manifest, plan, maximum_light_dark_temperature_delta_c)?;
         Some(light_calibration_plan_preview(&light_plan)?)
     } else {
         None
@@ -1869,6 +2106,78 @@ fn master_execution_error(error: MasterPlanExecutionError) -> PreviewCommandErro
     }
 }
 
+const fn light_execution_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "light_execution_configuration_invalid",
+        "Light execution requires absolute directories and positive tile and memory limits.",
+    )
+}
+
+const fn light_plan_stale_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "light_plan_stale",
+        "The reviewed manifest, master plan, or Light plan changed before execution.",
+    )
+}
+
+const fn light_execution_allocation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "light_execution_allocation_failed",
+        "Light execution could not reserve its bounded native state.",
+    )
+}
+
+fn light_execution_error(error: LightPlanExecutionError) -> PreviewCommandError {
+    match error {
+        LightPlanExecutionError::Cancelled(_) => PreviewCommandError::new(
+            "light_execution_cancelled",
+            "Light execution was cancelled without publishing a partial product set.",
+        ),
+        LightPlanExecutionError::DestinationExists { .. } => PreviewCommandError::new(
+            "light_destination_exists",
+            "A planned Light product already exists; existing files were not modified.",
+        ),
+        LightPlanExecutionError::LightPlanNotReady
+        | LightPlanExecutionError::NoLightProducts
+        | LightPlanExecutionError::InvalidMasterAssociation { .. }
+        | LightPlanExecutionError::MasterMissing { .. }
+        | LightPlanExecutionError::MasterProvenanceMismatch { .. } => PreviewCommandError::new(
+            "light_dependency_unresolved",
+            "Every Light requires verified Dark and Flat products from the reviewed master plan.",
+        ),
+        LightPlanExecutionError::SessionRootNotAbsolute
+        | LightPlanExecutionError::MasterDirectoryNotAbsolute
+        | LightPlanExecutionError::OutputDirectoryNotAbsolute
+        | LightPlanExecutionError::ZeroTileExtent { .. } => light_execution_configuration_error(),
+        LightPlanExecutionError::InspectDirectory(_)
+        | LightPlanExecutionError::DirectoryNotPhysical { .. }
+        | LightPlanExecutionError::CreateStagingDirectory(_)
+        | LightPlanExecutionError::PublishProduct { .. }
+        | LightPlanExecutionError::SyncOutputDirectory(_)
+        | LightPlanExecutionError::RollbackPublication { .. } => PreviewCommandError::new(
+            "light_execution_filesystem_failed",
+            "The Light transaction could not safely use or publish to the selected directories.",
+        ),
+        LightPlanExecutionError::Manifest(_)
+        | LightPlanExecutionError::MasterPlan(_)
+        | LightPlanExecutionError::LightPlan(_)
+        | LightPlanExecutionError::MasterPlanMismatch
+        | LightPlanExecutionError::LightPlanMismatch
+        | LightPlanExecutionError::InvalidGroup { .. }
+        | LightPlanExecutionError::MissingManifestFile { .. }
+        | LightPlanExecutionError::DestinationNameCollision { .. }
+        | LightPlanExecutionError::Provenance(_) => light_plan_generation_error(),
+        LightPlanExecutionError::OpenMaster { .. }
+        | LightPlanExecutionError::FingerprintMaster { .. }
+        | LightPlanExecutionError::SourceChanged { .. }
+        | LightPlanExecutionError::ProductPipeline { .. } => PreviewCommandError::new(
+            "light_product_failed",
+            "A Light product failed validation or calculation; no product set was published.",
+        ),
+        LightPlanExecutionError::AllocationFailed => light_execution_allocation_error(),
+    }
+}
+
 #[tauri::command]
 async fn sort_review_frames(
     request: ReviewSortRequest,
@@ -2299,13 +2608,15 @@ const fn preview_worker_error() -> PreviewCommandError {
 pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(DesktopMasterExecutionState::default())
+        .manage(DesktopCalibrationExecutionState::default())
         .manage(DesktopReviewState::default())
         .manage(DesktopSessionState::default())
         .invoke_handler(tauri::generate_handler![
             apply_review_decision,
+            cancel_light_plan,
             cancel_master_plan,
             estimate_fits_preview_transform,
+            execute_light_plan,
             execute_master_plan,
             import_session_directory,
             inspect_frame_quality,
@@ -2517,6 +2828,33 @@ mod tests {
         })
     }
 
+    fn light_execution_request(
+        session: &ImportedNativeSession,
+        master_directory: PathBuf,
+        output_directory: PathBuf,
+    ) -> TestResult<LightPlanExecutionCommandRequest> {
+        let planning = MasterPlanPreviewRequest {
+            flat_pedestal_policy: FlatPedestalPolicyWire::RequireMatchedDark,
+            maximum_exposure_delta_seconds: 0.01,
+            maximum_temperature_delta_c: 1.0,
+            maximum_light_dark_temperature_delta_c: 2.0,
+        };
+        let preview = preview_master_plan_sync(session, planning)?;
+        let light_plan = preview.light_plan.ok_or("light plan missing")?;
+        Ok(LightPlanExecutionCommandRequest {
+            master_directory,
+            output_directory,
+            planning,
+            expected_manifest_sha256: preview.manifest_sha256,
+            expected_master_plan_sha256: preview.plan_sha256,
+            expected_light_plan_sha256: light_plan.plan_sha256,
+            minimum_absolute_flat: 1.0e-12,
+            tile_width: 2,
+            tile_height: 2,
+            memory_limit_bytes: 1_048_576,
+        })
+    }
+
     fn quality_fits_bytes() -> TestResult<Vec<u8>> {
         const CELL_WIDTH: usize = 64;
         const CELL_HEIGHT: usize = 64;
@@ -2688,6 +3026,49 @@ mod tests {
     }
 
     #[test]
+    fn executes_the_reviewed_light_plan_with_shared_bounded_progress() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let masters = directory.path().join("masters");
+        let output = directory.path().join("lights");
+        fs::create_dir(&session_root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let session = planning_session(&session_root)?;
+        execute_master_plan_sync(
+            &session,
+            master_execution_request(
+                &session,
+                masters.clone(),
+                FlatPedestalPolicyWire::RequireMatchedDark,
+            )?,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+        let mut progress = Vec::new();
+
+        let result = execute_light_plan_sync(
+            &session,
+            light_execution_request(&session, masters, output)?,
+            &CancellationToken::new(),
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.products.len(), 1);
+        assert_eq!(result.products[0].group_id, "light-uvir");
+        assert_eq!(result.products[0].dark_group_id, "dark-2s");
+        assert_eq!(result.products[0].flat_group_id, "flat-uvir");
+        assert_eq!(result.products[0].mean.to_bits(), 1.0_f64.to_bits());
+        assert!(Path::new(&result.products[0].output_path).is_file());
+        assert!(result.peak_reserved_bytes > 0);
+        assert!(result.peak_reserved_bytes <= result.memory_limit_bytes);
+        assert!(progress.iter().all(|event| {
+            event.product_index == 0 && event.product_count == 1 && event.group_id == "light-uvir"
+        }));
+        Ok(())
+    }
+
+    #[test]
     fn refuses_to_execute_a_plan_other_than_the_reviewed_digest() -> TestResult {
         let directory = TestDirectory::new()?;
         let session_root = directory.path().join("session");
@@ -2770,23 +3151,23 @@ mod tests {
     }
 
     #[test]
-    fn desktop_master_execution_slot_is_exclusive_and_reusable() -> TestResult {
-        let state = DesktopMasterExecutionState::default();
-        let first = begin_master_execution(&state)?;
-        let busy = begin_master_execution(&state)
+    fn desktop_calibration_execution_slot_is_exclusive_and_reusable() -> TestResult {
+        let state = DesktopCalibrationExecutionState::default();
+        let first = begin_calibration_execution(&state)?;
+        let busy = begin_calibration_execution(&state)
             .err()
-            .ok_or("concurrent master execution was accepted")?;
-        assert_eq!(busy.code, "master_execution_busy");
+            .ok_or("concurrent calibration execution was accepted")?;
+        assert_eq!(busy.code, "calibration_execution_busy");
         assert!(first.cancel());
         assert!(
-            lock_master_execution(&state)?
+            lock_calibration_execution(&state)?
                 .as_ref()
                 .is_some_and(CancellationToken::is_cancelled)
         );
-        finish_master_execution(&state)?;
-        let second = begin_master_execution(&state)?;
+        finish_calibration_execution(&state)?;
+        let second = begin_calibration_execution(&state)?;
         assert!(!second.is_cancelled());
-        finish_master_execution(&state)?;
+        finish_calibration_execution(&state)?;
         Ok(())
     }
 

@@ -3,10 +3,15 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelLightPlan,
   cancelMasterPlan,
+  executeLightPlan,
   executeMasterPlan,
   previewMasterPlan,
+  selectLightOutputDirectory,
   selectMasterOutputDirectory,
+  type LightExecutionProgress,
+  type LightExecutionResult,
   type MasterExecutionProgress,
   type MasterExecutionResult,
   type MasterPlanPreview,
@@ -113,5 +118,77 @@ describe("native calibration bridge", () => {
     });
     await expect(cancelMasterPlan()).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith("cancel_master_plan");
+  });
+
+  it("binds Light execution to all three reviewed digests", async () => {
+    const expected: LightExecutionResult = {
+      manifestSha256: "a".repeat(64),
+      masterPlanSha256: "b".repeat(64),
+      lightPlanSha256: "c".repeat(64),
+      memoryLimitBytes: 1_073_741_824,
+      peakReservedBytes: 8_388_608,
+      products: [],
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+    const planning = {
+      flatPedestalPolicy: "require_matched_dark" as const,
+      maximumExposureDeltaSeconds: 0.1,
+      maximumTemperatureDeltaC: 2,
+      maximumLightDarkTemperatureDeltaC: 2,
+    };
+    const execution = {
+      minimumAbsoluteFlat: 1e-12,
+      tileWidth: 256,
+      tileHeight: 256,
+      memoryLimitBytes: 1_073_741_824,
+    };
+    const onProgress = vi.fn<(progress: LightExecutionProgress) => void>();
+
+    await expect(
+      executeLightPlan(
+        "/session/masters",
+        "/session/lights",
+        planning,
+        execution,
+        {
+          manifestSha256: expected.manifestSha256,
+          planSha256: expected.masterPlanSha256,
+        },
+        { planSha256: expected.lightPlanSha256 },
+        onProgress,
+      ),
+    ).resolves.toBe(expected);
+
+    const invocation = vi.mocked(invoke).mock.calls[0];
+    expect(invocation?.[0]).toBe("execute_light_plan");
+    expect(invocation?.[1]).toMatchObject({
+      request: {
+        masterDirectory: "/session/masters",
+        outputDirectory: "/session/lights",
+        planning,
+        expectedManifestSha256: expected.manifestSha256,
+        expectedMasterPlanSha256: expected.masterPlanSha256,
+        expectedLightPlanSha256: expected.lightPlanSha256,
+        ...execution,
+      },
+    });
+    expect(
+      (invocation?.[1] as { onProgress?: { onmessage?: unknown } }).onProgress
+        ?.onmessage,
+    ).toBe(onProgress);
+  });
+
+  it("selects Light output and cancels through native commands", async () => {
+    vi.mocked(open).mockResolvedValue("/session/lights");
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    await expect(selectLightOutputDirectory()).resolves.toBe("/session/lights");
+    expect(open).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Select a directory for calibrated Light products",
+    });
+    await expect(cancelLightPlan()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith("cancel_light_plan");
   });
 });

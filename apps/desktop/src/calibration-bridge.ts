@@ -159,6 +159,54 @@ export interface MasterExecutionResult {
   readonly products: readonly ExecutedMasterProduct[];
 }
 
+export interface LightExecutionSettings {
+  readonly minimumAbsoluteFlat: number;
+  readonly tileWidth: number;
+  readonly tileHeight: number;
+  readonly memoryLimitBytes: number;
+}
+
+export interface LightExecutionProgress {
+  readonly productIndex: number;
+  readonly productCount: number;
+  readonly groupId: string;
+  readonly sequence: number;
+  readonly stage: string;
+  readonly state: "started" | "running" | "completed" | "cancelled" | "failed";
+  readonly completedUnits: number;
+  readonly totalUnits: number | null;
+  readonly code: string | null;
+}
+
+export interface ExecutedLightProduct {
+  readonly groupId: string;
+  readonly darkGroupId: string;
+  readonly flatGroupId: string;
+  readonly outputPath: string;
+  readonly totalSamples: number;
+  readonly usableSamples: number;
+  readonly maskedSamples: number;
+  readonly nonFiniteSamples: number;
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly mean: number;
+  readonly populationStandardDeviation: number;
+  readonly samplesWritten: number;
+  readonly substitutedSamples: number;
+  readonly bytesWritten: number;
+  readonly tilesProcessed: number;
+  readonly tilesReused: number;
+}
+
+export interface LightExecutionResult {
+  readonly manifestSha256: string;
+  readonly masterPlanSha256: string;
+  readonly lightPlanSha256: string;
+  readonly memoryLimitBytes: number;
+  readonly peakReservedBytes: number;
+  readonly products: readonly ExecutedLightProduct[];
+}
+
 /**
  * Asks the native planner to derive calibration products from the immutable
  * imported manifest. No source paths or browser-reconstructed groups cross the
@@ -207,4 +255,45 @@ export function executeMasterPlan(
 /** Requests cooperative cancellation of the single active native master task. */
 export function cancelMasterPlan(): Promise<boolean> {
   return invoke<boolean>("cancel_master_plan");
+}
+
+/** Opens a native directory chooser for the calibrated integrated Light products. */
+export async function selectLightOutputDirectory(): Promise<string | null> {
+  const path = await open({
+    directory: true,
+    multiple: false,
+    title: "Select a directory for calibrated Light products",
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/** Executes all reviewed Light associations as one native publication transaction. */
+export function executeLightPlan(
+  masterDirectory: string,
+  outputDirectory: string,
+  planning: MasterPlanSettings,
+  execution: LightExecutionSettings,
+  reviewedMasterPlan: Pick<MasterPlanPreview, "manifestSha256" | "planSha256">,
+  reviewedLightPlan: Pick<LightCalibrationPlan, "planSha256">,
+  onProgress: (progress: LightExecutionProgress) => void,
+): Promise<LightExecutionResult> {
+  const progress = new Channel<LightExecutionProgress>();
+  progress.onmessage = onProgress;
+  return invoke<LightExecutionResult>("execute_light_plan", {
+    request: {
+      masterDirectory,
+      outputDirectory,
+      planning,
+      expectedManifestSha256: reviewedMasterPlan.manifestSha256,
+      expectedMasterPlanSha256: reviewedMasterPlan.planSha256,
+      expectedLightPlanSha256: reviewedLightPlan.planSha256,
+      ...execution,
+    },
+    onProgress: progress,
+  });
+}
+
+/** Requests cooperative cancellation of the active native Light transaction. */
+export function cancelLightPlan(): Promise<boolean> {
+  return invoke<boolean>("cancel_light_plan");
 }
