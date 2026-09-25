@@ -1,7 +1,11 @@
 import "./styles.css";
 
 import {
+  cancelMasterPlan,
+  executeMasterPlan,
   previewMasterPlan,
+  selectMasterOutputDirectory,
+  type MasterExecutionProgress,
   type MasterPlanSettings,
 } from "./calibration-bridge.ts";
 import { demoReviewModel } from "./demo-data.ts";
@@ -90,6 +94,7 @@ let decisionSessionRevision = 0;
 let decisionGeneration = 0;
 let blinkTimer: number | null = null;
 let masterPlanTicket = 0;
+let masterExecutionTicket = 0;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -100,6 +105,12 @@ const screen = mountReviewScreen(root, model, {
   },
   onRefreshMasterPlan() {
     void refreshMasterPlan();
+  },
+  onExecuteMasterPlan() {
+    void executeMasters();
+  },
+  onCancelMasterPlan() {
+    void cancelMasters();
   },
   onImportSession() {
     void importSession();
@@ -150,6 +161,12 @@ window.addEventListener("beforeunload", disposeRuntimeResources, {
 });
 
 async function importSession(): Promise<void> {
+  if (
+    model.calibration.execution.state === "running" ||
+    model.calibration.execution.state === "cancelling"
+  ) {
+    return;
+  }
   const previousStatus = model.sessionStatus;
   update({
     ...model,
@@ -190,6 +207,7 @@ function installImportedSession(session: ImportedSession): void {
   decisionGeneration = 0;
   decisionCache.clear();
   masterPlanTicket += 1;
+  masterExecutionTicket += 1;
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -236,6 +254,13 @@ function installImportedSession(session: ImportedSession): void {
       state: "loading",
       plan: null,
       message: "Building native calibration graph…",
+      execution: {
+        state: "idle",
+        outputDirectory: null,
+        progress: null,
+        result: null,
+        message: "Choose an output directory when the plan is ready",
+      },
     },
   });
   void loadSelectedPreview();
@@ -249,6 +274,12 @@ function selectWorkspace(workspace: WorkspaceView): void {
 }
 
 function updateCalibrationSettings(settings: MasterPlanSettings): void {
+  if (
+    model.calibration.execution.state === "running" ||
+    model.calibration.execution.state === "cancelling"
+  ) {
+    return;
+  }
   update({
     ...model,
     calibration: {
@@ -258,13 +289,174 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
       message: importedSession
         ? "Rebuilding native calibration graph…"
         : "Import a session to build a calibration graph",
+      execution: {
+        state: "idle",
+        outputDirectory: null,
+        progress: null,
+        result: null,
+        message: "Plan changed · choose an output directory after validation",
+      },
     },
   });
   if (importedSession) void refreshMasterPlan();
 }
 
+async function executeMasters(): Promise<void> {
+  const plan = model.calibration.plan;
+  const execution = model.calibration.execution;
+  if (
+    !importedSession ||
+    !plan?.ready ||
+    execution.state === "running" ||
+    execution.state === "cancelling"
+  ) {
+    return;
+  }
+  const selectedSession = importedSession;
+  const selectedPlanSha256 = plan.planSha256;
+  const outputDirectory = await selectMasterOutputDirectory();
+  if (!outputDirectory) return;
+  // The native picker is asynchronous. Do not execute an obsolete plan if the
+  // user imported another session or changed matching controls while it was
+  // open; the refreshed plan must be reviewed first.
+  if (
+    importedSession !== selectedSession ||
+    model.calibration.plan?.planSha256 !== selectedPlanSha256 ||
+    model.calibration.execution.state === "running" ||
+    model.calibration.execution.state === "cancelling"
+  ) {
+    return;
+  }
+  const ticket = ++masterExecutionTicket;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      execution: {
+        state: "running",
+        outputDirectory,
+        progress: null,
+        result: null,
+        message: "Preparing transactional master build…",
+      },
+    },
+  });
+  const onProgress = (progress: MasterExecutionProgress): void => {
+    if (ticket !== masterExecutionTicket) return;
+    const state = model.calibration.execution.state;
+    if (state !== "running" && state !== "cancelling") return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        execution: {
+          ...model.calibration.execution,
+          state,
+          progress,
+          message: masterProgressMessage(progress),
+        },
+      },
+    });
+  };
+  try {
+    const result = await executeMasterPlan(
+      outputDirectory,
+      model.calibration.settings,
+      model.calibration.buildSettings,
+      plan,
+      onProgress,
+    );
+    if (ticket !== masterExecutionTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        execution: {
+          state: "completed",
+          outputDirectory,
+          progress: model.calibration.execution.progress,
+          result,
+          message: `${result.products.length} master${result.products.length === 1 ? "" : "s"} published · peak ${formatMemory(result.peakReservedBytes)}`,
+        },
+      },
+    });
+  } catch (error) {
+    if (ticket !== masterExecutionTicket) return;
+    const cancelled = nativeErrorCode(error) === "master_execution_cancelled";
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        execution: {
+          ...model.calibration.execution,
+          state: cancelled ? "idle" : "error",
+          result: null,
+          message: cancelled
+            ? "Build cancelled · no partial product set published"
+            : "Master build failed safely · no existing output was modified",
+        },
+      },
+    });
+  }
+}
+
+async function cancelMasters(): Promise<void> {
+  if (model.calibration.execution.state !== "running") return;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      execution: {
+        ...model.calibration.execution,
+        state: "cancelling",
+        message: "Cancellation requested · finishing the current bounded unit…",
+      },
+    },
+  });
+  try {
+    await cancelMasterPlan();
+  } catch {
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        execution: {
+          ...model.calibration.execution,
+          state: "error",
+          message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
+function masterProgressMessage(progress: MasterExecutionProgress): string {
+  const product = progress.productIndex + 1;
+  const units = progress.totalUnits
+    ? ` · ${progress.completedUnits}/${progress.totalUnits}`
+    : "";
+  return `Master ${product}/${progress.productCount} · ${progress.groupId} · ${progress.stage}${units}`;
+}
+
+function formatMemory(bytes: number): string {
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
+}
+
+function nativeErrorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return null;
+  }
+  return typeof error.code === "string" ? error.code : null;
+}
+
 async function refreshMasterPlan(): Promise<void> {
-  if (!importedSession) return;
+  if (
+    !importedSession ||
+    model.calibration.execution.state === "running" ||
+    model.calibration.execution.state === "cancelling"
+  ) {
+    return;
+  }
   const ticket = ++masterPlanTicket;
   const settings = model.calibration.settings;
   update({
@@ -273,6 +465,13 @@ async function refreshMasterPlan(): Promise<void> {
       ...model.calibration,
       state: "loading",
       message: "Resolving Bias, Darks and Flats…",
+      execution: {
+        state: "idle",
+        outputDirectory: null,
+        progress: null,
+        result: null,
+        message: "Waiting for a validated native plan",
+      },
     },
   });
   try {
@@ -816,6 +1015,13 @@ function disposeRuntimeResources(): void {
   qualityBatchTicket += 1;
   decisionSessionRevision += 1;
   masterPlanTicket += 1;
+  masterExecutionTicket += 1;
+  if (
+    model.calibration.execution.state === "running" ||
+    model.calibration.execution.state === "cancelling"
+  ) {
+    void cancelMasterPlan();
+  }
   stopBlinkTimer();
   clearPreviewResources();
 }

@@ -67,8 +67,9 @@ optimized CPU and GPU paths must match.
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
   workspace and an instrument-inspired Calibration laboratory, separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
-  diagnostic metrics, explicit manual decisions, and a presenter boundary that
-  leaves scientific state in Rust;
+  diagnostic metrics, explicit manual decisions, a single bounded native
+  master-build slot, live typed progress, cooperative cancellation, and a
+  presenter boundary that leaves scientific state in Rust;
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,
   identity-safe real FITS preview loading, and Rust-owned deterministic review

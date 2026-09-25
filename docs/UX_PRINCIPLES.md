@@ -34,7 +34,11 @@ manifest, never from browser-reconstructed groups. Its essential view separates
 Bias, Dark, and Flat master cards and shows the exclusive flat pedestal choice.
 Advanced disclosure lists every compatible or rejected pedestal candidate and
 the stable mismatch reasons. Policy and tolerance edits request a fresh native
-plan and visibly replace its digest.
+plan and visibly replace its digest. Building masters executes that exact plan
+in a single native worker: the output location, live product/stage progress,
+cancellation state, peak reserved memory, and completed products remain visible.
+Changing the imported session or planning tolerances invalidates the prior run
+state instead of presenting stale evidence.
 
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch

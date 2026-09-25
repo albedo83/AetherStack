@@ -65,6 +65,27 @@ export function mountReviewScreen(
       root,
       '[data-action="refresh-master-plan"]',
     ),
+    executeMasterPlan: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-master-plan"]',
+    ),
+    cancelMasterPlan: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-master-plan"]',
+    ),
+    masterExecution: required<HTMLElement>(root, "[data-master-execution]"),
+    masterExecutionMessage: required<HTMLElement>(
+      root,
+      "[data-master-execution-message]",
+    ),
+    masterExecutionProgress: required<HTMLProgressElement>(
+      root,
+      "[data-master-execution-progress]",
+    ),
+    masterExecutionOutput: required<HTMLElement>(
+      root,
+      "[data-master-execution-output]",
+    ),
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
     sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
     sessionStatusLabel: required<HTMLElement>(
@@ -182,6 +203,14 @@ export function mountReviewScreen(
     }
     if (action === "refresh-master-plan") {
       actions.onRefreshMasterPlan();
+      return;
+    }
+    if (action === "execute-master-plan") {
+      actions.onExecuteMasterPlan();
+      return;
+    }
+    if (action === "cancel-master-plan") {
+      actions.onCancelMasterPlan();
       return;
     }
 
@@ -420,7 +449,10 @@ export function mountReviewScreen(
     elements.sessionStatus.dataset.tone = model.sessionStatus.tone;
     elements.sessionStatusLabel.textContent = model.sessionStatus.label;
     const importing = model.sessionStatus.tone === "busy";
-    const decisionBusy = model.decisionPending || importing;
+    const masterBusy =
+      model.calibration.execution.state === "running" ||
+      model.calibration.execution.state === "cancelling";
+    const decisionBusy = model.decisionPending || importing || masterBusy;
     const decisionsAvailable = reviewCommandsAvailable(model);
     const framesActive = model.activeWorkspace === "frames";
     elements.framesWorkspace.hidden = !framesActive;
@@ -431,7 +463,7 @@ export function mountReviewScreen(
       item.classList.toggle("nav-item--active", selected);
     }
     renderCalibration(elements, model);
-    elements.importSession.disabled = importing;
+    elements.importSession.disabled = importing || masterBusy;
     elements.importSession.textContent = importing
       ? "Scanning FITS…"
       : "＋ Import session";
@@ -848,6 +880,12 @@ interface CalibrationElements {
   readonly exposureTolerance: HTMLInputElement;
   readonly temperatureTolerance: HTMLInputElement;
   readonly refreshMasterPlan: HTMLButtonElement;
+  readonly executeMasterPlan: HTMLButtonElement;
+  readonly cancelMasterPlan: HTMLButtonElement;
+  readonly masterExecution: HTMLElement;
+  readonly masterExecutionMessage: HTMLElement;
+  readonly masterExecutionProgress: HTMLProgressElement;
+  readonly masterExecutionOutput: HTMLElement;
 }
 
 function calibrationSettings(
@@ -895,8 +933,22 @@ function renderCalibration(
   );
   elements.calibrationStatus.dataset.state = calibration.state;
   elements.calibrationStatus.textContent = calibration.message;
+  const execution = calibration.execution;
+  const executionBusy =
+    execution.state === "running" || execution.state === "cancelling";
   elements.refreshMasterPlan.disabled =
-    calibration.state === "loading" || !model.reviewSessionReady;
+    calibration.state === "loading" ||
+    !model.reviewSessionReady ||
+    executionBusy;
+  elements.pedestalPolicy.disabled = executionBusy;
+  elements.exposureTolerance.disabled = executionBusy;
+  elements.temperatureTolerance.disabled = executionBusy;
+  elements.executeMasterPlan.disabled =
+    !calibration.plan?.ready || executionBusy || !model.reviewSessionReady;
+  elements.executeMasterPlan.hidden = executionBusy;
+  elements.cancelMasterPlan.hidden = !executionBusy;
+  elements.cancelMasterPlan.disabled = execution.state === "cancelling";
+  renderMasterExecution(elements, model);
   const plan = calibration.plan;
   elements.calibrationDigest.textContent = plan
     ? `PLAN ${plan.planSha256.slice(0, 12)}`
@@ -924,6 +976,35 @@ function renderCalibration(
     nodes.push(empty);
   }
   elements.calibrationProducts.replaceChildren(...nodes);
+}
+
+function renderMasterExecution(
+  elements: Pick<
+    CalibrationElements,
+    | "masterExecution"
+    | "masterExecutionMessage"
+    | "masterExecutionProgress"
+    | "masterExecutionOutput"
+  >,
+  model: ReviewViewModel,
+): void {
+  const execution = model.calibration.execution;
+  elements.masterExecution.dataset.state = execution.state;
+  elements.masterExecutionMessage.textContent = execution.message;
+  elements.masterExecutionOutput.textContent = execution.outputDirectory
+    ? execution.outputDirectory
+    : "Output directory selected at run time";
+  elements.masterExecutionOutput.title = execution.outputDirectory ?? "";
+  const progress = execution.progress;
+  if (progress?.totalUnits) {
+    elements.masterExecutionProgress.max = progress.totalUnits;
+    elements.masterExecutionProgress.value = progress.completedUnits;
+  } else {
+    elements.masterExecutionProgress.removeAttribute("value");
+    elements.masterExecutionProgress.max = 1;
+  }
+  elements.masterExecutionProgress.hidden =
+    execution.state !== "running" && execution.state !== "cancelling";
 }
 
 function masterProductCard(product: MasterProductPlan): HTMLElement {
@@ -1322,6 +1403,8 @@ function shellMarkup(): string {
             <div class="workspace-heading__actions">
               <span class="calibration-readiness" data-calibration-status role="status" aria-live="polite"></span>
               <button class="button button--quiet" type="button" data-action="refresh-master-plan">↻ Rebuild plan</button>
+              <button class="button button--primary" type="button" data-action="execute-master-plan">Build masters</button>
+              <button class="button button--danger" type="button" data-action="cancel-master-plan" hidden>Cancel build</button>
             </div>
           </div>
 
@@ -1357,6 +1440,15 @@ function shellMarkup(): string {
                 <summary>Advanced matching evidence</summary>
                 <p>Every compatible and rejected candidate is retained below with stable machine-readable reasons.</p>
               </details>
+              <section class="master-execution" data-master-execution data-state="idle" aria-labelledby="master-execution-heading">
+                <div>
+                  <p class="eyebrow">Transactional build</p>
+                  <h4 id="master-execution-heading">Native execution</h4>
+                </div>
+                <p data-master-execution-message></p>
+                <progress data-master-execution-progress aria-label="Master build progress" hidden></progress>
+                <code data-master-execution-output></code>
+              </section>
             </aside>
 
             <section class="master-rack" aria-labelledby="master-rack-heading">

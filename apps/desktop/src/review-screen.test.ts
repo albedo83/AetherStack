@@ -14,6 +14,8 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSelectWorkspace: vi.fn(),
     onUpdateCalibrationSettings: vi.fn(),
     onRefreshMasterPlan: vi.fn(),
+    onExecuteMasterPlan: vi.fn(),
+    onCancelMasterPlan: vi.fn(),
     onImportSession: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -126,6 +128,56 @@ describe("frame review workspace", () => {
     });
     fireEvent.click(getByRole(root, "button", { name: "↻ Rebuild plan" }));
     expect(actions.onRefreshMasterPlan).toHaveBeenCalledOnce();
+    fireEvent.click(getByRole(root, "button", { name: "Build masters" }));
+    expect(actions.onExecuteMasterPlan).toHaveBeenCalledOnce();
+  });
+
+  it("shows cancellable native build progress without exposing another run", () => {
+    const running = {
+      ...demoReviewModel,
+      activeWorkspace: "calibration" as const,
+      reviewSessionReady: true,
+      calibration: {
+        ...demoReviewModel.calibration,
+        execution: {
+          state: "running" as const,
+          outputDirectory: "/session/masters",
+          progress: {
+            productIndex: 0,
+            productCount: 2,
+            groupId: "dark-2s-g120-o30",
+            kind: "dark" as const,
+            sequence: 2,
+            stage: "master.integrate",
+            state: "running" as const,
+            completedUnits: 4,
+            totalUnits: 10,
+            code: null,
+          },
+          result: null,
+          message: "Master 1/2 · dark-2s-g120-o30 · master.integrate · 4/10",
+        },
+      },
+    };
+    const { root, actions } = fixture(running);
+
+    expect(
+      root.querySelector<HTMLProgressElement>(
+        "[data-master-execution-progress]",
+      )?.value,
+    ).toBe(4);
+    expect(
+      getByRole(root, "button", { name: "Cancel build" }).hasAttribute(
+        "disabled",
+      ),
+    ).toBe(false);
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '[data-action="execute-master-plan"]',
+      )?.hidden,
+    ).toBe(true);
+    fireEvent.click(getByRole(root, "button", { name: "Cancel build" }));
+    expect(actions.onCancelMasterPlan).toHaveBeenCalledOnce();
   });
 
   it("requests role changes and supports tab arrow navigation", () => {

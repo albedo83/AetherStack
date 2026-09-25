@@ -12,6 +12,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use aether_calibration::FlatNormalizationParameters;
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions, ImageRegion,
     PrimaryImageReader, StoredSampleFormat, primary_image_statistics,
@@ -32,6 +33,10 @@ use aether_review::{
     MAX_UNDO_DEPTH, ManualDecision, ManualRejectionReason, MissingPlacement, ReviewBook,
     ReviewError, ReviewState, SortDirection as ReviewSortDirection, SortField as ReviewSortField,
     SortSpec, TransferFunction,
+};
+use aether_runtime::{
+    CancellationToken, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
+    ProgressState, run_master_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -273,10 +278,19 @@ struct DesktopSessionState {
     session: Mutex<Option<Arc<ImportedNativeSession>>>,
 }
 
+/// Single active master-build slot for bounded execution and cancellation.
+///
+/// Serializing master builds avoids accidental memory-budget multiplication and
+/// makes the visible Cancel control unambiguous.
+#[derive(Debug, Default)]
+struct DesktopMasterExecutionState {
+    cancellation: Mutex<Option<CancellationToken>>,
+}
+
 #[derive(Debug)]
 struct ImportedNativeSession {
     root: PathBuf,
-    manifest: SessionManifest,
+    manifest: Arc<SessionManifest>,
 }
 
 #[derive(Debug)]
@@ -293,12 +307,26 @@ enum FlatPedestalPolicyWire {
     PreferMatchedDarkThenBias,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MasterPlanPreviewRequest {
     flat_pedestal_policy: FlatPedestalPolicyWire,
     maximum_exposure_delta_seconds: f64,
     maximum_temperature_delta_c: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MasterPlanExecutionCommandRequest {
+    output_directory: PathBuf,
+    planning: MasterPlanPreviewRequest,
+    expected_manifest_sha256: String,
+    expected_plan_sha256: String,
+    minimum_flat_normalization_samples: usize,
+    minimum_positive_flat_median: f64,
+    tile_width: usize,
+    tile_height: usize,
+    memory_limit_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -309,6 +337,51 @@ struct MasterPlanPreviewResponse {
     plan_sha256: String,
     ready: bool,
     products: Vec<MasterProductPreview>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterExecutionProgress {
+    product_index: usize,
+    product_count: usize,
+    group_id: String,
+    kind: &'static str,
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MasterPlanExecutionResponse {
+    manifest_sha256: String,
+    plan_sha256: String,
+    memory_limit_bytes: usize,
+    peak_reserved_bytes: usize,
+    products: Vec<ExecutedMasterProduct>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutedMasterProduct {
+    group_id: String,
+    kind: &'static str,
+    output_path: String,
+    total_samples: usize,
+    usable_samples: usize,
+    masked_samples: usize,
+    non_finite_samples: usize,
+    minimum: f64,
+    maximum: f64,
+    mean: f64,
+    population_standard_deviation: f64,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    normalization: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -753,6 +826,56 @@ async fn preview_master_plan(
 }
 
 #[tauri::command]
+async fn execute_master_plan(
+    request: MasterPlanExecutionCommandRequest,
+    on_progress: tauri::ipc::Channel<MasterExecutionProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    execution_state: tauri::State<'_, DesktopMasterExecutionState>,
+) -> Result<MasterPlanExecutionResponse, PreviewCommandError> {
+    if !request.output_directory.is_absolute() {
+        return Err(PreviewCommandError::new(
+            "master_output_path_not_absolute",
+            "The master output directory must use an absolute path.",
+        ));
+    }
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let cancellation = begin_master_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_master_plan_sync(&session, request, &worker_cancellation, |event| {
+            // Losing the browser receiver must not compromise or panic the
+            // native transaction. The worker remains cancellable through
+            // the independently owned command below.
+            let _ignored = on_progress.send(event);
+        })
+    })
+    .await;
+    finish_master_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "master_execution_interrupted",
+            "The master-build worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_master_plan(
+    execution_state: tauri::State<'_, DesktopMasterExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    let state = lock_master_execution(&execution_state)?;
+    let cancellation = state.as_ref().ok_or_else(|| {
+        PreviewCommandError::new(
+            "master_execution_missing",
+            "No master-build task is currently running.",
+        )
+    })?;
+    Ok(cancellation.cancel())
+}
+
+#[tauri::command]
 fn apply_review_decision(
     request: ReviewDecisionRequest,
     review_state: tauri::State<'_, DesktopReviewState>,
@@ -946,6 +1069,37 @@ fn lock_session_state(
     })
 }
 
+fn lock_master_execution(
+    state: &DesktopMasterExecutionState,
+) -> Result<MutexGuard<'_, Option<CancellationToken>>, PreviewCommandError> {
+    state.cancellation.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "master_execution_state_unavailable",
+            "Master execution is unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
+fn begin_master_execution(
+    state: &DesktopMasterExecutionState,
+) -> Result<CancellationToken, PreviewCommandError> {
+    let mut active = lock_master_execution(state)?;
+    if active.is_some() {
+        return Err(PreviewCommandError::new(
+            "master_execution_busy",
+            "A master-build task is already running.",
+        ));
+    }
+    let cancellation = CancellationToken::new();
+    *active = Some(cancellation.clone());
+    Ok(cancellation)
+}
+
+fn finish_master_execution(state: &DesktopMasterExecutionState) -> Result<(), PreviewCommandError> {
+    *lock_master_execution(state)? = None;
+    Ok(())
+}
+
 const fn session_state_missing_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "session_state_missing",
@@ -998,6 +1152,14 @@ fn preview_master_plan_sync(
             "The native session root is not absolute.",
         ));
     }
+    let plan = build_master_plan(&session.manifest, request)?;
+    master_plan_preview(&session.manifest, &plan)
+}
+
+fn build_master_plan(
+    manifest: &SessionManifest,
+    request: MasterPlanPreviewRequest,
+) -> Result<MasterPlan, PreviewCommandError> {
     let policy = match request.flat_pedestal_policy {
         FlatPedestalPolicyWire::RequireMatchedDark => FlatPedestalPolicy::RequireMatchedDark,
         FlatPedestalPolicyWire::RequireBias => FlatPedestalPolicy::RequireBias,
@@ -1011,9 +1173,120 @@ fn preview_master_plan_sync(
         request.maximum_temperature_delta_c,
     )
     .map_err(|_| master_plan_options_error())?;
-    let plan = MasterPlan::from_manifest(&session.manifest, options)
+    MasterPlan::from_manifest(manifest, options).map_err(|_| master_plan_generation_error())
+}
+
+fn execute_master_plan_sync<F>(
+    session: &ImportedNativeSession,
+    request: MasterPlanExecutionCommandRequest,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<MasterPlanExecutionResponse, PreviewCommandError>
+where
+    F: FnMut(MasterExecutionProgress),
+{
+    if !session.root.is_absolute() {
+        return Err(PreviewCommandError::new(
+            "session_state_invalid",
+            "The native session root is not absolute.",
+        ));
+    }
+    // Reject paths that cannot cross the IPC boundary before any scientific
+    // product is written. Generated filenames are ASCII-only, so this also
+    // guarantees every successful output path can be returned to the UI.
+    request.output_directory.to_str().ok_or_else(|| {
+        PreviewCommandError::new(
+            "master_output_path_not_unicode",
+            "The selected master output directory cannot be represented as Unicode.",
+        )
+    })?;
+    let tile_width = request.tile_width;
+    let tile_height = request.tile_height;
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| master_execution_configuration_error())?;
+    let memory =
+        MemoryBudget::new(memory_limit).map_err(|_| master_execution_configuration_error())?;
+    let normalization = FlatNormalizationParameters::new(
+        request.minimum_flat_normalization_samples,
+        request.minimum_positive_flat_median,
+    )
+    .map_err(|_| master_execution_configuration_error())?;
+    let plan = build_master_plan(&session.manifest, request.planning)?;
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
         .map_err(|_| master_plan_generation_error())?;
-    master_plan_preview(&session.manifest, &plan)
+    let plan_sha256 = plan
+        .canonical_sha256()
+        .map_err(|_| master_plan_generation_error())?;
+    if manifest_sha256 != request.expected_manifest_sha256
+        || plan_sha256 != request.expected_plan_sha256
+    {
+        return Err(master_plan_stale_error());
+    }
+    let execution_request = MasterPlanExecutionRequest::new_shared(
+        session.root.clone(),
+        request.output_directory,
+        Arc::clone(&session.manifest),
+        plan,
+        normalization,
+    )
+    .and_then(|request| request.with_tile_shape(tile_width, tile_height))
+    .map_err(master_execution_error)?;
+    let result = run_master_plan(&execution_request, cancellation, &memory, |event| {
+        let stage = event.stage();
+        progress(MasterExecutionProgress {
+            product_index: event.product_index(),
+            product_count: event.product_count(),
+            group_id: event.group_id().to_owned(),
+            kind: master_product_kind_name(event.kind()),
+            sequence: stage.sequence(),
+            stage: stage.stage().as_str().to_owned(),
+            state: progress_state_name(stage.state()),
+            completed_units: stage.completed_units(),
+            total_units: stage.total_units(),
+            code: stage.code().map(str::to_owned),
+        });
+    })
+    .map_err(master_execution_error)?;
+    let mut products = Vec::new();
+    products
+        .try_reserve_exact(result.products().len())
+        .map_err(|_| master_plan_allocation_error())?;
+    for product in result.products() {
+        let output_path = product.output().to_str().ok_or_else(|| {
+            PreviewCommandError::new(
+                "master_output_path_not_unicode",
+                "A generated master path cannot be represented as Unicode.",
+            )
+        })?;
+        let statistics = product.statistics();
+        let write = product.write_summary();
+        products.push(ExecutedMasterProduct {
+            group_id: product.group_id().to_owned(),
+            kind: master_product_kind_name(product.kind()),
+            output_path: output_path.to_owned(),
+            total_samples: statistics.total_samples(),
+            usable_samples: statistics.usable_samples(),
+            masked_samples: statistics.masked_samples(),
+            non_finite_samples: statistics.non_finite_samples(),
+            minimum: statistics.minimum(),
+            maximum: statistics.maximum(),
+            mean: statistics.mean(),
+            population_standard_deviation: statistics.population_standard_deviation(),
+            samples_written: write.samples_written(),
+            substituted_samples: write.substituted_samples(),
+            bytes_written: write.bytes_written(),
+            normalization: product.normalization(),
+        });
+    }
+    Ok(MasterPlanExecutionResponse {
+        manifest_sha256: result.manifest_sha256().to_owned(),
+        plan_sha256: result.plan_sha256().to_owned(),
+        memory_limit_bytes: memory.limit(),
+        peak_reserved_bytes: memory.peak(),
+        products,
+    })
 }
 
 fn master_plan_preview(
@@ -1196,6 +1469,16 @@ const fn master_product_kind_name(kind: MasterProductKind) -> &'static str {
     }
 }
 
+const fn progress_state_name(state: ProgressState) -> &'static str {
+    match state {
+        ProgressState::Started => "started",
+        ProgressState::Running => "running",
+        ProgressState::Completed => "completed",
+        ProgressState::Cancelled => "cancelled",
+        ProgressState::Failed => "failed",
+    }
+}
+
 fn bayer_pattern_name(pattern: &BayerPattern) -> String {
     match pattern {
         BayerPattern::Rggb => "RGGB".to_owned(),
@@ -1265,6 +1548,72 @@ const fn master_plan_allocation_error() -> PreviewCommandError {
         "master_plan_allocation_failed",
         "The master-plan preview could not reserve its bounded response buffers.",
     )
+}
+
+const fn master_execution_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "master_execution_configuration_invalid",
+        "Master execution requires positive tile, memory, and flat-normalization limits.",
+    )
+}
+
+const fn master_plan_stale_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "master_plan_stale",
+        "The reviewed calibration plan changed before execution; review the refreshed plan first.",
+    )
+}
+
+fn master_execution_error(error: MasterPlanExecutionError) -> PreviewCommandError {
+    match error {
+        MasterPlanExecutionError::Cancelled(_) => PreviewCommandError::new(
+            "master_execution_cancelled",
+            "Master execution was cancelled without publishing a partial product set.",
+        ),
+        MasterPlanExecutionError::DestinationExists { .. } => PreviewCommandError::new(
+            "master_destination_exists",
+            "A planned master already exists; existing files were not modified.",
+        ),
+        MasterPlanExecutionError::UnresolvedFlatPedestal { .. }
+        | MasterPlanExecutionError::InvalidPedestalProduct { .. } => PreviewCommandError::new(
+            "master_dependency_unresolved",
+            "Every flat must have one exclusive resolved pedestal before execution.",
+        ),
+        MasterPlanExecutionError::SessionRootNotAbsolute
+        | MasterPlanExecutionError::OutputDirectoryNotAbsolute
+        | MasterPlanExecutionError::ZeroTileExtent { .. } => master_execution_configuration_error(),
+        MasterPlanExecutionError::SessionRootNotDirectory
+        | MasterPlanExecutionError::OutputDirectoryNotDirectory
+        | MasterPlanExecutionError::InspectSessionRoot(_)
+        | MasterPlanExecutionError::InspectOutputDirectory(_)
+        | MasterPlanExecutionError::CreateStagingDirectory(_)
+        | MasterPlanExecutionError::PublishProduct { .. }
+        | MasterPlanExecutionError::SyncOutputDirectory(_)
+        | MasterPlanExecutionError::RollbackPublication { .. } => PreviewCommandError::new(
+            "master_execution_filesystem_failed",
+            "The master transaction could not safely use or publish to the selected directories.",
+        ),
+        MasterPlanExecutionError::Manifest(_)
+        | MasterPlanExecutionError::Plan(_)
+        | MasterPlanExecutionError::ManifestDigestMismatch
+        | MasterPlanExecutionError::MissingGroup { .. }
+        | MasterPlanExecutionError::ProductKindMismatch { .. }
+        | MasterPlanExecutionError::MissingManifestFile { .. }
+        | MasterPlanExecutionError::DestinationNameCollision { .. }
+        | MasterPlanExecutionError::Provenance(_) => master_plan_generation_error(),
+        MasterPlanExecutionError::ProductPipeline { .. }
+        | MasterPlanExecutionError::OpenGeneratedPedestal { .. }
+        | MasterPlanExecutionError::FingerprintGeneratedPedestal { .. } => {
+            PreviewCommandError::new(
+                "master_product_failed",
+                "A master product failed validation or calculation; no product set was published.",
+            )
+        }
+        MasterPlanExecutionError::AllocationFailed => PreviewCommandError::new(
+            "master_execution_allocation_failed",
+            "Master execution could not reserve its bounded native state.",
+        ),
+    }
 }
 
 #[tauri::command]
@@ -1360,11 +1709,12 @@ fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, Pre
         )
     })?;
     let presentation = imported_session_from_report(root, root_path, &report)?;
+    let manifest = Arc::new(report.into_manifest());
     Ok(ImportedSessionBundle {
         presentation,
         native: ImportedNativeSession {
             root: root.to_owned(),
-            manifest: report.manifest().clone(),
+            manifest,
         },
     })
 }
@@ -1696,11 +2046,14 @@ const fn preview_worker_error() -> PreviewCommandError {
 pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(DesktopMasterExecutionState::default())
         .manage(DesktopReviewState::default())
         .manage(DesktopSessionState::default())
         .invoke_handler(tauri::generate_handler![
             apply_review_decision,
+            cancel_master_plan,
             estimate_fits_preview_transform,
+            execute_master_plan,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
@@ -1716,6 +2069,8 @@ pub fn run() -> Result<(), tauri::Error> {
 mod tests {
     use std::fs::{self, File};
     use std::io::Cursor;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
     use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1817,7 +2172,12 @@ mod tests {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let image = ScientificImage::from_pixels(Dimensions::new(4, 2, 1)?, vec![1.0; 8])?;
+        let sample = if frame_type == FrameType::Dark {
+            1.0
+        } else {
+            2.0
+        };
+        let image = ScientificImage::from_pixels(Dimensions::new(4, 2, 1)?, vec![sample; 8])?;
         let mut output = File::create(&path)?;
         write_f64_primary(&mut output, &image)?;
         drop(output);
@@ -1861,11 +2221,35 @@ mod tests {
         ];
         Ok(ImportedNativeSession {
             root: root.to_owned(),
-            manifest: SessionManifest::new(
+            manifest: Arc::new(SessionManifest::new(
                 ClassificationPolicy::RequireAgreement,
                 vec![dark, flat],
                 groups,
-            )?,
+            )?),
+        })
+    }
+
+    fn master_execution_request(
+        session: &ImportedNativeSession,
+        output_directory: PathBuf,
+        policy: FlatPedestalPolicyWire,
+    ) -> TestResult<MasterPlanExecutionCommandRequest> {
+        let planning = MasterPlanPreviewRequest {
+            flat_pedestal_policy: policy,
+            maximum_exposure_delta_seconds: 0.01,
+            maximum_temperature_delta_c: 1.0,
+        };
+        let preview = preview_master_plan_sync(session, planning)?;
+        Ok(MasterPlanExecutionCommandRequest {
+            output_directory,
+            planning,
+            expected_manifest_sha256: preview.manifest_sha256,
+            expected_plan_sha256: preview.plan_sha256,
+            minimum_flat_normalization_samples: 3,
+            minimum_positive_flat_median: 1.0e-12,
+            tile_width: 2,
+            tile_height: 2,
+            memory_limit_bytes: 1_048_576,
         })
     }
 
@@ -1978,6 +2362,150 @@ mod tests {
         assert_eq!(preview.products[1].candidates.len(), 1);
         assert_eq!(preview.products[1].candidates[0].status, "compatible");
         assert!(preview.products[1].candidates[0].mismatches.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn executes_native_master_plan_with_progress_and_bounded_memory() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let output = directory.path().join("masters");
+        fs::create_dir(&session_root)?;
+        fs::create_dir(&output)?;
+        let session = planning_session(&session_root)?;
+        let mut progress = Vec::new();
+
+        let result = execute_master_plan_sync(
+            &session,
+            master_execution_request(
+                &session,
+                output.clone(),
+                FlatPedestalPolicyWire::PreferMatchedDarkThenBias,
+            )?,
+            &CancellationToken::new(),
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.products.len(), 2);
+        assert!(result.peak_reserved_bytes > 0);
+        assert!(result.peak_reserved_bytes <= result.memory_limit_bytes);
+        assert_eq!(result.products[0].kind, "dark");
+        assert_eq!(result.products[0].mean.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(result.products[1].kind, "flat");
+        assert_eq!(result.products[1].normalization, Some(1.0));
+        assert_eq!(result.products[1].mean.to_bits(), 1.0_f64.to_bits());
+        assert!(
+            result
+                .products
+                .iter()
+                .all(|product| Path::new(&product.output_path).is_file())
+        );
+        assert!(progress.iter().any(|event| event.group_id == "dark-2s"));
+        assert!(progress.iter().any(|event| event.group_id == "flat-uvir"));
+        assert!(progress.iter().all(|event| event.product_count == 2));
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_to_execute_a_plan_other_than_the_reviewed_digest() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let output = directory.path().join("masters");
+        fs::create_dir(&session_root)?;
+        fs::create_dir(&output)?;
+        let session = planning_session(&session_root)?;
+        let mut request = master_execution_request(
+            &session,
+            output.clone(),
+            FlatPedestalPolicyWire::PreferMatchedDarkThenBias,
+        )?;
+        request.expected_plan_sha256 = "0".repeat(64);
+
+        let error = execute_master_plan_sync(&session, request, &CancellationToken::new(), |_| {})
+            .err()
+            .ok_or("a plan with an unreviewed digest was executed")?;
+
+        assert_eq!(error.code, "master_plan_stale");
+        assert_eq!(fs::read_dir(output)?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_publishes_no_desktop_master_products() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let output = directory.path().join("masters");
+        fs::create_dir(&session_root)?;
+        fs::create_dir(&output)?;
+        let session = planning_session(&session_root)?;
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+
+        let error = execute_master_plan_sync(
+            &session,
+            master_execution_request(
+                &session,
+                output.clone(),
+                FlatPedestalPolicyWire::RequireMatchedDark,
+            )?,
+            &cancellation,
+            |_| {},
+        )
+        .err()
+        .ok_or("cancelled master execution succeeded")?;
+
+        assert_eq!(error.code, "master_execution_cancelled");
+        assert_eq!(fs::read_dir(output)?.count(), 0);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_master_destination_is_rejected_before_writing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        fs::create_dir(&session_root)?;
+        let session = planning_session(&session_root)?;
+        let output = directory
+            .path()
+            .join(std::ffi::OsString::from_vec(vec![b'm', 0xff, b's']));
+
+        let error = execute_master_plan_sync(
+            &session,
+            master_execution_request(
+                &session,
+                output.clone(),
+                FlatPedestalPolicyWire::RequireMatchedDark,
+            )?,
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .err()
+        .ok_or("non-Unicode master destination was accepted")?;
+
+        assert_eq!(error.code, "master_output_path_not_unicode");
+        assert!(!output.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_master_execution_slot_is_exclusive_and_reusable() -> TestResult {
+        let state = DesktopMasterExecutionState::default();
+        let first = begin_master_execution(&state)?;
+        let busy = begin_master_execution(&state)
+            .err()
+            .ok_or("concurrent master execution was accepted")?;
+        assert_eq!(busy.code, "master_execution_busy");
+        assert!(first.cancel());
+        assert!(
+            lock_master_execution(&state)?
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+        );
+        finish_master_execution(&state)?;
+        let second = begin_master_execution(&state)?;
+        assert!(!second.is_cancelled());
+        finish_master_execution(&state)?;
         Ok(())
     }
 

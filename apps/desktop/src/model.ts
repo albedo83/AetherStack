@@ -1,4 +1,7 @@
 import type {
+  MasterBuildSettings,
+  MasterExecutionProgress,
+  MasterExecutionResult,
   MasterPlanPreview,
   MasterPlanSettings,
 } from "./calibration-bridge.ts";
@@ -127,6 +130,16 @@ export interface CalibrationViewModel {
   readonly settings: MasterPlanSettings;
   readonly plan: MasterPlanPreview | null;
   readonly message: string;
+  readonly buildSettings: MasterBuildSettings;
+  readonly execution: CalibrationExecutionViewModel;
+}
+
+export interface CalibrationExecutionViewModel {
+  readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+  readonly outputDirectory: string | null;
+  readonly progress: MasterExecutionProgress | null;
+  readonly result: MasterExecutionResult | null;
+  readonly message: string;
 }
 
 export type SortField =
@@ -143,6 +156,8 @@ export interface ReviewActions {
   readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
   readonly onUpdateCalibrationSettings: (settings: MasterPlanSettings) => void;
   readonly onRefreshMasterPlan: () => void;
+  readonly onExecuteMasterPlan: () => void;
+  readonly onCancelMasterPlan: () => void;
   readonly onImportSession: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
   readonly onSelectFrame: (frameId: string) => void;

@@ -96,6 +96,12 @@ Multi-file publication is not claimed to be one indivisible filesystem
 operation: a concurrent observer can see a short prefix while links are being
 created, but a failed call does not intentionally leave a partial product set.
 
+The desktop adapter owns one active execution slot. It shares the immutable
+native manifest into the worker without cloning its potentially large file set,
+forwards typed product and stage progress over IPC, and exposes one cooperative
+cancellation token. A second run is rejected while the slot is occupied, so its
+configured memory budget cannot be multiplied accidentally.
+
 ## Validation coverage
 
 Unit tests cover dark preference, bias fallback, dark-only and bias-only policy,

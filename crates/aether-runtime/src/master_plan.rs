@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aether_calibration::{
@@ -29,7 +30,7 @@ static STAGING_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub struct MasterPlanExecutionRequest {
     session_root: PathBuf,
     output_directory: PathBuf,
-    manifest: SessionManifest,
+    manifest: Arc<SessionManifest>,
     plan: MasterPlan,
     flat_normalization: FlatNormalizationParameters,
     tile_width: usize,
@@ -51,6 +52,30 @@ impl MasterPlanExecutionRequest {
         session_root: PathBuf,
         output_directory: PathBuf,
         manifest: SessionManifest,
+        plan: MasterPlan,
+        flat_normalization: FlatNormalizationParameters,
+    ) -> Result<Self, MasterPlanExecutionError> {
+        Self::new_shared(
+            session_root,
+            output_directory,
+            Arc::new(manifest),
+            plan,
+            flat_normalization,
+        )
+    }
+
+    /// Binds a shared manifest without copying its potentially large file set.
+    ///
+    /// This is the preferred desktop entry point once directory ingestion has
+    /// moved the immutable manifest into native session state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation failures as [`Self::new`].
+    pub fn new_shared(
+        session_root: PathBuf,
+        output_directory: PathBuf,
+        manifest: Arc<SessionManifest>,
         plan: MasterPlan,
         flat_normalization: FlatNormalizationParameters,
     ) -> Result<Self, MasterPlanExecutionError> {

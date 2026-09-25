@@ -273,6 +273,16 @@ impl DirectoryManifestReport {
         &self.manifest
     }
 
+    /// Consumes the report and returns its generated manifest without cloning.
+    ///
+    /// Desktop adapters use this after translating the remaining diagnostics,
+    /// so a large imported session can move into long-lived native state in
+    /// constant additional memory.
+    #[must_use]
+    pub fn into_manifest(self) -> SessionManifest {
+        self.manifest
+    }
+
     /// Recoverable failures, sorted deterministically by relative path and code.
     #[must_use]
     pub fn failures(&self) -> &[DirectoryScanFailure] {

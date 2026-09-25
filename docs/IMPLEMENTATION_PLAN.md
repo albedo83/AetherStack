@@ -514,10 +514,14 @@ safety reasoning. They do not narrate obvious syntax.
     pedestal policy and tolerances. Its separate Bias/Dark/Flat product cards
     expose metadata, exclusive selected dependencies, blocking reasons, and all
     compatible or rejected candidates through progressive disclosure; the web
-    presenter never reconstructs scientific groups. Arbitrary-file import,
-    master execution progress and cancellation, durable decision recovery,
-    multi-frame stretch estimation, spatial quality modeling, and ToupTek
-    validation remain next.
+    presenter never reconstructs scientific groups. Calibration can now choose
+    an output directory and execute that exact native plan in one memory-bounded
+    worker with typed live progress, cooperative cancellation, transactional
+    whole-plan publication, and explicit peak-memory reporting. The immutable
+    imported manifest is shared into execution without copying its file set.
+    Arbitrary-file import, durable decision recovery, multi-frame stretch
+    estimation, spatial quality modeling, advanced construction controls, and
+    ToupTek validation remain next.
 
 ## 11. Stable-release definition
 

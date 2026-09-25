@@ -105,6 +105,20 @@ export const demoReviewModel: ReviewViewModel = {
       ],
     },
     message: "2 master groups · all dependencies resolved",
+    buildSettings: {
+      minimumFlatNormalizationSamples: 1_024,
+      minimumPositiveFlatMedian: 1e-12,
+      tileWidth: 256,
+      tileHeight: 256,
+      memoryLimitBytes: 1_073_741_824,
+    },
+    execution: {
+      state: "idle",
+      outputDirectory: null,
+      progress: null,
+      result: null,
+      message: "Choose an output directory when the plan is ready",
+    },
   },
   roles: [
     { role: "bias", label: "Bias", count: 0, unresolved: 0 },

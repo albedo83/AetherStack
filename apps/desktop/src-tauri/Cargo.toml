@@ -16,11 +16,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+aether-calibration = { path = "../../../crates/aether-calibration" }
 aether-fits = { path = "../../../crates/aether-fits" }
 aether-metadata = { path = "../../../crates/aether-metadata" }
 aether-preview = { path = "../../../crates/aether-preview" }
 aether-quality = { path = "../../../crates/aether-quality" }
 aether-review = { path = "../../../crates/aether-review" }
+aether-runtime = { path = "../../../crates/aether-runtime" }
 aether-session = { path = "../../../crates/aether-session" }
 png = "0.18"
 serde.workspace = true
