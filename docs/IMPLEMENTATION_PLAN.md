@@ -522,6 +522,15 @@ safety reasoning. They do not narrate obvious syntax.
     Arbitrary-file import, durable decision recovery, multi-frame stretch
     estimation, spatial quality modeling, advanced construction controls, and
     ToupTek validation remain next.
+22. Begin Light calibration association planning. A versioned plan now binds
+    every Light group to the exact session manifest and master plan, evaluates
+    every Dark and normalized Flat candidate, requires exact Dark exposure,
+    applies one explicit inclusive Dark-temperature tolerance, and requires an
+    exact Flat filter. Equal best Darks and multiple applicable Flats remain
+    blocking ambiguities. Bounded canonical JSON, digest binding, missing-field
+    evidence, tamper rejection, and role-specific tests are complete. Native
+    preview, calibrated-Light publication, dark scaling, defect correction, and
+    uncertainty propagation remain next.
 
 ## 11. Stable-release definition
 

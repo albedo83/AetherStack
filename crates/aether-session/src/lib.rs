@@ -9,6 +9,7 @@ mod directory;
 mod fingerprint;
 mod generator;
 mod grouping;
+mod light_plan;
 mod manifest;
 mod master_plan;
 mod source;
@@ -27,6 +28,13 @@ pub use directory::{
 pub use fingerprint::{FINGERPRINT_BUFFER_BYTES, FingerprintError, fingerprint_reader};
 pub use generator::{ManifestGenerationError, generate_manifest};
 pub use grouping::{GroupingField, GroupingKeyError, StrictGroupingKey};
+pub use light_plan::{
+    LIGHT_CALIBRATION_PLAN_SCHEMA_VERSION, LightCalibrationPlan, LightCalibrationPlanError,
+    LightCalibrationPlanOptions, LightCalibrationProductPlan, LightMasterAssociation,
+    LightMasterBlockingReason, LightMasterCandidateCompatibility, LightMasterCandidateEvaluation,
+    LightMasterKind, LightMasterMatchField, LightMasterMismatch, LightMasterMismatchReason,
+    MAX_LIGHT_CALIBRATION_CANDIDATE_EVALUATIONS, MAX_LIGHT_CALIBRATION_PLAN_BYTES,
+};
 pub use manifest::{
     MAX_SESSION_MANIFEST_BYTES, ManifestError, ManifestFile, ManifestGroup, ManifestValidationCode,
     ManifestValidationError, SESSION_MANIFEST_SCHEMA_VERSION, SessionManifest, SourceFingerprint,

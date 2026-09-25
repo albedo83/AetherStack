@@ -31,6 +31,10 @@ optimized CPU and GPU paths must match.
 - versioned bias, dark, and flat master plans with exclusive short-dark-or-bias
   flat calibration, explicit tolerances, candidate diagnostics, and bounded
   deterministic serialization;
+- versioned Light-to-Dark-and-Flat association plans bound to both the session
+  manifest and master plan, with exact Dark exposure, explicit temperature
+  tolerance, filter-aware Flat matching, complete candidate evidence, and no
+  silent ambiguity resolution;
 - versioned, deterministic JSON session manifests with strict validation,
   retained FITS diagnostics, canonical manifest digests, and streaming SHA-256
   source fingerprints;
@@ -108,6 +112,8 @@ the evidence driving format support. The [session manifest contract](docs/SESSIO
 documents the current portable interchange schema and its validation rules. The
 [master plan contract](docs/MASTER_PLAN_CONTRACT.md) defines conservative
 short-dark and true-bias association for flat construction. The
+[light calibration plan contract](docs/LIGHT_CALIBRATION_PLAN_CONTRACT.md)
+defines exact Dark and normalized-Flat association for every Light group. The
 [runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
 and memory-accounting behavior for later pipeline stages. The initial
 [calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,
