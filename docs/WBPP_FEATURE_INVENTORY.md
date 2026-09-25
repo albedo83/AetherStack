@@ -102,7 +102,7 @@ evidence, not automatically an AetherStack default.
 | Optimize master dark | Expose the fitted scale, residuals, safeguards, and fallback behavior. | Research-gated |
 | Bias master | Build and match a true bias independently of darks. | Versioned planning, matching, strict `f64` construction, and transactional publication implemented |
 | Short-dark use for flat calibration | Match exposure, gain, offset, temperature policy, binning, dimensions, and CFA state; show every candidate decision. | Versioned planning, candidate diagnostics, strict `f64` pedestal correction, and transactional flat construction implemented |
-| Long-dark use for light calibration | Prefer exact exposure and acquisition conditions; disclose any tolerated mismatch. | Versioned Light association plan implemented with exact exposure, explicit temperature tolerance, unique-best selection, and complete mismatch evidence; execution pending |
+| Long-dark use for light calibration | Prefer exact exposure and acquisition conditions; disclose any tolerated mismatch. | Versioned association and transactional native execution implemented with exact exposure, explicit temperature tolerance, unique-best selection, complete mismatch evidence, selected-master provenance verification, and pre-publication source revalidation |
 
 ## Flat controls
 
@@ -120,7 +120,7 @@ evidence, not automatically an AetherStack default.
 | Reference capability | AetherStack requirement | Status |
 | --- | --- | --- |
 | Calibration association matrix | Display status for bias, dark, flat, optimization, CFA, and output pedestal for every light group. | Native Dark/Flat association matrix implemented with Ready/Blocked states and complete candidate evidence; optimization and output-pedestal columns remain research-gated |
-| Automatic bias, dark, and flat selection | Produce an inspectable plan with deterministic tie-breaking and no silent fallback. | Deterministic master and Light plans, explicit policies/tolerances, exclusive selection, candidate evidence, and master desktop preview implemented |
+| Automatic bias, dark, and flat selection | Produce an inspectable plan with deterministic tie-breaking and no silent fallback. | Deterministic master and Light plans, explicit policies/tolerances, exclusive selection, candidate evidence, desktop preview, and transactional native execution implemented |
 | Output pedestal: automatic or explicit | Define storage purpose, units, clipping interaction, and reversibility. | Research-gated |
 | Cosmetic correction: automatic | Generate a defect model with evidence and a before/after diagnostic map. | Planned |
 | Cosmetic high-sigma threshold | Define the estimator and preserve rejected-pixel reasons in masks. | Planned |

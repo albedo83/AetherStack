@@ -4,12 +4,17 @@
 //! executors and exposes the first deliberately narrow strict CPU pipeline.
 
 mod cancellation;
+mod light_plan;
 mod master_plan;
 mod memory;
 mod pipeline;
 mod progress;
 
 pub use cancellation::{CancellationToken, Cancelled};
+pub use light_plan::{
+    LightPlanExecutionError, LightPlanExecutionRequest, LightPlanExecutionResult,
+    LightPlanProgressEvent, LightProductExecutionResult, run_light_plan,
+};
 pub use master_plan::{
     MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,
     MasterPlanProgressEvent, MasterProductExecutionResult, run_master_plan,

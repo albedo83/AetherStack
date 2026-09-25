@@ -538,6 +538,17 @@ safety reasoning. They do not narrate obvious syntax.
     candidate through typed IPC. The dark UI renders a responsive execution-gate
     matrix with explicit Ready/Blocked states and expandable evidence. Native
     calibrated-Light publication remains next.
+24. Execute canonical Light calibration plans transactionally. The native
+    runtime now rejects non-canonical or empty plans, verifies each selected
+    Dark and Flat FITS product against the exact manifest and master-plan
+    digests, and runs strict tiled `f64` calibration plus stable-order mean
+    integration for every Light group. Raw Lights and generated masters are
+    fingerprinted again before whole-set publication. Products remain in a
+    private staging directory until the complete plan succeeds; cancellation,
+    an existing destination, stale provenance, source mutation, or any later
+    product failure publishes nothing. The calibrated product stores the Light
+    plan digest, which transitively binds its master plan. Desktop execution
+    controls and progress presentation remain next.
 
 ## 11. Stable-release definition
 

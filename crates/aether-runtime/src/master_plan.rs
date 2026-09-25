@@ -911,7 +911,7 @@ fn selected_pedestal_group(product: &aether_session::MasterProductPlan) -> Optio
     }
 }
 
-fn product_file_name(kind: MasterProductKind, group_id: &str) -> String {
+pub(crate) fn product_file_name(kind: MasterProductKind, group_id: &str) -> String {
     let role = match kind {
         MasterProductKind::Bias => "bias",
         MasterProductKind::Dark => "dark",

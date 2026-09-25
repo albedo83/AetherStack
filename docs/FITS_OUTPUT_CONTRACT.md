@@ -56,14 +56,17 @@ lowercase letter or digit. A product must represent at least one source image.
 | `CREATOR` | AetherStack package name and version |
 | `AETHVER` | Version of this provenance-card contract |
 | `AETHMAN` | SHA-256 of the canonical session-manifest bytes |
-| `AETHPLN` | Optional SHA-256 of the canonical master-plan bytes |
+| `AETHPLN` | Optional SHA-256 of the canonical product-driving plan bytes |
 | `AETHGRP` | Exact session group identifier |
 | `AETHALG` | Versioned integration algorithm identifier |
 | `AETHSRC` | Number of source images represented by the product |
 
-`AETHPLN` is mandatory for master calibration products and absent for products
-that do not depend on a master plan. It binds the pixels to the exact matching
-policy, tolerances, selected pedestal, and recorded candidate diagnostics.
+`AETHPLN` is mandatory for plan-driven calibration products and absent for
+products that do not depend on a plan. A master product stores its canonical
+master-plan digest. A calibrated integrated Light product stores its canonical
+Light-plan digest; that plan already binds the exact master-plan digest. The
+card therefore binds pixels transitively to every matching policy, tolerance,
+selected master, selected pedestal, and recorded candidate diagnostic.
 
 The corresponding atomic API places the same cards in the synchronized
 temporary stream before publication. Provenance deliberately contains stable

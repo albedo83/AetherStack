@@ -52,6 +52,10 @@ optimized CPU and GPU paths must match.
   normalized-flat masters, with deterministic tiling, explicit peak-memory
   reservations, pre/post source verification, exact readback statistics, and
   private whole-plan staging followed by create-new publication with rollback;
+- bounded Light-plan execution that verifies selected master provenance,
+  calibrates and strictly integrates every Light group in `f64`, revalidates
+  all raw and generated inputs, and publishes the complete product set as one
+  rollback-safe transaction;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
 - strict three-pass FITS pixel statistics with fixed-size decoding buffers,
@@ -115,6 +119,8 @@ documents the current portable interchange schema and its validation rules. The
 short-dark and true-bias association for flat construction. The
 [light calibration plan contract](docs/LIGHT_CALIBRATION_PLAN_CONTRACT.md)
 defines exact Dark and normalized-Flat association for every Light group. The
+[Light execution contract](docs/LIGHT_EXECUTION_CONTRACT.md) defines the
+all-or-nothing calibrated-integration transaction. The
 [runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
 and memory-accounting behavior for later pipeline stages. The initial
 [calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,
