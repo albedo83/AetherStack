@@ -43,6 +43,9 @@ execution parameters and do not alter strict output bytes.
 group. `run_calibrated_light_plan` instead publishes each calibrated source and
 performs no integration. They are separate execution modes, preventing a
 request for inspectable frames from paying for the same calibration twice.
+The desktop command exposes these as the explicit `integrated` and
+`calibrated_frames` modes. Calibrated frames are the default review workflow;
+integration remains an intentional choice rather than an implicit side effect.
 
 ## Bounded execution
 
@@ -51,6 +54,9 @@ checked before master loading, between products, inside each strict pipeline,
 before source revalidation, and during publication. Progress identifies the
 canonical product index, product count, group identifier, and typed pipeline
 stage. Calibrated-frame progress also reports canonical source index and count.
+Desktop progress preserves those optional source coordinates instead of
+flattening them into a synthetic product counter. Both modes share the single
+native calibration slot, so their declared memory budgets cannot overlap.
 
 The executor fingerprints every raw Light and selected generated master again
 after all computations and before publication. Any missing, unreadable, or

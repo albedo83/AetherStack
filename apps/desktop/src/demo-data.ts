@@ -169,6 +169,7 @@ export const demoReviewModel: ReviewViewModel = {
       message: "Choose an output directory when the plan is ready",
     },
     lightSettings: {
+      outputMode: "calibrated_frames",
       minimumAbsoluteFlat: 1e-12,
       tileWidth: 256,
       tileHeight: 256,
@@ -180,7 +181,7 @@ export const demoReviewModel: ReviewViewModel = {
       outputDirectory: null,
       progress: null,
       result: null,
-      message: "Build the reviewed masters before integrating Lights",
+      message: "Build the reviewed masters before calibrating Lights",
     },
   },
   roles: [

@@ -160,6 +160,7 @@ export interface MasterExecutionResult {
 }
 
 export interface LightExecutionSettings {
+  readonly outputMode: "calibrated_frames" | "integrated";
   readonly minimumAbsoluteFlat: number;
   readonly tileWidth: number;
   readonly tileHeight: number;
@@ -176,6 +177,8 @@ export interface LightExecutionProgress {
   readonly completedUnits: number;
   readonly totalUnits: number | null;
   readonly code: string | null;
+  readonly sourceIndex: number | null;
+  readonly sourceCount: number | null;
 }
 
 export interface ExecutedLightProduct {
@@ -204,7 +207,29 @@ export interface LightExecutionResult {
   readonly lightPlanSha256: string;
   readonly memoryLimitBytes: number;
   readonly peakReservedBytes: number;
+  readonly outputMode: "calibrated_frames" | "integrated";
   readonly products: readonly ExecutedLightProduct[];
+  readonly calibratedFrames: readonly ExecutedCalibratedLightFrame[];
+}
+
+export interface ExecutedCalibratedLightFrame {
+  readonly groupId: string;
+  readonly sourceIndex: number;
+  readonly sourceSha256: string;
+  readonly outputPath: string;
+  readonly totalSamples: number;
+  readonly usableSamples: number;
+  readonly maskedSamples: number;
+  readonly nonFiniteSamples: number;
+  readonly minimum: number;
+  readonly maximum: number;
+  readonly mean: number;
+  readonly populationStandardDeviation: number;
+  readonly samplesWritten: number;
+  readonly substitutedSamples: number;
+  readonly bytesWritten: number;
+  readonly tilesProcessed: number;
+  readonly tilesReused: number;
 }
 
 /**

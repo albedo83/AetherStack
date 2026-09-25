@@ -127,7 +127,9 @@ describe("native calibration bridge", () => {
       lightPlanSha256: "c".repeat(64),
       memoryLimitBytes: 1_073_741_824,
       peakReservedBytes: 8_388_608,
+      outputMode: "calibrated_frames",
       products: [],
+      calibratedFrames: [],
     };
     vi.mocked(invoke).mockResolvedValue(expected);
     const planning = {
@@ -137,6 +139,7 @@ describe("native calibration bridge", () => {
       maximumLightDarkTemperatureDeltaC: 2,
     };
     const execution = {
+      outputMode: "calibrated_frames" as const,
       minimumAbsoluteFlat: 1e-12,
       tileWidth: 256,
       tileHeight: 256,

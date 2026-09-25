@@ -81,8 +81,8 @@ optimized CPU and GPU paths must match.
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,
   explicit manual decisions, a single bounded native calibration slot,
-  transactional master and integrated-Light execution, live typed progress,
-  cooperative cancellation, and a
+  transactional master execution plus selectable per-frame or integrated-Light
+  output, source-aware live progress, cooperative cancellation, and a
   presenter boundary that leaves scientific state in Rust;
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,
@@ -125,7 +125,7 @@ short-dark and true-bias association for flat construction. The
 [light calibration plan contract](docs/LIGHT_CALIBRATION_PLAN_CONTRACT.md)
 defines exact Dark and normalized-Flat association for every Light group. The
 [Light execution contract](docs/LIGHT_EXECUTION_CONTRACT.md) defines the
-all-or-nothing calibrated-integration transaction. The
+all-or-nothing calibrated-frame and calibrated-integration transactions. The
 [runtime contracts](docs/RUNTIME_CONTRACTS.md) define cancellation, progress,
 and memory-accounting behavior for later pipeline stages. The initial
 [calibration contract](docs/CALIBRATION_CONTRACT.md) fixes the equation,

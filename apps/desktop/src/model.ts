@@ -169,6 +169,9 @@ export type SortDirection = "ascending" | "descending";
 export interface ReviewActions {
   readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
   readonly onUpdateCalibrationSettings: (settings: MasterPlanSettings) => void;
+  readonly onUpdateLightOutputMode: (
+    mode: LightExecutionSettings["outputMode"],
+  ) => void;
   readonly onRefreshMasterPlan: () => void;
   readonly onExecuteMasterPlan: () => void;
   readonly onCancelMasterPlan: () => void;

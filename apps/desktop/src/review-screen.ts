@@ -69,6 +69,10 @@ export function mountReviewScreen(
     ),
     lightAssociations: required<HTMLElement>(root, "[data-light-associations]"),
     lightDigest: required<HTMLElement>(root, "[data-light-digest]"),
+    lightOutputMode: required<HTMLSelectElement>(
+      root,
+      "[data-light-output-mode]",
+    ),
     refreshMasterPlan: required<HTMLButtonElement>(
       root,
       '[data-action="refresh-master-plan"]',
@@ -114,6 +118,10 @@ export function mountReviewScreen(
     lightExecutionOutput: required<HTMLElement>(
       root,
       "[data-light-execution-output]",
+    ),
+    lightExecutionHeading: required<HTMLElement>(
+      root,
+      "[data-light-execution-heading]",
     ),
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
     sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
@@ -360,6 +368,13 @@ export function mountReviewScreen(
 
   const onChange = (event: Event): void => {
     const target = event.target;
+    if (target === elements.lightOutputMode) {
+      const mode = elements.lightOutputMode.value;
+      if (mode === "calibrated_frames" || mode === "integrated") {
+        actions.onUpdateLightOutputMode(mode);
+      }
+      return;
+    }
     if (
       target !== elements.pedestalPolicy &&
       target !== elements.exposureTolerance &&
@@ -920,6 +935,7 @@ interface CalibrationElements {
   readonly lightTemperatureTolerance: HTMLInputElement;
   readonly lightAssociations: HTMLElement;
   readonly lightDigest: HTMLElement;
+  readonly lightOutputMode: HTMLSelectElement;
   readonly refreshMasterPlan: HTMLButtonElement;
   readonly executeMasterPlan: HTMLButtonElement;
   readonly cancelMasterPlan: HTMLButtonElement;
@@ -933,6 +949,7 @@ interface CalibrationElements {
   readonly lightExecutionMessage: HTMLElement;
   readonly lightExecutionProgress: HTMLProgressElement;
   readonly lightExecutionOutput: HTMLElement;
+  readonly lightExecutionHeading: HTMLElement;
 }
 
 function calibrationSettings(
@@ -1006,6 +1023,16 @@ function renderCalibration(
   elements.exposureTolerance.disabled = executionBusy;
   elements.temperatureTolerance.disabled = executionBusy;
   elements.lightTemperatureTolerance.disabled = executionBusy;
+  elements.lightOutputMode.value = calibration.lightSettings.outputMode;
+  elements.lightOutputMode.disabled = executionBusy;
+  elements.executeLightPlan.textContent =
+    calibration.lightSettings.outputMode === "calibrated_frames"
+      ? "Calibrate frames"
+      : "Calibrate & integrate";
+  elements.lightExecutionHeading.textContent =
+    calibration.lightSettings.outputMode === "calibrated_frames"
+      ? "Lossless calibrated frames"
+      : "Calibrate + strict integration";
   elements.executeMasterPlan.disabled =
     !calibration.plan?.ready || executionBusy || !model.reviewSessionReady;
   elements.executeMasterPlan.hidden = masterBusy;
@@ -1725,6 +1752,13 @@ function shellMarkup(): string {
                   </div>
                   <div class="light-association-panel__actions">
                     <code class="plan-digest" data-light-digest></code>
+                    <label class="light-output-mode">
+                      <span>Output</span>
+                      <select data-light-output-mode aria-label="Light output mode">
+                        <option value="calibrated_frames">Calibrated frames</option>
+                        <option value="integrated">Integrated group</option>
+                      </select>
+                    </label>
                     <button class="button button--primary" type="button" data-action="execute-light-plan">Calibrate &amp; integrate</button>
                     <button class="button button--danger" type="button" data-action="cancel-light-plan" hidden>Cancel Lights</button>
                   </div>
@@ -1733,7 +1767,7 @@ function shellMarkup(): string {
                 <section class="light-execution" data-light-execution data-state="idle" aria-labelledby="light-execution-heading">
                   <div>
                     <p class="eyebrow">Atomic Light run</p>
-                    <h4 id="light-execution-heading">Calibrate + strict integration</h4>
+                    <h4 id="light-execution-heading" data-light-execution-heading>Calibrate + strict integration</h4>
                   </div>
                   <p data-light-execution-message></p>
                   <progress data-light-execution-progress aria-label="Light calibration progress" hidden></progress>

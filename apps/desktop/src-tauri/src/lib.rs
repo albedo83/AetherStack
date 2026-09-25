@@ -37,7 +37,7 @@ use aether_review::{
 use aether_runtime::{
     CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
     MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, ProgressState,
-    run_light_plan, run_master_plan,
+    run_calibrated_light_plan, run_light_plan, run_master_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -346,6 +346,23 @@ struct LightPlanExecutionCommandRequest {
     tile_width: usize,
     tile_height: usize,
     memory_limit_bytes: u64,
+    output_mode: LightOutputMode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum LightOutputMode {
+    CalibratedFrames,
+    Integrated,
+}
+
+impl LightOutputMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::CalibratedFrames => "calibrated_frames",
+            Self::Integrated => "integrated",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -436,6 +453,8 @@ struct LightExecutionProgress {
     completed_units: u64,
     total_units: Option<u64>,
     code: Option<String>,
+    source_index: Option<usize>,
+    source_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -456,7 +475,31 @@ struct LightPlanExecutionResponse {
     light_plan_sha256: String,
     memory_limit_bytes: usize,
     peak_reserved_bytes: usize,
+    output_mode: &'static str,
     products: Vec<ExecutedLightProduct>,
+    calibrated_frames: Vec<ExecutedCalibratedLightFrame>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutedCalibratedLightFrame {
+    group_id: String,
+    source_index: usize,
+    source_sha256: String,
+    output_path: String,
+    total_samples: usize,
+    usable_samples: usize,
+    masked_samples: usize,
+    non_finite_samples: usize,
+    minimum: f64,
+    maximum: f64,
+    mean: f64,
+    population_standard_deviation: f64,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    tiles_processed: u64,
+    tiles_reused: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1519,61 +1562,130 @@ where
     )
     .and_then(|execution| execution.with_tile_shape(request.tile_width, request.tile_height))
     .map_err(light_execution_error)?;
-    let result = run_light_plan(&execution_request, cancellation, &memory, |event| {
-        let stage = event.stage();
-        progress(LightExecutionProgress {
-            product_index: event.product_index(),
-            product_count: event.product_count(),
-            group_id: event.group_id().to_owned(),
-            sequence: stage.sequence(),
-            stage: stage.stage().as_str().to_owned(),
-            state: progress_state_name(stage.state()),
-            completed_units: stage.completed_units(),
-            total_units: stage.total_units(),
-            code: stage.code().map(str::to_owned),
-        });
-    })
-    .map_err(light_execution_error)?;
-    let mut products = Vec::new();
-    products
-        .try_reserve_exact(result.products().len())
-        .map_err(|_| light_execution_allocation_error())?;
-    for product in result.products() {
-        let output_path = product.output().to_str().ok_or_else(|| {
-            PreviewCommandError::new(
-                "light_output_path_not_unicode",
-                "A generated Light path cannot be represented as Unicode.",
-            )
-        })?;
-        let statistics = product.statistics();
-        let write = product.write_summary();
-        products.push(ExecutedLightProduct {
-            group_id: product.group_id().to_owned(),
-            dark_group_id: product.dark_group_id().to_owned(),
-            flat_group_id: product.flat_group_id().to_owned(),
-            output_path: output_path.to_owned(),
-            total_samples: statistics.total_samples(),
-            usable_samples: statistics.usable_samples(),
-            masked_samples: statistics.masked_samples(),
-            non_finite_samples: statistics.non_finite_samples(),
-            minimum: statistics.minimum(),
-            maximum: statistics.maximum(),
-            mean: statistics.mean(),
-            population_standard_deviation: statistics.population_standard_deviation(),
-            samples_written: write.samples_written(),
-            substituted_samples: write.substituted_samples(),
-            bytes_written: write.bytes_written(),
-            tiles_processed: product.tiles_processed(),
-            tiles_reused: product.tiles_reused(),
-        });
+    match request.output_mode {
+        LightOutputMode::Integrated => {
+            let result = run_light_plan(&execution_request, cancellation, &memory, |event| {
+                let stage = event.stage();
+                progress(LightExecutionProgress {
+                    product_index: event.product_index(),
+                    product_count: event.product_count(),
+                    group_id: event.group_id().to_owned(),
+                    sequence: stage.sequence(),
+                    stage: stage.stage().as_str().to_owned(),
+                    state: progress_state_name(stage.state()),
+                    completed_units: stage.completed_units(),
+                    total_units: stage.total_units(),
+                    code: stage.code().map(str::to_owned),
+                    source_index: None,
+                    source_count: None,
+                });
+            })
+            .map_err(light_execution_error)?;
+            let mut products = Vec::new();
+            products
+                .try_reserve_exact(result.products().len())
+                .map_err(|_| light_execution_allocation_error())?;
+            for product in result.products() {
+                let output_path = light_output_path(product.output())?;
+                let statistics = product.statistics();
+                let write = product.write_summary();
+                products.push(ExecutedLightProduct {
+                    group_id: product.group_id().to_owned(),
+                    dark_group_id: product.dark_group_id().to_owned(),
+                    flat_group_id: product.flat_group_id().to_owned(),
+                    output_path,
+                    total_samples: statistics.total_samples(),
+                    usable_samples: statistics.usable_samples(),
+                    masked_samples: statistics.masked_samples(),
+                    non_finite_samples: statistics.non_finite_samples(),
+                    minimum: statistics.minimum(),
+                    maximum: statistics.maximum(),
+                    mean: statistics.mean(),
+                    population_standard_deviation: statistics.population_standard_deviation(),
+                    samples_written: write.samples_written(),
+                    substituted_samples: write.substituted_samples(),
+                    bytes_written: write.bytes_written(),
+                    tiles_processed: product.tiles_processed(),
+                    tiles_reused: product.tiles_reused(),
+                });
+            }
+            Ok(LightPlanExecutionResponse {
+                manifest_sha256: result.manifest_sha256().to_owned(),
+                master_plan_sha256: result.master_plan_sha256().to_owned(),
+                light_plan_sha256: result.light_plan_sha256().to_owned(),
+                memory_limit_bytes: memory.limit(),
+                peak_reserved_bytes: memory.peak(),
+                output_mode: request.output_mode.as_str(),
+                products,
+                calibrated_frames: Vec::new(),
+            })
+        }
+        LightOutputMode::CalibratedFrames => {
+            let result =
+                run_calibrated_light_plan(&execution_request, cancellation, &memory, |event| {
+                    let stage = event.stage();
+                    progress(LightExecutionProgress {
+                        product_index: event.product_index(),
+                        product_count: event.product_count(),
+                        group_id: event.group_id().to_owned(),
+                        sequence: stage.sequence(),
+                        stage: stage.stage().as_str().to_owned(),
+                        state: progress_state_name(stage.state()),
+                        completed_units: stage.completed_units(),
+                        total_units: stage.total_units(),
+                        code: stage.code().map(str::to_owned),
+                        source_index: Some(event.source_index()),
+                        source_count: Some(event.source_count()),
+                    });
+                })
+                .map_err(light_execution_error)?;
+            let mut calibrated_frames = Vec::new();
+            calibrated_frames
+                .try_reserve_exact(result.frames().len())
+                .map_err(|_| light_execution_allocation_error())?;
+            for frame in result.frames() {
+                let statistics = frame.statistics();
+                let write = frame.write_summary();
+                calibrated_frames.push(ExecutedCalibratedLightFrame {
+                    group_id: frame.group_id().to_owned(),
+                    source_index: frame.source_index(),
+                    source_sha256: frame.source_sha256().to_owned(),
+                    output_path: light_output_path(frame.output())?,
+                    total_samples: statistics.total_samples(),
+                    usable_samples: statistics.usable_samples(),
+                    masked_samples: statistics.masked_samples(),
+                    non_finite_samples: statistics.non_finite_samples(),
+                    minimum: statistics.minimum(),
+                    maximum: statistics.maximum(),
+                    mean: statistics.mean(),
+                    population_standard_deviation: statistics.population_standard_deviation(),
+                    samples_written: write.samples_written(),
+                    substituted_samples: write.substituted_samples(),
+                    bytes_written: write.bytes_written(),
+                    tiles_processed: frame.tiles_processed(),
+                    tiles_reused: frame.tiles_reused(),
+                });
+            }
+            Ok(LightPlanExecutionResponse {
+                manifest_sha256: result.manifest_sha256().to_owned(),
+                master_plan_sha256: result.master_plan_sha256().to_owned(),
+                light_plan_sha256: result.light_plan_sha256().to_owned(),
+                memory_limit_bytes: memory.limit(),
+                peak_reserved_bytes: memory.peak(),
+                output_mode: request.output_mode.as_str(),
+                products: Vec::new(),
+                calibrated_frames,
+            })
+        }
     }
-    Ok(LightPlanExecutionResponse {
-        manifest_sha256: result.manifest_sha256().to_owned(),
-        master_plan_sha256: result.master_plan_sha256().to_owned(),
-        light_plan_sha256: result.light_plan_sha256().to_owned(),
-        memory_limit_bytes: memory.limit(),
-        peak_reserved_bytes: memory.peak(),
-        products,
+}
+
+fn light_output_path(path: &Path) -> Result<String, PreviewCommandError> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        PreviewCommandError::new(
+            "light_output_path_not_unicode",
+            "A generated Light path cannot be represented as Unicode.",
+        )
     })
 }
 
@@ -2853,6 +2965,7 @@ mod tests {
             tile_width: 2,
             tile_height: 2,
             memory_limit_bytes: 1_048_576,
+            output_mode: LightOutputMode::Integrated,
         })
     }
 
@@ -3050,7 +3163,7 @@ mod tests {
 
         let result = execute_light_plan_sync(
             &session,
-            light_execution_request(&session, masters, output)?,
+            light_execution_request(&session, masters.clone(), output)?,
             &CancellationToken::new(),
             |event| progress.push(event),
         )?;
@@ -3066,6 +3179,30 @@ mod tests {
         assert!(progress.iter().all(|event| {
             event.product_index == 0 && event.product_count == 1 && event.group_id == "light-uvir"
         }));
+
+        let calibrated_output = directory.path().join("calibrated");
+        fs::create_dir(&calibrated_output)?;
+        let mut calibrated_request = light_execution_request(&session, masters, calibrated_output)?;
+        calibrated_request.output_mode = LightOutputMode::CalibratedFrames;
+        let mut calibrated_progress = Vec::new();
+        let calibrated = execute_light_plan_sync(
+            &session,
+            calibrated_request,
+            &CancellationToken::new(),
+            |event| calibrated_progress.push(event),
+        )?;
+        assert_eq!(calibrated.output_mode, "calibrated_frames");
+        assert!(calibrated.products.is_empty());
+        assert_eq!(calibrated.calibrated_frames.len(), 1);
+        assert_eq!(calibrated.calibrated_frames[0].group_id, "light-uvir");
+        assert_eq!(calibrated.calibrated_frames[0].source_index, 0);
+        assert_eq!(calibrated.calibrated_frames[0].source_sha256.len(), 64);
+        assert!(Path::new(&calibrated.calibrated_frames[0].output_path).is_file());
+        assert!(
+            calibrated_progress
+                .iter()
+                .all(|event| { event.source_index == Some(0) && event.source_count == Some(1) })
+        );
         Ok(())
     }
 

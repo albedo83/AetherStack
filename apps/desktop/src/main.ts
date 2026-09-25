@@ -108,6 +108,19 @@ const screen = mountReviewScreen(root, model, {
   onUpdateCalibrationSettings(settings) {
     updateCalibrationSettings(settings);
   },
+  onUpdateLightOutputMode(outputMode) {
+    if (isActiveExecutionState(model.calibration.lightExecution.state)) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        lightSettings: {
+          ...model.calibration.lightSettings,
+          outputMode,
+        },
+      },
+    });
+  },
   onRefreshMasterPlan() {
     void refreshMasterPlan();
   },
@@ -503,6 +516,7 @@ async function executeLights(): Promise<void> {
     return;
   }
   const ticket = ++lightExecutionTicket;
+  const outputMode = model.calibration.lightSettings.outputMode;
   update({
     ...model,
     calibration: {
@@ -513,7 +527,10 @@ async function executeLights(): Promise<void> {
         outputDirectory,
         progress: null,
         result: null,
-        message: "Preparing transactional Light calibration…",
+        message:
+          outputMode === "calibrated_frames"
+            ? "Preparing lossless calibrated-frame export…"
+            : "Preparing calibrated integration…",
       },
     },
   });
@@ -555,7 +572,10 @@ async function executeLights(): Promise<void> {
           outputDirectory,
           progress: model.calibration.lightExecution.progress,
           result,
-          message: `${result.products.length} Light product${result.products.length === 1 ? "" : "s"} published · peak ${formatMemory(result.peakReservedBytes)}`,
+          message:
+            result.outputMode === "calibrated_frames"
+              ? `${result.calibratedFrames.length} calibrated frame${result.calibratedFrames.length === 1 ? "" : "s"} published · peak ${formatMemory(result.peakReservedBytes)}`
+              : `${result.products.length} integrated product${result.products.length === 1 ? "" : "s"} published · peak ${formatMemory(result.peakReservedBytes)}`,
         },
       },
     });
@@ -611,10 +631,14 @@ async function cancelLights(): Promise<void> {
 
 function lightProgressMessage(progress: LightExecutionProgress): string {
   const product = progress.productIndex + 1;
+  const source =
+    progress.sourceIndex !== null && progress.sourceCount !== null
+      ? ` · frame ${progress.sourceIndex + 1}/${progress.sourceCount}`
+      : "";
   const units = progress.totalUnits
     ? ` · ${progress.completedUnits}/${progress.totalUnits}`
     : "";
-  return `Light ${product}/${progress.productCount} · ${progress.groupId} · ${progress.stage}${units}`;
+  return `Light ${product}/${progress.productCount} · ${progress.groupId}${source} · ${progress.stage}${units}`;
 }
 
 function masterProgressMessage(progress: MasterExecutionProgress): string {

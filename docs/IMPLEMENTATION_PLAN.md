@@ -569,9 +569,18 @@ safety reasoning. They do not narrate obvious syntax.
     group and source progress, revalidates all Lights and masters, and publishes
     the complete set with rollback; cancellation after an already calibrated
     frame still leaves the destination empty. Integrated and per-frame modes are
-    separate so calibration is never duplicated. Next, expose this mode in the
-    desktop and feed its products to Blink, debayering, quality weighting, and
-    registration.
+    separate so calibration is never duplicated.
+27. Expose lossless Light outputs in the desktop. The native command and typed
+    presenter bridge now select either canonical per-source calibrated frames
+    or integrated groups, default to inspectable calibrated frames, preserve
+    source-aware progress, and return every published path and exact source
+    identity. Both choices remain behind the one bounded native execution slot.
+    The dark instrument UI names the active transaction, adapts its primary
+    action and result copy to the selected mode, disables the selector while a
+    run is active, and keeps the control readable at the minimum supported
+    width. Native and DOM tests cover both modes and the selection boundary.
+    Next, feed calibrated products directly into Blink, then add debayering,
+    quality weighting, and registration.
 
 ## 11. Stable-release definition
 

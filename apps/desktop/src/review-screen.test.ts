@@ -13,6 +13,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
   const actions: ReviewActions = {
     onSelectWorkspace: vi.fn(),
     onUpdateCalibrationSettings: vi.fn(),
+    onUpdateLightOutputMode: vi.fn(),
     onRefreshMasterPlan: vi.fn(),
     onExecuteMasterPlan: vi.fn(),
     onCancelMasterPlan: vi.fn(),
@@ -240,10 +241,19 @@ describe("frame review workspace", () => {
       },
     };
     const mounted = fixture(ready);
+    const mode = getByRole(mounted.root, "combobox", {
+      name: "Light output mode",
+    });
+    expect((mode as HTMLSelectElement).value).toBe("calibrated_frames");
     fireEvent.click(
-      getByRole(mounted.root, "button", { name: "Calibrate & integrate" }),
+      getByRole(mounted.root, "button", { name: "Calibrate frames" }),
     );
     expect(mounted.actions.onExecuteLightPlan).toHaveBeenCalledOnce();
+
+    fireEvent.change(mode, { target: { value: "integrated" } });
+    expect(mounted.actions.onUpdateLightOutputMode).toHaveBeenCalledWith(
+      "integrated",
+    );
 
     mounted.controller.update({
       ...ready,
@@ -263,6 +273,8 @@ describe("frame review workspace", () => {
             completedUnits: 6,
             totalUnits: 10,
             code: null,
+            sourceIndex: 0,
+            sourceCount: 1,
           },
           result: null,
           message: "Light 1/1 · pipeline.integrate · 6/10",
