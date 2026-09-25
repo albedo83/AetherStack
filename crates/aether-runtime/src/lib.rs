@@ -12,8 +12,10 @@ mod progress;
 
 pub use cancellation::{CancellationToken, Cancelled};
 pub use light_plan::{
-    LightPlanExecutionError, LightPlanExecutionRequest, LightPlanExecutionResult,
-    LightPlanProgressEvent, LightProductExecutionResult, run_light_plan,
+    CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,
+    CalibratedLightPlanProgressEvent, LightPlanExecutionError, LightPlanExecutionRequest,
+    LightPlanExecutionResult, LightPlanProgressEvent, LightProductExecutionResult,
+    run_calibrated_light_plan, run_light_plan,
 };
 pub use master_plan::{
     MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,

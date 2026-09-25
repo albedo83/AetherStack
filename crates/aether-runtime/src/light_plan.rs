@@ -22,8 +22,9 @@ use aether_session::{
 use crate::master_plan::product_file_name;
 use crate::{
     CancellationToken, Cancelled, MemoryBudget, PipelineSource, ProgressEvent,
-    STRICT_FLAT_MASTER_ALGORITHM_ID, STRICT_MEAN_ALGORITHM_ID, StrictPipelineError,
-    StrictPipelineRequest, run_strict_pipeline,
+    STRICT_CALIBRATED_LIGHT_ALGORITHM_ID, STRICT_FLAT_MASTER_ALGORITHM_ID,
+    STRICT_MEAN_ALGORITHM_ID, StrictCalibrationRequest, StrictPipelineError, StrictPipelineRequest,
+    run_strict_calibration_pipeline, run_strict_pipeline,
 };
 
 const MAX_STAGING_DIRECTORY_ATTEMPTS: usize = 128;
@@ -183,6 +184,55 @@ impl LightPlanProgressEvent {
     }
 }
 
+/// Progress for one canonical source in a calibrated-frame export transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalibratedLightPlanProgressEvent {
+    product_index: usize,
+    product_count: usize,
+    group_id: String,
+    source_index: usize,
+    source_count: usize,
+    stage: ProgressEvent,
+}
+
+impl CalibratedLightPlanProgressEvent {
+    /// Zero-based Light-group index.
+    #[must_use]
+    pub const fn product_index(&self) -> usize {
+        self.product_index
+    }
+
+    /// Number of Light groups in the plan.
+    #[must_use]
+    pub const fn product_count(&self) -> usize {
+        self.product_count
+    }
+
+    /// Exact manifest Light group currently processed.
+    #[must_use]
+    pub fn group_id(&self) -> &str {
+        &self.group_id
+    }
+
+    /// Zero-based source index in canonical group order.
+    #[must_use]
+    pub const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    /// Number of sources in the current group.
+    #[must_use]
+    pub const fn source_count(&self) -> usize {
+        self.source_count
+    }
+
+    /// Underlying strict calibration progress event.
+    #[must_use]
+    pub const fn stage(&self) -> &ProgressEvent {
+        &self.stage
+    }
+}
+
 /// One atomically published calibrated and integrated Light-group product.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightProductExecutionResult {
@@ -243,6 +293,104 @@ impl LightProductExecutionResult {
     #[must_use]
     pub const fn tiles_reused(&self) -> u64 {
         self.tiles_reused
+    }
+}
+
+/// One calibrated Light frame published by a whole-plan transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalibratedLightFrameExecutionResult {
+    group_id: String,
+    source_index: usize,
+    source_sha256: String,
+    output: PathBuf,
+    statistics: ImageStatistics,
+    write_summary: FitsWriteSummary,
+    tiles_processed: u64,
+    tiles_reused: u64,
+}
+
+impl CalibratedLightFrameExecutionResult {
+    /// Exact source Light group.
+    #[must_use]
+    pub fn group_id(&self) -> &str {
+        &self.group_id
+    }
+
+    /// Zero-based source position in canonical manifest-group order.
+    #[must_use]
+    pub const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    /// Exact path-free SHA-256 identity embedded as `AETHINP`.
+    #[must_use]
+    pub fn source_sha256(&self) -> &str {
+        &self.source_sha256
+    }
+
+    /// Final public FITS path.
+    #[must_use]
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
+
+    /// Exact full-output statistics measured before publication.
+    #[must_use]
+    pub const fn statistics(&self) -> ImageStatistics {
+        self.statistics
+    }
+
+    /// FITS sample, checksum, and byte accounting.
+    #[must_use]
+    pub const fn write_summary(&self) -> FitsWriteSummary {
+        self.write_summary
+    }
+
+    /// Spatial-plane tiles processed.
+    #[must_use]
+    pub const fn tiles_processed(&self) -> u64 {
+        self.tiles_processed
+    }
+
+    /// Verified cached tiles reused by the strict pipeline.
+    #[must_use]
+    pub const fn tiles_reused(&self) -> u64 {
+        self.tiles_reused
+    }
+}
+
+/// Complete calibrated-frame transaction result in canonical source order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalibratedLightPlanExecutionResult {
+    manifest_sha256: String,
+    master_plan_sha256: String,
+    light_plan_sha256: String,
+    frames: Vec<CalibratedLightFrameExecutionResult>,
+}
+
+impl CalibratedLightPlanExecutionResult {
+    /// SHA-256 of the canonical session manifest.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+
+    /// SHA-256 of the exact master plan.
+    #[must_use]
+    pub fn master_plan_sha256(&self) -> &str {
+        &self.master_plan_sha256
+    }
+
+    /// SHA-256 of the exact Light association plan.
+    #[must_use]
+    pub fn light_plan_sha256(&self) -> &str {
+        &self.light_plan_sha256
+    }
+
+    /// Calibrated frames in group then canonical source order.
+    #[must_use]
+    pub fn frames(&self) -> &[CalibratedLightFrameExecutionResult] {
+        &self.frames
     }
 }
 
@@ -385,6 +533,15 @@ pub enum LightPlanExecutionError {
         /// Strict-pipeline failure.
         source: StrictPipelineError,
     },
+    /// One individual calibrated-frame pipeline failed.
+    FramePipeline {
+        /// Light group being processed.
+        group_id: String,
+        /// Zero-based canonical source index.
+        source_index: usize,
+        /// Strict single-frame calibration failure.
+        source: StrictPipelineError,
+    },
     /// A product could not be atomically exposed.
     PublishProduct {
         /// Light group being published.
@@ -504,6 +661,14 @@ impl Display for LightPlanExecutionError {
             Self::ProductPipeline { group_id, source } => {
                 write!(formatter, "Light product `{group_id}` failed: {source}")
             }
+            Self::FramePipeline {
+                group_id,
+                source_index,
+                source,
+            } => write!(
+                formatter,
+                "calibrated Light `{group_id}` source {source_index} failed: {source}"
+            ),
             Self::PublishProduct { group_id, source } => {
                 write!(
                     formatter,
@@ -540,6 +705,7 @@ impl Error for LightPlanExecutionError {
             Self::FingerprintMaster { source, .. } => Some(source),
             Self::Provenance(error) => Some(error),
             Self::ProductPipeline { source, .. } => Some(source),
+            Self::FramePipeline { source, .. } => Some(source),
             Self::PublishProduct { source, .. } | Self::RollbackPublication { source, .. } => {
                 Some(source)
             }
@@ -713,6 +879,170 @@ where
         master_plan_sha256,
         light_plan_sha256,
         products: results,
+    })
+}
+
+/// Calibrates every source Light as one rollback-safe publication transaction.
+///
+/// This execution mode deliberately does not also integrate the frames. It
+/// avoids calculating calibration twice and produces the lossless individual
+/// inputs required by Blink, quality selection, debayering, and registration.
+/// Every staged frame carries the exact source fingerprint in `AETHINP`; no
+/// public file appears until all frames succeed and every input is revalidated.
+///
+/// # Errors
+///
+/// Returns the same graph, master, source, filesystem, cancellation, and
+/// rollback failures as [`run_light_plan`], plus source-indexed frame failures.
+pub fn run_calibrated_light_plan<F>(
+    request: &LightPlanExecutionRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<CalibratedLightPlanExecutionResult, LightPlanExecutionError>
+where
+    F: FnMut(CalibratedLightPlanProgressEvent),
+{
+    validate_runtime_directories(request)?;
+    let manifest_sha256 = request
+        .manifest
+        .canonical_sha256()
+        .map_err(LightPlanExecutionError::Manifest)?;
+    let master_plan_sha256 = request
+        .master_plan
+        .canonical_sha256()
+        .map_err(LightPlanExecutionError::MasterPlan)?;
+    let light_plan_sha256 = request
+        .light_plan
+        .canonical_sha256()
+        .map_err(LightPlanExecutionError::LightPlan)?;
+    let destinations = planned_calibrated_destinations(request)?;
+    preflight_destinations(&destinations)?;
+    cancellation
+        .checkpoint()
+        .map_err(LightPlanExecutionError::Cancelled)?;
+
+    let master_sources = load_master_sources(request, &manifest_sha256, &master_plan_sha256)?;
+    let staging = StagingDirectory::create(&request.output_directory)?;
+    let product_count = request.light_plan.products().len();
+    let frame_count = destinations.len();
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(frame_count)
+        .map_err(|_| LightPlanExecutionError::AllocationFailed)?;
+    let mut staged_frames = BTreeMap::new();
+
+    for (product_index, product) in request.light_plan.products().iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(LightPlanExecutionError::Cancelled)?;
+        let group = find_group(&request.manifest, product.source_group_id())?;
+        let signals = group_sources(request, group)?;
+        let source_count = signals.len();
+        let dark_group_id = selected_group(product.dark(), LightMasterKind::Dark)
+            .ok_or(LightPlanExecutionError::LightPlanNotReady)?;
+        let flat_group_id = selected_group(product.flat(), LightMasterKind::Flat)
+            .ok_or(LightPlanExecutionError::LightPlanNotReady)?;
+        let dark = master_sources.get(dark_group_id).cloned().ok_or_else(|| {
+            LightPlanExecutionError::InvalidMasterAssociation {
+                light_group_id: group.id().to_owned(),
+                master_group_id: dark_group_id.to_owned(),
+            }
+        })?;
+        let flat = master_sources.get(flat_group_id).cloned().ok_or_else(|| {
+            LightPlanExecutionError::InvalidMasterAssociation {
+                light_group_id: group.id().to_owned(),
+                master_group_id: flat_group_id.to_owned(),
+            }
+        })?;
+
+        for (source_index, signal) in signals.into_iter().enumerate() {
+            cancellation
+                .checkpoint()
+                .map_err(LightPlanExecutionError::Cancelled)?;
+            let artifact_id = calibrated_artifact_id(group.id(), source_index);
+            let file_name = calibrated_light_file_name(group.id(), source_index);
+            let staged_output = staging.path().join(&file_name);
+            let public_output = destinations.get(&artifact_id).cloned().ok_or_else(|| {
+                LightPlanExecutionError::InvalidGroup {
+                    group_id: group.id().to_owned(),
+                }
+            })?;
+            let source_sha256 = signal.fingerprint().sha256().to_owned();
+            let provenance = FitsOutputProvenance::new(
+                &manifest_sha256,
+                group.id(),
+                STRICT_CALIBRATED_LIGHT_ALGORITHM_ID,
+                1,
+            )
+            .and_then(|value| value.with_plan_sha256(&light_plan_sha256))
+            .and_then(|value| value.with_source_sha256(&source_sha256))
+            .map_err(LightPlanExecutionError::Provenance)?;
+            let pipeline = StrictCalibrationRequest::new(
+                signal,
+                dark.clone(),
+                flat.clone(),
+                staged_output.clone(),
+                provenance,
+                request.calibration,
+            )
+            .and_then(|builder| builder.with_tile_shape(request.tile_width, request.tile_height))
+            .map(|builder| {
+                builder.with_header_policy(
+                    HeaderReadOptions::default(),
+                    request.manifest.fits_validation_mode(),
+                )
+            })
+            .map_err(|source| LightPlanExecutionError::FramePipeline {
+                group_id: group.id().to_owned(),
+                source_index,
+                source,
+            })?;
+            let completed =
+                run_strict_calibration_pipeline(&pipeline, cancellation, memory, |stage| {
+                    progress(CalibratedLightPlanProgressEvent {
+                        product_index,
+                        product_count,
+                        group_id: group.id().to_owned(),
+                        source_index,
+                        source_count,
+                        stage,
+                    });
+                })
+                .map_err(|source| LightPlanExecutionError::FramePipeline {
+                    group_id: group.id().to_owned(),
+                    source_index,
+                    source,
+                })?;
+            staged_frames.insert(artifact_id, staged_output);
+            frames.push(CalibratedLightFrameExecutionResult {
+                group_id: group.id().to_owned(),
+                source_index,
+                source_sha256,
+                output: public_output,
+                statistics: completed.statistics(),
+                write_summary: completed.write_summary(),
+                tiles_processed: completed.tiles_processed(),
+                tiles_reused: completed.tiles_reused(),
+            });
+        }
+    }
+
+    cancellation
+        .checkpoint()
+        .map_err(LightPlanExecutionError::Cancelled)?;
+    revalidate_all_inputs(request, &master_sources)?;
+    publish_product_set(
+        &staged_frames,
+        &destinations,
+        &request.output_directory,
+        cancellation,
+    )?;
+    Ok(CalibratedLightPlanExecutionResult {
+        manifest_sha256,
+        master_plan_sha256,
+        light_plan_sha256,
+        frames,
     })
 }
 
@@ -964,6 +1294,27 @@ fn planned_destinations(
     Ok(destinations)
 }
 
+fn planned_calibrated_destinations(
+    request: &LightPlanExecutionRequest,
+) -> Result<BTreeMap<String, PathBuf>, LightPlanExecutionError> {
+    let mut destinations = BTreeMap::new();
+    let mut portable_names = BTreeSet::new();
+    for product in request.light_plan.products() {
+        let group = find_group(&request.manifest, product.source_group_id())?;
+        for source_index in 0..group.files().len() {
+            let file_name = calibrated_light_file_name(group.id(), source_index);
+            if !portable_names.insert(file_name.to_ascii_lowercase()) {
+                return Err(LightPlanExecutionError::DestinationNameCollision { file_name });
+            }
+            destinations.insert(
+                calibrated_artifact_id(group.id(), source_index),
+                request.output_directory.join(file_name),
+            );
+        }
+    }
+    Ok(destinations)
+}
+
 fn preflight_destinations(
     destinations: &BTreeMap<String, PathBuf>,
 ) -> Result<(), LightPlanExecutionError> {
@@ -1055,6 +1406,14 @@ fn find_file<'a>(manifest: &'a SessionManifest, relative_path: &str) -> Option<&
 
 fn light_product_file_name(group_id: &str) -> String {
     format!("integrated-light-{group_id}.fits")
+}
+
+fn calibrated_artifact_id(group_id: &str, source_index: usize) -> String {
+    format!("{group_id}:{source_index:06}")
+}
+
+fn calibrated_light_file_name(group_id: &str, source_index: usize) -> String {
+    format!("calibrated-light-{group_id}-{source_index:06}.fits")
 }
 
 fn publish_product_set(
@@ -1388,6 +1747,109 @@ mod tests {
     }
 
     #[test]
+    fn exports_every_calibrated_light_as_one_atomic_plan_transaction() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let root = directory.path.join("session");
+        let masters = directory.path.join("masters");
+        let output = directory.path.join("calibrated");
+        fs::create_dir(&root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let manifest = grouped_manifest(&root)?;
+        let expected_source_digests = ["lights/light-1.fits", "lights/light-2.fits"]
+            .map(|path| {
+                manifest
+                    .files()
+                    .iter()
+                    .find(|file| file.relative_path() == path)
+                    .map(|file| file.fingerprint().sha256().to_owned())
+                    .ok_or_else(|| std::io::Error::other("test Light is missing"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let (master_plan, light_plan) = plans(&manifest)?;
+        build_masters(&root, &masters, &manifest, &master_plan)?;
+        let request = LightPlanExecutionRequest::new(
+            root,
+            masters,
+            output.clone(),
+            manifest,
+            master_plan,
+            light_plan,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(2, 1)?;
+        let mut progress = Vec::new();
+
+        let result = run_calibrated_light_plan(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(1_048_576)?,
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.frames().len(), 2);
+        assert!(progress.iter().any(|event| {
+            event.group_id() == "light"
+                && event.product_index() == 0
+                && event.product_count() == 1
+                && event.source_index() == 0
+                && event.source_count() == 2
+                && event.stage().stage().as_str() == "strict-light-calibration"
+        }));
+        for (source_index, expected_value) in [4.0_f64, 6.0].into_iter().enumerate() {
+            let frame = &result.frames()[source_index];
+            assert_eq!(frame.group_id(), "light");
+            assert_eq!(frame.source_index(), source_index);
+            assert_eq!(frame.source_sha256(), expected_source_digests[source_index]);
+            assert_eq!(frame.tiles_processed(), 2);
+            assert_eq!(frame.tiles_reused(), 0);
+            assert_eq!(
+                frame.statistics().mean().to_bits(),
+                expected_value.to_bits()
+            );
+            assert_eq!(frame.write_summary().samples_written(), 3);
+
+            let expected_path =
+                output.join(format!("calibrated-light-light-{source_index:06}.fits"));
+            assert_eq!(frame.output(), expected_path);
+            let mut reader = PrimaryImageReader::open(
+                File::open(&expected_path)?,
+                HeaderReadOptions::default(),
+            )?;
+            let header = reader.report().header();
+            assert_eq!(header.string("AETHMAN"), Some(result.manifest_sha256()));
+            assert_eq!(header.string("AETHPLN"), Some(result.light_plan_sha256()));
+            assert_eq!(header.string("AETHGRP"), Some("light"));
+            assert_eq!(
+                header.string("AETHALG"),
+                Some(STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)
+            );
+            assert_eq!(header.integer("AETHSRC"), Some(1));
+            assert_eq!(
+                header.string("AETHINP"),
+                Some(expected_source_digests[source_index].as_str())
+            );
+            let image = reader.read_region_image(ImageRegion::new(0, 0, 0, 3, 1))?;
+            assert_eq!(
+                image
+                    .pixels()
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                [expected_value; 3].map(f64::to_bits)
+            );
+        }
+        assert!(
+            fs::read_dir(output)?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stale_master_provenance_blocks_execution_without_output() -> TestResult {
         let directory = TestDirectory::new()?;
         let root = directory.path.join("session");
@@ -1479,6 +1941,49 @@ mod tests {
             cancelled,
             Err(LightPlanExecutionError::Cancelled(_))
         ));
+        assert!(fs::read_dir(output)?.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_after_one_calibrated_frame_publishes_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let root = directory.path.join("session");
+        let masters = directory.path.join("masters");
+        let output = directory.path.join("calibrated");
+        fs::create_dir(&root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let manifest = grouped_manifest(&root)?;
+        let (master_plan, light_plan) = plans(&manifest)?;
+        build_masters(&root, &masters, &manifest, &master_plan)?;
+        let request = LightPlanExecutionRequest::new(
+            root,
+            masters,
+            output.clone(),
+            manifest,
+            master_plan,
+            light_plan,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(3, 1)?;
+        let cancellation = CancellationToken::new();
+        let callback_token = cancellation.clone();
+
+        let result = run_calibrated_light_plan(
+            &request,
+            &cancellation,
+            &MemoryBudget::new(1_048_576)?,
+            |event| {
+                if event.source_index() == 0
+                    && event.stage().state() == crate::ProgressState::Completed
+                {
+                    let _already_cancelled = callback_token.cancel();
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(LightPlanExecutionError::Cancelled(_))));
         assert!(fs::read_dir(output)?.next().is_none());
         Ok(())
     }

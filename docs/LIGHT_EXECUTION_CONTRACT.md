@@ -2,9 +2,10 @@
 
 The Light executor consumes one immutable session manifest, its canonical
 master-construction plan, and the canonical Light association plan derived from
-both. It produces one calibrated and integrated FITS image per Light group. It
-does not select masters, scale darks, debayer, register, normalize backgrounds,
-or silently repair an incomplete plan.
+both. It can produce either one calibrated and integrated FITS image per Light
+group or every calibrated source frame as a separate transaction. It does not
+select masters, scale darks, debayer, register, normalize backgrounds, or
+silently repair an incomplete plan.
 
 ## Accepted graph
 
@@ -38,9 +39,10 @@ mask rules in the calibration and integration contracts. A caller supplies the
 flat-divisor floor and spatial tile dimensions explicitly. Tile dimensions are
 execution parameters and do not alter strict output bytes.
 
-The initial executor publishes an integrated calibrated product for each Light
-group. Individual calibrated-frame export is a separate future product contract
-and must not be inferred from this operation.
+`run_light_plan` publishes an integrated calibrated product for each Light
+group. `run_calibrated_light_plan` instead publishes each calibrated source and
+performs no integration. They are separate execution modes, preventing a
+request for inspectable frames from paying for the same calibration twice.
 
 ## Bounded execution
 
@@ -48,7 +50,7 @@ Raw frames are read by tiles through the shared memory budget. Cancellation is
 checked before master loading, between products, inside each strict pipeline,
 before source revalidation, and during publication. Progress identifies the
 canonical product index, product count, group identifier, and typed pipeline
-stage.
+stage. Calibrated-frame progress also reports canonical source index and count.
 
 The executor fingerprints every raw Light and selected generated master again
 after all computations and before publication. Any missing, unreadable, or
@@ -64,14 +66,18 @@ If cancellation or publication fails partway through, links created by that
 transaction are removed in reverse order. Staging is removed by its owner on
 every return path.
 
-The product filename is `integrated-light-<group-id>.fits`. Its `AETHMAN` card
+The integrated filename is `integrated-light-<group-id>.fits`. Individual files
+are `calibrated-light-<group-id>-<six-digit-source-index>.fits`, where the index
+is the canonical manifest-group order rather than discovery order. `AETHMAN`
 stores the manifest digest and `AETHPLN` stores the canonical Light-plan digest.
-The Light plan itself stores the canonical master-plan digest, providing a
-complete transitive provenance chain without embedding local paths.
+Each individual product also stores its exact source SHA-256 as `AETHINP`. The
+Light plan itself stores the canonical master-plan digest, providing a complete
+transitive provenance chain without embedding local paths.
 
 ## Covered failure cases
 
 Unit tests cover numerical Dark/Flat calibration and mean integration, exact
 provenance cards, stale-master rejection, existing-destination preservation,
-early cancellation cleanup, private-staging cleanup, and rejection of a
-structurally valid but non-canonical Light plan.
+early and mid-plan cancellation cleanup, private-staging cleanup, exact
+per-source identity, and rejection of a structurally valid but non-canonical
+Light plan.

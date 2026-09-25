@@ -565,8 +565,13 @@ safety reasoning. They do not narrate obvious syntax.
     source revalidation, and atomic publication. Provenance version 3 adds the
     optional `AETHINP` exact source digest, which this path requires. Its pixels
     are invariant to tile shape and it deliberately performs no integration.
-    The next slice binds these products into whole-plan transactional export,
-    then feeds them to debayering, quality weighting, and registration.
+    Whole-plan export now stages every canonical Light source privately, reports
+    group and source progress, revalidates all Lights and masters, and publishes
+    the complete set with rollback; cancellation after an already calibrated
+    frame still leaves the destination empty. Integrated and per-frame modes are
+    separate so calibration is never duplicated. Next, expose this mode in the
+    desktop and feed its products to Blink, debayering, quality weighting, and
+    registration.
 
 ## 11. Stable-release definition
 

@@ -2170,7 +2170,8 @@ fn light_execution_error(error: LightPlanExecutionError) -> PreviewCommandError 
         LightPlanExecutionError::OpenMaster { .. }
         | LightPlanExecutionError::FingerprintMaster { .. }
         | LightPlanExecutionError::SourceChanged { .. }
-        | LightPlanExecutionError::ProductPipeline { .. } => PreviewCommandError::new(
+        | LightPlanExecutionError::ProductPipeline { .. }
+        | LightPlanExecutionError::FramePipeline { .. } => PreviewCommandError::new(
             "light_product_failed",
             "A Light product failed validation or calculation; no product set was published.",
         ),
