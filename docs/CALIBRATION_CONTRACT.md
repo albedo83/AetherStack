@@ -39,6 +39,22 @@ through IEEE 754 overflow, the exact result is retained and marked `INVALID`.
 The function never mutates any source image. Dimension mismatches and allocation
 failures are typed errors and no partially calibrated image is returned.
 
+### Bounded single-frame FITS execution
+
+`run_strict_calibration_pipeline` applies this primitive to one immutable Light
+and writes one binary64 FITS image without integrating it with another frame.
+The request requires `AETHSRC = 1` and the distinct algorithm identifier
+`strict-calibrated-light-v1`, so a calibrated exposure cannot be mistaken for a
+stack. It uses the same strict FITS validation, source fingerprints, bounded
+spatial tiling, exact complete-image statistics, verified checkpoints, final
+source revalidation, and atomic create-new publication as the integration path.
+
+The memory reservation reflects the single-frame peak: signal, Dark, normalized
+Flat, calibrated output tile, one output band, bounded statistics buffers, and
+the writer buffer. It does not reserve integration support or a vector of
+calibrated frames. Tests fix exact output values and masks, reject incoherent
+provenance, and require byte-identical products for different tile shapes.
+
 ## Exclusive pedestal subtraction
 
 `subtract_pedestal` applies `corrected = signal - pedestal` in binary64. The

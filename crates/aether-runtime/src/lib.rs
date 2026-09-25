@@ -21,10 +21,11 @@ pub use master_plan::{
 };
 pub use memory::{MemoryBudget, MemoryBudgetError, MemoryReservation};
 pub use pipeline::{
-    PipelineInput, PipelineSource, STRICT_FLAT_MASTER_ALGORITHM_ID, STRICT_MEAN_ALGORITHM_ID,
+    PipelineInput, PipelineSource, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID,
+    STRICT_FLAT_MASTER_ALGORITHM_ID, STRICT_MEAN_ALGORITHM_ID, StrictCalibrationRequest,
     StrictFlatMasterRequest, StrictFlatMasterResult, StrictMasterRequest, StrictPipelineError,
-    StrictPipelineRequest, StrictPipelineResult, run_strict_flat_master_pipeline,
-    run_strict_master_pipeline, run_strict_pipeline,
+    StrictPipelineRequest, StrictPipelineResult, run_strict_calibration_pipeline,
+    run_strict_flat_master_pipeline, run_strict_master_pipeline, run_strict_pipeline,
 };
 pub use progress::{
     MAX_PROGRESS_CODE_BYTES, MAX_STAGE_ID_BYTES, ProgressEvent, ProgressEventError,

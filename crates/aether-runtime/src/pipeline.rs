@@ -37,6 +37,8 @@ use crate::{
 
 /// Algorithm identifier embedded by the first strict CPU integration pipeline.
 pub const STRICT_MEAN_ALGORITHM_ID: &str = "strict-mean-v1";
+/// Algorithm identifier for one calibrated Light frame without integration.
+pub const STRICT_CALIBRATED_LIGHT_ALGORITHM_ID: &str = "strict-calibrated-light-v1";
 /// Algorithm identifier for pedestal-corrected, exact-median normalized flats.
 pub const STRICT_FLAT_MASTER_ALGORITHM_ID: &str = "strict-flat-v1";
 
@@ -44,6 +46,7 @@ const DEFAULT_TILE_WIDTH: usize = 256;
 const DEFAULT_TILE_HEIGHT: usize = 256;
 const OUTPUT_BUFFER_BYTES: usize = 64 * 1_024;
 const PIPELINE_STAGE_ID: &str = "strict-cpu-slice";
+const CALIBRATION_PIPELINE_STAGE_ID: &str = "strict-light-calibration";
 const MASTER_PIPELINE_STAGE_ID: &str = "strict-master";
 const FLAT_MASTER_PIPELINE_STAGE_ID: &str = "strict-flat-master";
 const TILE_CACHE_DOMAIN: &str = "strict-mean-tile-v1";
@@ -132,6 +135,13 @@ pub struct StrictPipelineRequest {
     header_options: HeaderReadOptions,
     validation_mode: ValidationMode,
     cache: Option<ArtifactStore>,
+    operation: SignalOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SignalOperation {
+    CalibrateOne,
+    Integrate,
 }
 
 impl StrictPipelineRequest {
@@ -183,6 +193,7 @@ impl StrictPipelineRequest {
             header_options: HeaderReadOptions::default(),
             validation_mode: ValidationMode::Strict,
             cache: None,
+            operation: SignalOperation::Integrate,
         })
     }
 
@@ -242,6 +253,94 @@ impl StrictPipelineRequest {
     #[must_use]
     pub fn output(&self) -> &Path {
         &self.output
+    }
+}
+
+/// Validated request for one calibrated Light frame.
+///
+/// This path applies the exact same strict `f64` dark subtraction and flat
+/// division as group integration, but deliberately performs no statistical
+/// combination. Its output is therefore suitable for inspection, frame
+/// quality measurement, debayering, and registration.
+#[derive(Clone, Debug)]
+pub struct StrictCalibrationRequest {
+    pipeline: StrictPipelineRequest,
+}
+
+impl StrictCalibrationRequest {
+    /// Builds a strict single-frame calibration request.
+    ///
+    /// Provenance must represent exactly one source and use
+    /// [`STRICT_CALIBRATED_LIGHT_ALGORITHM_ID`].
+    pub fn new(
+        signal: PipelineSource,
+        dark: PipelineSource,
+        normalized_flat: PipelineSource,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        calibration: CalibrationParameters,
+    ) -> Result<Self, StrictPipelineError> {
+        if provenance.source_count() != 1 {
+            return Err(StrictPipelineError::ProvenanceSourceCountMismatch {
+                signals: 1,
+                provenance: provenance.source_count(),
+            });
+        }
+        if provenance.algorithm_id() != STRICT_CALIBRATED_LIGHT_ALGORITHM_ID {
+            return Err(StrictPipelineError::CalibrationProvenanceAlgorithmMismatch);
+        }
+        Ok(Self {
+            pipeline: StrictPipelineRequest {
+                signals: vec![signal],
+                dark,
+                normalized_flat,
+                output,
+                provenance,
+                calibration,
+                tile_width: DEFAULT_TILE_WIDTH,
+                tile_height: DEFAULT_TILE_HEIGHT,
+                header_options: HeaderReadOptions::default(),
+                validation_mode: ValidationMode::Strict,
+                cache: None,
+                operation: SignalOperation::CalibrateOne,
+            },
+        })
+    }
+
+    /// Replaces the default tile shape.
+    pub fn with_tile_shape(
+        mut self,
+        width: usize,
+        height: usize,
+    ) -> Result<Self, StrictPipelineError> {
+        self.pipeline = self.pipeline.with_tile_shape(width, height)?;
+        Ok(self)
+    }
+
+    /// Replaces FITS header limits and the diagnostic acceptance policy.
+    #[must_use]
+    pub fn with_header_policy(mut self, options: HeaderReadOptions, mode: ValidationMode) -> Self {
+        self.pipeline = self.pipeline.with_header_policy(options, mode);
+        self
+    }
+
+    /// Enables verified calibrated-tile checkpoints in the supplied store.
+    #[must_use]
+    pub fn with_cache(mut self, cache: ArtifactStore) -> Self {
+        self.pipeline = self.pipeline.with_cache(cache);
+        self
+    }
+
+    /// Single immutable source frame.
+    #[must_use]
+    pub fn signal(&self) -> &PipelineSource {
+        &self.pipeline.signals[0]
+    }
+
+    /// Destination governed by atomic create-new publication.
+    #[must_use]
+    pub fn output(&self) -> &Path {
+        self.pipeline.output()
     }
 }
 
@@ -578,6 +677,8 @@ pub enum StrictPipelineError {
     },
     /// Provenance names an algorithm other than the one this pipeline executes.
     ProvenanceAlgorithmMismatch,
+    /// Single-frame provenance names an algorithm other than strict calibration.
+    CalibrationProvenanceAlgorithmMismatch,
     /// Flat provenance names an algorithm other than the normalized-flat path.
     FlatProvenanceAlgorithmMismatch,
     /// A master product is not bound to the canonical master plan.
@@ -716,6 +817,7 @@ impl StrictPipelineError {
             Self::TooManySignals { .. } => "too-many-signals",
             Self::ProvenanceSourceCountMismatch { .. } => "provenance-source-count",
             Self::ProvenanceAlgorithmMismatch => "provenance-algorithm",
+            Self::CalibrationProvenanceAlgorithmMismatch => "calibration-provenance-algorithm",
             Self::FlatProvenanceAlgorithmMismatch => "flat-provenance-algorithm",
             Self::MissingMasterPlanProvenance => "master-plan-provenance",
             Self::FlatMasterRequiresCalibration => "flat-master-calibration",
@@ -777,6 +879,10 @@ impl Display for StrictPipelineError {
             Self::ProvenanceAlgorithmMismatch => write!(
                 formatter,
                 "provenance algorithm must be {STRICT_MEAN_ALGORITHM_ID}"
+            ),
+            Self::CalibrationProvenanceAlgorithmMismatch => write!(
+                formatter,
+                "calibration provenance algorithm must be {STRICT_CALIBRATED_LIGHT_ALGORITHM_ID}"
             ),
             Self::FlatProvenanceAlgorithmMismatch => write!(
                 formatter,
@@ -917,6 +1023,7 @@ impl Error for StrictPipelineError {
             | Self::TooManySignals { .. }
             | Self::ProvenanceSourceCountMismatch { .. }
             | Self::ProvenanceAlgorithmMismatch
+            | Self::CalibrationProvenanceAlgorithmMismatch
             | Self::FlatProvenanceAlgorithmMismatch
             | Self::MissingMasterPlanProvenance
             | Self::FlatMasterRequiresCalibration
@@ -1154,6 +1261,84 @@ where
             };
             // Preserve the scientific or I/O failure if the best-effort
             // terminal progress event itself cannot be constructed.
+            let _ignored = emit_progress(
+                &sequence,
+                &stage,
+                state,
+                completed_units,
+                total_units,
+                Some(error.code().to_owned()),
+                &mut progress,
+            );
+            Err(error)
+        }
+    }
+}
+
+/// Calibrates one Light frame into an atomic, double-precision FITS product.
+///
+/// The implementation shares validation, bounded tiling, checkpointing,
+/// statistics, source revalidation, and atomic publication with the strict
+/// integration path. No mean reduction occurs.
+///
+/// # Errors
+///
+/// Returns a typed validation, I/O, calibration, memory, cancellation,
+/// progress, statistics, cache, or publication failure.
+pub fn run_strict_calibration_pipeline<F>(
+    request: &StrictCalibrationRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<StrictPipelineResult, StrictPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let stage =
+        StageId::new(CALIBRATION_PIPELINE_STAGE_ID).map_err(StrictPipelineError::StageId)?;
+    let sequence = ProgressSequence::new();
+    emit_progress(
+        &sequence,
+        &stage,
+        ProgressState::Started,
+        0,
+        None,
+        None,
+        &mut progress,
+    )?;
+
+    let mut completed_units = 0_u64;
+    let mut total_units = None;
+    let execution = execute_pipeline(
+        &request.pipeline,
+        cancellation,
+        memory,
+        &sequence,
+        &stage,
+        &mut completed_units,
+        &mut total_units,
+        &mut progress,
+    );
+
+    match execution {
+        Ok(result) => {
+            emit_progress(
+                &sequence,
+                &stage,
+                ProgressState::Completed,
+                completed_units,
+                total_units,
+                None,
+                &mut progress,
+            )?;
+            Ok(result)
+        }
+        Err(error) => {
+            let state = if matches!(error, StrictPipelineError::Cancelled(_)) {
+                ProgressState::Cancelled
+            } else {
+                ProgressState::Failed
+            };
             let _ignored = emit_progress(
                 &sequence,
                 &stage,
@@ -1685,6 +1870,7 @@ where
         request.tile_width,
         request.tile_height,
         request.signals.len(),
+        request.operation,
     )?;
     let _reservation = memory
         .try_reserve(reserved_bytes)
@@ -2372,6 +2558,23 @@ fn process_tile(
         region,
     )?;
 
+    if request.operation == SignalOperation::CalibrateOne {
+        cancellation
+            .checkpoint()
+            .map_err(StrictPipelineError::Cancelled)?;
+        let signal = read_tile(
+            request.signals[0].path(),
+            PipelineInput::Signal { index: 0 },
+            request.header_options,
+            request.validation_mode,
+            dimensions,
+            region,
+        )?;
+        let calibrated = calibrate_dark_flat(&signal, &dark, &flat, request.calibration)
+            .map_err(StrictPipelineError::Calibration)?;
+        return Ok((calibrated, false));
+    }
+
     let mut calibrated = Vec::new();
     calibrated
         .try_reserve_exact(request.signals.len())
@@ -2812,6 +3015,7 @@ fn planned_working_set_bytes(
     tile_width: usize,
     tile_height: usize,
     signal_count: usize,
+    operation: SignalOperation,
 ) -> Result<usize, StrictPipelineError> {
     let image_sample_bytes = size_of::<f64>()
         .checked_add(size_of::<PixelFlags>())
@@ -2834,26 +3038,34 @@ fn planned_working_set_bytes(
         )
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
 
-    // At calibration peak, references, previously calibrated signals, the
-    // current signal, and its result coexist. At integration peak, the same
-    // image count coexists with the support map. Reserve the larger auxiliary.
-    let tile_image_count = signal_count
-        .checked_add(3)
-        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    // Single-frame calibration retains signal, dark, flat, and calibrated
+    // output at peak. Integration additionally retains every calibrated frame.
+    let tile_image_count = match operation {
+        SignalOperation::CalibrateOne => 4,
+        SignalOperation::Integrate => signal_count
+            .checked_add(3)
+            .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+    };
     let tile_images = maximum_tile_samples
         .checked_mul(image_sample_bytes)
         .and_then(|bytes| bytes.checked_mul(tile_image_count))
         .ok_or(StrictPipelineError::WorkSizeOverflow)?;
-    let tile_auxiliary = maximum_tile_samples
-        .checked_mul(size_of::<PixelSupport>().max(size_of::<SampleStatus>()))
-        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
-    let vector_storage = signal_count
-        .checked_mul(
-            size_of::<ScientificImage>()
-                .checked_add(size_of::<&ScientificImage>())
-                .ok_or(StrictPipelineError::WorkSizeOverflow)?,
-        )
-        .ok_or(StrictPipelineError::WorkSizeOverflow)?;
+    let tile_auxiliary = match operation {
+        SignalOperation::CalibrateOne => 0,
+        SignalOperation::Integrate => maximum_tile_samples
+            .checked_mul(size_of::<PixelSupport>().max(size_of::<SampleStatus>()))
+            .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+    };
+    let vector_storage = match operation {
+        SignalOperation::CalibrateOne => 0,
+        SignalOperation::Integrate => signal_count
+            .checked_mul(
+                size_of::<ScientificImage>()
+                    .checked_add(size_of::<&ScientificImage>())
+                    .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+            )
+            .ok_or(StrictPipelineError::WorkSizeOverflow)?,
+    };
 
     output_band_bytes
         .checked_add(tile_images)
@@ -3719,6 +3931,97 @@ mod tests {
     }
 
     #[test]
+    fn calibrates_one_light_without_statistical_integration() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let output = directory.path.join("calibrated-light.fits");
+        let provenance = provenance(1, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)?
+            .with_plan_sha256("c".repeat(64))?;
+        let request = StrictCalibrationRequest::new(
+            paths[0].clone(),
+            paths[2].clone(),
+            paths[3].clone(),
+            output.clone(),
+            provenance,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(2, 1)?;
+        let mut events = Vec::new();
+
+        let result = run_strict_calibration_pipeline(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(1_048_576)?,
+            |event| events.push(event),
+        )?;
+
+        assert_eq!(request.signal(), &paths[0]);
+        assert_eq!(request.output(), output);
+        assert_eq!(result.tiles_processed(), 4);
+        assert_eq!(events[0].stage().as_str(), CALIBRATION_PIPELINE_STAGE_ID);
+        assert_eq!(
+            events.last().map(ProgressEvent::state),
+            Some(ProgressState::Completed)
+        );
+
+        let mut reader =
+            PrimaryImageReader::open(File::open(output)?, HeaderReadOptions::default())?;
+        assert_eq!(
+            reader.report().header().string("AETHALG"),
+            Some(STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)
+        );
+        assert_eq!(reader.report().header().integer("AETHSRC"), Some(1));
+        let calibrated = reader.read_region_image(ImageRegion::new(0, 0, 0, 4, 2))?;
+        let expected = [4.0, 18.0, 56.0, 19.0, 24.0, 58.0, 136.0, 39.0];
+        assert_eq!(
+            calibrated
+                .pixels()
+                .iter()
+                .copied()
+                .map(f64::to_bits)
+                .collect::<Vec<_>>(),
+            expected.map(f64::to_bits)
+        );
+        assert!(
+            calibrated
+                .mask()
+                .as_slice()
+                .iter()
+                .all(|flags| flags.is_clear())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn calibrated_light_bytes_are_independent_of_tile_shape() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let paths = write_standard_inputs(&directory)?;
+        let small_output = directory.path.join("calibrated-small.fits");
+        let whole_output = directory.path.join("calibrated-whole.fits");
+        let build = |output: PathBuf| -> TestResult<StrictCalibrationRequest> {
+            StrictCalibrationRequest::new(
+                paths[0].clone(),
+                paths[2].clone(),
+                paths[3].clone(),
+                output,
+                provenance(1, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)
+                    .and_then(|value| Ok(value.with_plan_sha256("c".repeat(64))?))?,
+                CalibrationParameters::new(1.0e-12)?,
+            )
+            .map_err(|error| Box::new(error) as Box<dyn StdError>)
+        };
+        let small = build(small_output.clone())?.with_tile_shape(1, 1)?;
+        let whole = build(whole_output.clone())?.with_tile_shape(4, 2)?;
+        let memory = MemoryBudget::new(1_048_576)?;
+
+        run_strict_calibration_pipeline(&small, &CancellationToken::new(), &memory, |_| {})?;
+        run_strict_calibration_pipeline(&whole, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(fs::read(small_output)?, fs::read(whole_output)?);
+        Ok(())
+    }
+
+    #[test]
     fn cancellation_before_inspection_creates_no_output() -> TestResult {
         let directory = TestDirectory::new()?;
         let paths = write_standard_inputs(&directory)?;
@@ -4095,8 +4398,8 @@ mod tests {
         let short = Dimensions::new(100, 256, 1)?;
         let tall = Dimensions::new(100, 10_000, 1)?;
 
-        let short_bytes = planned_working_set_bytes(short, 64, 64, 4)?;
-        let tall_bytes = planned_working_set_bytes(tall, 64, 64, 4)?;
+        let short_bytes = planned_working_set_bytes(short, 64, 64, 4, SignalOperation::Integrate)?;
+        let tall_bytes = planned_working_set_bytes(tall, 64, 64, 4, SignalOperation::Integrate)?;
         let complete_tall_image_bytes = tall
             .pixel_count()
             .checked_mul(size_of::<f64>() + size_of::<PixelFlags>())
@@ -4284,6 +4587,32 @@ mod tests {
         assert!(matches!(
             wrong_algorithm,
             Err(StrictPipelineError::ProvenanceAlgorithmMismatch)
+        ));
+
+        let calibration_wrong_algorithm = StrictCalibrationRequest::new(
+            placeholder_source("signal.fits")?,
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
+            PathBuf::from("calibrated.fits"),
+            provenance(1, STRICT_MEAN_ALGORITHM_ID)?,
+            calibration,
+        );
+        assert!(matches!(
+            calibration_wrong_algorithm,
+            Err(StrictPipelineError::CalibrationProvenanceAlgorithmMismatch)
+        ));
+
+        let calibration_wrong_source_count = StrictCalibrationRequest::new(
+            placeholder_source("signal.fits")?,
+            placeholder_source("dark.fits")?,
+            placeholder_source("flat.fits")?,
+            PathBuf::from("calibrated.fits"),
+            provenance(2, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)?,
+            calibration,
+        );
+        assert!(matches!(
+            calibration_wrong_source_count,
+            Err(StrictPipelineError::ProvenanceSourceCountMismatch { .. })
         ));
 
         let valid = StrictPipelineRequest::new(

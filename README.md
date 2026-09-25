@@ -56,6 +56,9 @@ optimized CPU and GPU paths must match.
   calibrates and strictly integrates every Light group in `f64`, revalidates
   all raw and generated inputs, and publishes the complete product set as one
   rollback-safe transaction;
+- bounded single-Light `f64` calibration with a distinct non-integration
+  algorithm identity, exact statistics, verified checkpoints, source
+  revalidation, and atomic publication for Blink and later post-processing;
 - deterministic masked image statistics with compensated, overflow-resistant
   mean and variance calculations;
 - strict three-pass FITS pixel statistics with fixed-size decoding buffers,

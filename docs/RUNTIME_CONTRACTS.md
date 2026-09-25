@@ -97,6 +97,14 @@ The source count and algorithm identifier in provenance must exactly describe
 the executed operation. The fixed identifier is `strict-mean-v1`. Errors name an
 input role and signal index but deliberately omit filesystem paths.
 
+`StrictCalibrationRequest` reuses this executor for exactly one signal while
+skipping the mean reduction. Its fixed identifier is
+`strict-calibrated-light-v1`, its source count is exactly one, and its progress
+stage is `strict-light-calibration`. This is the lossless intermediate needed by
+frame review, debayering, registration, and optional calibrated-frame export.
+The operation identifier participates in checkpoint keys, preventing a
+single-frame calibrated tile from colliding with an integrated tile.
+
 Progress starts before input inspection. The total becomes known after image
 dimensions establish the tile count. A successful run emits running events for
 each completed tile, the statistics pass, final source revalidation, and

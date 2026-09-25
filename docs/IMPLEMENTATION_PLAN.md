@@ -559,6 +559,13 @@ safety reasoning. They do not narrate obvious syntax.
     progress, peak reserved memory, final product count, safe cancellation, and
     failure-without-partial-publication. Native and presenter tests cover the
     bridge, state gating, progress, and cancellation controls.
+26. Begin lossless post-calibration frame products. The runtime now has a
+    dedicated single-Light `f64` executor with distinct provenance, exact
+    statistics, operation-separated verified checkpoints, bounded memory,
+    source revalidation, and atomic publication. Its pixels are invariant to
+    tile shape and it deliberately performs no integration. The next slice
+    binds deterministic per-frame identity into whole-plan transactional export,
+    then feeds those products to debayering, quality weighting, and registration.
 
 ## 11. Stable-release definition
 
