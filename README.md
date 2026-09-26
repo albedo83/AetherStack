@@ -99,6 +99,10 @@ optimized CPU and GPU paths must match.
   through linked linear Rec. 709 luminance, with robust background, noise,
   stellar count, source-pixel FWHM, and eccentricity shown in Review, including
   serial bounded-memory whole-view measurement;
+- deterministic registration foundations with an explicit pixel-center
+  convention, finite nonsingular source-to-reference affine transforms,
+  compensated residual summaries, and an input-order-invariant automatic
+  reference policy that retains complete per-metric ranking evidence;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and
@@ -159,6 +163,10 @@ progressive disclosure, diagnostics, and accessibility requirements. The
 viewer, Blink, rejection, and reproducibility behavior. The
 [quality contract](docs/QUALITY_CONTRACT.md) defines the strict initial
 background and stellar measurement algorithms and their current release gates.
+The [registration contract](docs/REGISTRATION_CONTRACT.md) fixes scientific
+coordinates, affine direction and composition, residual evidence, and the
+initial automatic-reference policy without claiming that matching or resampling
+is complete.
 The [preview contract](docs/PREVIEW_CONTRACT.md) separates bounded display
 artifacts from scientific pixels and records the remaining viewer release gates.
 

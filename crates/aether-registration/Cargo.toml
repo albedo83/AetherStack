@@ -1,0 +1,17 @@
+[package]
+name = "aether-registration"
+description = "Deterministic geometric registration foundations for AetherStack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+aether-review = { path = "../aether-review" }
+
+[lints]
+workspace = true

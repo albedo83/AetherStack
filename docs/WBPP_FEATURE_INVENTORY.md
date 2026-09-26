@@ -136,7 +136,7 @@ evidence, not automatically an AetherStack default.
 | Linear defect correction | Detect and correct row or column defects conservatively with reason masks. | Planned |
 | Subframe weighting | Calculate documented quality metrics and preserve every metric and expression. | Strict global background and stellar-shape primitives implemented; weighting expression planned |
 | Frame selection | Support automatic thresholds and an interactive review without changing metrics. | Strict metrics, phase-neutral CFA and linked linear-RGB diagnostic measurement, review decisions, undo, stable Rust sorting, color Blink, bounded FITS previews, and accessible desktop Review surface implemented; ToupTek validation, persistent desktop decisions, and automatic rule evidence remain |
-| Image registration | Provide robust matching, transforms, interpolation, and residual diagnostics. | Planned |
+| Image registration | Provide robust matching, transforms, interpolation, and residual diagnostics. | Pixel coordinates, affine composition/inversion, compensated residual summaries, and inspectable automatic-reference ranking implemented; matching, estimation, resampling, and corpus validation planned |
 | Local normalization | Fit guarded background and scale models with inspectable samples and residuals. | Planned |
 | Image integration | Provide deterministic weighted robust estimators, support maps, and rejection maps. | Planned |
 | Autocrop | Derive the maximal valid common footprint and preview its coordinate transform. | Planned |

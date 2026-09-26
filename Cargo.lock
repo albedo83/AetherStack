@@ -85,6 +85,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-registration"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-review",
+]
+
+[[package]]
 name = "aether-review"
 version = "0.1.0"
 dependencies = [

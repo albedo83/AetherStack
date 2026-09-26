@@ -656,6 +656,18 @@ safety reasoning. They do not narrate obvious syntax.
     order, masks, native stellar measurement, and the RGB wire request. These
     remain expert diagnostics rather than automatic rejection authority. Next,
     define deterministic registration coordinates and reference selection.
+35. Fix registration geometry and automatic reference selection before matching.
+    The new registration core defines integer-centered continuous pixel
+    coordinates, finite nonsingular source-to-reference affine maps, explicit
+    inversion and execution-order composition, and compensated mean/RMS/maximum
+    residual evidence. Its `equal-ordinal-ranks-v1` reference policy validates
+    FWHM, eccentricity, star count, and noise; preserves all per-metric ranks;
+    rejects duplicate identities and bounded-resource failures; and cannot vary
+    with input order. The normative contract states clearly that feature
+    matching, robust model fitting, resampling, common-footprint calculation,
+    and ASI294MC Pro/ToupTek 585C comparison remain release gates. Next,
+    implement deterministic star-feature extraction for registration without
+    duplicating the quality detector's scientific primitives.
 
 ## 11. Stable-release definition
 
