@@ -8,11 +8,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use aether_calibration::CalibrationParameters;
 use aether_core::ImageStatistics;
+use aether_demosaic::MALVAR_HE_CUTLER_ALGORITHM_ID;
 use aether_fits::{
     FitsOutputProvenance, FitsProvenanceError, FitsWriteSummary, HeaderReadOptions, ImageReadError,
     PrimaryImageReader,
 };
-use aether_metadata::FrameType;
+use aether_metadata::{BayerPattern, FrameType};
 use aether_session::{
     FingerprintError, LightCalibrationPlan, LightCalibrationPlanError, LightMasterAssociation,
     LightMasterKind, ManifestError, ManifestFile, ManifestGroup, MasterPlan, MasterPlanError,
@@ -21,10 +22,11 @@ use aether_session::{
 
 use crate::master_plan::product_file_name;
 use crate::{
-    CancellationToken, Cancelled, MemoryBudget, PipelineSource, ProgressEvent,
-    STRICT_CALIBRATED_LIGHT_ALGORITHM_ID, STRICT_FLAT_MASTER_ALGORITHM_ID,
-    STRICT_MEAN_ALGORITHM_ID, StrictCalibrationRequest, StrictPipelineError, StrictPipelineRequest,
-    run_strict_calibration_pipeline, run_strict_pipeline,
+    CancellationToken, Cancelled, DemosaicPipelineError, MemoryBudget, PipelineSource,
+    ProgressEvent, STRICT_CALIBRATED_LIGHT_ALGORITHM_ID, STRICT_FLAT_MASTER_ALGORITHM_ID,
+    STRICT_MEAN_ALGORITHM_ID, StrictCalibrationRequest, StrictDemosaicRequest, StrictPipelineError,
+    StrictPipelineRequest, run_strict_calibration_pipeline, run_strict_demosaic_pipeline,
+    run_strict_pipeline,
 };
 
 const MAX_STAGING_DIRECTORY_ATTEMPTS: usize = 128;
@@ -394,6 +396,132 @@ impl CalibratedLightPlanExecutionResult {
     }
 }
 
+/// Progress for one calibrated source in a whole-plan RGB export transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DemosaicedLightPlanProgressEvent {
+    product_index: usize,
+    product_count: usize,
+    group_id: String,
+    source_index: usize,
+    source_count: usize,
+    stage: ProgressEvent,
+}
+
+impl DemosaicedLightPlanProgressEvent {
+    /// Zero-based Light-group index.
+    #[must_use]
+    pub const fn product_index(&self) -> usize {
+        self.product_index
+    }
+
+    /// Number of Light groups in the reviewed plan.
+    #[must_use]
+    pub const fn product_count(&self) -> usize {
+        self.product_count
+    }
+
+    /// Exact manifest Light group currently processed.
+    #[must_use]
+    pub fn group_id(&self) -> &str {
+        &self.group_id
+    }
+
+    /// Zero-based source position in canonical group order.
+    #[must_use]
+    pub const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    /// Number of sources in the current group.
+    #[must_use]
+    pub const fn source_count(&self) -> usize {
+        self.source_count
+    }
+
+    /// Underlying bounded demosaicing progress event.
+    #[must_use]
+    pub const fn stage(&self) -> &ProgressEvent {
+        &self.stage
+    }
+}
+
+/// One RGB Light frame published by the whole-plan transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DemosaicedLightFrameExecutionResult {
+    group_id: String,
+    source_index: usize,
+    calibrated_sha256: String,
+    pattern: BayerPattern,
+    output: PathBuf,
+    write_summary: FitsWriteSummary,
+}
+
+impl DemosaicedLightFrameExecutionResult {
+    /// Exact source Light group.
+    #[must_use]
+    pub fn group_id(&self) -> &str {
+        &self.group_id
+    }
+
+    /// Zero-based source position in canonical manifest-group order.
+    #[must_use]
+    pub const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    /// SHA-256 of the exact calibrated CFA input embedded as `AETHINP`.
+    #[must_use]
+    pub fn calibrated_sha256(&self) -> &str {
+        &self.calibrated_sha256
+    }
+
+    /// CFA phase used for reconstruction.
+    #[must_use]
+    pub const fn pattern(&self) -> &BayerPattern {
+        &self.pattern
+    }
+
+    /// Final public planar RGB FITS path.
+    #[must_use]
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
+
+    /// FITS sample, checksum, substitution, and byte accounting.
+    #[must_use]
+    pub const fn write_summary(&self) -> FitsWriteSummary {
+        self.write_summary
+    }
+}
+
+/// Complete RGB transaction result in canonical group and source order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DemosaicedLightPlanExecutionResult {
+    manifest_sha256: String,
+    light_plan_sha256: String,
+    frames: Vec<DemosaicedLightFrameExecutionResult>,
+}
+
+impl DemosaicedLightPlanExecutionResult {
+    /// SHA-256 of the canonical session manifest.
+    #[must_use]
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+
+    /// SHA-256 of the reviewed Light association plan.
+    #[must_use]
+    pub fn light_plan_sha256(&self) -> &str {
+        &self.light_plan_sha256
+    }
+
+    /// Demosaiced frames in canonical group then source order.
+    #[must_use]
+    pub fn frames(&self) -> &[DemosaicedLightFrameExecutionResult] {
+        &self.frames
+    }
+}
+
 /// Complete transaction result ordered by canonical Light group identifier.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LightPlanExecutionResult {
@@ -542,6 +670,49 @@ pub enum LightPlanExecutionError {
         /// Strict single-frame calibration failure.
         source: StrictPipelineError,
     },
+    /// The supplied calibrated result belongs to another manifest or Light plan.
+    CalibratedPlanMismatch,
+    /// The calibrated result does not contain exactly one canonical frame per source.
+    CalibratedFrameSetMismatch,
+    /// A color Light group has no usable standard Bayer phase.
+    MissingBayerPattern {
+        /// Light group lacking a supported CFA declaration.
+        group_id: String,
+    },
+    /// A calibrated source cannot be opened or its FITS header cannot be parsed.
+    OpenCalibrated {
+        /// Light group owning the calibrated source.
+        group_id: String,
+        /// Zero-based canonical source index.
+        source_index: usize,
+        /// FITS open or header-parse failure.
+        source: ImageReadError,
+    },
+    /// A calibrated source does not carry the exact expected upstream provenance.
+    CalibratedProvenanceMismatch {
+        /// Light group owning the calibrated source.
+        group_id: String,
+        /// Zero-based canonical source index.
+        source_index: usize,
+    },
+    /// A calibrated source could not be fingerprinted.
+    FingerprintCalibrated {
+        /// Light group owning the calibrated source.
+        group_id: String,
+        /// Zero-based canonical source index.
+        source_index: usize,
+        /// Bounded fingerprinting failure.
+        source: FingerprintError,
+    },
+    /// One calibrated CFA frame failed bounded RGB reconstruction.
+    DemosaicFramePipeline {
+        /// Light group being processed.
+        group_id: String,
+        /// Zero-based canonical source index.
+        source_index: usize,
+        /// Strict demosaicing failure.
+        source: Box<DemosaicPipelineError>,
+    },
     /// A product could not be atomically exposed.
     PublishProduct {
         /// Light group being published.
@@ -669,6 +840,45 @@ impl Display for LightPlanExecutionError {
                 formatter,
                 "calibrated Light `{group_id}` source {source_index} failed: {source}"
             ),
+            Self::CalibratedPlanMismatch => formatter
+                .write_str("calibrated Light result belongs to another manifest or Light plan"),
+            Self::CalibratedFrameSetMismatch => formatter
+                .write_str("calibrated Light result does not match the canonical Light source set"),
+            Self::MissingBayerPattern { group_id } => write!(
+                formatter,
+                "Light group `{group_id}` has no supported Bayer pattern"
+            ),
+            Self::OpenCalibrated {
+                group_id,
+                source_index,
+                source,
+            } => write!(
+                formatter,
+                "cannot inspect calibrated Light `{group_id}` source {source_index}: {source}"
+            ),
+            Self::CalibratedProvenanceMismatch {
+                group_id,
+                source_index,
+            } => write!(
+                formatter,
+                "calibrated Light `{group_id}` source {source_index} has stale provenance"
+            ),
+            Self::FingerprintCalibrated {
+                group_id,
+                source_index,
+                source,
+            } => write!(
+                formatter,
+                "cannot fingerprint calibrated Light `{group_id}` source {source_index}: {source}"
+            ),
+            Self::DemosaicFramePipeline {
+                group_id,
+                source_index,
+                source,
+            } => write!(
+                formatter,
+                "demosaiced Light `{group_id}` source {source_index} failed: {source}"
+            ),
             Self::PublishProduct { group_id, source } => {
                 write!(
                     formatter,
@@ -703,9 +913,12 @@ impl Error for LightPlanExecutionError {
             | Self::SyncOutputDirectory(error) => Some(error),
             Self::OpenMaster { source, .. } => Some(source),
             Self::FingerprintMaster { source, .. } => Some(source),
+            Self::OpenCalibrated { source, .. } => Some(source),
+            Self::FingerprintCalibrated { source, .. } => Some(source),
             Self::Provenance(error) => Some(error),
             Self::ProductPipeline { source, .. } => Some(source),
             Self::FramePipeline { source, .. } => Some(source),
+            Self::DemosaicFramePipeline { source, .. } => Some(source.as_ref()),
             Self::PublishProduct { source, .. } | Self::RollbackPublication { source, .. } => {
                 Some(source)
             }
@@ -718,6 +931,10 @@ impl Error for LightPlanExecutionError {
             | Self::LightPlanMismatch
             | Self::LightPlanNotReady
             | Self::NoLightProducts
+            | Self::CalibratedPlanMismatch
+            | Self::CalibratedFrameSetMismatch
+            | Self::MissingBayerPattern { .. }
+            | Self::CalibratedProvenanceMismatch { .. }
             | Self::InvalidGroup { .. }
             | Self::InvalidMasterAssociation { .. }
             | Self::MissingManifestFile { .. }
@@ -1046,6 +1263,164 @@ where
     })
 }
 
+/// Demosaics every calibrated Light as one rollback-safe RGB transaction.
+///
+/// The calibrated result must be the exact canonical output of this request.
+/// Each input header is checked against the manifest, Light plan, group, strict
+/// calibration algorithm, source count, and original raw-source fingerprint.
+/// The CFA phase comes only from the reviewed manifest group. Every RGB FITS
+/// remains in a private sibling directory until all frames succeed and all
+/// calibrated inputs are fingerprinted again. Existing destinations are never
+/// replaced, and a publication failure rolls back links already exposed.
+///
+/// # Errors
+///
+/// Returns a typed graph, provenance, CFA, FITS, fingerprint, demosaicing,
+/// cancellation, publication, or rollback failure.
+pub fn run_demosaiced_light_plan<F>(
+    request: &LightPlanExecutionRequest,
+    calibrated: &CalibratedLightPlanExecutionResult,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<DemosaicedLightPlanExecutionResult, LightPlanExecutionError>
+where
+    F: FnMut(DemosaicedLightPlanProgressEvent),
+{
+    validate_runtime_directories(request)?;
+    let manifest_sha256 = request
+        .manifest
+        .canonical_sha256()
+        .map_err(LightPlanExecutionError::Manifest)?;
+    let light_plan_sha256 = request
+        .light_plan
+        .canonical_sha256()
+        .map_err(LightPlanExecutionError::LightPlan)?;
+    validate_calibrated_frame_set(request, calibrated, &manifest_sha256, &light_plan_sha256)?;
+    let destinations = planned_demosaiced_destinations(request)?;
+    preflight_destinations(&destinations)?;
+    cancellation
+        .checkpoint()
+        .map_err(LightPlanExecutionError::Cancelled)?;
+
+    let staging = StagingDirectory::create(&request.output_directory)?;
+    let product_count = request.light_plan.products().len();
+    let mut staged_frames = BTreeMap::new();
+    let mut inputs = BTreeMap::new();
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(calibrated.frames().len())
+        .map_err(|_| LightPlanExecutionError::AllocationFailed)?;
+
+    for (product_index, product) in request.light_plan.products().iter().enumerate() {
+        let group = find_group(&request.manifest, product.source_group_id())?;
+        let pattern = group
+            .key()
+            .bayer_pattern()
+            .filter(|pattern| !matches!(pattern, BayerPattern::Other(_)))
+            .cloned()
+            .ok_or_else(|| LightPlanExecutionError::MissingBayerPattern {
+                group_id: group.id().to_owned(),
+            })?;
+        let source_count = group.files().len();
+        for source_index in 0..source_count {
+            cancellation
+                .checkpoint()
+                .map_err(LightPlanExecutionError::Cancelled)?;
+            let artifact_id = calibrated_artifact_id(group.id(), source_index);
+            let calibrated_frame = calibrated_frame(calibrated, group.id(), source_index)?;
+            validate_calibrated_provenance(calibrated_frame, &manifest_sha256, &light_plan_sha256)?;
+            let fingerprint = fingerprint_path(calibrated_frame.output()).map_err(|source| {
+                LightPlanExecutionError::FingerprintCalibrated {
+                    group_id: group.id().to_owned(),
+                    source_index,
+                    source,
+                }
+            })?;
+            let calibrated_sha256 = fingerprint.sha256().to_owned();
+            let source = PipelineSource::new(calibrated_frame.output().to_path_buf(), fingerprint);
+            let staged_output = staging
+                .path()
+                .join(demosaiced_light_file_name(group.id(), source_index));
+            let provenance = FitsOutputProvenance::new(
+                &manifest_sha256,
+                group.id(),
+                MALVAR_HE_CUTLER_ALGORITHM_ID,
+                1,
+            )
+            .and_then(|value| value.with_plan_sha256(&light_plan_sha256))
+            .and_then(|value| value.with_source_sha256(&calibrated_sha256))
+            .map_err(LightPlanExecutionError::Provenance)?;
+            let pipeline = StrictDemosaicRequest::new(
+                source.clone(),
+                staged_output.clone(),
+                provenance,
+                pattern.clone(),
+            )
+            .map(|builder| {
+                builder.with_header_policy(
+                    HeaderReadOptions::default(),
+                    request.manifest.fits_validation_mode(),
+                )
+            })
+            .map_err(|source| LightPlanExecutionError::DemosaicFramePipeline {
+                group_id: group.id().to_owned(),
+                source_index,
+                source: Box::new(source),
+            })?;
+            let completed =
+                run_strict_demosaic_pipeline(&pipeline, cancellation, memory, |stage| {
+                    progress(DemosaicedLightPlanProgressEvent {
+                        product_index,
+                        product_count,
+                        group_id: group.id().to_owned(),
+                        source_index,
+                        source_count,
+                        stage,
+                    });
+                })
+                .map_err(|source| {
+                    LightPlanExecutionError::DemosaicFramePipeline {
+                        group_id: group.id().to_owned(),
+                        source_index,
+                        source: Box::new(source),
+                    }
+                })?;
+            let public_output = destinations.get(&artifact_id).cloned().ok_or_else(|| {
+                LightPlanExecutionError::InvalidGroup {
+                    group_id: group.id().to_owned(),
+                }
+            })?;
+            inputs.insert(artifact_id.clone(), source);
+            staged_frames.insert(artifact_id, staged_output);
+            frames.push(DemosaicedLightFrameExecutionResult {
+                group_id: group.id().to_owned(),
+                source_index,
+                calibrated_sha256,
+                pattern: pattern.clone(),
+                output: public_output,
+                write_summary: completed.summary(),
+            });
+        }
+    }
+
+    cancellation
+        .checkpoint()
+        .map_err(LightPlanExecutionError::Cancelled)?;
+    revalidate_demosaic_inputs(&inputs)?;
+    publish_product_set(
+        &staged_frames,
+        &destinations,
+        &request.output_directory,
+        cancellation,
+    )?;
+    Ok(DemosaicedLightPlanExecutionResult {
+        manifest_sha256,
+        light_plan_sha256,
+        frames,
+    })
+}
+
 fn validate_plan_graph(
     manifest: &SessionManifest,
     master_plan: &MasterPlan,
@@ -1315,6 +1690,161 @@ fn planned_calibrated_destinations(
     Ok(destinations)
 }
 
+fn planned_demosaiced_destinations(
+    request: &LightPlanExecutionRequest,
+) -> Result<BTreeMap<String, PathBuf>, LightPlanExecutionError> {
+    let mut destinations = BTreeMap::new();
+    let mut portable_names = BTreeSet::new();
+    for product in request.light_plan.products() {
+        let group = find_group(&request.manifest, product.source_group_id())?;
+        for source_index in 0..group.files().len() {
+            let file_name = demosaiced_light_file_name(group.id(), source_index);
+            if !portable_names.insert(file_name.to_ascii_lowercase()) {
+                return Err(LightPlanExecutionError::DestinationNameCollision { file_name });
+            }
+            destinations.insert(
+                calibrated_artifact_id(group.id(), source_index),
+                request.output_directory.join(file_name),
+            );
+        }
+    }
+    Ok(destinations)
+}
+
+fn validate_calibrated_frame_set(
+    request: &LightPlanExecutionRequest,
+    calibrated: &CalibratedLightPlanExecutionResult,
+    manifest_sha256: &str,
+    light_plan_sha256: &str,
+) -> Result<(), LightPlanExecutionError> {
+    let master_plan_sha256 = request
+        .master_plan
+        .canonical_sha256()
+        .map_err(LightPlanExecutionError::MasterPlan)?;
+    if calibrated.manifest_sha256() != manifest_sha256
+        || calibrated.master_plan_sha256() != master_plan_sha256
+        || calibrated.light_plan_sha256() != light_plan_sha256
+    {
+        return Err(LightPlanExecutionError::CalibratedPlanMismatch);
+    }
+
+    let expected_count =
+        request
+            .light_plan
+            .products()
+            .iter()
+            .try_fold(0_usize, |count, product| {
+                let group = find_group(&request.manifest, product.source_group_id())?;
+                count
+                    .checked_add(group.files().len())
+                    .ok_or(LightPlanExecutionError::AllocationFailed)
+            })?;
+    if calibrated.frames().len() != expected_count {
+        return Err(LightPlanExecutionError::CalibratedFrameSetMismatch);
+    }
+
+    let mut actual = calibrated.frames().iter();
+    for product in request.light_plan.products() {
+        let group = find_group(&request.manifest, product.source_group_id())?;
+        for (source_index, relative_path) in group.files().iter().enumerate() {
+            let frame = actual
+                .next()
+                .ok_or(LightPlanExecutionError::CalibratedFrameSetMismatch)?;
+            let manifest_file = find_file(&request.manifest, relative_path).ok_or_else(|| {
+                LightPlanExecutionError::MissingManifestFile {
+                    relative_path: relative_path.clone(),
+                }
+            })?;
+            let expected_output = request
+                .output_directory
+                .join(calibrated_light_file_name(group.id(), source_index));
+            if frame.group_id() != group.id()
+                || frame.source_index() != source_index
+                || frame.source_sha256() != manifest_file.fingerprint().sha256()
+                || frame.output() != expected_output
+            {
+                return Err(LightPlanExecutionError::CalibratedFrameSetMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn calibrated_frame<'a>(
+    calibrated: &'a CalibratedLightPlanExecutionResult,
+    group_id: &str,
+    source_index: usize,
+) -> Result<&'a CalibratedLightFrameExecutionResult, LightPlanExecutionError> {
+    calibrated
+        .frames()
+        .iter()
+        .find(|frame| frame.group_id() == group_id && frame.source_index() == source_index)
+        .ok_or(LightPlanExecutionError::CalibratedFrameSetMismatch)
+}
+
+fn validate_calibrated_provenance(
+    frame: &CalibratedLightFrameExecutionResult,
+    manifest_sha256: &str,
+    light_plan_sha256: &str,
+) -> Result<(), LightPlanExecutionError> {
+    let group_id = frame.group_id().to_owned();
+    let source_index = frame.source_index();
+    let file =
+        File::open(frame.output()).map_err(|source| LightPlanExecutionError::OpenCalibrated {
+            group_id: group_id.clone(),
+            source_index,
+            source: ImageReadError::Io(source),
+        })?;
+    let mut reader =
+        PrimaryImageReader::open(file, HeaderReadOptions::default()).map_err(|source| {
+            LightPlanExecutionError::OpenCalibrated {
+                group_id: group_id.clone(),
+                source_index,
+                source,
+            }
+        })?;
+    let header = reader.report().header();
+    let valid_header = header.string("AETHMAN") == Some(manifest_sha256)
+        && header.string("AETHPLN") == Some(light_plan_sha256)
+        && header.string("AETHGRP") == Some(frame.group_id())
+        && header.string("AETHALG") == Some(STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)
+        && header.integer("AETHSRC") == Some(1)
+        && header.string("AETHINP") == Some(frame.source_sha256());
+    let valid_checksums = reader
+        .verify_checksums()
+        .map_err(|source| LightPlanExecutionError::OpenCalibrated {
+            group_id: group_id.clone(),
+            source_index,
+            source,
+        })?
+        .is_fully_verified();
+    if !valid_header || !valid_checksums {
+        return Err(LightPlanExecutionError::CalibratedProvenanceMismatch {
+            group_id,
+            source_index,
+        });
+    }
+    Ok(())
+}
+
+fn revalidate_demosaic_inputs(
+    inputs: &BTreeMap<String, PipelineSource>,
+) -> Result<(), LightPlanExecutionError> {
+    for (identity, source) in inputs {
+        let actual = fingerprint_path(source.path()).map_err(|_| {
+            LightPlanExecutionError::SourceChanged {
+                identity: identity.clone(),
+            }
+        })?;
+        if &actual != source.fingerprint() {
+            return Err(LightPlanExecutionError::SourceChanged {
+                identity: identity.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn preflight_destinations(
     destinations: &BTreeMap<String, PathBuf>,
 ) -> Result<(), LightPlanExecutionError> {
@@ -1416,6 +1946,10 @@ fn calibrated_light_file_name(group_id: &str, source_index: usize) -> String {
     format!("calibrated-light-{group_id}-{source_index:06}.fits")
 }
 
+fn demosaiced_light_file_name(group_id: &str, source_index: usize) -> String {
+    format!("demosaiced-light-{group_id}-{source_index:06}.fits")
+}
+
 fn publish_product_set(
     staged_by_group: &BTreeMap<String, PathBuf>,
     destinations: &BTreeMap<String, PathBuf>,
@@ -1508,6 +2042,7 @@ impl Drop for StagingDirectory {
 #[cfg(test)]
 mod tests {
     use std::error::Error as StdError;
+    use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use aether_calibration::FlatNormalizationParameters;
@@ -1603,6 +2138,82 @@ mod tests {
         let flat = write_source(root, "flats/flat.fits", vec![3.0; 3], FrameType::Flat)?;
         let light_one = write_source(root, "lights/light-1.fits", vec![5.0; 3], FrameType::Light)?;
         let light_two = write_source(root, "lights/light-2.fits", vec![7.0; 3], FrameType::Light)?;
+        let groups = vec![
+            ManifestGroup::new(
+                "dark",
+                StrictGroupingKey::from_metadata(FrameType::Dark, dark.metadata(), dark.axes())?,
+                vec![dark.relative_path().to_owned()],
+                Vec::new(),
+                None,
+            )?,
+            ManifestGroup::new(
+                "flat",
+                StrictGroupingKey::from_metadata(FrameType::Flat, flat.metadata(), flat.axes())?,
+                vec![flat.relative_path().to_owned()],
+                Vec::new(),
+                None,
+            )?,
+            ManifestGroup::new(
+                "light",
+                StrictGroupingKey::from_metadata(
+                    FrameType::Light,
+                    light_one.metadata(),
+                    light_one.axes(),
+                )?,
+                vec![
+                    light_one.relative_path().to_owned(),
+                    light_two.relative_path().to_owned(),
+                ],
+                Vec::new(),
+                None,
+            )?,
+        ];
+        Ok(SessionManifest::new(
+            ClassificationPolicy::RequireAgreement,
+            vec![dark, flat, light_one, light_two],
+            groups,
+        )?)
+    }
+
+    fn write_uniform_source(
+        root: &Path,
+        relative_path: &str,
+        width: usize,
+        height: usize,
+        value: f64,
+        frame_type: FrameType,
+    ) -> TestResult<ManifestFile> {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let dimensions = Dimensions::new(width, height, 1)?;
+        write_f64_primary_atomic_new(
+            &path,
+            &ScientificImage::from_pixels(dimensions, vec![value; width * height])?,
+        )?;
+        let mut source = File::open(&path)?;
+        let fingerprint = fingerprint_reader(&mut source)?;
+        let metadata = metadata(frame_type);
+        let classification = classify_frame(Path::new(relative_path), &metadata);
+        Ok(ManifestFile::from_analysis(
+            relative_path,
+            fingerprint,
+            vec![width as u64, height as u64],
+            metadata,
+            Vec::new(),
+            classification,
+            ClassificationPolicy::RequireAgreement,
+        )?)
+    }
+
+    fn grouped_demosaic_manifest(root: &Path) -> TestResult<SessionManifest> {
+        let dark = write_uniform_source(root, "darks/dark.fits", 4, 4, 1.0, FrameType::Dark)?;
+        let flat = write_uniform_source(root, "flats/flat.fits", 4, 4, 3.0, FrameType::Flat)?;
+        let light_one =
+            write_uniform_source(root, "lights/light-1.fits", 4, 4, 5.0, FrameType::Light)?;
+        let light_two =
+            write_uniform_source(root, "lights/light-2.fits", 4, 4, 7.0, FrameType::Light)?;
         let groups = vec![
             ManifestGroup::new(
                 "dark",
@@ -1850,6 +2461,106 @@ mod tests {
     }
 
     #[test]
+    fn demosaics_every_calibrated_light_as_one_atomic_plan_transaction() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let root = directory.path.join("session");
+        let masters = directory.path.join("masters");
+        let output = directory.path.join("lights");
+        fs::create_dir(&root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let manifest = grouped_demosaic_manifest(&root)?;
+        let (master_plan, light_plan) = plans(&manifest)?;
+        build_masters(&root, &masters, &manifest, &master_plan)?;
+        let request = LightPlanExecutionRequest::new(
+            root,
+            masters,
+            output.clone(),
+            manifest,
+            master_plan,
+            light_plan,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(2, 2)?;
+        let budget = MemoryBudget::new(2 * 1_048_576)?;
+        let calibrated =
+            run_calibrated_light_plan(&request, &CancellationToken::new(), &budget, |_| {})?;
+        let expected_calibrated_digests = calibrated
+            .frames()
+            .iter()
+            .map(|frame| fingerprint_path(frame.output()).map(|value| value.sha256().to_owned()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut progress = Vec::new();
+
+        let result = run_demosaiced_light_plan(
+            &request,
+            &calibrated,
+            &CancellationToken::new(),
+            &budget,
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.frames().len(), 2);
+        assert!(progress.iter().any(|event| {
+            event.group_id() == "light"
+                && event.product_index() == 0
+                && event.product_count() == 1
+                && event.source_index() == 0
+                && event.source_count() == 2
+                && event.stage().stage().as_str() == "strict-demosaic"
+        }));
+        for (source_index, expected_value) in [4.0_f64, 6.0].into_iter().enumerate() {
+            let frame = &result.frames()[source_index];
+            assert_eq!(frame.group_id(), "light");
+            assert_eq!(frame.source_index(), source_index);
+            assert_eq!(frame.pattern(), &BayerPattern::Rggb);
+            assert_eq!(
+                frame.calibrated_sha256(),
+                expected_calibrated_digests[source_index]
+            );
+            assert_eq!(frame.write_summary().samples_written(), 4 * 4 * 3);
+            let expected_path =
+                output.join(format!("demosaiced-light-light-{source_index:06}.fits"));
+            assert_eq!(frame.output(), expected_path);
+            let mut reader = PrimaryImageReader::open(
+                File::open(&expected_path)?,
+                HeaderReadOptions::default(),
+            )?;
+            assert_eq!(reader.descriptor().axes(), &[4, 4, 3]);
+            let header = reader.report().header();
+            assert_eq!(header.string("AETHMAN"), Some(result.manifest_sha256()));
+            assert_eq!(header.string("AETHPLN"), Some(result.light_plan_sha256()));
+            assert_eq!(header.string("AETHGRP"), Some("light"));
+            assert_eq!(
+                header.string("AETHALG"),
+                Some(MALVAR_HE_CUTLER_ALGORITHM_ID)
+            );
+            assert_eq!(header.integer("AETHSRC"), Some(1));
+            assert_eq!(
+                header.string("AETHINP"),
+                Some(expected_calibrated_digests[source_index].as_str())
+            );
+            assert!(reader.verify_checksums()?.is_fully_verified());
+            for plane in 0..3 {
+                let image = reader.read_region_image(ImageRegion::new(plane, 0, 0, 4, 4))?;
+                assert!(
+                    image
+                        .pixels()
+                        .iter()
+                        .all(|value| value.to_bits() == expected_value.to_bits())
+                );
+            }
+        }
+        assert!(
+            fs::read_dir(output)?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stale_master_provenance_blocks_execution_without_output() -> TestResult {
         let directory = TestDirectory::new()?;
         let root = directory.path.join("session");
@@ -1985,6 +2696,185 @@ mod tests {
 
         assert!(matches!(result, Err(LightPlanExecutionError::Cancelled(_))));
         assert!(fs::read_dir(output)?.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_after_one_rgb_frame_publishes_no_rgb_products() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let root = directory.path.join("session");
+        let masters = directory.path.join("masters");
+        let output = directory.path.join("lights");
+        fs::create_dir(&root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let manifest = grouped_demosaic_manifest(&root)?;
+        let (master_plan, light_plan) = plans(&manifest)?;
+        build_masters(&root, &masters, &manifest, &master_plan)?;
+        let request = LightPlanExecutionRequest::new(
+            root,
+            masters,
+            output.clone(),
+            manifest,
+            master_plan,
+            light_plan,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(2, 2)?;
+        let budget = MemoryBudget::new(2 * 1_048_576)?;
+        let calibrated =
+            run_calibrated_light_plan(&request, &CancellationToken::new(), &budget, |_| {})?;
+        let cancellation = CancellationToken::new();
+        let callback_token = cancellation.clone();
+
+        let result =
+            run_demosaiced_light_plan(&request, &calibrated, &cancellation, &budget, |event| {
+                if event.source_index() == 0
+                    && event.stage().state() == crate::ProgressState::Completed
+                {
+                    let _already_cancelled = callback_token.cancel();
+                }
+            });
+
+        assert!(matches!(result, Err(LightPlanExecutionError::Cancelled(_))));
+        assert!(
+            fs::read_dir(output)?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("demosaiced-light-"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn calibrated_source_mutation_rolls_back_the_complete_rgb_set() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let root = directory.path.join("session");
+        let masters = directory.path.join("masters");
+        let output = directory.path.join("lights");
+        fs::create_dir(&root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let manifest = grouped_demosaic_manifest(&root)?;
+        let (master_plan, light_plan) = plans(&manifest)?;
+        build_masters(&root, &masters, &manifest, &master_plan)?;
+        let request = LightPlanExecutionRequest::new(
+            root,
+            masters,
+            output.clone(),
+            manifest,
+            master_plan,
+            light_plan,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(2, 2)?;
+        let budget = MemoryBudget::new(2 * 1_048_576)?;
+        let calibrated =
+            run_calibrated_light_plan(&request, &CancellationToken::new(), &budget, |_| {})?;
+        let first_input = calibrated.frames()[0].output().to_path_buf();
+        let mut mutated = false;
+        let mut mutation_error = None;
+
+        let result = run_demosaiced_light_plan(
+            &request,
+            &calibrated,
+            &CancellationToken::new(),
+            &budget,
+            |event| {
+                if !mutated
+                    && event.source_index() == 0
+                    && event.stage().state() == crate::ProgressState::Completed
+                {
+                    let mutation = std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&first_input)
+                        .and_then(|mut file| file.write_all(b"changed"));
+                    match mutation {
+                        Ok(()) => mutated = true,
+                        Err(error) => mutation_error = Some(error),
+                    }
+                }
+            },
+        );
+        if let Some(error) = mutation_error {
+            return Err(error.into());
+        }
+
+        assert!(matches!(
+            result,
+            Err(LightPlanExecutionError::SourceChanged { .. })
+        ));
+        assert!(
+            fs::read_dir(output)?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("demosaiced-light-"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_calibrated_provenance_blocks_the_rgb_transaction() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let root = directory.path.join("session");
+        let masters = directory.path.join("masters");
+        let output = directory.path.join("lights");
+        fs::create_dir(&root)?;
+        fs::create_dir(&masters)?;
+        fs::create_dir(&output)?;
+        let manifest = grouped_demosaic_manifest(&root)?;
+        let (master_plan, light_plan) = plans(&manifest)?;
+        build_masters(&root, &masters, &manifest, &master_plan)?;
+        let request = LightPlanExecutionRequest::new(
+            root,
+            masters,
+            output.clone(),
+            manifest,
+            master_plan,
+            light_plan,
+            CalibrationParameters::new(1.0e-12)?,
+        )?
+        .with_tile_shape(2, 2)?;
+        let budget = MemoryBudget::new(2 * 1_048_576)?;
+        let calibrated =
+            run_calibrated_light_plan(&request, &CancellationToken::new(), &budget, |_| {})?;
+        let stale = calibrated.frames()[0].output();
+        fs::remove_file(stale)?;
+        write_f64_primary_atomic_new(
+            stale,
+            &ScientificImage::from_pixels(Dimensions::new(4, 4, 1)?, vec![4.0; 16])?,
+        )?;
+
+        let result = run_demosaiced_light_plan(
+            &request,
+            &calibrated,
+            &CancellationToken::new(),
+            &budget,
+            |_| {},
+        );
+
+        assert!(matches!(
+            result,
+            Err(LightPlanExecutionError::CalibratedProvenanceMismatch {
+                group_id,
+                source_index: 0
+            }) if group_id == "light"
+        ));
+        assert!(
+            fs::read_dir(output)?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("demosaiced-light-"))
+        );
         Ok(())
     }
 

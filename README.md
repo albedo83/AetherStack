@@ -101,7 +101,8 @@ optimized CPU and GPU paths must match.
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and
   a memory-bounded band executor that atomically publishes checksum-verified
-  planar RGB FITS products;
+  planar RGB FITS products, plus an all-or-nothing reviewed-Light-plan RGB
+  exporter that revalidates every calibrated input before set publication;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat

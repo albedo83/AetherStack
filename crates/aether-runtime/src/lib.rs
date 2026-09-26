@@ -18,9 +18,11 @@ pub use demosaic::{
 };
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,
-    CalibratedLightPlanProgressEvent, LightPlanExecutionError, LightPlanExecutionRequest,
-    LightPlanExecutionResult, LightPlanProgressEvent, LightProductExecutionResult,
-    run_calibrated_light_plan, run_light_plan,
+    CalibratedLightPlanProgressEvent, DemosaicedLightFrameExecutionResult,
+    DemosaicedLightPlanExecutionResult, DemosaicedLightPlanProgressEvent, LightPlanExecutionError,
+    LightPlanExecutionRequest, LightPlanExecutionResult, LightPlanProgressEvent,
+    LightProductExecutionResult, run_calibrated_light_plan, run_demosaiced_light_plan,
+    run_light_plan,
 };
 pub use master_plan::{
     MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,

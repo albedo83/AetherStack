@@ -143,6 +143,16 @@ again after readback. Cancellation is checked before work, between bands, after
 readback, and immediately before atomic publication; every pre-publication
 failure leaves the destination absent.
 
+`run_demosaiced_light_plan` lifts that single-frame guarantee to the reviewed
+Light set. It rejects a calibrated result whose manifest, master-plan, or
+Light-plan digest differs, whose frame count/order/path/raw-source identity is
+not canonical, whose FITS provenance is stale, or whose checksums do not verify.
+The CFA phase is the manifest-group value. Completed RGB frames remain in a
+private sibling directory until every calibrated input passes a final
+fingerprint check. Set publication uses create-new hard links and rolls back
+links already created if cancellation, linking, or directory synchronization
+fails.
+
 ## Integrated-tile checkpoints
 
 `StrictPipelineRequest::with_cache` enables verified checkpoints for integrated

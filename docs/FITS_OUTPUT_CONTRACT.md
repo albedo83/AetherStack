@@ -79,6 +79,13 @@ A demosaiced individual frame also requires `AETHSRC = 1` and an exact
 height, and three planes in red, green, blue order. The executor verifies both
 embedded checksums and these axes while the stream is still private.
 
+For reviewed-Light-plan export, `AETHINP` identifies the exact calibrated CFA
+FITS rather than the original raw Light. The executor separately verifies that
+the calibrated input carries the original raw fingerprint and matching
+manifest, Light-plan, group, algorithm, and source-count cards. All RGB products
+remain private until the calibrated set is fingerprinted again and the complete
+set can be published without replacing an existing file.
+
 The corresponding atomic API places the same cards in the synchronized
 temporary stream before publication. Provenance deliberately contains stable
 identifiers rather than source paths, target names, observer details, or other

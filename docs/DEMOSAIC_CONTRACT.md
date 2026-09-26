@@ -68,3 +68,19 @@ checked, and the input fingerprint has been recalculated. Publication uses
 create-new semantics. Cancellation, insufficient memory, source mutation,
 invalid readback, an existing destination, or any earlier failure publishes no
 partial result.
+
+## Reviewed Light-plan execution
+
+The whole-plan executor accepts only the exact calibrated result associated with
+the current manifest, master plan, and Light plan. Its frame list must match
+every planned group and canonical source position exactly. Each calibrated FITS
+must carry the expected manifest, Light-plan, group, algorithm, source-count,
+and raw-input provenance cards, and both embedded checksums must verify before
+the frame can enter demosaicing.
+
+The Bayer phase comes from the reviewed manifest group, never from a filename or
+an output-directory heuristic. Each RGB product is first completed inside a
+private sibling staging directory. After every frame succeeds, all calibrated
+inputs are fingerprinted again and the complete set is exposed with create-new
+hard links. Cancellation, input mutation, a stale header, checksum failure, an
+existing destination, or a publication failure leaves no public RGB subset.

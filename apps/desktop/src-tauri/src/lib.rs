@@ -2308,6 +2308,7 @@ fn light_execution_error(error: LightPlanExecutionError) -> PreviewCommandError 
         ),
         LightPlanExecutionError::LightPlanNotReady
         | LightPlanExecutionError::NoLightProducts
+        | LightPlanExecutionError::MissingBayerPattern { .. }
         | LightPlanExecutionError::InvalidMasterAssociation { .. }
         | LightPlanExecutionError::MasterMissing { .. }
         | LightPlanExecutionError::MasterProvenanceMismatch { .. } => PreviewCommandError::new(
@@ -2332,15 +2333,21 @@ fn light_execution_error(error: LightPlanExecutionError) -> PreviewCommandError 
         | LightPlanExecutionError::LightPlan(_)
         | LightPlanExecutionError::MasterPlanMismatch
         | LightPlanExecutionError::LightPlanMismatch
+        | LightPlanExecutionError::CalibratedPlanMismatch
+        | LightPlanExecutionError::CalibratedFrameSetMismatch
         | LightPlanExecutionError::InvalidGroup { .. }
         | LightPlanExecutionError::MissingManifestFile { .. }
         | LightPlanExecutionError::DestinationNameCollision { .. }
         | LightPlanExecutionError::Provenance(_) => light_plan_generation_error(),
         LightPlanExecutionError::OpenMaster { .. }
         | LightPlanExecutionError::FingerprintMaster { .. }
+        | LightPlanExecutionError::OpenCalibrated { .. }
+        | LightPlanExecutionError::CalibratedProvenanceMismatch { .. }
+        | LightPlanExecutionError::FingerprintCalibrated { .. }
         | LightPlanExecutionError::SourceChanged { .. }
         | LightPlanExecutionError::ProductPipeline { .. }
-        | LightPlanExecutionError::FramePipeline { .. } => PreviewCommandError::new(
+        | LightPlanExecutionError::FramePipeline { .. }
+        | LightPlanExecutionError::DemosaicFramePipeline { .. } => PreviewCommandError::new(
             "light_product_failed",
             "A Light product failed validation or calculation; no product set was published.",
         ),

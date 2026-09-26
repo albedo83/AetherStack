@@ -614,6 +614,17 @@ safety reasoning. They do not narrate obvious syntax.
     no destination. Tests prove byte identity across band heights and exact
     agreement with the full-frame oracle. Next, orchestrate per-frame RGB output
     from the reviewed Light plan and expose color Blink previews.
+31. Publish reviewed-Light-plan RGB outputs as one transaction. The runtime now
+    requires the exact calibrated result bound to the current manifest, master
+    plan, and Light plan; validates its complete canonical frame set; verifies
+    each calibrated FITS provenance and checksum; takes CFA phase only from the
+    reviewed group; and stages every bounded demosaic before set publication.
+    A final calibrated-input fingerprint pass detects mutation after an earlier
+    frame completed, while cancellation and publication failures roll back the
+    complete RGB set. Tests cover exact RGB values and provenance, progress,
+    cancellation, late mutation, and staging cleanup. Next, decode the planar
+    RGB products into bounded color Blink previews and connect them to the
+    existing review controls.
 
 ## 11. Stable-release definition
 
