@@ -6,6 +6,7 @@
 
 mod background;
 mod cfa;
+mod rgb;
 mod stars;
 
 pub use background::{
@@ -13,6 +14,9 @@ pub use background::{
     estimate_plane_background,
 };
 pub use cfa::{CFA_CELL_MEAN_ALGORITHM_ID, CfaDetectionError, prepare_cfa_cell_mean};
+pub use rgb::{
+    RGB_LUMINANCE_ALGORITHM_ID, RgbDetectionError, RgbLuminanceBuilder, RgbLuminanceChannel,
+};
 pub use stars::{
     FrameQuality, FrameQualityError, StarMeasurement, StarMeasurementParameters,
     measure_frame_quality,

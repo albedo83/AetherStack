@@ -42,6 +42,7 @@ import {
 } from "./preview-prefetch.ts";
 import {
   inspectCfaFrameQuality,
+  inspectRgbFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
 import { runSerialBatch } from "./quality-batch.ts";
@@ -810,8 +811,7 @@ function reviewFrameFromImported(
   const cachedDecision = decisionCache.get(frame.id);
   const qualityAvailable =
     frame.role === "light" &&
-    frame.bayerPattern !== null &&
-    previewContent.kind === "scalar";
+    (previewContent.kind === "rgb" || frame.bayerPattern !== null);
   const qualityState = cachedQuality
     ? "ready"
     : qualityPending.has(artifactKey)
@@ -836,12 +836,12 @@ function reviewFrameFromImported(
       : qualityState === "loading"
         ? "Measuring immutable linear pixels…"
         : qualityAvailable
-          ? "Ready for phase-neutral CFA diagnostics"
-          : previewContent.kind === "rgb"
-            ? "Calibrated RGB quality metrics are not implemented yet"
-            : frame.role === "light"
-              ? "Blocked · no supported CFA phase"
-              : "Quality metrics apply to light frames",
+          ? previewContent.kind === "rgb"
+            ? "Ready for linked linear-luminance diagnostics"
+            : "Ready for phase-neutral CFA diagnostics"
+          : frame.role === "light"
+            ? "Blocked · no supported CFA phase"
+            : "Quality metrics apply to light frames",
     qualityProfileId: cachedQuality?.profileId ?? null,
     state: cachedDecision?.state ?? "undecided",
     rejectionReason: cachedDecision?.rejectionReason ?? null,
@@ -894,8 +894,7 @@ function qualityResultMessage(result: FrameQualityResult): string {
 function qualityCandidate(frame: ReviewFrame): boolean {
   return (
     frame.sourcePath !== null &&
-    frame.bayerPattern !== null &&
-    frame.previewContent.kind === "scalar" &&
+    (frame.previewContent.kind === "rgb" || frame.bayerPattern !== null) &&
     (frame.qualityState === "idle" || frame.qualityState === "error")
   );
 }
@@ -945,7 +944,7 @@ async function measureQuality(frameId: string): Promise<void> {
     : null;
   if (
     !frame?.sourcePath ||
-    !frame.bayerPattern ||
+    (frame.previewContent.kind === "scalar" && !frame.bayerPattern) ||
     model.activeRole !== "light" ||
     !artifactKey ||
     qualityPending.has(artifactKey)
@@ -966,10 +965,10 @@ async function measureQuality(frameId: string): Promise<void> {
     qualityMessage: "Measuring immutable linear pixels…",
   });
   try {
-    const result = await inspectCfaFrameQuality(
-      frame.sourcePath,
-      frame.bayerPattern,
-    );
+    const result =
+      frame.previewContent.kind === "rgb"
+        ? await inspectRgbFrameQuality(frame.sourcePath)
+        : await inspectCfaFrameQuality(frame.sourcePath, frame.bayerPattern!);
     if (sessionRevision !== qualitySessionRevision) return;
     qualityCache.set(artifactKey, result);
     applyQualityResult(frame.id, result);

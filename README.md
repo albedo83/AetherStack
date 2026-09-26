@@ -95,9 +95,10 @@ optimized CPU and GPU paths must match.
   moments and invalid-sample accounting without loading the array into the web
   presenter;
 - explicit diagnostic frame-quality measurement for declared standard Bayer
-  lights through a phase-neutral complete-cell plane, with robust background,
-  noise, stellar count, source-pixel FWHM, and eccentricity shown in Review,
-  including serial bounded-memory whole-session measurement;
+  lights through a phase-neutral complete-cell plane and calibrated RGB lights
+  through linked linear Rec. 709 luminance, with robust background, noise,
+  stellar count, source-pixel FWHM, and eccentricity shown in Review, including
+  serial bounded-memory whole-view measurement;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

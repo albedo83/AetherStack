@@ -26,7 +26,8 @@ use aether_preview::{
 };
 use aether_quality::{
     BackgroundParameters, CFA_CELL_MEAN_ALGORITHM_ID, FrameQualityError,
-    GLOBAL_BACKGROUND_ALGORITHM_ID, STAR_MEASUREMENT_ALGORITHM_ID, StarMeasurementParameters,
+    GLOBAL_BACKGROUND_ALGORITHM_ID, RGB_LUMINANCE_ALGORITHM_ID, RgbLuminanceBuilder,
+    RgbLuminanceChannel, STAR_MEASUREMENT_ALGORITHM_ID, StarMeasurementParameters,
     measure_frame_quality, prepare_cfa_cell_mean,
 };
 use aether_review::{
@@ -142,6 +143,7 @@ struct FrameQualityRequest {
 enum QualityInterpretation {
     Monochrome,
     BayerCellMean { pattern: BayerPatternWire },
+    RgbLuminance,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -814,13 +816,9 @@ fn inspect_frame_quality_sync(
                 "The selected FITS primary header could not be inspected for quality measurement.",
             )
         })?;
-    let [width, height] = reader.descriptor().axes() else {
-        return Err(PreviewCommandError::new(
-            "frame_quality_axes_unsupported",
-            "Frame quality currently requires one two-dimensional FITS primary array.",
-        ));
-    };
-    let source_samples = width.checked_mul(*height).ok_or_else(|| {
+    let (width, height) =
+        quality_source_dimensions(reader.descriptor().axes(), request.interpretation)?;
+    let source_samples = width.checked_mul(height).ok_or_else(|| {
         PreviewCommandError::new(
             "frame_quality_size_overflow",
             "The frame dimensions exceed the supported quality-measurement range.",
@@ -832,20 +830,14 @@ fn inspect_frame_quality_sync(
             "The frame exceeds the documented in-memory quality-measurement limit.",
         ));
     }
-    let source = reader
-        .read_region_image(ImageRegion::new(0, 0, 0, *width, *height))
-        .map_err(|_| {
-            PreviewCommandError::new(
-                "frame_quality_decode_failed",
-                "The complete linear FITS plane could not be decoded for quality measurement.",
-            )
-        })?;
     let (detection_plane, detection_plane_algorithm_id, interpretation, source_pixel_scale) =
         match request.interpretation {
             QualityInterpretation::Monochrome => {
+                let source = read_quality_plane(&mut reader, 0, width, height)?;
                 (source, "identity-monochrome-v1", "monochrome", 1.0)
             }
             QualityInterpretation::BayerCellMean { pattern } => {
+                let source = read_quality_plane(&mut reader, 0, width, height)?;
                 let interpretation = bayer_interpretation_name(pattern);
                 let plane = prepare_cfa_cell_mean(source).map_err(|_| {
                     PreviewCommandError::new(
@@ -854,6 +846,40 @@ fn inspect_frame_quality_sync(
                     )
                 })?;
                 (plane, CFA_CELL_MEAN_ALGORITHM_ID, interpretation, 2.0)
+            }
+            QualityInterpretation::RgbLuminance => {
+                let mut builder = RgbLuminanceBuilder::new(
+                    usize::try_from(width).map_err(|_| frame_quality_size_error())?,
+                    usize::try_from(height).map_err(|_| frame_quality_size_error())?,
+                )
+                .map_err(|_| frame_quality_rgb_preparation_error())?;
+                for (plane, channel) in [
+                    RgbLuminanceChannel::Red,
+                    RgbLuminanceChannel::Green,
+                    RgbLuminanceChannel::Blue,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let source = read_quality_plane(
+                        &mut reader,
+                        u64::try_from(plane).map_err(|_| frame_quality_size_error())?,
+                        width,
+                        height,
+                    )?;
+                    builder
+                        .push(channel, &source)
+                        .map_err(|_| frame_quality_rgb_preparation_error())?;
+                }
+                let plane = builder
+                    .finish()
+                    .map_err(|_| frame_quality_rgb_preparation_error())?;
+                (
+                    plane,
+                    RGB_LUMINANCE_ALGORITHM_ID,
+                    "calibrated RGB · linear Rec. 709 luminance",
+                    1.0,
+                )
             }
         };
     let background =
@@ -890,6 +916,53 @@ fn inspect_frame_quality_sync(
             .map(|value| value * source_pixel_scale),
         eccentricity: quality.median_eccentricity(),
     })
+}
+
+fn quality_source_dimensions(
+    axes: &[u64],
+    interpretation: QualityInterpretation,
+) -> Result<(u64, u64), PreviewCommandError> {
+    match (axes, interpretation) {
+        (
+            [width, height],
+            QualityInterpretation::Monochrome | QualityInterpretation::BayerCellMean { .. },
+        ) => Ok((*width, *height)),
+        ([width, height, 3], QualityInterpretation::RgbLuminance) => Ok((*width, *height)),
+        _ => Err(PreviewCommandError::new(
+            "frame_quality_axes_unsupported",
+            "The FITS axes do not match the requested quality interpretation.",
+        )),
+    }
+}
+
+fn read_quality_plane<R: Read + Seek>(
+    reader: &mut PrimaryImageReader<R>,
+    plane: u64,
+    width: u64,
+    height: u64,
+) -> Result<aether_core::ScientificImage, PreviewCommandError> {
+    reader
+        .read_region_image(ImageRegion::new(plane, 0, 0, width, height))
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "frame_quality_decode_failed",
+                "A complete linear FITS plane could not be decoded for quality measurement.",
+            )
+        })
+}
+
+const fn frame_quality_size_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_quality_size_overflow",
+        "The frame dimensions exceed the supported quality-measurement range.",
+    )
+}
+
+const fn frame_quality_rgb_preparation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_quality_rgb_preparation_failed",
+        "The planar RGB source could not be converted into linked linear luminance.",
+    )
 }
 
 const fn bayer_interpretation_name(pattern: BayerPatternWire) -> &'static str {
@@ -3169,7 +3242,7 @@ mod tests {
         })
     }
 
-    fn quality_fits_bytes() -> TestResult<Vec<u8>> {
+    fn quality_pixels() -> TestResult<Vec<f64>> {
         const CELL_WIDTH: usize = 64;
         const CELL_HEIGHT: usize = 64;
         let mut pixels = Vec::new();
@@ -3184,10 +3257,29 @@ mod tests {
                 pixels.push(1_000.0 + noise + 500.0 * (-(dx * dx + dy * dy) / 18.0).exp());
             }
         }
-        let image = ScientificImage::from_pixels(
-            Dimensions::new(CELL_WIDTH * 2, CELL_HEIGHT * 2, 1)?,
-            pixels,
-        )?;
+        Ok(pixels)
+    }
+
+    fn quality_fits_bytes() -> TestResult<Vec<u8>> {
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 128;
+        let image =
+            ScientificImage::from_pixels(Dimensions::new(WIDTH, HEIGHT, 1)?, quality_pixels()?)?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+        Ok(bytes)
+    }
+
+    fn rgb_quality_fits_bytes() -> TestResult<Vec<u8>> {
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 128;
+        let plane = quality_pixels()?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(plane.len() * 3)?;
+        pixels.extend_from_slice(&plane);
+        pixels.extend_from_slice(&plane);
+        pixels.extend_from_slice(&plane);
+        let image = ScientificImage::from_pixels(Dimensions::new(WIDTH, HEIGHT, 3)?, pixels)?;
         let mut bytes = Vec::new();
         write_f64_primary(&mut bytes, &image)?;
         Ok(bytes)
@@ -3678,6 +3770,32 @@ mod tests {
         assert_eq!(quality.usable_stars, 1);
         assert!(quality.fwhm_pixels.is_some_and(|value| value > 10.0));
         assert!(quality.eccentricity.is_some_and(|value| value < 0.2));
+        Ok(())
+    }
+
+    #[test]
+    fn measures_planar_rgb_on_linked_linear_luminance() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let path = directory.path().join("quality-rgb.fits");
+        fs::write(&path, rgb_quality_fits_bytes()?)?;
+
+        let quality = inspect_frame_quality_sync(&FrameQualityRequest {
+            path,
+            interpretation: QualityInterpretation::RgbLuminance,
+        })?;
+
+        assert_eq!(
+            quality.detection_plane_algorithm_id,
+            RGB_LUMINANCE_ALGORITHM_ID
+        );
+        assert_eq!(
+            quality.interpretation,
+            "calibrated RGB · linear Rec. 709 luminance"
+        );
+        assert_eq!(quality.source_pixel_scale.to_bits(), 1.0_f64.to_bits());
+        assert!(quality.detected_stars > 0);
+        assert_eq!(quality.usable_stars, quality.detected_stars);
+        assert!(quality.fwhm_pixels.is_some_and(|value| value > 0.0));
         Ok(())
     }
 

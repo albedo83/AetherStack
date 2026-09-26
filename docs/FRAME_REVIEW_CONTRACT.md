@@ -98,8 +98,10 @@ can join an in-flight request, and a session or role change invalidates its whol
 generation. Every late or uncached browser resource is revoked; accepted entries
 remain inside the five-entry and 32 MiB encoded-artifact cache bounds.
 
-Diagnostic quality measurement can run for one declared CFA light or for every
-eligible light in the active session. Batch measurement is deliberately serial:
+Diagnostic quality measurement can run for one declared CFA light, one
+calibrated planar RGB light, or every eligible light in the active view. CFA
+frames use complete-cell phase-neutral detection; RGB frames use linked linear
+Rec. 709 luminance. Batch measurement is deliberately serial:
 only one immutable FITS frame and its exact statistical scratch are active at a
 time. Switching frame type cancels the batch generation without discarding
 already completed, identity-keyed measurements. The action reports processed

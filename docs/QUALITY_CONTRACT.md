@@ -70,6 +70,27 @@ The native adapter rejects sources above 64 Mi samples before allocation. Its
 first diagnostic profile does not infer a saturation level from container type;
 saturation count and threshold therefore remain explicitly unavailable.
 
+## Calibrated RGB luminance plane
+
+Planar calibrated RGB products use `linear-rec709-luminance-v1`. The transform
+consumes exactly three congruent single-plane images in canonical red, green,
+blue order and computes `0.2126 R + 0.7152 G + 0.0722 B` without a display
+stretch, white balance, clipping, or gamma. The output remains in linear source
+units and retains the original pixel scale. Per-pixel Kahan compensation and a
+fixed RGB reduction order preserve low-order signal across unequal channels.
+
+The native adapter decodes only one channel at a time into a luminance builder,
+so peak source storage is one channel plus the output plane rather than the
+complete RGB cube. Any quality bit or non-finite value in any channel
+invalidates the complete luminance sample and retains the combined evidence.
+Channel order, dimensions, completeness, masks, finite arithmetic, and the
+three-axis `[width, height, 3]` FITS contract are checked explicitly.
+
+RGB and raw-CFA measurements use distinct algorithm identities and pixel-source
+cache keys. They may therefore be compared in Review, but one can never satisfy
+or overwrite the other's cached result. Like the CFA path, RGB measurements are
+diagnostic and cannot silently reject frames.
+
 The initial estimator does not deblend overlapping sources or fit a full PSF
 family. Minimum separation prevents duplicate peaks, but crowded or nebulous
 fields require later deblending and spatial diagnostics. Missing or degenerate
@@ -95,6 +116,7 @@ Blink, not silent automatic rejection authority.
 
 The current synthetic suite covers all four standard Bayer phase permutations,
 complete-cell mask and non-finite propagation, compensated cell arithmetic,
-partial-cell rejection, and the low-isophote truncation correction. One declared
-RGGB ASI294MC Pro light also passes the complete native diagnostic path. The
+partial-cell rejection, RGB channel order and mask propagation, native planar
+RGB measurement, and the low-isophote truncation correction. One declared RGGB
+ASI294MC Pro light also passes the complete native CFA diagnostic path. The
 ToupTek 585C comparison and independent-reference tolerances remain open gates.

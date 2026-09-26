@@ -39,3 +39,15 @@ export function inspectCfaFrameQuality(
     },
   });
 }
+
+/** Measures a calibrated planar RGB light on linked linear Rec. 709 luminance. */
+export function inspectRgbFrameQuality(
+  path: string,
+): Promise<FrameQualityResult> {
+  return invoke<FrameQualityResult>("inspect_frame_quality", {
+    request: {
+      path,
+      interpretation: { kind: "rgb_luminance" },
+    },
+  });
+}

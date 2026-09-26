@@ -646,6 +646,16 @@ safety reasoning. They do not narrate obvious syntax.
     wire shape, cache separation, and visible RGB state. Next, extend
     quality/selection to calibrated RGB without weakening CFA diagnostics, then
     implement registration.
+34. Measure calibrated RGB Lights without display contamination. The quality
+    core now assembles versioned linear Rec. 709 luminance from exact R/G/B
+    planes in enforced order, combines masks conservatively, rejects incomplete
+    or mismatched channels, and accepts one decoded channel at a time to avoid
+    retaining the full cube. Native quality IPC validates `[width, height, 3]`,
+    Review caches RGB metrics by their distinct product path, and serial batch
+    measurement works in calibrated Blink. Tests cover exact luminance, channel
+    order, masks, native stellar measurement, and the RGB wire request. These
+    remain expert diagnostics rather than automatic rejection authority. Next,
+    define deterministic registration coordinates and reference selection.
 
 ## 11. Stable-release definition
 
