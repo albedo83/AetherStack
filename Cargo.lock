@@ -28,6 +28,14 @@ name = "aether-core"
 version = "0.1.0"
 
 [[package]]
+name = "aether-demosaic"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-metadata",
+]
+
+[[package]]
 name = "aether-fits"
 version = "0.1.0"
 dependencies = [

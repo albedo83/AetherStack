@@ -97,6 +97,9 @@ optimized CPU and GPU paths must match.
   lights through a phase-neutral complete-cell plane, with robust background,
   noise, stellar count, source-pixel FWHM, and eccentricity shown in Review,
   including serial bounded-memory whole-session measurement;
+- a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
+  GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
+  behavior, unclipped linear output, and conservative defect-mask propagation;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
@@ -136,6 +139,9 @@ precision, and mask behavior used by the CPU vertical slice. The
 the strict reference moment calculations. The initial
 [integration contract](docs/INTEGRATION_CONTRACT.md) defines reduction order,
 sample eligibility, output masks, and support maps. The
+[demosaicing contract](docs/DEMOSAIC_CONTRACT.md) fixes the first strict Bayer
+reconstruction algorithm, phase handling, border rule, precision, and mask
+semantics. The
 [FITS output contract](docs/FITS_OUTPUT_CONTRACT.md) defines the strict binary64
 encoding and unavailable-sample representation. The
 [cache contract](docs/CACHE_CONTRACT.md) defines immutable operation keys,

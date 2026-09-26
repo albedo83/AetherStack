@@ -4,6 +4,7 @@ members = [
     "crates/aether-cache",
     "crates/aether-calibration",
     "crates/aether-core",
+    "crates/aether-demosaic",
     "crates/aether-fits",
     "crates/aether-inspect",
     "crates/aether-integration",

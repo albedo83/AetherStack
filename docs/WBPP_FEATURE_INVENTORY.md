@@ -126,7 +126,7 @@ evidence, not automatically an AetherStack default.
 | Cosmetic high-sigma threshold | Define the estimator and preserve rejected-pixel reasons in masks. | Planned |
 | Cosmetic correction template | Use a versioned reusable profile whose applicability is validated against camera metadata. | Planned |
 | CFA images and mosaic pattern | Auto-detection must show raw keyword evidence and allow an explicit override. | Metadata core partially implemented |
-| Debayer method | Provide versioned methods with CFA-phase, edge, color, and artifact tests. | Planned |
+| Debayer method | Provide versioned methods with CFA-phase, edge, color, and artifact tests. | Strict deterministic `f64` Malvar-He-Cutler oracle implemented for all standard Bayer phases with exact-sample, coefficient, border, overshoot, and mask tests; bounded tiled FITS execution, RGB Blink presentation, representative-camera differential validation, and additional selectable methods remain |
 | Calibration diagram | Show the actual dependency graph, selected masters, parameters, warnings, and cache reuse. | Native dependency cards, selected pedestal, warnings, plan digest, and candidate disclosure implemented; graphical edges and cache reuse planned |
 
 ## Light post-calibration pipeline

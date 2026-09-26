@@ -592,6 +592,17 @@ safety reasoning. They do not narrate obvious syntax.
     duplicated, or non-Light identity. Native, binding, DOM, accessibility, and
     cache-separation tests cover the handoff. Debayering is the next processing
     stage, followed by quality weighting and registration.
+29. Establish the strict Bayer demosaicing oracle. The dedicated
+    `aether-demosaic` crate now reconstructs planar linear RGB with the versioned
+    Malvar-He-Cutler 5x5 gradient-corrected filters in deterministic `f64`.
+    RGGB, BGGR, GRBG, and GBRG phases are explicit; measured CFA samples remain
+    exact; interpolation is unclipped; whole-sample symmetric borders and
+    conservative mask propagation are normative. Unit tests lock the published
+    coefficients, every phase, boundary behavior, defect evidence, non-finite
+    handling, and typed rejection. Next, execute this oracle through a bounded
+    halo-tiled FITS transaction, publish provenance-bearing RGB products, and
+    expose their color previews in Blink before quality weighting and
+    registration.
 
 ## 11. Stable-release definition
 
@@ -608,4 +619,7 @@ repository contains no private acquisition data or machine-specific information.
 - CFITSIO: <https://heasarc.gsfc.nasa.gov/docs/software/fitsio/fitsio.html>
 - SER format overview: <https://github.com/olegkutkov/ser-file-format>
 - WGPU: <https://wgpu.rs/>
+- Malvar, He, and Cutler, “High-quality linear interpolation for demosaicing of
+  Bayer-patterned color images”:
+  <https://www.microsoft.com/en-us/research/publication/high-quality-linear-interpolation-for-demosaicing-of-bayer-patterned-color-images/>
 - Apache Arrow IPC: <https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc>
