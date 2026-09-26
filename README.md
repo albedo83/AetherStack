@@ -74,8 +74,9 @@ optimized CPU and GPU paths must match.
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, linked-luminance
-  RGB mapping that preserves channel ratios, and a bounded desktop artifact cache
-  keyed by identity and transform with generation-cancelled adjacent prefetch;
+  RGB mapping that preserves channel ratios, typed mono/RGB native PNG
+  transport, and a bounded desktop artifact cache keyed by identity and
+  transform with generation-cancelled adjacent prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
   workspace and an instrument-inspired Calibration laboratory, separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
@@ -83,8 +84,8 @@ optimized CPU and GPU paths must match.
   explicit manual decisions, a single bounded native calibration slot,
   transactional master execution plus selectable per-frame or integrated-Light
   output, source-aware live progress, direct identity-preserving calibrated
-  Blink review with an explicit raw/calibrated switch, cooperative cancellation,
-  and a
+  Blink review with an explicit raw/calibrated switch and automatic linked-color
+  presentation for standard Bayer sets, cooperative cancellation, and a
   presenter boundary that leaves scientific state in Rust;
 - native structured-directory import with retained classification conflicts,
   content-derived frame identities, an inspectable robust reference stretch,

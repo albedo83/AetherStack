@@ -7,10 +7,15 @@ export type PreviewTransfer =
   | { readonly kind: "midtones" }
   | { readonly kind: "asinh"; readonly softness: number };
 
+/** Explicit primary-array interpretation; RGB always means planes R, G, B. */
+export type FitsPreviewContent =
+  | { readonly kind: "scalar"; readonly plane: number }
+  | { readonly kind: "rgb" };
+
 export interface FitsPreviewRequest {
   readonly frameId: string;
   readonly path: string;
-  readonly plane: number;
+  readonly content: FitsPreviewContent;
   readonly maximumWidth: number;
   readonly maximumHeight: number;
   readonly blackPoint: number;
@@ -21,7 +26,7 @@ export interface FitsPreviewRequest {
 
 export interface FitsPreviewEstimateRequest {
   readonly path: string;
-  readonly plane: number;
+  readonly content: FitsPreviewContent;
   readonly maximumWidth: number;
   readonly maximumHeight: number;
 }

@@ -30,6 +30,7 @@ const artifact = (sourceFrameId: string): ExecutedCalibratedLightFrame => ({
   sourceLabel: "light.fits",
   sourceSha256: "f".repeat(64),
   outputPath: "/output/calibrated-light-000000.fits",
+  rgbOutputPath: "/output/demosaiced-light-000000.fits",
   totalSamples: 8,
   usableSamples: 8,
   maskedSamples: 0,

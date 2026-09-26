@@ -662,9 +662,12 @@ export function mountReviewScreen(
             ? `Measure diagnostic quality for ${qualityCandidateCount} eligible light frames`
             : "All eligible light frames have diagnostic quality measurements",
     );
-    elements.cfaBadge.textContent = frame?.bayerPattern
-      ? `${calibratedLightView ? "CALIBRATED CFA" : "RAW CFA"} · ${frame.bayerPattern.toUpperCase()}`
-      : "LINEAR · UNRESOLVED";
+    elements.cfaBadge.textContent =
+      calibratedLightView && frame?.previewContent.kind === "rgb"
+        ? "CALIBRATED RGB · LINEAR"
+        : frame?.bayerPattern
+          ? `${calibratedLightView ? "CALIBRATED CFA" : "RAW CFA"} · ${frame.bayerPattern.toUpperCase()}`
+          : "LINEAR · UNRESOLVED";
     elements.qualityBadge.hidden = frame === null;
     elements.qualityBadge.dataset.state = frame?.qualityState ?? "unavailable";
     elements.qualityBadge.textContent = qualityBadgeLabel(frame);

@@ -46,6 +46,10 @@ export interface ReviewFrame {
   readonly label: string;
   /** Absolute runtime-only source path; never persisted in portable state. */
   readonly sourcePath: string | null;
+  /** Exact FITS primary-array interpretation used by the native viewer. */
+  readonly previewContent:
+    | { readonly kind: "scalar"; readonly plane: number }
+    | { readonly kind: "rgb" };
   readonly exposureSeconds: number | null;
   readonly temperatureCelsius: number | null;
   readonly classificationWarning: string | null;

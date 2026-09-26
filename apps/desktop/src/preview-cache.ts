@@ -133,8 +133,12 @@ export function previewCacheKey(
   if (transformAlgorithmId.length === 0) {
     throw new RangeError("preview transform algorithm identity is empty");
   }
+  const contentIdentity =
+    request.content.kind === "scalar"
+      ? [request.content.kind, request.content.plane]
+      : [request.content.kind];
   for (const value of [
-    request.plane,
+    ...(request.content.kind === "scalar" ? [request.content.plane] : []),
     request.maximumWidth,
     request.maximumHeight,
     request.blackPoint,
@@ -150,7 +154,7 @@ export function previewCacheKey(
   return JSON.stringify([
     PREVIEW_CACHE_SCHEMA,
     request.frameId,
-    request.plane,
+    contentIdentity,
     request.maximumWidth,
     request.maximumHeight,
     canonicalZero(request.blackPoint),

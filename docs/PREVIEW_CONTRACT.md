@@ -101,20 +101,22 @@ remain display-only derivatives.
 
 ## Current scope and release gates
 
-The implemented path reads one selected plane from a 2D or 3D primary FITS image
-and produces scalar, grayscale, or native PNG output. The desktop Review surface
-accepts only identity-bound preview URLs. Native directory selection now runs
+The implemented path reads either one explicitly selected plane or the canonical
+R/G/B planes from a 2D or 3D primary FITS image and produces bounded native PNG
+output. A tagged IPC value prevents an RGB cube from silently becoming a
+grayscale plane. The desktop Review surface accepts only identity-bound preview
+URLs. Native directory selection now runs
 the bounded session scanner, derives stable frame identities, preserves role
 conflicts, loads a real reference-stretched preview, offers fitted and actual
 preview-pixel presentation, and delegates metric-table sorting to the Rust
 review model. A bounded browser artifact cache accelerates revisiting Blink
-frames but is not a scientific or scalar pyramid cache. The preview core now
-composes already-demosaiced planar RGB with one linked luminance-derived stretch.
-The desktop transport does not yet select that color path, estimate a multi-frame
-aggregate stretch, cache reusable scalar pyramid levels, or stream viewport
-tiles. Those
-capabilities require versioned cache keys and camera-aware tests before they are
-presented as complete.
+frames but is not a scientific or scalar pyramid cache. Standard Bayer Light
+sets now run calibrated-CFA and demosaiced-RGB publication transactions in the
+same bounded native execution slot. Their identity-bound RGB products become the
+calibrated Blink source automatically and retain one linked luminance-derived
+stretch. Mixed mono/CFA plans deliberately remain scalar until their per-group
+output contract is explicit. Multi-frame aggregate stretches, reusable scalar
+pyramid levels, and viewport tiles remain future versioned work.
 
 Synthetic tests cover edge support, non-finite exclusion, no-support blocks,
 chunk-size invariance, safety limits, automatic level selection, exact linear

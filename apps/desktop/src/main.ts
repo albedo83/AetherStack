@@ -800,12 +800,18 @@ function reviewFrameFromImported(
   frame: ImportedFrame,
   sourcePath: string,
   label: string,
+  previewContent: ReviewFrame["previewContent"] = {
+    kind: "scalar",
+    plane: 0,
+  },
 ): ReviewFrame {
   const artifactKey = frameArtifactKey(frame.id, sourcePath);
   const cachedQuality = qualityCache.get(artifactKey);
   const cachedDecision = decisionCache.get(frame.id);
   const qualityAvailable =
-    frame.role === "light" && frame.bayerPattern !== null;
+    frame.role === "light" &&
+    frame.bayerPattern !== null &&
+    previewContent.kind === "scalar";
   const qualityState = cachedQuality
     ? "ready"
     : qualityPending.has(artifactKey)
@@ -817,6 +823,7 @@ function reviewFrameFromImported(
     id: frame.id,
     label,
     sourcePath,
+    previewContent,
     exposureSeconds: frame.exposureSeconds,
     temperatureCelsius: frame.temperatureCelsius,
     classificationWarning: frame.classificationConflict
@@ -830,9 +837,11 @@ function reviewFrameFromImported(
         ? "Measuring immutable linear pixels…"
         : qualityAvailable
           ? "Ready for phase-neutral CFA diagnostics"
-          : frame.role === "light"
-            ? "Blocked · no supported CFA phase"
-            : "Quality metrics apply to light frames",
+          : previewContent.kind === "rgb"
+            ? "Calibrated RGB quality metrics are not implemented yet"
+            : frame.role === "light"
+              ? "Blocked · no supported CFA phase"
+              : "Quality metrics apply to light frames",
     qualityProfileId: cachedQuality?.profileId ?? null,
     state: cachedDecision?.state ?? "undecided",
     rejectionReason: cachedDecision?.rejectionReason ?? null,
@@ -849,7 +858,12 @@ function calibratedReviewFrames(
   const bound = bindCalibratedLightFrames(session.frames, calibrated);
   if (!bound) return null;
   return bound.map(({ source, artifact }) =>
-    reviewFrameFromImported(source, artifact.outputPath, artifact.sourceLabel),
+    reviewFrameFromImported(
+      source,
+      artifact.rgbOutputPath ?? artifact.outputPath,
+      artifact.sourceLabel,
+      artifact.rgbOutputPath ? { kind: "rgb" } : { kind: "scalar", plane: 0 },
+    ),
   );
 }
 
@@ -881,6 +895,7 @@ function qualityCandidate(frame: ReviewFrame): boolean {
   return (
     frame.sourcePath !== null &&
     frame.bayerPattern !== null &&
+    frame.previewContent.kind === "scalar" &&
     (frame.qualityState === "idle" || frame.qualityState === "error")
   );
 }
@@ -1231,7 +1246,7 @@ async function loadSelectedPreview(): Promise<void> {
     if (!transform) {
       transform = await estimateFitsPreviewTransform({
         path: frame.sourcePath,
-        plane: 0,
+        content: frame.previewContent,
         ...previewBounds,
       });
       if (ticket !== previewTicket) return;
@@ -1245,7 +1260,7 @@ async function loadSelectedPreview(): Promise<void> {
     const request: FitsPreviewRequest = {
       frameId: frame.id,
       path: frame.sourcePath,
-      plane: 0,
+      content: frame.previewContent,
       ...previewBounds,
       blackPoint: transform.blackPoint,
       whitePoint: transform.whitePoint,
@@ -1303,7 +1318,7 @@ function scheduleAdjacentPreviewPrefetch(
     const request: FitsPreviewRequest = {
       frameId: frame.id,
       path: frame.sourcePath,
-      plane: 0,
+      content: frame.previewContent,
       ...previewBounds,
       blackPoint: transform.blackPoint,
       whitePoint: transform.whitePoint,

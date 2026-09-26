@@ -7,7 +7,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,7 +21,8 @@ use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
     AUTO_STRETCH_ALGORITHM_ID, AutomaticDisplayTransform, FitsPreviewParameters, MissingPixelStyle,
     PreviewLimits, RgbaPreview, ScalarPreview, build_fits_preview, choose_reduction_level,
-    estimate_display_transform, render_grayscale_rgba8,
+    estimate_display_transform, estimate_rgb_display_transform, render_grayscale_rgba8,
+    render_rgb_rgba8,
 };
 use aether_quality::{
     BackgroundParameters, CFA_CELL_MEAN_ALGORITHM_ID, FrameQualityError,
@@ -37,7 +38,7 @@ use aether_review::{
 use aether_runtime::{
     CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
     MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, ProgressState,
-    run_calibrated_light_plan, run_light_plan, run_master_plan,
+    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan, run_master_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -60,7 +61,7 @@ const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FitsPreviewRequest {
     path: PathBuf,
-    plane: u64,
+    content: FitsPreviewContent,
     maximum_width: usize,
     maximum_height: usize,
     black_point: f64,
@@ -73,9 +74,21 @@ struct FitsPreviewRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FitsPreviewEstimateRequest {
     path: PathBuf,
-    plane: u64,
+    content: FitsPreviewContent,
     maximum_width: usize,
     maximum_height: usize,
+}
+
+/// Explicit interpretation of the primary FITS array for display.
+///
+/// A tagged value prevents a planar RGB product from being silently treated as
+/// one grayscale plane, and preserves an exact plane choice for scientific
+/// mono or cube inspection.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum FitsPreviewContent {
+    Scalar { plane: u64 },
+    Rgb,
 }
 
 #[derive(Debug, Serialize)]
@@ -489,6 +502,7 @@ struct ExecutedCalibratedLightFrame {
     source_label: String,
     source_sha256: String,
     output_path: String,
+    rgb_output_path: Option<String>,
     total_samples: usize,
     usable_samples: usize,
     masked_samples: usize,
@@ -1553,6 +1567,7 @@ where
     {
         return Err(light_plan_stale_error());
     }
+    let should_demosaic = light_plan_has_only_standard_cfa(&session.manifest, &light_plan);
     let execution_request = LightPlanExecutionRequest::new_shared(
         session.root.clone(),
         request.master_directory,
@@ -1641,6 +1656,37 @@ where
                     });
                 })
                 .map_err(light_execution_error)?;
+            // A reviewed all-CFA Light set is promoted to planar RGB as a
+            // second all-or-nothing transaction. Mono and mixed sessions keep
+            // their calibrated scalar products until a mixed-plan contract is
+            // introduced explicitly.
+            let demosaiced = should_demosaic
+                .then(|| {
+                    run_demosaiced_light_plan(
+                        &execution_request,
+                        &result,
+                        cancellation,
+                        &memory,
+                        |event| {
+                            let stage = event.stage();
+                            progress(LightExecutionProgress {
+                                product_index: event.product_index(),
+                                product_count: event.product_count(),
+                                group_id: event.group_id().to_owned(),
+                                sequence: stage.sequence(),
+                                stage: stage.stage().as_str().to_owned(),
+                                state: progress_state_name(stage.state()),
+                                completed_units: stage.completed_units(),
+                                total_units: stage.total_units(),
+                                code: stage.code().map(str::to_owned),
+                                source_index: Some(event.source_index()),
+                                source_count: Some(event.source_count()),
+                            });
+                        },
+                    )
+                })
+                .transpose()
+                .map_err(light_execution_error)?;
             let mut calibrated_frames = Vec::new();
             calibrated_frames
                 .try_reserve_exact(result.frames().len())
@@ -1654,6 +1700,16 @@ where
                 )?;
                 let statistics = frame.statistics();
                 let write = frame.write_summary();
+                let rgb_output_path = demosaiced
+                    .as_ref()
+                    .and_then(|rgb| {
+                        rgb.frames().iter().find(|candidate| {
+                            candidate.group_id() == frame.group_id()
+                                && candidate.source_index() == frame.source_index()
+                        })
+                    })
+                    .map(|rgb| light_output_path(rgb.output()))
+                    .transpose()?;
                 calibrated_frames.push(ExecutedCalibratedLightFrame {
                     group_id: frame.group_id().to_owned(),
                     source_index: frame.source_index(),
@@ -1661,6 +1717,7 @@ where
                     source_label,
                     source_sha256: frame.source_sha256().to_owned(),
                     output_path: light_output_path(frame.output())?,
+                    rgb_output_path,
                     total_samples: statistics.total_samples(),
                     usable_samples: statistics.usable_samples(),
                     masked_samples: statistics.masked_samples(),
@@ -1688,6 +1745,21 @@ where
             })
         }
     }
+}
+
+fn light_plan_has_only_standard_cfa(
+    manifest: &SessionManifest,
+    light_plan: &LightCalibrationPlan,
+) -> bool {
+    !light_plan.products().is_empty()
+        && light_plan.products().iter().all(|product| {
+            manifest
+                .groups()
+                .iter()
+                .find(|group| group.id() == product.source_group_id())
+                .and_then(|group| group.key().bayer_pattern())
+                .is_some_and(|pattern| !matches!(pattern, BayerPattern::Other(_)))
+        })
 }
 
 fn light_output_path(path: &Path) -> Result<String, PreviewCommandError> {
@@ -2614,15 +2686,9 @@ const fn frame_role(frame_type: &FrameType) -> Option<&'static str> {
 }
 
 fn render_fits_preview_png<R: Read + Seek>(
-    input: R,
+    mut input: R,
     request: &FitsPreviewRequest,
 ) -> Result<Vec<u8>, PreviewCommandError> {
-    let scalar = build_scalar_preview(
-        input,
-        request.plane,
-        request.maximum_width,
-        request.maximum_height,
-    )?;
     let transfer_function = match request.transfer {
         PreviewTransfer::Linear => TransferFunction::Linear,
         PreviewTransfer::Midtones => TransferFunction::Midtones,
@@ -2640,33 +2706,92 @@ fn render_fits_preview_png<R: Read + Seek>(
             "The requested display transform is invalid.",
         )
     })?;
-    let rgba = render_grayscale_rgba8(&scalar, transform, MissingPixelStyle::Checkerboard)
-        .map_err(|_| {
-            PreviewCommandError::new(
-                "preview_mapping_failed",
-                "The scalar preview could not be mapped for display.",
+    let rgba = match request.content {
+        FitsPreviewContent::Scalar { plane } => {
+            let scalar = build_scalar_preview(
+                &mut input,
+                plane,
+                request.maximum_width,
+                request.maximum_height,
+            )?;
+            render_grayscale_rgba8(&scalar, transform, MissingPixelStyle::Checkerboard)
+        }
+        FitsPreviewContent::Rgb => {
+            let [red, green, blue] =
+                build_rgb_preview(&mut input, request.maximum_width, request.maximum_height)?;
+            render_rgb_rgba8(
+                &red,
+                &green,
+                &blue,
+                transform,
+                MissingPixelStyle::Checkerboard,
             )
-        })?;
+        }
+    }
+    .map_err(|_| {
+        PreviewCommandError::new(
+            "preview_mapping_failed",
+            "The FITS preview could not be mapped for display.",
+        )
+    })?;
     encode_png(&rgba)
 }
 
 fn estimate_fits_preview_transform_from_reader<R: Read + Seek>(
-    input: R,
+    mut input: R,
     request: &FitsPreviewEstimateRequest,
 ) -> Result<EstimatedDisplayTransform, PreviewCommandError> {
-    let scalar = build_scalar_preview(
-        input,
-        request.plane,
-        request.maximum_width,
-        request.maximum_height,
-    )?;
-    let estimate = estimate_display_transform(&scalar).map_err(|_| {
+    let estimate = match request.content {
+        FitsPreviewContent::Scalar { plane } => {
+            let scalar = build_scalar_preview(
+                &mut input,
+                plane,
+                request.maximum_width,
+                request.maximum_height,
+            )?;
+            estimate_display_transform(&scalar)
+        }
+        FitsPreviewContent::Rgb => {
+            let [red, green, blue] =
+                build_rgb_preview(&mut input, request.maximum_width, request.maximum_height)?;
+            estimate_rgb_display_transform(&red, &green, &blue)
+        }
+    }
+    .map_err(|_| {
         PreviewCommandError::new(
             "preview_stretch_failed",
             "A robust display stretch could not be estimated from this frame.",
         )
     })?;
     Ok(estimated_transform(estimate))
+}
+
+/// Reduces the three canonical planar RGB channels with identical bounds.
+///
+/// The reader is rewound before every channel because each independent FITS
+/// decoder owns a complete header pass. This keeps memory bounded without
+/// relying on the prior decoder's final cursor position.
+fn build_rgb_preview<R: Read + Seek>(
+    input: &mut R,
+    maximum_width: usize,
+    maximum_height: usize,
+) -> Result<[ScalarPreview; 3], PreviewCommandError> {
+    rewind_preview_input(input)?;
+    let red = build_scalar_preview(&mut *input, 0, maximum_width, maximum_height)?;
+    rewind_preview_input(input)?;
+    let green = build_scalar_preview(&mut *input, 1, maximum_width, maximum_height)?;
+    rewind_preview_input(input)?;
+    let blue = build_scalar_preview(&mut *input, 2, maximum_width, maximum_height)?;
+    Ok([red, green, blue])
+}
+
+fn rewind_preview_input<R: Seek>(input: &mut R) -> Result<(), PreviewCommandError> {
+    input.seek(SeekFrom::Start(0)).map(|_| ()).map_err(|_| {
+        PreviewCommandError::new(
+            "fits_seek_failed",
+            "The FITS preview source could not be rewound between RGB channels.",
+        )
+    })
 }
 
 fn estimated_transform(estimate: AutomaticDisplayTransform) -> EstimatedDisplayTransform {
@@ -2855,7 +2980,7 @@ mod tests {
     fn request(transfer: PreviewTransfer) -> FitsPreviewRequest {
         FitsPreviewRequest {
             path: PathBuf::from("unused-in-memory-test.fits"),
-            plane: 0,
+            content: FitsPreviewContent::Scalar { plane: 0 },
             maximum_width: 4,
             maximum_height: 2,
             black_point: 0.0,
@@ -2868,7 +2993,7 @@ mod tests {
     fn estimate_request() -> FitsPreviewEstimateRequest {
         FitsPreviewEstimateRequest {
             path: PathBuf::from("unused-in-memory-test.fits"),
-            plane: 0,
+            content: FitsPreviewContent::Scalar { plane: 0 },
             maximum_width: 4,
             maximum_height: 2,
         }
@@ -2879,6 +3004,17 @@ mod tests {
             Dimensions::new(4, 2, 1)?,
             (0..8).map(f64::from).collect(),
         )?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+        Ok(bytes)
+    }
+
+    fn rgb_fits_bytes() -> TestResult<Vec<u8>> {
+        let mut pixels = Vec::new();
+        pixels.extend((1..=8).map(f64::from));
+        pixels.extend((2..=9).map(f64::from));
+        pixels.extend((3..=10).map(f64::from));
+        let image = ScientificImage::from_pixels(Dimensions::new(4, 2, 3)?, pixels)?;
         let mut bytes = Vec::new();
         write_f64_primary(&mut bytes, &image)?;
         Ok(bytes)
@@ -3068,6 +3204,25 @@ mod tests {
         assert_eq!(&encoded[12..16], b"IHDR");
         assert_eq!(u32::from_be_bytes(encoded[16..20].try_into()?), 4);
         assert_eq!(u32::from_be_bytes(encoded[20..24].try_into()?), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn renders_planar_rgb_in_canonical_channel_order() -> TestResult {
+        let mut rgb_request = request(PreviewTransfer::Linear);
+        rgb_request.content = FitsPreviewContent::Rgb;
+        rgb_request.white_point = 12.0;
+        let encoded = render_fits_preview_png(Cursor::new(rgb_fits_bytes()?), &rgb_request)?;
+        let decoder = png::Decoder::new(Cursor::new(encoded));
+        let mut reader = decoder.read_info()?;
+        let output_size = reader
+            .output_buffer_size()
+            .ok_or("decoded PNG output size overflowed")?;
+        let mut pixels = vec![0; output_size];
+        let info = reader.next_frame(&mut pixels)?;
+
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        assert_eq!(&pixels[..4], &[21, 43, 64, 255]);
         Ok(())
     }
 
@@ -3278,6 +3433,13 @@ mod tests {
         assert_eq!(calibrated.calibrated_frames[0].source_label, "light.fits");
         assert_eq!(calibrated.calibrated_frames[0].source_sha256.len(), 64);
         assert!(Path::new(&calibrated.calibrated_frames[0].output_path).is_file());
+        let rgb_path = calibrated.calibrated_frames[0]
+            .rgb_output_path
+            .as_deref()
+            .ok_or("standard CFA Light did not publish an RGB artifact")?;
+        let rgb_reader =
+            PrimaryImageReader::open(File::open(rgb_path)?, HeaderReadOptions::default())?;
+        assert_eq!(rgb_reader.descriptor().axes(), [4, 2, 3]);
         assert!(
             calibrated_progress
                 .iter()
@@ -3447,6 +3609,20 @@ mod tests {
         assert!(estimate.white_point > estimate.median);
         assert!(estimate.scaled_mad > 0.0);
         assert!((0.0..1.0).contains(&estimate.midtone));
+        Ok(())
+    }
+
+    #[test]
+    fn estimates_one_linked_transform_for_planar_rgb() -> TestResult {
+        let mut request = estimate_request();
+        request.content = FitsPreviewContent::Rgb;
+        let estimate =
+            estimate_fits_preview_transform_from_reader(Cursor::new(rgb_fits_bytes()?), &request)?;
+
+        assert_eq!(estimate.algorithm_id, AUTO_STRETCH_ALGORITHM_ID);
+        assert_eq!(estimate.finite_samples, 8);
+        assert!(estimate.black_point < estimate.median);
+        assert!(estimate.white_point > estimate.median);
         Ok(())
     }
 
@@ -3676,7 +3852,7 @@ mod tests {
             .ok_or("representative corpus has no light preview source")?;
         let estimate_request = FitsPreviewEstimateRequest {
             path: PathBuf::from(&light.path),
-            plane: 0,
+            content: FitsPreviewContent::Scalar { plane: 0 },
             maximum_width: 800,
             maximum_height: 600,
         };
@@ -3686,7 +3862,7 @@ mod tests {
         )?;
         let transform = FitsPreviewRequest {
             path: estimate_request.path.clone(),
-            plane: 0,
+            content: FitsPreviewContent::Scalar { plane: 0 },
             maximum_width: 800,
             maximum_height: 600,
             black_point: estimate.black_point,

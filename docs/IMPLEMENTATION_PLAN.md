@@ -634,6 +634,18 @@ safety reasoning. They do not narrate obvious syntax.
     behavior, and luminance estimation. Next, expose this path through native
     PNG transport and make reviewed RGB Light products the calibrated Blink
     source.
+33. Carry reviewed RGB Lights into native color Blink. Preview IPC now uses an
+    explicit tagged scalar-plane or planar-RGB interpretation; RGB decoding
+    reduces the three canonical planes under identical bounds, estimates the
+    linked luminance stretch, and produces one native PNG. Calibrated execution
+    automatically follows an all-standard-Bayer frame transaction with the
+    whole-plan demosaic transaction, returns both artifact paths, and selects
+    RGB in Blink while retaining the raw source identity and decisions. Mono or
+    mixed plans stay scalar by policy. Rust tests lock channel order, linked
+    estimation, final RGB publication, and FITS axes; frontend tests lock the
+    wire shape, cache separation, and visible RGB state. Next, extend
+    quality/selection to calibrated RGB without weakening CFA diagnostics, then
+    implement registration.
 
 ## 11. Stable-release definition
 

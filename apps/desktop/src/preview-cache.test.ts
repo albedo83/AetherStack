@@ -19,7 +19,7 @@ function request(frameDigit: string): FitsPreviewRequest {
   return {
     frameId: frameDigit.repeat(64),
     path: `/private-session/${frameDigit}.fits`,
-    plane: 0,
+    content: { kind: "scalar", plane: 0 },
     maximumWidth: 1_600,
     maximumHeight: 1_200,
     blackPoint: 900,
@@ -112,6 +112,9 @@ describe("bounded preview cache", () => {
     const firstKey = previewCacheKey(first, "stretch-v1");
     expect(previewCacheKey(moved, "stretch-v1")).toBe(firstKey);
     expect(previewCacheKey(changedStretch, "stretch-v1")).not.toBe(firstKey);
+    expect(
+      previewCacheKey({ ...first, content: { kind: "rgb" } }, "stretch-v1"),
+    ).not.toBe(firstKey);
     expect(previewCacheKey(first, "stretch-v2")).not.toBe(firstKey);
     expect(firstKey).not.toContain("private-session");
   });

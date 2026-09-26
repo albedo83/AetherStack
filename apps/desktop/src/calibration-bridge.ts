@@ -220,6 +220,8 @@ export interface ExecutedCalibratedLightFrame {
   readonly sourceLabel: string;
   readonly sourceSha256: string;
   readonly outputPath: string;
+  /** Planar linear RGB product when the reviewed Light set is standard CFA. */
+  readonly rgbOutputPath: string | null;
   readonly totalSamples: number;
   readonly usableSamples: number;
   readonly maskedSamples: number;

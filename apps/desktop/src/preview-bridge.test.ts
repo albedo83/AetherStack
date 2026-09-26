@@ -37,7 +37,7 @@ describe("native preview bridge", () => {
     await expect(
       estimateFitsPreviewTransform({
         path: "/selected/reference.fits",
-        plane: 0,
+        content: { kind: "scalar", plane: 0 },
         maximumWidth: 1_600,
         maximumHeight: 1_200,
       }),
@@ -45,7 +45,7 @@ describe("native preview bridge", () => {
     expect(invoke).toHaveBeenCalledWith("estimate_fits_preview_transform", {
       request: {
         path: "/selected/reference.fits",
-        plane: 0,
+        content: { kind: "scalar", plane: 0 },
         maximumWidth: 1_600,
         maximumHeight: 1_200,
       },
@@ -58,7 +58,7 @@ describe("native preview bridge", () => {
     const resource = await requestFitsPreview({
       frameId: "a".repeat(64),
       path: "/selected/frame.fits",
-      plane: 0,
+      content: { kind: "rgb" },
       maximumWidth: 1_600,
       maximumHeight: 1_200,
       blackPoint: 1_800,
@@ -70,7 +70,7 @@ describe("native preview bridge", () => {
     expect(invoke).toHaveBeenCalledWith("render_fits_preview", {
       request: {
         path: "/selected/frame.fits",
-        plane: 0,
+        content: { kind: "rgb" },
         maximumWidth: 1_600,
         maximumHeight: 1_200,
         blackPoint: 1_800,
@@ -91,7 +91,7 @@ describe("native preview bridge", () => {
     const resource = await requestFitsPreview({
       frameId: "b".repeat(64),
       path: "/selected/frame.fits",
-      plane: 0,
+      content: { kind: "scalar", plane: 0 },
       maximumWidth: 800,
       maximumHeight: 600,
       blackPoint: 0,

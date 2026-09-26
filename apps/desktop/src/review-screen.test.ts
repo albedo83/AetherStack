@@ -103,6 +103,7 @@ describe("frame review workspace", () => {
       sourceLabel: "light_0001.fits",
       sourceSha256: "f".repeat(64),
       outputPath: "/runtime/calibrated-light-000000.fits",
+      rgbOutputPath: null,
       totalSamples: 8,
       usableSamples: 8,
       maskedSamples: 0,
@@ -173,6 +174,19 @@ describe("frame review workspace", () => {
         name: "Calibrated · 1",
       }).getAttribute("aria-pressed"),
     ).toBe("true");
+
+    const rgbView = fixture({
+      ...demoReviewModel,
+      lightFrameView: "calibrated",
+      frames: [
+        {
+          ...demoReviewModel.frames[0]!,
+          previewContent: { kind: "rgb" },
+        },
+      ],
+      selectedFrameId: demoReviewModel.frames[0]?.id ?? null,
+    });
+    expect(rgbView.root.textContent).toContain("CALIBRATED RGB · LINEAR");
   });
 
   it("opens the calibration laboratory and presents separate master roles", () => {
