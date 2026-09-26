@@ -625,6 +625,15 @@ safety reasoning. They do not narrate obvious syntax.
     cancellation, late mutation, and staging cleanup. Next, decode the planar
     RGB products into bounded color Blink previews and connect them to the
     existing review controls.
+32. Define deterministic linked-color preview mapping. The preview core now
+    combines three congruent bounded scalar reductions, estimates one robust
+    stretch from common-support linear Rec. 709 luminance, and applies that
+    transform unchanged to all channels. Missing support in any plane produces
+    the explicit missing-data style for the complete pixel, preventing false
+    color. Tests lock channel order, exact RGBA endpoints, common-support
+    behavior, and luminance estimation. Next, expose this path through native
+    PNG transport and make reviewed RGB Light products the calibrated Blink
+    source.
 
 ## 11. Stable-release definition
 

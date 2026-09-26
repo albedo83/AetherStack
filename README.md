@@ -73,9 +73,9 @@ optimized CPU and GPU paths must match.
   locked display state, and exact asynchronous preview commits;
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
-  explicit linear, midtone, or asinh grayscale display mapping, and a bounded
-  identity-and-transform-keyed desktop artifact cache with generation-cancelled
-  adjacent-frame prefetch;
+  explicit linear, midtone, or asinh grayscale display mapping, linked-luminance
+  RGB mapping that preserves channel ratios, and a bounded desktop artifact cache
+  keyed by identity and transform with generation-cancelled adjacent prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
   workspace and an instrument-inspired Calibration laboratory, separate
   acquisition roles and master products, inspectable flat-pedestal evidence,

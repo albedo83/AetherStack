@@ -29,6 +29,9 @@ const AUTO_STRETCH_SHADOW_SIGMA: f64 = 2.8;
 const AUTO_STRETCH_TARGET_BACKGROUND: f64 = 0.25;
 const AUTO_STRETCH_HIGH_QUANTILE: f64 = 0.9995;
 const NORMALIZED_BACKGROUND_EPSILON: f64 = 1.0e-6;
+const LUMINANCE_RED: f64 = 0.2126;
+const LUMINANCE_GREEN: f64 = 0.7152;
+const LUMINANCE_BLUE: f64 = 0.0722;
 
 /// Inspectable evidence behind one automatic display transform.
 ///
@@ -631,6 +634,59 @@ pub fn estimate_display_transform(
         return Err(PreviewError::NoValidSamples);
     }
 
+    estimate_transform_from_samples(samples)
+}
+
+/// Estimates one linked RGB display transform from linear-light luminance.
+///
+/// Only pixels supported in all three channels contribute. Luminance uses the
+/// standard linear Rec. 709 coefficients, while the returned transform is
+/// applied unchanged to red, green, and blue. A linked transform preserves
+/// relative channel ratios and prevents automatic per-channel neutralization of
+/// genuine astronomical color.
+///
+/// # Errors
+///
+/// Returns a typed error when the channel previews are not congruent, contain
+/// inconsistent arrays, provide no common finite support, cannot allocate the
+/// bounded estimator storage, or exceed the finite numerical domain.
+pub fn estimate_rgb_display_transform(
+    red: &ScalarPreview,
+    green: &ScalarPreview,
+    blue: &ScalarPreview,
+) -> Result<AutomaticDisplayTransform, PreviewError> {
+    let pixel_count = validate_rgb_previews(red, green, blue)?;
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(pixel_count)
+        .map_err(|_| PreviewError::AllocationFailed {
+            elements: pixel_count,
+        })?;
+    for index in 0..pixel_count {
+        if red.valid_support[index] == 0
+            || green.valid_support[index] == 0
+            || blue.valid_support[index] == 0
+        {
+            continue;
+        }
+        let luminance = LUMINANCE_RED * red.values[index]
+            + LUMINANCE_GREEN * green.values[index]
+            + LUMINANCE_BLUE * blue.values[index];
+        if luminance.is_finite() {
+            samples.push(luminance);
+        }
+    }
+    if samples.is_empty() {
+        return Err(PreviewError::NoValidSamples);
+    }
+    estimate_transform_from_samples(samples)
+}
+
+fn estimate_transform_from_samples(
+    mut samples: Vec<f64>,
+) -> Result<AutomaticDisplayTransform, PreviewError> {
+    let finite_samples = samples.len();
+
     samples.sort_by(f64::total_cmp);
     let median = median_of_sorted(&samples)?;
     let high_index = ((samples.len() - 1) as f64 * AUTO_STRETCH_HIGH_QUANTILE).floor() as usize;
@@ -678,12 +734,7 @@ pub fn estimate_display_transform(
 
     Ok(AutomaticDisplayTransform {
         transform,
-        finite_samples: preview
-            .valid_support
-            .iter()
-            .zip(&preview.values)
-            .filter(|(support, value)| **support > 0 && value.is_finite())
-            .count(),
+        finite_samples,
         median,
         scaled_mad,
         high_quantile,
@@ -746,6 +797,64 @@ pub fn render_grayscale_rgba8(
     Ok(RgbaPreview {
         width: preview.width,
         height: preview.height,
+        display_transform_version: transform.version(),
+        pixels,
+    })
+}
+
+/// Maps three congruent linear previews to packed RGBA8 with one linked stretch.
+///
+/// A pixel is displayed only when all three channels have valid support. This
+/// conservative rule prevents an invalid channel from appearing as a plausible
+/// false color. The scalar previews remain available for exact support and mask
+/// inspection; this function creates display-only bytes.
+///
+/// # Errors
+///
+/// Returns a typed invariant, overflow, allocation, transform, or non-finite
+/// mapping failure.
+pub fn render_rgb_rgba8(
+    red: &ScalarPreview,
+    green: &ScalarPreview,
+    blue: &ScalarPreview,
+    transform: DisplayTransform,
+    missing_style: MissingPixelStyle,
+) -> Result<RgbaPreview, PreviewError> {
+    let pixel_count = validate_rgb_previews(red, green, blue)?;
+    let byte_count = pixel_count
+        .checked_mul(4)
+        .ok_or(PreviewError::SizeOverflow)?;
+    let mut pixels = try_filled_vec(byte_count, 0_u8)?;
+    let scale = transform.white_point() - transform.black_point();
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(PreviewError::InvalidDisplayTransform);
+    }
+
+    for index in 0..pixel_count {
+        let byte_index = index.checked_mul(4).ok_or(PreviewError::SizeOverflow)?;
+        let target = pixels
+            .get_mut(byte_index..byte_index + 4)
+            .ok_or(PreviewError::PreviewInvariant)?;
+        if red.valid_support[index] == 0
+            || green.valid_support[index] == 0
+            || blue.valid_support[index] == 0
+        {
+            target.copy_from_slice(&missing_rgba(index, red.width, missing_style));
+            continue;
+        }
+        let mapped = [red.values[index], green.values[index], blue.values[index]].map(|value| {
+            let normalized = ((value - transform.black_point()) / scale).clamp(0.0, 1.0);
+            map_transfer(normalized, transform)
+        });
+        let [red_value, green_value, blue_value] = mapped;
+        let rgb = [red_value?, green_value?, blue_value?]
+            .map(|value| (value * 255.0).round().clamp(0.0, 255.0) as u8);
+        target.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+    }
+
+    Ok(RgbaPreview {
+        width: red.width,
+        height: red.height,
         display_transform_version: transform.version(),
         pixels,
     })
@@ -901,6 +1010,35 @@ impl Error for PreviewError {
             _ => None,
         }
     }
+}
+
+fn validate_rgb_previews(
+    red: &ScalarPreview,
+    green: &ScalarPreview,
+    blue: &ScalarPreview,
+) -> Result<usize, PreviewError> {
+    let pixel_count = red
+        .width
+        .checked_mul(red.height)
+        .ok_or(PreviewError::SizeOverflow)?;
+    let congruent = [green, blue].iter().all(|preview| {
+        preview.source_width == red.source_width
+            && preview.source_height == red.source_height
+            && preview.reduction_level == red.reduction_level
+            && preview.reduction_factor == red.reduction_factor
+            && preview.width == red.width
+            && preview.height == red.height
+    });
+    let arrays_valid = [red, green, blue].iter().all(|preview| {
+        preview.values.len() == pixel_count
+            && preview.valid_support.len() == pixel_count
+            && preview.excluded_support.len() == pixel_count
+            && preview.excluded_flags.len() == pixel_count
+    });
+    if !congruent || !arrays_valid {
+        return Err(PreviewError::PreviewInvariant);
+    }
+    Ok(pixel_count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1212,6 +1350,68 @@ mod tests {
             rgba.pixels(),
             &[0, 0, 0, 255, 128, 128, 128, 255, 255, 255, 255, 255]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn linked_rgb_mapping_preserves_channel_order_and_ratios() -> TestResult {
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(2, 1, 3)?,
+            vec![0.0, 1.0, 0.25, 0.75, 0.5, 0.125],
+        )?;
+        let mut red_reader = fits_reader_from_image(&image)?;
+        let mut green_reader = fits_reader_from_image(&image)?;
+        let mut blue_reader = fits_reader_from_image(&image)?;
+        let red = build_fits_preview(&mut red_reader, FitsPreviewParameters::new(0, 0, 2, 2)?)?;
+        let green = build_fits_preview(&mut green_reader, FitsPreviewParameters::new(1, 0, 2, 2)?)?;
+        let blue = build_fits_preview(&mut blue_reader, FitsPreviewParameters::new(2, 0, 2, 2)?)?;
+        let transform = DisplayTransform::new(0.0, 1.0, 0.5, TransferFunction::Linear)?;
+
+        let rgba = render_rgb_rgba8(
+            &red,
+            &green,
+            &blue,
+            transform,
+            MissingPixelStyle::Transparent,
+        )?;
+
+        assert_eq!(rgba.pixels(), &[0, 64, 128, 255, 255, 191, 32, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn linked_rgb_stretch_uses_luminance_and_common_support() -> TestResult {
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(3, 1, 3)?,
+            vec![10.0, 20.0, 30.0, 20.0, 40.0, 60.0, 30.0, 60.0, f64::NAN],
+        )?;
+        let mut readers = [
+            fits_reader_from_image(&image)?,
+            fits_reader_from_image(&image)?,
+            fits_reader_from_image(&image)?,
+        ];
+        let red = build_fits_preview(&mut readers[0], FitsPreviewParameters::new(0, 0, 3, 3)?)?;
+        let green = build_fits_preview(&mut readers[1], FitsPreviewParameters::new(1, 0, 3, 3)?)?;
+        let blue = build_fits_preview(&mut readers[2], FitsPreviewParameters::new(2, 0, 3, 3)?)?;
+
+        let estimate = estimate_rgb_display_transform(&red, &green, &blue)?;
+        let first_luminance = LUMINANCE_RED * 10.0 + LUMINANCE_GREEN * 20.0 + LUMINANCE_BLUE * 30.0;
+        let second_luminance =
+            LUMINANCE_RED * 20.0 + LUMINANCE_GREEN * 40.0 + LUMINANCE_BLUE * 60.0;
+
+        assert_eq!(estimate.finite_samples(), 2);
+        assert_eq!(
+            estimate.median().to_bits(),
+            (first_luminance * 0.5 + second_luminance * 0.5).to_bits()
+        );
+        let rgba = render_rgb_rgba8(
+            &red,
+            &green,
+            &blue,
+            estimate.transform(),
+            MissingPixelStyle::Checkerboard,
+        )?;
+        assert_eq!(&rgba.pixels()[8..12], &[188, 64, 188, 255]);
         Ok(())
     }
 

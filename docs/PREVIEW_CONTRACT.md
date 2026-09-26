@@ -83,6 +83,22 @@ Gaussian-consistent MAD for the black point, limits the white point to the
 scaled MAD, quantile, and exact support count remain inspectable. The presenter
 locks that explicit transform for subsequent frames in the active Blink role.
 
+## Linked RGB presentation
+
+Planar RGB products use the same bounded scalar reducer independently for red,
+green, and blue, with identical dimensions and reduction level. Automatic color
+stretch estimation uses only pixels supported by all three planes and computes
+linear-light luminance with Rec. 709 coefficients. The resulting black point,
+white point, midtone, and transfer function are applied unchanged to every
+channel. Per-channel automatic stretches are forbidden because they silently
+neutralize real astronomical color.
+
+RGB display mapping requires common support in all three channels. If any plane
+is missing at a reduced pixel, the complete display pixel uses the configured
+missing-data presentation instead of synthesizing a plausible false color. The
+three scalar previews retain their exact support and mask evidence; RGBA bytes
+remain display-only derivatives.
+
 ## Current scope and release gates
 
 The implemented path reads one selected plane from a 2D or 3D primary FITS image
@@ -92,9 +108,11 @@ the bounded session scanner, derives stable frame identities, preserves role
 conflicts, loads a real reference-stretched preview, offers fitted and actual
 preview-pixel presentation, and delegates metric-table sorting to the Rust
 review model. A bounded browser artifact cache accelerates revisiting Blink
-frames but is not a scientific or scalar pyramid cache. The renderer does not
-yet demosaic a Bayer image, compose RGB planes, estimate a multi-frame aggregate
-stretch, cache reusable scalar pyramid levels, or stream viewport tiles. Those
+frames but is not a scientific or scalar pyramid cache. The preview core now
+composes already-demosaiced planar RGB with one linked luminance-derived stretch.
+The desktop transport does not yet select that color path, estimate a multi-frame
+aggregate stretch, cache reusable scalar pyramid levels, or stream viewport
+tiles. Those
 capabilities require versioned cache keys and camera-aware tests before they are
 presented as complete.
 
