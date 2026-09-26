@@ -4,9 +4,15 @@
 //! the coordinate conventions and inspectable reference policy those later
 //! stages must obey, preventing the desktop shell from inventing geometry.
 
+mod features;
 mod geometry;
 mod reference;
 
+pub use features::{
+    FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog, FeatureCatalogError, FeatureExclusions,
+    FeatureSelectionParameters, MAX_REGISTRATION_FEATURES, MAX_REGISTRATION_MEASUREMENTS,
+    RegistrationFeature, build_feature_catalog,
+};
 pub use geometry::{
     AffineTransform, CoordinateError, ImagePoint, RegistrationMatch, ResidualError,
     ResidualStatistics, evaluate_residuals,

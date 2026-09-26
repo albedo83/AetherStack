@@ -102,7 +102,9 @@ optimized CPU and GPU paths must match.
 - deterministic registration foundations with an explicit pixel-center
   convention, finite nonsingular source-to-reference affine transforms,
   compensated residual summaries, and an input-order-invariant automatic
-  reference policy that retains complete per-metric ranking evidence;
+  reference policy that retains complete per-metric ranking evidence, plus a
+  bounded matching-feature catalog derived directly from the canonical quality
+  measurements with explicit saturation, SNR, shape, border, and count evidence;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

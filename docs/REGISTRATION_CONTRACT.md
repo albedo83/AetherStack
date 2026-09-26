@@ -43,6 +43,39 @@ must separately report its inlier rule and the evidence it excluded.
 An empty correspondence set, non-finite transformed point, or overflowing
 distance is an error rather than a fabricated zero statistic.
 
+## Matching feature catalog
+
+`quality-filtered-stars-v1` converts the canonical
+`local-max-moments-v1` quality measurements into registration features. It does
+not implement a second star detector. This keeps background estimation, local
+maxima, sub-pixel centroids, aperture flux, FWHM, eccentricity, saturation, and
+mask behavior identical between Review and registration.
+
+The catalog accepts the measured image axes and verifies their pixel count
+against the upstream quality evidence. Each measurement is assigned exactly
+once, in this exclusion order:
+
+1. saturated aperture;
+2. background SNR below the inclusive configured minimum;
+3. eccentricity above the inclusive configured maximum;
+4. centroid inside the configured border margin;
+5. otherwise eligible but beyond the maximum output count.
+
+Eligible features are ordered by descending background SNR, aperture flux, and
+peak. Lower eccentricity, vertical coordinate, and horizontal coordinate are
+deterministic tie breakers. The output carries a zero-based matching rank,
+centroid, photometric evidence, shape evidence, measurement support, exact
+selection parameters, upstream and catalog algorithm identities, and all
+mutually exclusive exclusion counts. Saturated stars can remain visible in
+Review but never enter this initial matching catalog.
+
+One catalog accepts at most one million upstream measurements and emits at most
+65,536 features. Sorting storage is reserved fallibly before selection; invalid
+axes, an all-excluding border margin, invalid thresholds, allocation failure,
+coordinate failure, and evidence-count inconsistency remain explicit errors.
+The catalog is intended for calibrated mono or linear RGB luminance products.
+Raw-CFA cell coordinates must not be mixed with full-resolution coordinates.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -71,7 +104,7 @@ the automatic winner.
 
 Production registration still requires:
 
-- deterministic multi-scale star detection and invariant feature descriptors;
+- deterministic multi-scale enhancement and invariant feature descriptors;
 - robust correspondence search with explicit ambiguity and sparse-field errors;
 - translation, affine, and projective model fitting with inspectable inliers;
 - justified distortion models with bounded control-point counts;

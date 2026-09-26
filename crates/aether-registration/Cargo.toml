@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 aether-core = { path = "../aether-core" }
+aether-quality = { path = "../aether-quality" }
 aether-review = { path = "../aether-review" }
 
 [lints]

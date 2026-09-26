@@ -89,6 +89,7 @@ name = "aether-registration"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-quality",
  "aether-review",
 ]
 

@@ -668,6 +668,17 @@ safety reasoning. They do not narrate obvious syntax.
     and ASI294MC Pro/ToupTek 585C comparison remain release gates. Next,
     implement deterministic star-feature extraction for registration without
     duplicating the quality detector's scientific primitives.
+36. Derive matching features from the canonical quality measurements. The
+    registration core now validates measured dimensions and exact catalog
+    controls, excludes saturated, low-SNR, elongated, and border sources in a
+    fixed evidence order, ranks eligible stars deterministically, retains their
+    centroid/photometric/shape support, accounts for output truncation, and
+    bounds both input and output populations. The catalog stores both algorithm
+    identities and its complete parameters, while fallible preallocation keeps
+    sorting failures explicit. Synthetic tests exercise ranking, truncation,
+    mutually exclusive exclusions, dimensions, margins, and invalid controls.
+    Next, build scale- and rotation-invariant local descriptors from these
+    catalogs, with ambiguity bounds before correspondence search.
 
 ## 11. Stable-release definition
 
