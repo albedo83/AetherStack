@@ -74,6 +74,11 @@ frame self-identifying without exposing its local path or acquisition filename.
 The runtime requires it to equal the signal fingerprint before single-Light
 calibration begins.
 
+A demosaiced individual frame also requires `AETHSRC = 1` and an exact
+`AETHINP`. Its `AETHALG` is `malvar-he-cutler-f64-v1`; its image axes are width,
+height, and three planes in red, green, blue order. The executor verifies both
+embedded checksums and these axes while the stream is still private.
+
 The corresponding atomic API places the same cards in the synchronized
 temporary stream before publication. Provenance deliberately contains stable
 identifiers rather than source paths, target names, observer details, or other

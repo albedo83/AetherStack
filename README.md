@@ -99,7 +99,9 @@ optimized CPU and GPU paths must match.
   including serial bounded-memory whole-session measurement;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
-  behavior, unclipped linear output, and conservative defect-mask propagation;
+  behavior, unclipped linear output, conservative defect-mask propagation, and
+  a memory-bounded band executor that atomically publishes checksum-verified
+  planar RGB FITS products;
 - strict unweighted mean integration with compensated normalized accumulation
   and exact per-pixel support accounting;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat

@@ -4,6 +4,7 @@
 //! executors and exposes the first deliberately narrow strict CPU pipeline.
 
 mod cancellation;
+mod demosaic;
 mod light_plan;
 mod master_plan;
 mod memory;
@@ -11,6 +12,10 @@ mod pipeline;
 mod progress;
 
 pub use cancellation::{CancellationToken, Cancelled};
+pub use demosaic::{
+    DemosaicPipelineError, StrictDemosaicRequest, StrictDemosaicResult,
+    run_strict_demosaic_pipeline,
+};
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,
     CalibratedLightPlanProgressEvent, LightPlanExecutionError, LightPlanExecutionRequest,

@@ -99,6 +99,7 @@ dependencies = [
  "aether-cache",
  "aether-calibration",
  "aether-core",
+ "aether-demosaic",
  "aether-fits",
  "aether-integration",
  "aether-metadata",

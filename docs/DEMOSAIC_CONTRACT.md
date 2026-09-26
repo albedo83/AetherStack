@@ -46,3 +46,25 @@ mask and non-finite propagation, unclipped overshoot, and typed input rejection.
 Optimized implementations must be compared against this oracle on synthetic
 edge/color targets and representative calibrated ASI294MC Pro and ToupTek 585C
 frames before becoming selectable.
+
+## Bounded FITS execution
+
+The strict runtime writes one planar binary64 RGB FITS product in red, green,
+blue plane order. It processes one channel at a time and one scan-line band at a
+time. Each source read contains the core plus the clipped two-pixel vertical
+halo required by the 5x5 filter. Global coordinates remain attached to the read
+window, so neither CFA phase nor whole-image reflection changes at an internal
+band boundary.
+
+Band height is an execution parameter. Changing it must produce byte-identical
+FITS output, including checksums and provenance. The memory reservation covers
+the largest decoded source band, its temporary sample statuses, one reconstructed
+output band, and the streaming writer buffer. It depends on image width and band
+height, not full image height.
+
+The output remains private until all three planes have been written, the staged
+dimensions and both FITS checksums have been verified, cancellation has been
+checked, and the input fingerprint has been recalculated. Publication uses
+create-new semantics. Cancellation, insufficient memory, source mutation,
+invalid readback, an existing destination, or any earlier failure publishes no
+partial result.

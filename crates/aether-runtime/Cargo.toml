@@ -13,6 +13,7 @@ publish = false
 aether-cache = { path = "../aether-cache" }
 aether-calibration = { path = "../aether-calibration" }
 aether-core = { path = "../aether-core" }
+aether-demosaic = { path = "../aether-demosaic" }
 aether-fits = { path = "../aether-fits" }
 aether-integration = { path = "../aether-integration" }
 aether-metadata = { path = "../aether-metadata" }

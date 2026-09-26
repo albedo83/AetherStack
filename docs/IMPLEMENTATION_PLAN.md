@@ -603,6 +603,17 @@ safety reasoning. They do not narrate obvious syntax.
     halo-tiled FITS transaction, publish provenance-bearing RGB products, and
     expose their color previews in Blink before quality weighting and
     registration.
+30. Execute strict demosaicing as a bounded FITS transaction. The runtime now
+    reads calibrated CFA bands with the exact two-row halo, preserves global
+    phase and reflected-edge coordinates, reconstructs one RGB plane at a time,
+    and streams canonical planar binary64 output. Its memory reservation depends
+    on width and band height rather than full image height. The source is hashed
+    before execution and immediately before publication; the complete private
+    output must pass dimensional and FITS-checksum readback before atomic
+    create-new publication. Cancellation and every pre-publication failure leave
+    no destination. Tests prove byte identity across band heights and exact
+    agreement with the full-frame oracle. Next, orchestrate per-frame RGB output
+    from the reviewed Light plan and expose color Blink previews.
 
 ## 11. Stable-release definition
 

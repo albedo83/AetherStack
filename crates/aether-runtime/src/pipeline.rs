@@ -2203,7 +2203,10 @@ fn validate_flat_master_input_fingerprints(
     verify_source(&request.pedestal, PipelineInput::FlatPedestal)
 }
 
-fn verify_source(source: &PipelineSource, input: PipelineInput) -> Result<(), StrictPipelineError> {
+pub(crate) fn verify_source(
+    source: &PipelineSource,
+    input: PipelineInput,
+) -> Result<(), StrictPipelineError> {
     let mut file = File::open(source.path())
         .map_err(|source| StrictPipelineError::OpenInput { input, source })?;
     let actual = fingerprint_reader(&mut file)
@@ -2246,7 +2249,7 @@ fn inspect_dimensions(
     dimensions_from_axes(input, reader.descriptor().axes())
 }
 
-fn open_reader(
+pub(crate) fn open_reader(
     path: &Path,
     input: PipelineInput,
     options: HeaderReadOptions,
@@ -2268,7 +2271,7 @@ fn open_reader(
     Ok(reader)
 }
 
-fn dimensions_from_axes(
+pub(crate) fn dimensions_from_axes(
     input: PipelineInput,
     axes: &[u64],
 ) -> Result<Dimensions, StrictPipelineError> {

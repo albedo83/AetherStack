@@ -127,6 +127,22 @@ publisher owns one fixed output buffer. The logical reservation is therefore
 independent of total image height once the image is taller than one band. Header
 memory is bounded separately by `HeaderReadOptions`.
 
+## Strict demosaicing transaction
+
+`run_strict_demosaic_pipeline` consumes one fingerprint-bound calibrated CFA
+product and writes one three-plane linear RGB product. It traverses red, green,
+and blue planes in that order, then full-width scan-line bands from top to
+bottom. Each read contains a clipped two-pixel halo, while the kernel retains
+whole-image coordinates for CFA phase and reflected boundaries. Changing band
+height cannot change the published bytes.
+
+The logical reservation covers decoded values, FITS sample statuses, masks, one
+output band, and the streaming writer buffer. The staged product must pass exact
+axis and embedded-checksum readback. The source is hashed before decoding and
+again after readback. Cancellation is checked before work, between bands, after
+readback, and immediately before atomic publication; every pre-publication
+failure leaves the destination absent.
+
 ## Integrated-tile checkpoints
 
 `StrictPipelineRequest::with_cache` enables verified checkpoints for integrated
