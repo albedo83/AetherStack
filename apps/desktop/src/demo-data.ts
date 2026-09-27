@@ -67,6 +67,8 @@ export const demoReviewModel: ReviewViewModel = {
       outputPath: null,
       progress: null,
       result: null,
+      previewState: "idle",
+      preview: null,
       message: "Register the reviewed Lights to unlock integration",
     },
     resultReview: {

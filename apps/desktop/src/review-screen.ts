@@ -160,6 +160,14 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-output]",
     ),
+    registeredStackPreviewImage: required<HTMLImageElement>(
+      root,
+      "[data-registered-stack-preview-image]",
+    ),
+    registeredStackPreviewPlaceholder: required<HTMLElement>(
+      root,
+      "[data-registered-stack-preview-placeholder]",
+    ),
     registeredFrame: required<HTMLSelectElement>(
       root,
       "[data-registered-frame]",
@@ -1219,6 +1227,8 @@ interface RegistrationElements {
   readonly registeredStackMessage: HTMLElement;
   readonly registeredStackProgress: HTMLProgressElement;
   readonly registeredStackOutput: HTMLElement;
+  readonly registeredStackPreviewImage: HTMLImageElement;
+  readonly registeredStackPreviewPlaceholder: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
   readonly registeredPreviewImage: HTMLImageElement;
   readonly registeredPreviewPlaceholder: HTMLElement;
@@ -1345,6 +1355,24 @@ function renderRegistration(
       ? "Registered identity set verified"
       : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
+  const stackPreviewReady =
+    registration.stack.previewState === "ready" &&
+    registration.stack.preview?.frameId ===
+      `${registration.stack.result?.planSha256}:registered-stack`;
+  elements.registeredStackPreviewImage.hidden = !stackPreviewReady;
+  elements.registeredStackPreviewPlaceholder.hidden = stackPreviewReady;
+  elements.registeredStackPreviewImage.src = stackPreviewReady
+    ? (registration.stack.preview?.url ?? "")
+    : "";
+  elements.registeredStackPreviewImage.alt = stackPreviewReady
+    ? "Integrated registered common-crop preview"
+    : "";
+  elements.registeredStackPreviewPlaceholder.textContent =
+    registration.stack.previewState === "loading"
+      ? "Rendering the integrated FITS preview…"
+      : registration.stack.previewState === "error"
+        ? "The integrated FITS is valid, but its display preview is unavailable"
+        : "The integrated common crop will appear here after publication";
   const stackProgress = registration.stack.progress;
   if (stackProgress?.totalUnits) {
     elements.registeredStackProgress.max = stackProgress.totalUnits;
@@ -2387,6 +2415,10 @@ function shellMarkup(): string {
                   <p data-registered-stack-message>Register the reviewed Lights to unlock integration</p>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
+                  <div class="registered-stack__preview">
+                    <img data-registered-stack-preview-image alt="" hidden />
+                    <div data-registered-stack-preview-placeholder>The integrated common crop will appear here after publication</div>
+                  </div>
                   <div class="registered-stack__actions">
                     <button class="button button--primary" type="button" data-action="execute-registered-stack" disabled>Integrate crop</button>
                     <button class="button button--danger" type="button" data-action="cancel-registered-stack" hidden>Cancel</button>

@@ -74,3 +74,9 @@ published registered artifact set, opens a native FITS destination chooser,
 forwards bounded progress and cancellation, and reports the exact crop
 dimensions and peak reserved memory after atomic publication. JavaScript never
 reads or integrates scientific pixels.
+
+After publication, the desktop may request a bounded display preview of the
+integrated product. Rust estimates the display transform and renders RGB or a
+selected scalar plane; the browser retains only a revocable PNG object URL.
+This display path cannot mutate, replace, or validate the scientific FITS, and
+a preview failure does not invalidate a successfully published stack.

@@ -90,7 +90,8 @@ optimized CPU and GPU paths must match.
   and a bounded shared-stretch Blink viewer for the published registered set;
   that reviewed set can then be integrated directly on the sealed common crop
   through a native create-new destination, deterministic progress, cooperative
-  cancellation, and exact peak-memory reporting;
+  cancellation, exact peak-memory reporting, and an immediate bounded native
+  preview of the final FITS product;
   separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,

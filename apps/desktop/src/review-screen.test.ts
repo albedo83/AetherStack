@@ -464,6 +464,29 @@ describe("frame review workspace", () => {
             frames: [],
           },
         },
+        stack: {
+          state: "completed" as const,
+          outputPath: "/results/integrated.fits",
+          progress: null,
+          result: {
+            planSha256,
+            outputPath: "/results/integrated.fits",
+            width: 4128,
+            height: 2810,
+            planes: 3,
+            samplesWritten: 34_798_080,
+            substitutedSamples: 0,
+            bytesWritten: 278_400_000,
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 18_000_000,
+          },
+          previewState: "ready" as const,
+          preview: {
+            frameId: `${planSha256}:registered-stack`,
+            url: "blob:registered-stack",
+          },
+          message: "4128 × 2810 × 3 integrated atomically",
+        },
         resultReview: {
           frames: [
             {
@@ -502,6 +525,11 @@ describe("frame review workspace", () => {
       }).src,
     ).toContain("blob:registered-a");
     expect(root.textContent).toContain("Registered stretch · locked");
+    expect(
+      getByRole<HTMLImageElement>(root, "img", {
+        name: "Integrated registered common-crop preview",
+      }).src,
+    ).toContain("blob:registered-stack");
     fireEvent.click(
       getByRole(root, "button", { name: "Next registered frame" }),
     );

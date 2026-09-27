@@ -915,6 +915,13 @@ safety reasoning. They do not narrate obvious syntax.
     dark instrument panel beneath Registered Blink. Tests cover the IPC shape,
     UI action, and native registration-to-stack transaction. Next, add a
     result preview for the final integrated product and rejection-map products.
+61. Render the final integrated FITS inside the Registration laboratory after
+    publication. The frontend asks Rust to estimate one display-only transform
+    and render a bounded RGB or scalar PNG; it retains only a revocable object
+    URL, rejects stale asynchronous responses by plan and output identity, and
+    keeps preview failure separate from scientific product validity. The final
+    product remains an untouched binary64 FITS. Next, design and persist
+    high/low rejection-map products without weakening the strict estimator.
 
 ## 11. Stable-release definition
 

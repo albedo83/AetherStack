@@ -196,6 +196,8 @@ export interface RegistrationViewModel {
     readonly outputPath: string | null;
     readonly progress: RegisteredStackProgress | null;
     readonly result: RegisteredStackResult | null;
+    readonly previewState: "idle" | "loading" | "ready" | "error";
+    readonly preview: FramePreview | null;
     readonly message: string;
   };
   readonly resultReview: RegistrationResultReview;

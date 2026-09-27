@@ -124,6 +124,7 @@ let lightExecutionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
+let registeredStackPreviewTicket = 0;
 let registrationPreviewTicket = 0;
 let registrationBlinkTimer: number | null = null;
 let registrationSharedTransform: EstimatedDisplayTransform | null = null;
@@ -134,6 +135,7 @@ const registrationPreviewCache = new BoundedPreviewCache(
 const registrationPreviewPrefetch =
   new PreviewPrefetchCoordinator<PreviewResource>();
 let ephemeralRegistrationPreview: PreviewResource | null = null;
+let registeredStackPreviewResource: PreviewResource | null = null;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -648,6 +650,8 @@ function idleRegisteredStack(
     outputPath: null,
     progress: null,
     result: null,
+    previewState: "idle",
+    preview: null,
     message,
   };
 }
@@ -899,6 +903,8 @@ async function executeStack(): Promise<void> {
         outputPath,
         progress: null,
         result: null,
+        previewState: "idle",
+        preview: null,
         message: "Integrating the sealed common crop with strict F64 mean…",
       },
     },
@@ -953,10 +959,13 @@ async function executeStack(): Promise<void> {
           outputPath,
           progress: model.registration.stack.progress,
           result,
+          previewState: "loading",
+          preview: null,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · peak ${formatMemory(result.peakReservedBytes)}`,
         },
       },
     });
+    void loadRegisteredStackPreview(result);
   } catch (error) {
     if (ticket !== registeredStackTicket) return;
     const cancelled = nativeErrorCode(error) === "registered_stack_cancelled";
@@ -1001,6 +1010,72 @@ async function cancelStack(): Promise<void> {
           ...model.registration.stack,
           state: "error",
           message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
+async function loadRegisteredStackPreview(
+  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+): Promise<void> {
+  const ticket = ++registeredStackPreviewTicket;
+  const content =
+    result.planes === 3
+      ? ({ kind: "rgb" } as const)
+      : ({ kind: "scalar", plane: 0 } as const);
+  try {
+    const transform = await estimateFitsPreviewTransform({
+      path: result.outputPath,
+      content,
+      ...previewBounds,
+    });
+    if (
+      ticket !== registeredStackPreviewTicket ||
+      model.registration.stack.result?.outputPath !== result.outputPath
+    ) {
+      return;
+    }
+    const resource = await requestFitsPreview({
+      frameId: `${result.planSha256}:registered-stack`,
+      path: result.outputPath,
+      content,
+      ...previewBounds,
+      blackPoint: transform.blackPoint,
+      whitePoint: transform.whitePoint,
+      midtone: transform.midtone,
+      transfer: { kind: "midtones" },
+    });
+    if (
+      ticket !== registeredStackPreviewTicket ||
+      model.registration.stack.result?.outputPath !== result.outputPath
+    ) {
+      resource.revoke();
+      return;
+    }
+    registeredStackPreviewResource?.revoke();
+    registeredStackPreviewResource = resource;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          previewState: "ready",
+          preview: resource.preview,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== registeredStackPreviewTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          previewState: "error",
+          preview: null,
         },
       },
     });
@@ -2321,10 +2396,13 @@ function releaseEphemeralRegistrationPreview(): void {
 
 function clearRegistrationPreviewResources(): void {
   registrationPreviewTicket += 1;
+  registeredStackPreviewTicket += 1;
   registrationSharedTransform = null;
   registrationPreviewPrefetch.cancel();
   releaseEphemeralRegistrationPreview();
   registrationPreviewCache.clear();
+  registeredStackPreviewResource?.revoke();
+  registeredStackPreviewResource = null;
   stopRegistrationBlinkTimer();
 }
 
