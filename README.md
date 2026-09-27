@@ -88,6 +88,9 @@ optimized CPU and GPU paths must match.
   one bounded, cancellable, rollback-safe all-frame publication transaction,
   with explicitly rejected Blink frames excluded by the Rust-owned Review book
   and a bounded shared-stretch Blink viewer for the published registered set;
+  that reviewed set can then be integrated directly on the sealed common crop
+  through a native create-new destination, deterministic progress, cooperative
+  cancellation, and exact peak-memory reporting;
   separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,

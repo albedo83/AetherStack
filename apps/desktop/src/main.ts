@@ -46,12 +46,16 @@ import {
   type FrameQualityResult,
 } from "./quality-bridge.ts";
 import {
+  cancelRegisteredStack,
   cancelRegistrationPlan,
   diagnoseFitsRegistration,
   executeRegistrationPlan,
+  executeRegisteredStack,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
+  selectRegisteredStackOutput,
   type RegistrationExecutionProgress,
+  type RegisteredStackProgress,
 } from "./registration-bridge.ts";
 import { reconcileRegistrationSolutions } from "./registration-plan.ts";
 import { bindRegisteredReviewFrames } from "./registered-review.ts";
@@ -119,6 +123,7 @@ let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
+let registeredStackTicket = 0;
 let registrationPreviewTicket = 0;
 let registrationBlinkTimer: number | null = null;
 let registrationSharedTransform: EstimatedDisplayTransform | null = null;
@@ -148,6 +153,12 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelRegistration() {
     void cancelRegistration();
+  },
+  onExecuteRegisteredStack() {
+    void executeStack();
+  },
+  onCancelRegisteredStack() {
+    void cancelStack();
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -245,7 +256,7 @@ async function importSession(): Promise<void> {
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -292,6 +303,7 @@ function installImportedSession(session: ImportedSession): void {
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
   registrationExecutionTicket += 1;
+  registeredStackTicket += 1;
   registrationTicket += 1;
   clearRegistrationPreviewResources();
 
@@ -353,6 +365,7 @@ function installImportedSession(session: ImportedSession): void {
         result: null,
         message: "Export calibrated Lights to unlock registration",
       },
+      stack: idleRegisteredStack(),
       resultReview: idleRegistrationResultReview(),
       message:
         registrationFrames.length >= 2
@@ -435,6 +448,12 @@ function selectRegistrationFrame(
         role === "reference"
           ? idleRegistrationExecution("Reference changed · rebuild the plan")
           : model.registration.execution,
+      stack:
+        role === "reference"
+          ? idleRegisteredStack(
+              "Reference changed · integrate a fresh registered set",
+            )
+          : model.registration.stack,
       resultReview:
         role === "reference"
           ? idleRegistrationResultReview(
@@ -476,6 +495,9 @@ async function analyzeRegistration(): Promise<void> {
       plan: null,
       execution: idleRegistrationExecution(
         "Geometry changed · reseal before registration",
+      ),
+      stack: idleRegisteredStack(
+        "Geometry changed · publish and integrate a fresh registered set",
       ),
       resultReview: idleRegistrationResultReview(
         "Geometry changed · register a fresh frame set",
@@ -618,6 +640,18 @@ function idleRegistrationExecution(
   };
 }
 
+function idleRegisteredStack(
+  message = "Register the reviewed Lights to unlock integration",
+): ReviewViewModel["registration"]["stack"] {
+  return {
+    state: "idle",
+    outputPath: null,
+    progress: null,
+    result: null,
+    message,
+  };
+}
+
 function idleRegistrationResultReview(
   message = "Registered pixels will appear here after atomic publication",
 ): ReviewViewModel["registration"]["resultReview"] {
@@ -695,6 +729,9 @@ async function executeRegistration(): Promise<void> {
         result: null,
         message: "Preparing the atomic registered-frame transaction…",
       },
+      stack: idleRegisteredStack(
+        "Registration is publishing the source set required for integration",
+      ),
       resultReview: idleRegistrationResultReview(
         "Registration is publishing the complete sealed frame set…",
       ),
@@ -754,6 +791,9 @@ async function executeRegistration(): Promise<void> {
           result,
           message: `${result.frames.length} registered frames published atomically · peak ${formatMemory(result.peakReservedBytes)}`,
         },
+        stack: idleRegisteredStack(
+          "Registered set verified · ready to integrate the common crop",
+        ),
         resultReview: registeredFrames
           ? {
               frames: registeredFrames,
@@ -816,6 +856,149 @@ async function cancelRegistration(): Promise<void> {
         ...model.registration,
         execution: {
           ...model.registration.execution,
+          state: "error",
+          message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
+async function executeStack(): Promise<void> {
+  const plan = model.registration.plan;
+  const registered = model.registration.execution.result;
+  const stack = model.registration.stack;
+  if (
+    model.registration.planState !== "ready" ||
+    !plan ||
+    !registered ||
+    registered.planSha256 !== plan.planSha256 ||
+    stack.state === "running" ||
+    stack.state === "cancelling" ||
+    isActiveExecutionState(model.registration.execution.state) ||
+    isActiveExecutionState(model.calibration.execution.state) ||
+    isActiveExecutionState(model.calibration.lightExecution.state)
+  ) {
+    return;
+  }
+  const outputPath = await selectRegisteredStackOutput();
+  if (
+    !outputPath ||
+    model.registration.plan?.planSha256 !== plan.planSha256 ||
+    model.registration.execution.result?.planSha256 !== plan.planSha256
+  ) {
+    return;
+  }
+  const ticket = ++registeredStackTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        state: "running",
+        outputPath,
+        progress: null,
+        result: null,
+        message: "Integrating the sealed common crop with strict F64 mean…",
+      },
+    },
+  });
+  const onProgress = (progress: RegisteredStackProgress): void => {
+    if (ticket !== registeredStackTicket) return;
+    const state = model.registration.stack.state;
+    if (state !== "running" && state !== "cancelling") return;
+    const units = progress.totalUnits
+      ? ` · ${progress.completedUnits}/${progress.totalUnits}`
+      : "";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          state,
+          progress,
+          message: `Registered common crop · ${progress.stage}${units}`,
+        },
+      },
+    });
+  };
+  try {
+    const result = await executeRegisteredStack(
+      outputPath,
+      {
+        referenceFrameId: plan.referenceFrameId,
+        sourceFrameIds: plan.frames
+          .filter((frame) => !frame.reference)
+          .map((frame) => frame.frameId),
+      },
+      plan.planSha256,
+      registered.frames.map((frame) => ({
+        frameId: frame.frameId,
+        path: frame.outputPath,
+      })),
+      {
+        bandHeight: 128,
+        memoryLimitBytes: model.calibration.lightSettings.memoryLimitBytes,
+      },
+      onProgress,
+    );
+    if (ticket !== registeredStackTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          state: "completed",
+          outputPath,
+          progress: model.registration.stack.progress,
+          result,
+          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · peak ${formatMemory(result.peakReservedBytes)}`,
+        },
+      },
+    });
+  } catch (error) {
+    if (ticket !== registeredStackTicket) return;
+    const cancelled = nativeErrorCode(error) === "registered_stack_cancelled";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          state: cancelled ? "idle" : "error",
+          result: null,
+          message: cancelled
+            ? "Integration cancelled · no partial stack published"
+            : "Integration failed safely · no existing output was modified",
+        },
+      },
+    });
+  }
+}
+
+async function cancelStack(): Promise<void> {
+  if (model.registration.stack.state !== "running") return;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...model.registration.stack,
+        state: "cancelling",
+        message: "Cancellation requested · finishing the current bounded band…",
+      },
+    },
+  });
+  try {
+    await cancelRegisteredStack();
+  } catch {
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
           state: "error",
           message: "Cancellation request failed · native task state is unknown",
         },
@@ -1002,7 +1185,7 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
     model.calibration.execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -1013,6 +1196,9 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
       ...model.registration,
       execution: idleRegistrationExecution(
         "Calibration changed · export fresh Light artifacts",
+      ),
+      stack: idleRegisteredStack(
+        "Calibration changed · publish and integrate fresh registered artifacts",
       ),
       resultReview: idleRegistrationResultReview(
         "Calibration changed · register a fresh frame set",
@@ -1055,7 +1241,7 @@ async function executeMasters(): Promise<void> {
     execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -1072,7 +1258,7 @@ async function executeMasters(): Promise<void> {
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -1202,7 +1388,7 @@ async function executeLights(): Promise<void> {
     execution.state === "cancelling" ||
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -1216,7 +1402,7 @@ async function executeLights(): Promise<void> {
     importedSession !== selectedSession ||
     model.calibration.plan?.planSha256 !== selectedMasterPlanSha256 ||
     model.calibration.plan?.lightPlan?.planSha256 !== selectedLightPlanSha256 ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -1244,6 +1430,9 @@ async function executeLights(): Promise<void> {
       ...model.registration,
       execution: idleRegistrationExecution(
         "Light calibration is running · wait for the complete artifact set",
+      ),
+      stack: idleRegisteredStack(
+        "Light calibration is running · registered integration reset",
       ),
       resultReview: idleRegistrationResultReview(
         "Light calibration is running · registered review reset",
@@ -1411,6 +1600,13 @@ function isActiveExecutionState(
   return state === "running" || state === "cancelling";
 }
 
+function isRegistrationWorkActive(): boolean {
+  return (
+    isActiveExecutionState(model.registration.execution.state) ||
+    isActiveExecutionState(model.registration.stack.state)
+  );
+}
+
 function nativeErrorCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("code" in error)) {
     return null;
@@ -1424,7 +1620,8 @@ async function refreshMasterPlan(): Promise<void> {
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
-    model.calibration.lightExecution.state === "cancelling"
+    model.calibration.lightExecution.state === "cancelling" ||
+    isRegistrationWorkActive()
   ) {
     return;
   }
@@ -2156,6 +2353,9 @@ function disposeRuntimeResources(): void {
   if (isActiveExecutionState(model.registration.execution.state)) {
     void cancelRegistrationPlan();
   }
+  if (isActiveExecutionState(model.registration.stack.state)) {
+    void cancelRegisteredStack();
+  }
   stopBlinkTimer();
   clearPreviewResources();
   clearRegistrationPreviewResources();
@@ -2171,11 +2371,7 @@ async function setDecision(
   state: Exclude<ReviewState, "undecided">,
   reason: ReviewRejectionReason | null,
 ): Promise<void> {
-  if (
-    !importedSession ||
-    model.decisionPending ||
-    isActiveExecutionState(model.registration.execution.state)
-  )
+  if (!importedSession || model.decisionPending || isRegistrationWorkActive())
     return;
   if (state === "accepted") {
     await runDecisionTransaction(() =>
@@ -2190,11 +2386,7 @@ async function setDecision(
 }
 
 async function clearDecision(frameId: string): Promise<void> {
-  if (
-    !importedSession ||
-    model.decisionPending ||
-    isActiveExecutionState(model.registration.execution.state)
-  )
+  if (!importedSession || model.decisionPending || isRegistrationWorkActive())
     return;
   await runDecisionTransaction(() =>
     applyReviewDecision(frameId, { kind: "clear" }),
@@ -2206,7 +2398,7 @@ async function undoDecision(): Promise<void> {
     !importedSession ||
     model.decisionPending ||
     !model.canUndo ||
-    isActiveExecutionState(model.registration.execution.state)
+    isRegistrationWorkActive()
   )
     return;
   await runDecisionTransaction(undoReviewDecision);
@@ -2257,6 +2449,7 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
   if (registrationMembershipChanged) {
     registrationTicket += 1;
     registrationExecutionTicket += 1;
+    registeredStackTicket += 1;
     clearRegistrationPreviewResources();
   }
   update({
@@ -2280,6 +2473,9 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
           plan: null,
           execution: idleRegistrationExecution(
             "Review membership changed · rebuild the registration plan",
+          ),
+          stack: idleRegisteredStack(
+            "Review membership changed · publish and integrate a fresh registered set",
           ),
           resultReview: idleRegistrationResultReview(
             "Review membership changed · register a fresh frame set",

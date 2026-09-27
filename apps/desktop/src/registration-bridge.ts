@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 export interface RegistrationDiagnosticRequest {
   readonly sourcePath: string;
@@ -147,6 +147,28 @@ export interface RegistrationExecutionResult {
   readonly frames: readonly ExecutedRegisteredFrame[];
 }
 
+export interface RegisteredStackProgress {
+  readonly sequence: number;
+  readonly stage: string;
+  readonly state: "started" | "running" | "completed" | "cancelled" | "failed";
+  readonly completedUnits: number;
+  readonly totalUnits: number | null;
+  readonly code: string | null;
+}
+
+export interface RegisteredStackResult {
+  readonly planSha256: string;
+  readonly outputPath: string;
+  readonly width: number;
+  readonly height: number;
+  readonly planes: number;
+  readonly samplesWritten: number;
+  readonly substitutedSamples: number;
+  readonly bytesWritten: number;
+  readonly memoryLimitBytes: number;
+  readonly peakReservedBytes: number;
+}
+
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */
 export function diagnoseFitsRegistration(
   request: RegistrationDiagnosticRequest,
@@ -203,4 +225,42 @@ export function executeRegistrationPlan(
 /** Requests cooperative cancellation of the active registration transaction. */
 export function cancelRegistrationPlan(): Promise<boolean> {
   return invoke<boolean>("cancel_registration_plan");
+}
+
+/** Chooses the create-new FITS destination for the registered common-crop stack. */
+export async function selectRegisteredStackOutput(): Promise<string | null> {
+  const path = await save({
+    title: "Save the integrated registered common crop",
+    defaultPath: "integrated-common-crop.fits",
+    filters: [{ name: "FITS image", extensions: ["fits", "fit", "fts"] }],
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/** Integrates the exact registered set on its sealed common footprint. */
+export function executeRegisteredStack(
+  outputPath: string,
+  planning: RegistrationPlanPreviewRequest,
+  expectedPlanSha256: string,
+  artifacts: readonly RegistrationArtifactInput[],
+  settings: RegistrationExecutionSettings,
+  onProgress: (progress: RegisteredStackProgress) => void,
+): Promise<RegisteredStackResult> {
+  const progress = new Channel<RegisteredStackProgress>();
+  progress.onmessage = onProgress;
+  return invoke<RegisteredStackResult>("execute_registered_stack", {
+    request: {
+      planning,
+      expectedPlanSha256,
+      artifacts,
+      outputPath,
+      ...settings,
+    },
+    onProgress: progress,
+  });
+}
+
+/** Requests cooperative cancellation of the active common-crop integration. */
+export function cancelRegisteredStack(): Promise<boolean> {
+  return invoke<boolean>("cancel_registered_stack");
 }

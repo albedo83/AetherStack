@@ -17,6 +17,8 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onAnalyzeRegistration: vi.fn(),
     onExecuteRegistration: vi.fn(),
     onCancelRegistration: vi.fn(),
+    onExecuteRegisteredStack: vi.fn(),
+    onCancelRegisteredStack: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -233,6 +235,7 @@ describe("frame review workspace", () => {
       planState: "idle" as const,
       plan: null,
       execution: demoReviewModel.registration.execution,
+      stack: demoReviewModel.registration.stack,
       resultReview: demoReviewModel.registration.resultReview,
       diagnostic: {
         schemaVersion: 2,
@@ -424,6 +427,32 @@ describe("frame review workspace", () => {
       activeWorkspace: "registration" as const,
       registration: {
         ...demoReviewModel.registration,
+        planState: "ready" as const,
+        plan: {
+          schemaVersion: 1,
+          planSha256,
+          referenceFrameId: frameA.id,
+          referenceWidth: 4144,
+          referenceHeight: 2822,
+          coveredPixels: 11_000_000,
+          autocrop: { x: 8, y: 6, width: 4128, height: 2810 },
+          frames: [
+            {
+              frameId: frameA.id,
+              sourceWidth: 4144,
+              sourceHeight: 2822,
+              transformCoefficientsSourcePixels: [1, 0, 0, 1, 0, 0] as const,
+              reference: true,
+            },
+            {
+              frameId: frameB.id,
+              sourceWidth: 4144,
+              sourceHeight: 2822,
+              transformCoefficientsSourcePixels: [1, 0, 0, 1, 1, 1] as const,
+              reference: false,
+            },
+          ],
+        },
         execution: {
           ...demoReviewModel.registration.execution,
           state: "completed" as const,
@@ -488,6 +517,8 @@ describe("frame review workspace", () => {
       { target: { value: frameB.id } },
     );
     expect(actions.onSelectRegisteredFrame).toHaveBeenCalledWith(frameB.id);
+    fireEvent.click(getByRole(root, "button", { name: "Integrate crop" }));
+    expect(actions.onExecuteRegisteredStack).toHaveBeenCalledOnce();
   });
 
   it("keeps ambiguous Light associations visibly blocked", () => {

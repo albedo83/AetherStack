@@ -139,6 +139,27 @@ export function mountReviewScreen(
       root,
       "[data-registration-execution-output]",
     ),
+    executeRegisteredStack: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-registered-stack"]',
+    ),
+    cancelRegisteredStack: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-registered-stack"]',
+    ),
+    registeredStack: required<HTMLElement>(root, "[data-registered-stack]"),
+    registeredStackMessage: required<HTMLElement>(
+      root,
+      "[data-registered-stack-message]",
+    ),
+    registeredStackProgress: required<HTMLProgressElement>(
+      root,
+      "[data-registered-stack-progress]",
+    ),
+    registeredStackOutput: required<HTMLElement>(
+      root,
+      "[data-registered-stack-output]",
+    ),
     registeredFrame: required<HTMLSelectElement>(
       root,
       "[data-registered-frame]",
@@ -384,6 +405,14 @@ export function mountReviewScreen(
     }
     if (action === "cancel-registration") {
       actions.onCancelRegistration();
+      return;
+    }
+    if (action === "execute-registered-stack") {
+      actions.onExecuteRegisteredStack();
+      return;
+    }
+    if (action === "cancel-registered-stack") {
+      actions.onCancelRegisteredStack();
       return;
     }
     if (action === "toggle-registered-play") {
@@ -1184,6 +1213,12 @@ interface RegistrationElements {
   readonly registrationExecutionMessage: HTMLElement;
   readonly registrationExecutionProgress: HTMLProgressElement;
   readonly registrationExecutionOutput: HTMLElement;
+  readonly executeRegisteredStack: HTMLButtonElement;
+  readonly cancelRegisteredStack: HTMLButtonElement;
+  readonly registeredStack: HTMLElement;
+  readonly registeredStackMessage: HTMLElement;
+  readonly registeredStackProgress: HTMLProgressElement;
+  readonly registeredStackOutput: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
   readonly registeredPreviewImage: HTMLImageElement;
   readonly registeredPreviewPlaceholder: HTMLElement;
@@ -1220,10 +1255,14 @@ function renderRegistration(
   const executionBusy =
     registration.execution.state === "running" ||
     registration.execution.state === "cancelling";
+  const stackBusy =
+    registration.stack.state === "running" ||
+    registration.stack.state === "cancelling";
   const running =
     registration.state === "running" ||
     registration.planState === "building" ||
-    executionBusy;
+    executionBusy ||
+    stackBusy;
   const pairReady =
     !!reference?.sourcePath &&
     !!source?.sourcePath &&
@@ -1290,6 +1329,31 @@ function renderRegistration(
     elements.registrationExecutionProgress.max = 1;
   }
   elements.registrationExecutionProgress.hidden = !executionBusy;
+  const registeredSetReady =
+    registration.execution.state === "completed" &&
+    registration.execution.result?.planSha256 === registration.plan?.planSha256;
+  elements.executeRegisteredStack.disabled = !registeredSetReady || stackBusy;
+  elements.executeRegisteredStack.hidden = stackBusy;
+  elements.cancelRegisteredStack.hidden = !stackBusy;
+  elements.cancelRegisteredStack.disabled =
+    registration.stack.state === "cancelling";
+  elements.registeredStack.dataset.state = registration.stack.state;
+  elements.registeredStackMessage.textContent = registration.stack.message;
+  elements.registeredStackOutput.textContent =
+    registration.stack.outputPath ??
+    (registeredSetReady
+      ? "Registered identity set verified"
+      : "Published registered artifacts required");
+  elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
+  const stackProgress = registration.stack.progress;
+  if (stackProgress?.totalUnits) {
+    elements.registeredStackProgress.max = stackProgress.totalUnits;
+    elements.registeredStackProgress.value = stackProgress.completedUnits;
+  } else {
+    elements.registeredStackProgress.removeAttribute("value");
+    elements.registeredStackProgress.max = 1;
+  }
+  elements.registeredStackProgress.hidden = !stackBusy;
   renderRegisteredResult(elements, registration.resultReview);
   elements.registrationPlanFrames.replaceChildren(
     ...registration.frames.map((frame) => {
@@ -2312,6 +2376,22 @@ function shellMarkup(): string {
                   <button class="transport-button transport-button--play" type="button" data-action="toggle-registered-play" aria-label="Start registered Blink" aria-pressed="false" disabled>▶</button>
                   <button class="transport-button" type="button" data-action="next-registered" aria-label="Next registered frame" disabled>›</button>
                 </div>
+                <section class="registered-stack" data-registered-stack data-state="idle" aria-labelledby="registered-stack-heading">
+                  <div class="registered-stack__heading">
+                    <div>
+                      <p class="eyebrow">Final scientific product</p>
+                      <h5 id="registered-stack-heading">Integrate common crop</h5>
+                    </div>
+                    <span class="instrument-label">STRICT F64 MEAN</span>
+                  </div>
+                  <p data-registered-stack-message>Register the reviewed Lights to unlock integration</p>
+                  <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
+                  <code data-registered-stack-output>Published registered artifacts required</code>
+                  <div class="registered-stack__actions">
+                    <button class="button button--primary" type="button" data-action="execute-registered-stack" disabled>Integrate crop</button>
+                    <button class="button button--danger" type="button" data-action="cancel-registered-stack" hidden>Cancel</button>
+                  </div>
+                </section>
               </section>
             </section>
           </div>

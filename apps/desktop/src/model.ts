@@ -13,6 +13,8 @@ import type {
   RegistrationExecutionProgress,
   RegistrationExecutionResult,
   RegistrationPlanPreview,
+  RegisteredStackProgress,
+  RegisteredStackResult,
 } from "./registration-bridge.ts";
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
@@ -189,6 +191,13 @@ export interface RegistrationViewModel {
     readonly result: RegistrationExecutionResult | null;
     readonly message: string;
   };
+  readonly stack: {
+    readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+    readonly outputPath: string | null;
+    readonly progress: RegisteredStackProgress | null;
+    readonly result: RegisteredStackResult | null;
+    readonly message: string;
+  };
   readonly resultReview: RegistrationResultReview;
   readonly message: string;
 }
@@ -238,6 +247,8 @@ export interface ReviewActions {
   readonly onAnalyzeRegistration: () => void;
   readonly onExecuteRegistration: () => void;
   readonly onCancelRegistration: () => void;
+  readonly onExecuteRegisteredStack: () => void;
+  readonly onCancelRegisteredStack: () => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

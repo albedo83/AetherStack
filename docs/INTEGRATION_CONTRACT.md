@@ -67,3 +67,10 @@ After private checksum readback, every source is fingerprinted again before the
 create-new publication. Cancellation, insufficient memory, source mutation,
 stale plan evidence, checksum failure, or an existing destination leaves no
 new public product.
+
+The desktop adapter reconstructs the registration plan from the current
+reviewed Light membership before every stack run. It accepts only the complete
+published registered artifact set, opens a native FITS destination chooser,
+forwards bounded progress and cancellation, and reports the exact crop
+dimensions and peak reserved memory after atomic publication. JavaScript never
+reads or integrates scientific pixels.

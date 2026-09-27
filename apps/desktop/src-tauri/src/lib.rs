@@ -15,8 +15,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
-    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, HeaderReadOptions, ImageRegion,
-    PrimaryImageReader, StoredSampleFormat, primary_image_statistics,
+    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, FitsOutputProvenance,
+    HeaderReadOptions, ImageRegion, PrimaryImageReader, StoredSampleFormat,
+    primary_image_statistics,
 };
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
@@ -42,9 +43,10 @@ use aether_review::{
 use aether_runtime::{
     CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
     MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, PipelineSource,
-    ProgressState, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
+    ProgressState, REGISTERED_CROP_MEAN_ALGORITHM_ID, RegisteredStackError, RegisteredStackRequest,
+    RegisteredStackSource, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
     RegistrationPlanSource, run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
-    run_master_plan, run_registration_plan,
+    run_master_plan, run_registered_stack, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -163,14 +165,14 @@ struct RegistrationCropResponse {
     height: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegistrationArtifactInput {
     frame_id: String,
     path: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegistrationPlanExecutionCommandRequest {
     planning: RegistrationPlanPreviewRequest,
@@ -215,6 +217,43 @@ struct ExecutedRegisteredFrame {
     interpolated_samples: usize,
     outside_footprint_samples: usize,
     masked_support_samples: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegisteredStackCommandRequest {
+    planning: RegistrationPlanPreviewRequest,
+    expected_plan_sha256: String,
+    artifacts: Vec<RegistrationArtifactInput>,
+    output_path: PathBuf,
+    band_height: usize,
+    memory_limit_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackProgress {
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackResponse {
+    plan_sha256: String,
+    output_path: String,
+    width: usize,
+    height: usize,
+    planes: usize,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    memory_limit_bytes: usize,
+    peak_reserved_bytes: usize,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -943,6 +982,56 @@ fn cancel_registration_plan(
     cancel_calibration_execution(&execution_state, "registration_execution_missing")
 }
 
+#[tauri::command]
+async fn execute_registered_stack(
+    request: RegisteredStackCommandRequest,
+    on_progress: tauri::ipc::Channel<RegisteredStackProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    review_state: tauri::State<'_, DesktopReviewState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<RegisteredStackResponse, PreviewCommandError> {
+    if !request.output_path.is_absolute()
+        || request
+            .artifacts
+            .iter()
+            .any(|artifact| !artifact.path.is_absolute())
+    {
+        return Err(registered_stack_configuration_error());
+    }
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let eligible_ids = reviewed_registration_frame_ids(&review_state, &session)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_registered_stack_for_ids_sync(
+            &session,
+            request,
+            &eligible_ids,
+            &worker_cancellation,
+            |event| {
+                let _ignored = on_progress.send(event);
+            },
+        )
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "registered_stack_interrupted",
+            "The registered-stack worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_registered_stack(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "registered_stack_execution_missing")
+}
+
 #[derive(Debug)]
 struct RegistrationNativeSource {
     path: PathBuf,
@@ -1241,6 +1330,136 @@ where
     })
 }
 
+#[cfg(test)]
+fn execute_registered_stack_sync<F>(
+    session: &ImportedNativeSession,
+    request: RegisteredStackCommandRequest,
+    cancellation: &CancellationToken,
+    progress: F,
+) -> Result<RegisteredStackResponse, PreviewCommandError>
+where
+    F: FnMut(RegisteredStackProgress),
+{
+    let eligible_ids = registration_native_sources(session)?
+        .into_keys()
+        .collect::<BTreeSet<_>>();
+    execute_registered_stack_for_ids_sync(session, request, &eligible_ids, cancellation, progress)
+}
+
+fn execute_registered_stack_for_ids_sync<F>(
+    session: &ImportedNativeSession,
+    request: RegisteredStackCommandRequest,
+    eligible_ids: &BTreeSet<FrameId>,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<RegisteredStackResponse, PreviewCommandError>
+where
+    F: FnMut(RegisteredStackProgress),
+{
+    if request.band_height == 0 || !request.output_path.is_absolute() {
+        return Err(registered_stack_configuration_error());
+    }
+    let plan = build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?;
+    if plan.plan_sha256() != request.expected_plan_sha256 {
+        return Err(PreviewCommandError::new(
+            "registered_stack_plan_stale",
+            "The reviewed registration digest no longer matches native evidence.",
+        ));
+    }
+    if request.artifacts.len() != plan.frames().len() {
+        return Err(registered_stack_artifact_set_error());
+    }
+    let mut by_id = BTreeMap::new();
+    for artifact in request.artifacts {
+        if !artifact.path.is_absolute() {
+            return Err(registered_stack_configuration_error());
+        }
+        let frame_id =
+            FrameId::new(artifact.frame_id).map_err(|_| registered_stack_artifact_set_error())?;
+        if by_id.insert(frame_id, artifact.path).is_some() {
+            return Err(registered_stack_artifact_set_error());
+        }
+    }
+    let expected_ids = plan
+        .frames()
+        .iter()
+        .map(|frame| frame.frame_id().clone())
+        .collect::<BTreeSet<_>>();
+    if by_id.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
+        return Err(registered_stack_artifact_set_error());
+    }
+
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| registered_stack_configuration_error())?;
+    let memory =
+        MemoryBudget::new(memory_limit).map_err(|_| registered_stack_configuration_error())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(by_id.len())
+        .map_err(|_| registered_stack_allocation_error())?;
+    for frame in plan.frames() {
+        let path = by_id
+            .remove(frame.frame_id())
+            .ok_or_else(registered_stack_artifact_set_error)?;
+        let mut input = File::open(&path).map_err(|_| registered_stack_artifact_error())?;
+        let fingerprint =
+            fingerprint_reader(&mut input).map_err(|_| registered_stack_artifact_error())?;
+        sources.push(RegisteredStackSource::new(
+            frame.frame_id().clone(),
+            PipelineSource::new(path, fingerprint),
+        ));
+    }
+    let source_count =
+        u32::try_from(sources.len()).map_err(|_| registered_stack_configuration_error())?;
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| registered_stack_artifact_error())?;
+    let provenance = FitsOutputProvenance::new(
+        manifest_sha256,
+        "registered-stack",
+        REGISTERED_CROP_MEAN_ALGORITHM_ID,
+        source_count,
+    )
+    .and_then(|value| value.with_plan_sha256(plan.plan_sha256()))
+    .map_err(|_| registered_stack_configuration_error())?;
+    let output_path = request.output_path;
+    let execution = RegisteredStackRequest::new(plan, sources, output_path.clone(), provenance)
+        .and_then(|value| value.with_band_height(request.band_height))
+        .map_err(registered_stack_error)?;
+    let result = run_registered_stack(&execution, cancellation, &memory, |event| {
+        progress(RegisteredStackProgress {
+            sequence: event.sequence(),
+            stage: event.stage().as_str().to_owned(),
+            state: progress_state_name(event.state()),
+            completed_units: event.completed_units(),
+            total_units: event.total_units(),
+            code: event.code().map(str::to_owned),
+        });
+    })
+    .map_err(registered_stack_error)?;
+    let output_path = output_path.to_str().map(str::to_owned).ok_or_else(|| {
+        PreviewCommandError::new(
+            "registered_stack_output_path_not_unicode",
+            "The integrated output path cannot be represented as Unicode.",
+        )
+    })?;
+    let dimensions = result.dimensions();
+    let summary = result.summary();
+    Ok(RegisteredStackResponse {
+        plan_sha256: request.expected_plan_sha256,
+        output_path,
+        width: dimensions.width(),
+        height: dimensions.height(),
+        planes: dimensions.planes(),
+        samples_written: summary.samples_written(),
+        substituted_samples: summary.substituted_samples(),
+        bytes_written: summary.bytes_written(),
+        memory_limit_bytes: memory.limit(),
+        peak_reserved_bytes: result.peak_reserved_bytes(),
+    })
+}
+
 fn registration_native_sources(
     session: &ImportedNativeSession,
 ) -> Result<BTreeMap<FrameId, RegistrationNativeSource>, PreviewCommandError> {
@@ -1402,6 +1621,71 @@ fn registration_execution_error(error: RegistrationPlanExecutionError) -> Previe
         | RegistrationPlanExecutionError::RollbackPublication { .. } => PreviewCommandError::new(
             "registration_publication_failed",
             "The registered frame set could not be published as one atomic transaction.",
+        ),
+    }
+}
+
+const fn registered_stack_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_configuration_invalid",
+        "Registered-stack settings or paths are invalid.",
+    )
+}
+
+const fn registered_stack_artifact_set_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_artifact_set_invalid",
+        "The registered artifacts do not match every identity in the sealed plan.",
+    )
+}
+
+const fn registered_stack_artifact_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_artifact_invalid",
+        "A registered artifact could not be opened or fingerprinted.",
+    )
+}
+
+const fn registered_stack_allocation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_allocation_failed",
+        "The registered stack could not reserve bounded transaction bookkeeping.",
+    )
+}
+
+fn registered_stack_error(error: RegisteredStackError) -> PreviewCommandError {
+    match error {
+        RegisteredStackError::Cancelled(_) => PreviewCommandError::new(
+            "registered_stack_cancelled",
+            "Integration was cancelled before the output was published.",
+        ),
+        RegisteredStackError::SourceSetMismatch
+        | RegisteredStackError::ArtifactIdentityMismatch { .. }
+        | RegisteredStackError::ArtifactPlanMismatch { .. } => {
+            registered_stack_artifact_set_error()
+        }
+        RegisteredStackError::ZeroBandHeight
+        | RegisteredStackError::ProvenanceAlgorithmMismatch
+        | RegisteredStackError::ProvenanceSourceCountMismatch
+        | RegisteredStackError::ProvenancePlanMismatch => registered_stack_configuration_error(),
+        RegisteredStackError::Memory(_) | RegisteredStackError::AllocationFailed => {
+            registered_stack_allocation_error()
+        }
+        RegisteredStackError::Publish(_) => PreviewCommandError::new(
+            "registered_stack_publication_failed",
+            "The integrated common crop could not be published atomically.",
+        ),
+        RegisteredStackError::DimensionMismatch { .. }
+        | RegisteredStackError::PlaneCountMismatch { .. }
+        | RegisteredStackError::Input(_)
+        | RegisteredStackError::ReadInput(_)
+        | RegisteredStackError::Integration(_)
+        | RegisteredStackError::InvalidStagedOutput
+        | RegisteredStackError::WorkSizeOverflow
+        | RegisteredStackError::StageId(_)
+        | RegisteredStackError::Progress(_) => PreviewCommandError::new(
+            "registered_stack_execution_failed",
+            "Registered integration failed strict native validation; no output was published.",
         ),
     }
 }
@@ -3655,11 +3939,13 @@ pub fn run() -> Result<(), tauri::Error> {
             cancel_light_plan,
             cancel_master_plan,
             cancel_registration_plan,
+            cancel_registered_stack,
             diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_light_plan,
             execute_master_plan,
             execute_registration_plan,
+            execute_registered_stack,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
@@ -4299,6 +4585,116 @@ mod tests {
         }));
         assert!(progress.iter().all(|event| event.frame_count == 2));
         assert_eq!(fs::read_dir(output_root)?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn integrates_the_published_registered_set_on_the_sealed_common_crop() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let registered_root = directory.path().join("registered");
+        let stack_path = directory.path().join("integrated-common-crop.fits");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let registration_request =
+            registration_execution_request(&session, &artifact_root, registered_root)?;
+        let planning = registration_request.planning.clone();
+        let expected_plan_sha256 = registration_request.expected_plan_sha256.clone();
+        let registered = execute_registration_plan_sync(
+            &session,
+            registration_request,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+        let artifacts = registered
+            .frames
+            .into_iter()
+            .map(|frame| RegistrationArtifactInput {
+                frame_id: frame.frame_id,
+                path: PathBuf::from(frame.output_path),
+            })
+            .collect();
+        let mut progress = Vec::new();
+
+        let result = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256: expected_plan_sha256.clone(),
+                artifacts,
+                output_path: stack_path.clone(),
+                band_height: 32,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+            },
+            &CancellationToken::new(),
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.plan_sha256, expected_plan_sha256);
+        assert_eq!(result.output_path, stack_path.to_string_lossy());
+        assert_eq!(result.planes, 3);
+        assert!(result.width > 0 && result.width < 256);
+        assert!(result.height > 0 && result.height < 256);
+        assert_eq!(
+            result.samples_written,
+            u64::try_from(result.width * result.height * result.planes)?
+        );
+        assert!(result.bytes_written > 0);
+        assert!(result.peak_reserved_bytes <= result.memory_limit_bytes);
+        assert!(stack_path.is_file());
+        assert_eq!(progress.first().map(|event| event.state), Some("started"));
+        assert_eq!(progress.last().map(|event| event.state), Some("completed"));
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_desktop_registered_stack_publishes_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let registered_root = directory.path().join("registered");
+        let stack_path = directory.path().join("cancelled-stack.fits");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let registration_request =
+            registration_execution_request(&session, &artifact_root, registered_root)?;
+        let planning = registration_request.planning.clone();
+        let expected_plan_sha256 = registration_request.expected_plan_sha256.clone();
+        let registered = execute_registration_plan_sync(
+            &session,
+            registration_request,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+
+        let error = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256,
+                artifacts: registered
+                    .frames
+                    .into_iter()
+                    .map(|frame| RegistrationArtifactInput {
+                        frame_id: frame.frame_id,
+                        path: PathBuf::from(frame.output_path),
+                    })
+                    .collect(),
+                output_path: stack_path.clone(),
+                band_height: 32,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+            },
+            &cancellation,
+            |_| {},
+        )
+        .err()
+        .ok_or("cancelled desktop registered stack succeeded")?;
+
+        assert_eq!(error.code, "registered_stack_cancelled");
+        assert!(!stack_path.exists());
         Ok(())
     }
 

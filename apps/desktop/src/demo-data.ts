@@ -62,6 +62,13 @@ export const demoReviewModel: ReviewViewModel = {
       result: null,
       message: "Calibrate the reviewed Lights to unlock registration",
     },
+    stack: {
+      state: "idle",
+      outputPath: null,
+      progress: null,
+      result: null,
+      message: "Register the reviewed Lights to unlock integration",
+    },
     resultReview: {
       frames: [],
       selectedFrameId: null,

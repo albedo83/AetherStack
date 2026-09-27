@@ -1,14 +1,18 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   cancelRegistrationPlan,
+  cancelRegisteredStack,
   diagnoseFitsRegistration,
   executeRegistrationPlan,
+  executeRegisteredStack,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
+  selectRegisteredStackOutput,
   type RegistrationExecutionProgress,
+  type RegisteredStackProgress,
 } from "./registration-bridge.ts";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -17,7 +21,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     this.onmessage = undefined;
   }),
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+  save: vi.fn(),
+}));
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -116,5 +123,60 @@ describe("native registration bridge", () => {
     });
     await expect(cancelRegistrationPlan()).resolves.toBe(true);
     expect(invoke).toHaveBeenLastCalledWith("cancel_registration_plan");
+  });
+
+  it("binds common-crop integration to the registered identities and plan", async () => {
+    const result = {
+      planSha256: "a".repeat(64),
+      outputPath: "/results/integrated.fits",
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+    const planning = {
+      referenceFrameId: "1".repeat(64),
+      sourceFrameIds: ["2".repeat(64)],
+    };
+    const artifacts = [
+      { frameId: "1".repeat(64), path: "/registered/reference.fits" },
+      { frameId: "2".repeat(64), path: "/registered/source.fits" },
+    ];
+    const onProgress = vi.fn<(event: RegisteredStackProgress) => void>();
+
+    await expect(
+      executeRegisteredStack(
+        "/results/integrated.fits",
+        planning,
+        "a".repeat(64),
+        artifacts,
+        { bandHeight: 128, memoryLimitBytes: 1_073_741_824 },
+        onProgress,
+      ),
+    ).resolves.toBe(result);
+    expect(invoke).toHaveBeenCalledWith("execute_registered_stack", {
+      request: {
+        planning,
+        expectedPlanSha256: "a".repeat(64),
+        artifacts,
+        outputPath: "/results/integrated.fits",
+        bandHeight: 128,
+        memoryLimitBytes: 1_073_741_824,
+      },
+      onProgress: expect.objectContaining({ onmessage: onProgress }),
+    });
+  });
+
+  it("selects and cancels a registered stack natively", async () => {
+    vi.mocked(save).mockResolvedValue("/results/integrated-common-crop.fits");
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    await expect(selectRegisteredStackOutput()).resolves.toBe(
+      "/results/integrated-common-crop.fits",
+    );
+    expect(save).toHaveBeenCalledWith({
+      title: "Save the integrated registered common crop",
+      defaultPath: "integrated-common-crop.fits",
+      filters: [{ name: "FITS image", extensions: ["fits", "fit", "fts"] }],
+    });
+    await expect(cancelRegisteredStack()).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("cancel_registered_stack");
   });
 });

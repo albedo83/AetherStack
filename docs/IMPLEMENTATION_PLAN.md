@@ -906,6 +906,15 @@ safety reasoning. They do not narrate obvious syntax.
     exact cropped RGB mean, progress, memory refusal, cancellation between
     bands, late source mutation, stale plan binding, and no-output rollback.
     Next, expose this transaction through the desktop execution panel.
+60. Expose registered common-crop integration in the desktop Registration
+    laboratory. The adapter reconstructs the current reviewed plan, accepts the
+    complete published registered identity set, fingerprints every artifact,
+    and delegates all pixel work to the bounded Rust executor. A native
+    create-new FITS chooser, typed progress, cooperative cancellation, exact
+    output dimensions, and peak-memory evidence are presented in an accessible
+    dark instrument panel beneath Registered Blink. Tests cover the IPC shape,
+    UI action, and native registration-to-stack transaction. Next, add a
+    result preview for the final integrated product and rejection-map products.
 
 ## 11. Stable-release definition
 
