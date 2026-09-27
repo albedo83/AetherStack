@@ -885,6 +885,16 @@ safety reasoning. They do not narrate obvious syntax.
     Presenter and binding tests cover exact pixel interpretation, stale preview
     suppression, accessible controls, and fail-closed set reconciliation. Next,
     add crop-aware registered-frame integration.
+58. Add the strict crop-aware mean primitive. `IntegrationRegion` rejects empty
+    or overflowing extents, and `integrate_mean_region` validates containment
+    against every equal-sized input before reading source samples directly into
+    a cropped planar output. It allocates no full-frame crop copies and retains
+    the exact two-pass compensated estimator, mask rules, stable source order,
+    and per-pixel support accounting. Tests cover multi-plane coordinate
+    mapping, masked and non-finite samples inside the crop, bounds failures, and
+    bit identity between the full-frame region and the established entry point.
+    Next, stream registered FITS bands through this primitive and atomically
+    publish a plan-bound integrated product.
 
 ## 11. Stable-release definition
 

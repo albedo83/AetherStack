@@ -6,6 +6,13 @@ each planar sample position. Weighting, statistical rejection, normalization,
 and registration are intentionally absent until their independent contracts and
 tests exist.
 
+`integrate_mean_region` applies the same estimator to one non-empty rectangular
+region contained by every input plane. Its output uses the region width and
+height with the original plane count. The implementation maps output samples
+directly into full-frame sources in planar order; it does not allocate cropped
+copies or process pixels outside the requested extent. This is the strict CPU
+primitive used by future registered stacking with the sealed common crop.
+
 ## Eligibility and support
 
 A source sample participates only when its quality mask is clear and its value
@@ -37,4 +44,8 @@ any pixel, so tile dimensions are not scientific parameters.
 
 The per-pixel support representation accepts at most `u32::MAX` inputs. Empty
 input, count overflow, dimension mismatch, internal invariant failure, and
-allocation failure are typed errors. No partial result is returned.
+allocation failure are typed errors. Empty, overflowing, or out-of-bounds
+regions are also explicit failures. No partial result is returned. Tests prove
+that a full-frame region is bit-identical to `integrate_mean`, that multi-plane
+crop coordinates preserve planar order, and that excluded-sample accounting is
+unchanged inside a crop.

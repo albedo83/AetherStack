@@ -50,6 +50,65 @@ pub struct MeanIntegration {
     support: Vec<PixelSupport>,
 }
 
+/// Inclusive origin and exclusive extent for strict spatial integration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IntegrationRegion {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+impl IntegrationRegion {
+    /// Builds a non-empty region whose coordinate additions cannot overflow.
+    ///
+    /// Bounds against an image are checked by [`integrate_mean_region`].
+    pub fn new(x: usize, y: usize, width: usize, height: usize) -> Result<Self, IntegrationError> {
+        if width == 0
+            || height == 0
+            || x.checked_add(width).is_none()
+            || y.checked_add(height).is_none()
+        {
+            return Err(IntegrationError::InvalidRegion {
+                x,
+                y,
+                width,
+                height,
+            });
+        }
+        Ok(Self {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+
+    /// Horizontal origin in source pixels.
+    #[must_use]
+    pub const fn x(self) -> usize {
+        self.x
+    }
+
+    /// Vertical origin in source pixels.
+    #[must_use]
+    pub const fn y(self) -> usize {
+        self.y
+    }
+
+    /// Output width in pixels.
+    #[must_use]
+    pub const fn width(self) -> usize {
+        self.width
+    }
+
+    /// Output height in pixels.
+    #[must_use]
+    pub const fn height(self) -> usize {
+        self.height
+    }
+}
+
 impl MeanIntegration {
     /// Strict mean image.
     #[must_use]
@@ -90,6 +149,24 @@ pub enum IntegrationError {
         expected: Dimensions,
         /// Received dimensions.
         actual: Dimensions,
+    },
+    /// A region is empty or its exclusive bounds overflow `usize`.
+    InvalidRegion {
+        /// Horizontal origin.
+        x: usize,
+        /// Vertical origin.
+        y: usize,
+        /// Requested width.
+        width: usize,
+        /// Requested height.
+        height: usize,
+    },
+    /// The requested region is not wholly contained in every input plane.
+    RegionOutsideInput {
+        /// Requested region.
+        region: IntegrationRegion,
+        /// Common input dimensions.
+        dimensions: Dimensions,
     },
     /// A supposedly valid image violated its internal sample/mask length invariant.
     InternalImageInvariant {
@@ -134,6 +211,25 @@ impl Display for IntegrationError {
                 expected.height(),
                 expected.planes()
             ),
+            Self::InvalidRegion {
+                x,
+                y,
+                width,
+                height,
+            } => write!(
+                formatter,
+                "integration region {x},{y} + {width}x{height} is empty or overflows"
+            ),
+            Self::RegionOutsideInput { region, dimensions } => write!(
+                formatter,
+                "integration region {},{} + {}x{} exceeds {}x{} input planes",
+                region.x(),
+                region.y(),
+                region.width(),
+                region.height(),
+                dimensions.width(),
+                dimensions.height()
+            ),
             Self::InternalImageInvariant { input_index } => write!(
                 formatter,
                 "input {input_index} violates the image sample/mask length invariant"
@@ -158,6 +254,8 @@ impl Error for IntegrationError {
             Self::NoInputImages
             | Self::TooManyInputImages { .. }
             | Self::DimensionMismatch { .. }
+            | Self::InvalidRegion { .. }
+            | Self::RegionOutsideInput { .. }
             | Self::InternalImageInvariant { .. }
             | Self::InternalAccountingInvariant { .. }
             | Self::SupportAllocationFailed { .. } => None,
@@ -189,6 +287,42 @@ pub fn integrate_mean(inputs: &[&ScientificImage]) -> Result<MeanIntegration, In
     let Some(first) = inputs.first().copied() else {
         return Err(IntegrationError::NoInputImages);
     };
+    let dimensions = first.dimensions();
+    let region = IntegrationRegion {
+        x: 0,
+        y: 0,
+        width: dimensions.width(),
+        height: dimensions.height(),
+    };
+    integrate_mean_impl(inputs, region)
+}
+
+/// Integrates one exact spatial region from equal-sized images.
+///
+/// The output dimensions are the requested width and height with the original
+/// plane count. Samples are read directly from the source images in stable
+/// planar order; no full-frame cropped copies are allocated. Classification,
+/// compensated arithmetic, mask propagation, and support accounting are
+/// identical to [`integrate_mean`].
+///
+/// # Errors
+///
+/// Returns an error when the input set is empty, dimensions differ, or the
+/// region is not wholly contained in the common input plane.
+pub fn integrate_mean_region(
+    inputs: &[&ScientificImage],
+    region: IntegrationRegion,
+) -> Result<MeanIntegration, IntegrationError> {
+    integrate_mean_impl(inputs, region)
+}
+
+fn integrate_mean_impl(
+    inputs: &[&ScientificImage],
+    region: IntegrationRegion,
+) -> Result<MeanIntegration, IntegrationError> {
+    let Some(first) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
     let input_count =
         u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
             count: inputs.len(),
@@ -206,23 +340,55 @@ pub fn integrate_mean(inputs: &[&ScientificImage]) -> Result<MeanIntegration, In
         }
     }
 
+    let region_right =
+        region
+            .x
+            .checked_add(region.width)
+            .ok_or(IntegrationError::InvalidRegion {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            })?;
+    let region_bottom =
+        region
+            .y
+            .checked_add(region.height)
+            .ok_or(IntegrationError::InvalidRegion {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            })?;
+    if region.width == 0
+        || region.height == 0
+        || region_right > dimensions.width()
+        || region_bottom > dimensions.height()
+    {
+        return Err(IntegrationError::RegionOutsideInput { region, dimensions });
+    }
+
+    let output_dimensions = Dimensions::new(region.width, region.height, dimensions.planes())
+        .map_err(IntegrationError::Core)?;
+
     let mut output =
-        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+        ScientificImage::filled(output_dimensions, f64::NAN).map_err(IntegrationError::Core)?;
     let mut support = Vec::new();
     support
-        .try_reserve_exact(dimensions.pixel_count())
+        .try_reserve_exact(output_dimensions.pixel_count())
         .map_err(|_| IntegrationError::SupportAllocationFailed {
-            elements: dimensions.pixel_count(),
+            elements: output_dimensions.pixel_count(),
         })?;
-    support.resize(dimensions.pixel_count(), PixelSupport::default());
+    support.resize(output_dimensions.pixel_count(), PixelSupport::default());
 
     let (output_pixels, output_mask) = output.pixels_and_mask_mut();
-    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+    for (output_index, ((output, output_flags), output_support)) in output_pixels
         .iter_mut()
         .zip(output_mask.as_mut_slice())
         .zip(&mut support)
         .enumerate()
     {
+        let pixel_index = source_index_for_region(dimensions, region, output_index);
         let mut scale = 0.0_f64;
         let mut minimum = f64::INFINITY;
         let mut maximum = f64::NEG_INFINITY;
@@ -286,6 +452,19 @@ pub fn integrate_mean(inputs: &[&ScientificImage]) -> Result<MeanIntegration, In
         image: output,
         support,
     })
+}
+
+fn source_index_for_region(
+    source: Dimensions,
+    region: IntegrationRegion,
+    output_index: usize,
+) -> usize {
+    let output_plane_samples = region.width * region.height;
+    let plane = output_index / output_plane_samples;
+    let within_plane = output_index % output_plane_samples;
+    let row = within_plane / region.width;
+    let column = within_plane % region.width;
+    plane * source.width() * source.height() + (region.y + row) * source.width() + region.x + column
 }
 
 fn sample_at(
@@ -442,6 +621,108 @@ mod tests {
 
         assert_eq!(image.pixels(), &[2.0, 3.0, 4.0, 5.0]);
         assert!(support.iter().all(|entry| entry.accepted() == 2));
+        Ok(())
+    }
+
+    #[test]
+    fn integrates_a_crop_directly_in_planar_order() -> TestResult {
+        let dimensions = Dimensions::new(4, 3, 2)?;
+        let first = ScientificImage::from_pixels(dimensions, (0..24).map(f64::from).collect())?;
+        let second = ScientificImage::from_pixels(
+            dimensions,
+            (0..24).map(|value| f64::from(value) + 10.0).collect(),
+        )?;
+        let region = IntegrationRegion::new(1, 1, 2, 2)?;
+
+        let result = integrate_mean_region(&[&first, &second], region)?;
+
+        assert_eq!(result.image().dimensions(), Dimensions::new(2, 2, 2)?);
+        for (actual, expected) in result
+            .image()
+            .pixels()
+            .iter()
+            .zip([10.0, 11.0, 14.0, 15.0, 22.0, 23.0, 26.0, 27.0])
+        {
+            assert!((actual - expected).abs() <= expected * f64::EPSILON);
+        }
+        assert!(
+            result
+                .support()
+                .iter()
+                .all(|support| support.accepted() == 2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cropped_support_retains_mask_and_non_finite_accounting() -> TestResult {
+        let dimensions = Dimensions::new(3, 2, 1)?;
+        let first = ScientificImage::from_pixels(dimensions, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+        let mut second =
+            ScientificImage::from_pixels(dimensions, vec![10.0, 20.0, 30.0, 40.0, f64::NAN, 60.0])?;
+        second.mask_mut().as_mut_slice()[3] = PixelFlags::SATURATED;
+
+        let result =
+            integrate_mean_region(&[&first, &second], IntegrationRegion::new(0, 1, 2, 1)?)?;
+
+        assert_eq!(result.image().pixels(), &[4.0, 5.0]);
+        assert_eq!(
+            result.support(),
+            &[
+                PixelSupport {
+                    accepted: 1,
+                    masked: 1,
+                    non_finite: 0,
+                },
+                PixelSupport {
+                    accepted: 1,
+                    masked: 0,
+                    non_finite: 1,
+                },
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validates_region_construction_and_source_bounds() -> TestResult {
+        assert!(matches!(
+            IntegrationRegion::new(0, 0, 0, 1),
+            Err(IntegrationError::InvalidRegion { .. })
+        ));
+        assert!(matches!(
+            IntegrationRegion::new(usize::MAX, 0, 1, 1),
+            Err(IntegrationError::InvalidRegion { .. })
+        ));
+        let source = ScientificImage::from_pixels(Dimensions::new(3, 2, 1)?, vec![0.0; 6])?;
+        assert!(matches!(
+            integrate_mean_region(&[&source], IntegrationRegion::new(2, 1, 2, 1)?,),
+            Err(IntegrationError::RegionOutsideInput { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn full_region_is_bit_identical_to_the_existing_entry_point() -> TestResult {
+        let dimensions = Dimensions::new(3, 2, 2)?;
+        let first = ScientificImage::from_pixels(
+            dimensions,
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        )?;
+        let second = ScientificImage::from_pixels(
+            dimensions,
+            vec![
+                2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0,
+            ],
+        )?;
+
+        let existing = integrate_mean(&[&first, &second])?;
+        let regional =
+            integrate_mean_region(&[&first, &second], IntegrationRegion::new(0, 0, 3, 2)?)?;
+
+        assert_eq!(existing, regional);
         Ok(())
     }
 }

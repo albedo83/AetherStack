@@ -145,8 +145,9 @@ optimized CPU and GPU paths must match.
   a memory-bounded band executor that atomically publishes checksum-verified
   planar RGB FITS products, plus an all-or-nothing reviewed-Light-plan RGB
   exporter that revalidates every calibrated input before set publication;
-- strict unweighted mean integration with compensated normalized accumulation
-  and exact per-pixel support accounting;
+- strict unweighted mean integration with compensated normalized accumulation,
+  exact per-pixel support accounting, and direct multi-plane region integration
+  for a sealed common crop without full-frame crop copies;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, streams scan-line bands without a
   full final-image allocation, calculates exact three-pass output statistics,
