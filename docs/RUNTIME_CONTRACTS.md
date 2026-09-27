@@ -108,6 +108,15 @@ It derives the reviewed frame identity from the portable relative path and
 recorded source fingerprint, obtains transform and canvas only from the
 canonical registration plan, requires matching plan SHA-256 in output
 provenance, and verifies decoded source dimensions before staging a FITS file.
+`run_registration_plan` raises this single-frame primitive to the production
+transaction boundary. It requires an exact one-to-one source set for the
+identity-canonical plan, derives deterministic public names from `FrameId`, and
+builds every checksum-verified FITS in a private sibling directory. After the
+last frame, it fingerprints every source again and only then exposes the set
+with create-new hard links. Cancellation and publication failures roll back
+links created by that run; existing paths are rejected before calculation and
+are never replaced. Progress identifies both the canonical frame position and
+the underlying bounded registration stage.
 The operation identifier participates in checkpoint keys, preventing a
 single-frame calibrated tile from colliding with an integrated tile.
 

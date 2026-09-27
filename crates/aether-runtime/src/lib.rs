@@ -42,6 +42,8 @@ pub use progress::{
     ProgressSequence, ProgressState, StageId, StageIdError,
 };
 pub use registration::{
-    RegistrationPipelineError, StrictRegistrationRequest, StrictRegistrationResult,
-    run_strict_registration_pipeline,
+    RegisteredFrameExecutionResult, RegistrationPipelineError, RegistrationPlanExecutionError,
+    RegistrationPlanExecutionRequest, RegistrationPlanExecutionResult,
+    RegistrationPlanProgressEvent, RegistrationPlanSource, StrictRegistrationRequest,
+    StrictRegistrationResult, run_registration_plan, run_strict_registration_pipeline,
 };

@@ -130,7 +130,9 @@ optimized CPU and GPU paths must match.
   geometric field, and an immutable identity-canonical multi-Light plan that
   requires one exact identity reference and a non-empty all-frame crop; the
   runtime can derive geometry only from this plan and rejects stale digest,
-  portable identity, fingerprint, or decoded-dimension evidence;
+  portable identity, fingerprint, or decoded-dimension evidence, then stages,
+  revalidates, and rollback-safely publishes the entire registered frame set as
+  one transaction;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

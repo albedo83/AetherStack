@@ -814,6 +814,15 @@ safety reasoning. They do not narrate obvious syntax.
     Tests reject missing digest, a substituted portable identity, and dimension
     drift without publishing output. Next, wrap these plan-bound requests in an
     all-or-nothing multi-frame transaction with shared cancellation and progress.
+51. Publish an immutable registration plan as one transaction. The runtime now
+    requires every reviewed `FrameId` exactly once, orders work and names output
+    canonically, stages and checksum-validates every registered FITS privately,
+    revalidates the complete source set, then publishes with create-new links
+    and rollback. Existing destinations fail before numerical work; cancellation
+    after an already staged frame exposes nothing. Shared memory accounting and
+    frame-indexed progress cover the complete run. Next, bind the desktop's
+    accepted diagnostics into this multi-frame plan and expose an explicit
+    review-before-run surface without weakening the confidence gate.
 
 ## 11. Stable-release definition
 

@@ -331,8 +331,8 @@ Production registration still requires:
 
 The desktop Registration laboratory exposes the native pair diagnostic,
 confidence evidence, accepted source-pixel transform, and exact autocrop. It is
-diagnostic-only: registered FITS publication exists in the runtime API but is
-not yet orchestrated as a complete multi-frame desktop plan.
+diagnostic-only at the UI boundary: the runtime can execute a complete plan,
+but the desktop does not yet assemble and submit that plan.
 
 The geometry core also provides `registration-plan-v1`, the immutable boundary
 for that future orchestration. It requires at least two unique reviewed frame
@@ -352,3 +352,11 @@ inside the immutable plan, and requires FITS provenance to carry the exact plan
 digest. It also rechecks decoded source dimensions before creating output. The
 older direct constructor remains the numerical oracle boundary; production
 orchestration must use the plan-bound path.
+
+`run_registration_plan` is the all-frame publication boundary. The supplied
+portable identities must match every canonical plan entry exactly once. Each
+registered image is constructed and checksum-read back inside a private sibling
+directory; all raw sources are fingerprinted again before the first public link
+appears. Final filenames contain only stable frame IDs. Create-new publication
+never overwrites user data, rolls back links made by a failed or cancelled run,
+and synchronizes the destination directory after the complete set is visible.

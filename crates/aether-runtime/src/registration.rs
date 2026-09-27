@@ -1,13 +1,16 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::fs::{self, File};
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use aether_core::{Dimensions, PixelFlags};
 use aether_fits::{
-    AtomicF64PrimaryStreamWriter, AtomicFitsWriteError, FitsOutputProvenance, FitsWriteSummary,
-    HeaderReadOptions, ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus,
-    ValidationMode,
+    AtomicF64PrimaryStreamWriter, AtomicFitsWriteError, FitsOutputProvenance, FitsProvenanceError,
+    FitsWriteSummary, HeaderReadOptions, ImageReadError, ImageRegion, PrimaryImageReader,
+    SampleStatus, ValidationMode,
 };
 use aether_registration::{
     AffineTransform, LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandPlan, RegistrationPlan,
@@ -25,6 +28,8 @@ use crate::{
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const REGISTRATION_STAGE_ID: &str = "strict-registration";
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
+const MAX_STAGING_DIRECTORY_ATTEMPTS: usize = 128;
+static STAGING_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Validated request for one bounded, atomic registration transaction.
 #[derive(Clone, Debug)]
@@ -190,6 +195,351 @@ impl StrictRegistrationResult {
     }
 }
 
+/// One exact source supplied to a whole-plan registration transaction.
+#[derive(Clone, Debug)]
+pub struct RegistrationPlanSource {
+    source: PipelineSource,
+    portable_relative_path: String,
+}
+
+impl RegistrationPlanSource {
+    /// Associates a fingerprinted source with its portable session path.
+    #[must_use]
+    pub fn new(source: PipelineSource, portable_relative_path: impl Into<String>) -> Self {
+        Self {
+            source,
+            portable_relative_path: portable_relative_path.into(),
+        }
+    }
+
+    /// Fingerprinted local source.
+    #[must_use]
+    pub const fn source(&self) -> &PipelineSource {
+        &self.source
+    }
+
+    /// Portable path used to derive the reviewed [`FrameId`].
+    #[must_use]
+    pub fn portable_relative_path(&self) -> &str {
+        &self.portable_relative_path
+    }
+
+    fn frame_id(&self) -> Result<FrameId, RegistrationPlanExecutionError> {
+        FrameId::derive(
+            &self.portable_relative_path,
+            self.source.fingerprint().byte_length(),
+            self.source.fingerprint().sha256(),
+        )
+        .map_err(|_| RegistrationPlanExecutionError::InvalidSourceIdentity)
+    }
+}
+
+/// Complete immutable request for a rollback-safe registration plan run.
+#[derive(Clone, Debug)]
+pub struct RegistrationPlanExecutionRequest {
+    plan: RegistrationPlan,
+    sources: Vec<RegistrationPlanSource>,
+    output_directory: PathBuf,
+    manifest_sha256: String,
+    group_id: String,
+    band_height: usize,
+    header_options: HeaderReadOptions,
+    validation_mode: ValidationMode,
+}
+
+impl RegistrationPlanExecutionRequest {
+    /// Creates a request whose public filenames are derived from frame IDs.
+    pub fn new(
+        plan: RegistrationPlan,
+        sources: Vec<RegistrationPlanSource>,
+        output_directory: PathBuf,
+        manifest_sha256: impl Into<String>,
+        group_id: impl Into<String>,
+    ) -> Result<Self, RegistrationPlanExecutionError> {
+        if sources.len() != plan.frames().len() {
+            return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+        }
+        let manifest_sha256 = manifest_sha256.into();
+        let group_id = group_id.into();
+        FitsOutputProvenance::new(
+            &manifest_sha256,
+            &group_id,
+            LANCZOS3_RESAMPLING_ALGORITHM_ID,
+            1,
+        )
+        .map_err(RegistrationPlanExecutionError::Provenance)?;
+        validate_plan_source_set(&plan, &sources)?;
+        Ok(Self {
+            plan,
+            sources,
+            output_directory,
+            manifest_sha256,
+            group_id,
+            band_height: DEFAULT_BAND_HEIGHT,
+            header_options: HeaderReadOptions::default(),
+            validation_mode: ValidationMode::Strict,
+        })
+    }
+
+    /// Replaces the maximum number of output rows held by one frame worker.
+    pub fn with_band_height(
+        mut self,
+        band_height: usize,
+    ) -> Result<Self, RegistrationPlanExecutionError> {
+        if band_height == 0 {
+            return Err(RegistrationPlanExecutionError::FramePipeline {
+                frame_id: self.plan.reference_frame_id().clone(),
+                source: RegistrationPipelineError::ZeroBandHeight,
+            });
+        }
+        self.band_height = band_height;
+        Ok(self)
+    }
+
+    /// Replaces FITS header limits and diagnostic acceptance policy.
+    #[must_use]
+    pub const fn with_header_policy(
+        mut self,
+        options: HeaderReadOptions,
+        mode: ValidationMode,
+    ) -> Self {
+        self.header_options = options;
+        self.validation_mode = mode;
+        self
+    }
+
+    /// Canonical plan executed by this transaction.
+    #[must_use]
+    pub const fn plan(&self) -> &RegistrationPlan {
+        &self.plan
+    }
+
+    /// Directory that receives the complete public product set.
+    #[must_use]
+    pub fn output_directory(&self) -> &Path {
+        &self.output_directory
+    }
+}
+
+/// Progress of one canonical frame within a whole-plan transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistrationPlanProgressEvent {
+    frame_index: usize,
+    frame_count: usize,
+    frame_id: FrameId,
+    stage: ProgressEvent,
+}
+
+impl RegistrationPlanProgressEvent {
+    /// Zero-based position in canonical frame-ID order.
+    #[must_use]
+    pub const fn frame_index(&self) -> usize {
+        self.frame_index
+    }
+
+    /// Total number of frames in this transaction.
+    #[must_use]
+    pub const fn frame_count(&self) -> usize {
+        self.frame_count
+    }
+
+    /// Stable reviewed identity of the active frame.
+    #[must_use]
+    pub const fn frame_id(&self) -> &FrameId {
+        &self.frame_id
+    }
+
+    /// Underlying bounded registration stage event.
+    #[must_use]
+    pub const fn stage(&self) -> &ProgressEvent {
+        &self.stage
+    }
+}
+
+/// One registered FITS published by a complete plan transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredFrameExecutionResult {
+    frame_id: FrameId,
+    output: PathBuf,
+    summary: FitsWriteSummary,
+    statistics: ResamplingStatistics,
+}
+
+impl RegisteredFrameExecutionResult {
+    /// Stable reviewed identity of this product.
+    #[must_use]
+    pub const fn frame_id(&self) -> &FrameId {
+        &self.frame_id
+    }
+
+    /// Public create-new FITS path.
+    #[must_use]
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
+
+    /// Exact FITS write accounting.
+    #[must_use]
+    pub const fn summary(&self) -> FitsWriteSummary {
+        self.summary
+    }
+
+    /// Complete interpolation and support accounting.
+    #[must_use]
+    pub const fn statistics(&self) -> ResamplingStatistics {
+        self.statistics
+    }
+}
+
+/// Complete canonically ordered result of a registration-plan transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistrationPlanExecutionResult {
+    plan_sha256: String,
+    frames: Vec<RegisteredFrameExecutionResult>,
+    peak_reserved_bytes: usize,
+}
+
+impl RegistrationPlanExecutionResult {
+    /// Exact canonical plan digest carried by every output.
+    #[must_use]
+    pub fn plan_sha256(&self) -> &str {
+        &self.plan_sha256
+    }
+
+    /// Published products in canonical frame-ID order.
+    #[must_use]
+    pub fn frames(&self) -> &[RegisteredFrameExecutionResult] {
+        &self.frames
+    }
+
+    /// Peak logical working set observed by the shared memory budget.
+    #[must_use]
+    pub const fn peak_reserved_bytes(&self) -> usize {
+        self.peak_reserved_bytes
+    }
+}
+
+/// Failure while validating or executing a complete registration plan.
+#[derive(Debug)]
+pub enum RegistrationPlanExecutionError {
+    /// A portable path and fingerprint cannot form a reviewed identity.
+    InvalidSourceIdentity,
+    /// Supplied identities are missing, duplicated, or absent from the plan.
+    SourceSetMismatch,
+    /// The output directory is absent or is not a directory.
+    InvalidOutputDirectory,
+    /// A final create-new destination already exists.
+    DestinationExists(PathBuf),
+    /// FITS provenance could not be constructed.
+    Provenance(FitsProvenanceError),
+    /// A private sibling staging directory could not be created.
+    CreateStagingDirectory(std::io::Error),
+    /// One frame failed before publication.
+    FramePipeline {
+        /// Reviewed frame that failed.
+        frame_id: FrameId,
+        /// Strict single-frame failure.
+        source: RegistrationPipelineError,
+    },
+    /// Allocation for bounded transaction bookkeeping failed.
+    AllocationFailed,
+    /// Execution stopped at a cooperative checkpoint.
+    Cancelled(Cancelled),
+    /// A staged product could not be linked into the public directory.
+    PublishProduct {
+        /// Reviewed frame that could not be published.
+        frame_id: FrameId,
+        /// Atomic hard-link failure.
+        source: std::io::Error,
+    },
+    /// The published directory entry set could not be durably synchronized.
+    SyncOutputDirectory(std::io::Error),
+    /// A link created by this transaction could not be removed during rollback.
+    RollbackPublication {
+        /// Public path that remains visible.
+        path: PathBuf,
+        /// Filesystem rollback failure.
+        source: std::io::Error,
+    },
+}
+
+impl Display for RegistrationPlanExecutionError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSourceIdentity => formatter.write_str(
+                "registration source path and fingerprint do not form a portable frame identity",
+            ),
+            Self::SourceSetMismatch => formatter
+                .write_str("registration sources do not match the reviewed plan exactly once each"),
+            Self::InvalidOutputDirectory => {
+                formatter.write_str("registration output directory is absent or invalid")
+            }
+            Self::DestinationExists(path) => {
+                write!(
+                    formatter,
+                    "registration destination already exists: {}",
+                    path.display()
+                )
+            }
+            Self::Provenance(error) => {
+                write!(formatter, "invalid registration provenance: {error}")
+            }
+            Self::CreateStagingDirectory(error) => {
+                write!(
+                    formatter,
+                    "cannot create private registration staging directory: {error}"
+                )
+            }
+            Self::FramePipeline { frame_id, source } => {
+                write!(
+                    formatter,
+                    "registration frame {} failed: {source}",
+                    frame_id.as_str()
+                )
+            }
+            Self::AllocationFailed => {
+                formatter.write_str("cannot allocate registration transaction bookkeeping")
+            }
+            Self::Cancelled(error) => Display::fmt(error, formatter),
+            Self::PublishProduct { frame_id, source } => write!(
+                formatter,
+                "cannot publish registration frame {}: {source}",
+                frame_id.as_str()
+            ),
+            Self::SyncOutputDirectory(error) => {
+                write!(
+                    formatter,
+                    "cannot synchronize registration output directory: {error}"
+                )
+            }
+            Self::RollbackPublication { path, source } => write!(
+                formatter,
+                "cannot roll back published registration path {}: {source}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl Error for RegistrationPlanExecutionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Provenance(error) => Some(error),
+            Self::CreateStagingDirectory(error)
+            | Self::SyncOutputDirectory(error)
+            | Self::RollbackPublication { source: error, .. }
+            | Self::PublishProduct { source: error, .. } => Some(error),
+            Self::FramePipeline { source, .. } => Some(source),
+            Self::Cancelled(error) => Some(error),
+            Self::InvalidSourceIdentity
+            | Self::SourceSetMismatch
+            | Self::InvalidOutputDirectory
+            | Self::DestinationExists(_)
+            | Self::AllocationFailed => None,
+        }
+    }
+}
+
 /// Failure raised by the bounded registration transaction.
 #[derive(Debug)]
 pub enum RegistrationPipelineError {
@@ -328,6 +678,303 @@ impl Error for RegistrationPipelineError {
             | Self::WorkSizeOverflow
             | Self::InvalidStagedOutput => None,
         }
+    }
+}
+
+/// Executes every reviewed transform as one rollback-safe publication set.
+///
+/// All sources are identity-checked before calculation. Individual registered
+/// FITS files are then built and checksum-validated in a private sibling
+/// directory. The complete source set is fingerprinted again before any public
+/// link is created. Publication uses create-new hard links, rolls back links
+/// made by this transaction on failure, and never replaces an existing path.
+pub fn run_registration_plan<F>(
+    request: &RegistrationPlanExecutionRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<RegistrationPlanExecutionResult, RegistrationPlanExecutionError>
+where
+    F: FnMut(RegistrationPlanProgressEvent),
+{
+    validate_plan_source_set(&request.plan, &request.sources)?;
+    if !request.output_directory.is_dir() {
+        return Err(RegistrationPlanExecutionError::InvalidOutputDirectory);
+    }
+    let ordered = canonical_plan_sources(&request.plan, &request.sources)?;
+    let destinations = planned_registration_destinations(&request.output_directory, &ordered)?;
+    preflight_registration_destinations(&destinations)?;
+    cancellation
+        .checkpoint()
+        .map_err(RegistrationPlanExecutionError::Cancelled)?;
+
+    let staging = RegistrationStagingDirectory::create(&request.output_directory)?;
+    let frame_count = ordered.len();
+    let mut staged = BTreeMap::new();
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(frame_count)
+        .map_err(|_| RegistrationPlanExecutionError::AllocationFailed)?;
+
+    for (frame_index, (frame_id, source)) in ordered.iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(RegistrationPlanExecutionError::Cancelled)?;
+        let staged_output = staging.path().join(registration_file_name(frame_id));
+        let provenance = FitsOutputProvenance::new(
+            &request.manifest_sha256,
+            &request.group_id,
+            LANCZOS3_RESAMPLING_ALGORITHM_ID,
+            1,
+        )
+        .and_then(|value| value.with_plan_sha256(request.plan.plan_sha256()))
+        .and_then(|value| value.with_source_sha256(source.source.fingerprint().sha256()))
+        .map_err(RegistrationPlanExecutionError::Provenance)?;
+        let pipeline = StrictRegistrationRequest::from_plan(
+            source.source.clone(),
+            &source.portable_relative_path,
+            staged_output.clone(),
+            provenance,
+            &request.plan,
+        )
+        .and_then(|value| value.with_band_height(request.band_height))
+        .map(|value| value.with_header_policy(request.header_options, request.validation_mode))
+        .map_err(|source| RegistrationPlanExecutionError::FramePipeline {
+            frame_id: frame_id.clone(),
+            source,
+        })?;
+        let completed =
+            run_strict_registration_pipeline(&pipeline, cancellation, memory, |stage| {
+                progress(RegistrationPlanProgressEvent {
+                    frame_index,
+                    frame_count,
+                    frame_id: frame_id.clone(),
+                    stage,
+                });
+            })
+            .map_err(|source| RegistrationPlanExecutionError::FramePipeline {
+                frame_id: frame_id.clone(),
+                source,
+            })?;
+        let output = destinations
+            .get(frame_id)
+            .cloned()
+            .ok_or(RegistrationPlanExecutionError::SourceSetMismatch)?;
+        staged.insert(frame_id.clone(), staged_output);
+        frames.push(RegisteredFrameExecutionResult {
+            frame_id: frame_id.clone(),
+            output,
+            summary: completed.summary(),
+            statistics: completed.statistics(),
+        });
+    }
+
+    cancellation
+        .checkpoint()
+        .map_err(RegistrationPlanExecutionError::Cancelled)?;
+    revalidate_registration_sources(&ordered)?;
+    publish_registration_set(
+        &staged,
+        &destinations,
+        &request.output_directory,
+        cancellation,
+    )?;
+    Ok(RegistrationPlanExecutionResult {
+        plan_sha256: request.plan.plan_sha256().to_owned(),
+        frames,
+        peak_reserved_bytes: memory.peak(),
+    })
+}
+
+fn validate_plan_source_set(
+    plan: &RegistrationPlan,
+    sources: &[RegistrationPlanSource],
+) -> Result<(), RegistrationPlanExecutionError> {
+    if sources.len() != plan.frames().len() {
+        return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+    }
+    let mut identities = BTreeMap::new();
+    for source in sources {
+        let frame_id = source.frame_id()?;
+        if identities.insert(frame_id, ()).is_some() {
+            return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+        }
+    }
+    if plan
+        .frames()
+        .iter()
+        .any(|frame| !identities.contains_key(frame.frame_id()))
+    {
+        return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+    }
+    Ok(())
+}
+
+fn canonical_plan_sources<'a>(
+    plan: &RegistrationPlan,
+    sources: &'a [RegistrationPlanSource],
+) -> Result<Vec<(FrameId, &'a RegistrationPlanSource)>, RegistrationPlanExecutionError> {
+    let mut by_id = BTreeMap::new();
+    for source in sources {
+        if by_id.insert(source.frame_id()?, source).is_some() {
+            return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+        }
+    }
+    let mut ordered = Vec::new();
+    ordered
+        .try_reserve_exact(plan.frames().len())
+        .map_err(|_| RegistrationPlanExecutionError::AllocationFailed)?;
+    for frame in plan.frames() {
+        let source = by_id
+            .remove(frame.frame_id())
+            .ok_or(RegistrationPlanExecutionError::SourceSetMismatch)?;
+        ordered.push((frame.frame_id().clone(), source));
+    }
+    if !by_id.is_empty() {
+        return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+    }
+    Ok(ordered)
+}
+
+fn planned_registration_destinations(
+    output_directory: &Path,
+    ordered: &[(FrameId, &RegistrationPlanSource)],
+) -> Result<BTreeMap<FrameId, PathBuf>, RegistrationPlanExecutionError> {
+    let mut destinations = BTreeMap::new();
+    for (frame_id, _) in ordered {
+        destinations.insert(
+            frame_id.clone(),
+            output_directory.join(registration_file_name(frame_id)),
+        );
+    }
+    Ok(destinations)
+}
+
+fn registration_file_name(frame_id: &FrameId) -> String {
+    format!("registered-{}.fits", frame_id.as_str())
+}
+
+fn preflight_registration_destinations(
+    destinations: &BTreeMap<FrameId, PathBuf>,
+) -> Result<(), RegistrationPlanExecutionError> {
+    if let Some(path) = destinations.values().find(|path| path.exists()) {
+        return Err(RegistrationPlanExecutionError::DestinationExists(
+            path.clone(),
+        ));
+    }
+    Ok(())
+}
+
+fn revalidate_registration_sources(
+    ordered: &[(FrameId, &RegistrationPlanSource)],
+) -> Result<(), RegistrationPlanExecutionError> {
+    for (index, (frame_id, source)) in ordered.iter().enumerate() {
+        verify_source(&source.source, PipelineInput::Signal { index }).map_err(|source| {
+            RegistrationPlanExecutionError::FramePipeline {
+                frame_id: frame_id.clone(),
+                source: RegistrationPipelineError::Input(source),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn publish_registration_set(
+    staged: &BTreeMap<FrameId, PathBuf>,
+    destinations: &BTreeMap<FrameId, PathBuf>,
+    output_directory: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), RegistrationPlanExecutionError> {
+    let mut published = Vec::new();
+    published
+        .try_reserve_exact(staged.len())
+        .map_err(|_| RegistrationPlanExecutionError::AllocationFailed)?;
+    for (frame_id, staged_path) in staged {
+        if let Err(cancelled) = cancellation.checkpoint() {
+            rollback_registration_publications(&published)?;
+            return Err(RegistrationPlanExecutionError::Cancelled(cancelled));
+        }
+        let destination = destinations
+            .get(frame_id)
+            .ok_or(RegistrationPlanExecutionError::SourceSetMismatch)?;
+        if let Err(source) = fs::hard_link(staged_path, destination) {
+            rollback_registration_publications(&published)?;
+            return Err(RegistrationPlanExecutionError::PublishProduct {
+                frame_id: frame_id.clone(),
+                source,
+            });
+        }
+        published.push(destination.clone());
+    }
+    if let Err(source) = sync_registration_output_directory(output_directory) {
+        rollback_registration_publications(&published)?;
+        return Err(RegistrationPlanExecutionError::SyncOutputDirectory(source));
+    }
+    Ok(())
+}
+
+fn rollback_registration_publications(
+    paths: &[PathBuf],
+) -> Result<(), RegistrationPlanExecutionError> {
+    for path in paths.iter().rev() {
+        fs::remove_file(path).map_err(|source| {
+            RegistrationPlanExecutionError::RollbackPublication {
+                path: path.clone(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_registration_output_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_registration_output_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+struct RegistrationStagingDirectory {
+    path: PathBuf,
+}
+
+impl RegistrationStagingDirectory {
+    fn create(output_directory: &Path) -> Result<Self, RegistrationPlanExecutionError> {
+        for _ in 0..MAX_STAGING_DIRECTORY_ATTEMPTS {
+            let sequence = STAGING_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = output_directory.join(format!(
+                ".aether-registration-stage-{}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(RegistrationPlanExecutionError::CreateStagingDirectory(
+                        error,
+                    ));
+                }
+            }
+        }
+        Err(RegistrationPlanExecutionError::CreateStagingDirectory(
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "exhausted private registration staging names",
+            ),
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RegistrationStagingDirectory {
+    fn drop(&mut self) {
+        let _ignored = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -716,6 +1363,194 @@ mod tests {
                 PlannedRegistrationFrame::new(reference_id, 11, 9, AffineTransform::IDENTITY),
             ],
         )?)
+    }
+
+    fn two_source_registration_request(
+        directory: &TestDirectory,
+    ) -> Result<(RegistrationPlanExecutionRequest, Vec<FrameId>), Box<dyn Error>> {
+        let (first, _, _) = source_and_provenance(directory)?;
+        let second_path = directory.0.join("reference.fits");
+        fs::copy(first.path(), &second_path)?;
+        let second = PipelineSource::new(second_path, first.fingerprint().clone());
+        let first_id = FrameId::derive(
+            "source.fits",
+            first.fingerprint().byte_length(),
+            first.fingerprint().sha256(),
+        )?;
+        let second_id = FrameId::derive(
+            "reference.fits",
+            second.fingerprint().byte_length(),
+            second.fingerprint().sha256(),
+        )?;
+        let plan = RegistrationPlan::new(
+            second_id.clone(),
+            11,
+            9,
+            vec![
+                PlannedRegistrationFrame::new(first_id.clone(), 11, 9, AffineTransform::IDENTITY),
+                PlannedRegistrationFrame::new(second_id.clone(), 11, 9, AffineTransform::IDENTITY),
+            ],
+        )?;
+        let output_directory = directory.0.join("registered");
+        fs::create_dir(&output_directory)?;
+        let request = RegistrationPlanExecutionRequest::new(
+            plan,
+            vec![
+                RegistrationPlanSource::new(second, "reference.fits"),
+                RegistrationPlanSource::new(first, "source.fits"),
+            ],
+            output_directory,
+            "c".repeat(64),
+            "light-group",
+        )?
+        .with_band_height(3)?;
+        let mut ids = vec![first_id, second_id];
+        ids.sort();
+        Ok((request, ids))
+    }
+
+    #[test]
+    fn registration_plan_publishes_only_the_complete_canonical_set() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, expected_ids) = two_source_registration_request(&directory)?;
+        let mut events = Vec::new();
+        let result = run_registration_plan(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |event| events.push(event),
+        )?;
+
+        assert_eq!(result.plan_sha256(), request.plan().plan_sha256());
+        assert_eq!(result.frames().len(), 2);
+        assert_eq!(
+            result
+                .frames()
+                .iter()
+                .map(|frame| frame.frame_id().clone())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        assert!(result.frames().iter().all(|frame| frame.output().is_file()));
+        assert_eq!(
+            events
+                .first()
+                .map(RegistrationPlanProgressEvent::frame_index),
+            Some(0)
+        );
+        assert_eq!(
+            events
+                .last()
+                .map(RegistrationPlanProgressEvent::frame_index),
+            Some(1)
+        );
+        assert!(events.iter().all(|event| event.frame_count() == 2));
+        assert!(
+            request
+                .output_directory()
+                .read_dir()?
+                .all(|entry| entry.map_or(true, |entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with('.')))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registration_plan_rejects_incomplete_or_preexisting_products_before_work() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, _) = two_source_registration_request(&directory)?;
+        let incomplete = RegistrationPlanExecutionRequest::new(
+            request.plan.clone(),
+            vec![request.sources[0].clone()],
+            request.output_directory.clone(),
+            request.manifest_sha256.clone(),
+            request.group_id.clone(),
+        );
+        assert!(matches!(
+            incomplete,
+            Err(RegistrationPlanExecutionError::SourceSetMismatch)
+        ));
+
+        let first_id = request.plan.frames()[0].frame_id();
+        let occupied = request
+            .output_directory()
+            .join(registration_file_name(first_id));
+        File::create(&occupied)?;
+        let mut events = Vec::new();
+        assert!(matches!(
+            run_registration_plan(
+                &request,
+                &CancellationToken::new(),
+                &MemoryBudget::new(2_000_000)?,
+                |event| events.push(event),
+            ),
+            Err(RegistrationPlanExecutionError::DestinationExists(path)) if path == occupied
+        ));
+        assert!(events.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_after_one_registered_frame_publishes_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, _) = two_source_registration_request(&directory)?;
+        let cancellation = CancellationToken::new();
+        let result = run_registration_plan(
+            &request,
+            &cancellation,
+            &MemoryBudget::new(2_000_000)?,
+            |event| {
+                if event.frame_index() == 0 && event.stage().state() == ProgressState::Completed {
+                    let _was_first_cancellation = cancellation.cancel();
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(RegistrationPlanExecutionError::Cancelled(_))
+        ));
+        assert_eq!(request.output_directory().read_dir()?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn source_mutation_after_staging_blocks_the_complete_plan() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, _) = two_source_registration_request(&directory)?;
+        let first_path = canonical_plan_sources(&request.plan, &request.sources)?[0]
+            .1
+            .source
+            .path()
+            .to_path_buf();
+        let mut mutated = false;
+        let result = run_registration_plan(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |event| {
+                if !mutated
+                    && event.frame_index() == 0
+                    && event.stage().state() == ProgressState::Completed
+                    && let Ok(mut file) = fs::OpenOptions::new().append(true).open(&first_path)
+                {
+                    mutated = file.write_all(&[0]).is_ok();
+                }
+            },
+        );
+
+        assert!(mutated);
+        assert!(matches!(
+            result,
+            Err(RegistrationPlanExecutionError::FramePipeline {
+                source: RegistrationPipelineError::Input(_),
+                ..
+            })
+        ));
+        assert_eq!(request.output_directory().read_dir()?.count(), 0);
+        Ok(())
     }
 
     #[test]
