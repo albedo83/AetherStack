@@ -119,9 +119,10 @@ optimized CPU and GPU paths must match.
   integer-coordinate sampling, compensated weights, unclipped output,
   conservative non-zero-tap mask propagation, complete footprint accounting,
   synthetic constant-field and point-source flux tests, and a bounded band
-  executor proven bit-exact against the complete-image oracle, plus an exact
-  common-support scan that derives the largest deterministic autocrop without
-  letting isolated sensor defects shrink the geometric field;
+  executor with exact source-window plans proven bit-exact against the
+  complete-image oracle, plus an exact common-support scan that derives the
+  largest deterministic autocrop without letting isolated sensor defects shrink
+  the geometric field;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

@@ -769,6 +769,14 @@ safety reasoning. They do not narrate obvious syntax.
     artificial halo, fractional coordinates retain every necessary tap, and a
     disjoint band becomes an explicit no-read result. Next, make the band kernel
     consume these windows and bind it to transactional FITS publication.
+46. Execute registration directly from the planned source rectangle. An
+    immutable band plan binds complete source and reference dimensions, global
+    band coordinates, transform, and exact window. Execution rejects missing,
+    unnecessary, or misshaped decoded storage, translates taps with checked
+    global-to-local arithmetic, and emits disjoint bands without I/O. A
+    multi-plane differential test reconstructs the entire registered result and
+    requires bitwise oracle parity for pixels, masks, and support accounting.
+    Next, connect this contract to bounded FITS reads and atomic publication.
 
 ## 11. Stable-release definition
 

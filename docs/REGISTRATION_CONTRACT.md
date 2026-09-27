@@ -250,6 +250,14 @@ bands require no source read. Integer-aligned transforms consequently request no
 invented halo, while fractional transforms include all six taps per affected
 axis. This plan is geometric and does not inspect pixel values or masks.
 
+The immutable band plan is also the authority that consumes the decoded window.
+It rejects absent, unnecessary, or dimensionally different storage before
+sampling, and converts global tap coordinates to window-local indices with
+checked arithmetic. A disjoint plan emits a fully missing band without source
+storage. Multi-plane, masked, non-finite, fractional-transform tests assemble
+all window-backed bands and require bitwise equality with the whole-image
+oracle, including masks and support counters.
+
 ## Common geometric footprint and autocrop
 
 `common-lanczos3-footprint-v1` evaluates only image extents and accepted

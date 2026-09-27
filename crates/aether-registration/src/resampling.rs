@@ -99,6 +99,148 @@ impl Lanczos3SourceWindow {
     }
 }
 
+/// Immutable, validated geometry for one window-backed resampling band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lanczos3BandPlan {
+    source_dimensions: Dimensions,
+    output_width: usize,
+    output_height: usize,
+    reference_y: usize,
+    band_height: usize,
+    source_to_reference: AffineTransform,
+    reference_to_source: AffineTransform,
+    source_window: Option<Lanczos3SourceWindow>,
+}
+
+impl Lanczos3BandPlan {
+    /// Plans one band and its exact source read rectangle.
+    pub fn new(
+        source_dimensions: Dimensions,
+        output_width: usize,
+        output_height: usize,
+        reference_y: usize,
+        band_height: usize,
+        source_to_reference: AffineTransform,
+    ) -> Result<Self, ResamplingError> {
+        let source_window = plan_lanczos3_source_window(
+            source_dimensions.width(),
+            source_dimensions.height(),
+            output_width,
+            output_height,
+            reference_y,
+            band_height,
+            source_to_reference,
+        )?;
+        let reference_to_source = source_to_reference
+            .inverse()
+            .map_err(ResamplingError::Coordinate)?;
+        Ok(Self {
+            source_dimensions,
+            output_width,
+            output_height,
+            reference_y,
+            band_height,
+            source_to_reference,
+            reference_to_source,
+            source_window,
+        })
+    }
+
+    /// Complete source dimensions represented by the eventual window.
+    #[must_use]
+    pub const fn source_dimensions(self) -> Dimensions {
+        self.source_dimensions
+    }
+
+    /// Complete reference-canvas width.
+    #[must_use]
+    pub const fn output_width(self) -> usize {
+        self.output_width
+    }
+
+    /// Complete reference-canvas height.
+    #[must_use]
+    pub const fn output_height(self) -> usize {
+        self.output_height
+    }
+
+    /// First output row produced by this plan.
+    #[must_use]
+    pub const fn reference_y(self) -> usize {
+        self.reference_y
+    }
+
+    /// Number of output rows produced by this plan.
+    #[must_use]
+    pub const fn band_height(self) -> usize {
+        self.band_height
+    }
+
+    /// Exact source-to-reference transform applied by this plan.
+    #[must_use]
+    pub const fn source_to_reference(self) -> AffineTransform {
+        self.source_to_reference
+    }
+
+    /// Exact rectangular read required, or `None` for a fully disjoint band.
+    #[must_use]
+    pub const fn source_window(self) -> Option<Lanczos3SourceWindow> {
+        self.source_window
+    }
+
+    /// Resamples this band from exactly the planned source window.
+    ///
+    /// A disjoint plan requires `None` and produces an all-missing band. Every
+    /// intersecting plan requires an image whose width, height, and plane count
+    /// exactly match the plan, preventing accidental coordinate rebasing.
+    pub fn resample(
+        self,
+        source_window_image: Option<&ScientificImage>,
+    ) -> Result<ResampledBand, ResamplingError> {
+        match (self.source_window, source_window_image) {
+            (None, None) => self.missing_band(),
+            (None, Some(_)) => Err(ResamplingError::UnexpectedSourceWindow),
+            (Some(_), None) => Err(ResamplingError::MissingSourceWindow),
+            (Some(window), Some(image)) => {
+                let actual = image.dimensions();
+                if actual.width() != window.width
+                    || actual.height() != window.height
+                    || actual.planes() != self.source_dimensions.planes()
+                {
+                    return Err(ResamplingError::SourceWindowDimensions {
+                        expected_width: window.width,
+                        expected_height: window.height,
+                        expected_planes: self.source_dimensions.planes(),
+                        actual_width: actual.width(),
+                        actual_height: actual.height(),
+                        actual_planes: actual.planes(),
+                    });
+                }
+                resample_lanczos3_planned_band(image, window, self)
+            }
+        }
+    }
+
+    fn missing_band(self) -> Result<ResampledBand, ResamplingError> {
+        let dimensions = Dimensions::new(
+            self.output_width,
+            self.band_height,
+            self.source_dimensions.planes(),
+        )?;
+        let mut image = ScientificImage::filled(dimensions, f64::NAN)?;
+        image.mask_mut().as_mut_slice().fill(PixelFlags::MISSING);
+        Ok(ResampledBand {
+            reference_y: self.reference_y,
+            image,
+            statistics: ResamplingStatistics {
+                total_samples: dimensions.pixel_count(),
+                outside_footprint_samples: dimensions.pixel_count(),
+                ..ResamplingStatistics::default()
+            },
+        })
+    }
+}
+
 impl ResampledBand {
     /// First reference row represented by this band.
     #[must_use]
@@ -277,6 +419,27 @@ pub enum ResamplingError {
         /// Complete output height.
         output_height: usize,
     },
+    /// A geometrically intersecting plan was executed without its source data.
+    MissingSourceWindow,
+    /// A fully disjoint plan was supplied an unnecessary source window.
+    UnexpectedSourceWindow,
+    /// Decoded source storage does not exactly match the planned rectangle.
+    SourceWindowDimensions {
+        /// Planned source-window width.
+        expected_width: usize,
+        /// Planned source-window height.
+        expected_height: usize,
+        /// Planned source plane count.
+        expected_planes: usize,
+        /// Supplied source-window width.
+        actual_width: usize,
+        /// Supplied source-window height.
+        actual_height: usize,
+        /// Supplied source plane count.
+        actual_planes: usize,
+    },
+    /// An exact planned tap was absent from the supplied source window.
+    IncompleteSourceWindow,
     /// Output dimensions or allocation violated the shared image contract.
     Core(CoreError),
     /// Transform inversion or application failed.
@@ -299,6 +462,26 @@ impl Display for ResamplingError {
                 formatter,
                 "reference band y={y}, height={height} exceeds output height {output_height}"
             ),
+            Self::MissingSourceWindow => {
+                formatter.write_str("resampling plan requires its exact source window")
+            }
+            Self::UnexpectedSourceWindow => {
+                formatter.write_str("disjoint resampling plan requires no source window")
+            }
+            Self::SourceWindowDimensions {
+                expected_width,
+                expected_height,
+                expected_planes,
+                actual_width,
+                actual_height,
+                actual_planes,
+            } => write!(
+                formatter,
+                "source window must be {expected_width}x{expected_height}x{expected_planes}, received {actual_width}x{actual_height}x{actual_planes}"
+            ),
+            Self::IncompleteSourceWindow => {
+                formatter.write_str("planned source window does not contain every required tap")
+            }
             Self::Core(error) => write!(formatter, "cannot construct resampled image: {error}"),
             Self::Coordinate(error) => {
                 write!(formatter, "cannot map resampling coordinate: {error}")
@@ -318,6 +501,10 @@ impl Error for ResamplingError {
             Self::Coordinate(error) => Some(error),
             Self::ZeroBandHeight
             | Self::ReferenceBandOutOfBounds { .. }
+            | Self::MissingSourceWindow
+            | Self::UnexpectedSourceWindow
+            | Self::SourceWindowDimensions { .. }
+            | Self::IncompleteSourceWindow
             | Self::NumericalOverflow
             | Self::CountOverflow => None,
         }
@@ -742,6 +929,125 @@ fn resample_lanczos3_band(
     })
 }
 
+fn resample_lanczos3_planned_band(
+    source: &ScientificImage,
+    window: Lanczos3SourceWindow,
+    plan: Lanczos3BandPlan,
+) -> Result<ResampledBand, ResamplingError> {
+    let output_dimensions = Dimensions::new(
+        plan.output_width,
+        plan.band_height,
+        plan.source_dimensions.planes(),
+    )?;
+    let mut output = ScientificImage::filled(output_dimensions, f64::NAN)?;
+    let output_area = plan
+        .output_width
+        .checked_mul(plan.band_height)
+        .ok_or(ResamplingError::CountOverflow)?;
+    let source_area = window
+        .width
+        .checked_mul(window.height)
+        .ok_or(ResamplingError::CountOverflow)?;
+    let mut statistics = ResamplingStatistics {
+        total_samples: output_dimensions.pixel_count(),
+        ..ResamplingStatistics::default()
+    };
+
+    for band_y in 0..plan.band_height {
+        let output_y = plan
+            .reference_y
+            .checked_add(band_y)
+            .ok_or(ResamplingError::CountOverflow)?;
+        for output_x in 0..plan.output_width {
+            let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
+                .map_err(ResamplingError::Coordinate)?;
+            let source_point = plan
+                .reference_to_source
+                .apply(reference_point)
+                .map_err(ResamplingError::Coordinate)?;
+            let x_kernel = AxisKernel::new(source_point.x(), plan.source_dimensions.width())?;
+            let y_kernel = AxisKernel::new(source_point.y(), plan.source_dimensions.height())?;
+            if !x_kernel.complete || !y_kernel.complete {
+                for plane in 0..plan.source_dimensions.planes() {
+                    let output_index =
+                        linear_index(output_area, plan.output_width, output_x, band_y, plane)?;
+                    output.mask_mut().as_mut_slice()[output_index] = PixelFlags::MISSING;
+                    statistics.outside_footprint_samples =
+                        checked_increment(statistics.outside_footprint_samples)?;
+                }
+                continue;
+            }
+
+            for plane in 0..plan.source_dimensions.planes() {
+                let mut weighted_sum = CompensatedSum::new();
+                let mut weight_sum = CompensatedSum::new();
+                let mut combined_flags = PixelFlags::CLEAR;
+                for y_tap in y_kernel.active() {
+                    let local_y = y_tap
+                        .index
+                        .checked_sub(window.y)
+                        .filter(|&index| index < window.height)
+                        .ok_or(ResamplingError::IncompleteSourceWindow)?;
+                    for x_tap in x_kernel.active() {
+                        let local_x = x_tap
+                            .index
+                            .checked_sub(window.x)
+                            .filter(|&index| index < window.width)
+                            .ok_or(ResamplingError::IncompleteSourceWindow)?;
+                        let weight = x_tap.weight * y_tap.weight;
+                        if !weight.is_finite() {
+                            return Err(ResamplingError::NumericalOverflow);
+                        }
+                        let source_index =
+                            linear_index(source_area, window.width, local_x, local_y, plane)?;
+                        let value = source.pixels()[source_index];
+                        combined_flags |= source.mask().as_slice()[source_index];
+                        if value.is_finite() {
+                            weighted_sum.add(value * weight);
+                        } else {
+                            combined_flags |= PixelFlags::INVALID;
+                        }
+                        weight_sum.add(weight);
+                    }
+                }
+                let output_index =
+                    linear_index(output_area, plan.output_width, output_x, band_y, plane)?;
+                if !combined_flags.is_clear() {
+                    output.mask_mut().as_mut_slice()[output_index] = combined_flags;
+                    statistics.masked_support_samples =
+                        checked_increment(statistics.masked_support_samples)?;
+                    continue;
+                }
+                let denominator = weight_sum.total();
+                if !denominator.is_finite() || denominator.abs() < MINIMUM_WEIGHT_SUM {
+                    return Err(ResamplingError::NumericalOverflow);
+                }
+                let value = weighted_sum.total() / denominator;
+                if !value.is_finite() {
+                    return Err(ResamplingError::NumericalOverflow);
+                }
+                output.pixels_mut()[output_index] = canonical_zero(value);
+                statistics.interpolated_samples =
+                    checked_increment(statistics.interpolated_samples)?;
+            }
+        }
+    }
+
+    let accounted = statistics
+        .interpolated_samples
+        .checked_add(statistics.outside_footprint_samples)
+        .and_then(|value| value.checked_add(statistics.masked_support_samples))
+        .ok_or(ResamplingError::CountOverflow)?;
+    if accounted != statistics.total_samples {
+        return Err(ResamplingError::CountOverflow);
+    }
+    Ok(ResampledBand {
+        reference_y: plan.reference_y,
+        image: output,
+        statistics,
+    })
+}
+
 fn linear_index(
     plane_area: usize,
     width: usize,
@@ -804,6 +1110,33 @@ mod tests {
             .map(|index| index as f64 + 0.25)
             .collect();
         Ok(ScientificImage::from_pixels(dimensions, pixels)?)
+    }
+
+    fn extract_window(
+        source: &ScientificImage,
+        window: Lanczos3SourceWindow,
+    ) -> TestResult<ScientificImage> {
+        let source_dimensions = source.dimensions();
+        let output_dimensions =
+            Dimensions::new(window.width(), window.height(), source_dimensions.planes())?;
+        let mut output = ScientificImage::filled(output_dimensions, f64::NAN)?;
+        let source_area = source_dimensions.width() * source_dimensions.height();
+        let output_area = output_dimensions.width() * output_dimensions.height();
+        for plane in 0..source_dimensions.planes() {
+            for local_y in 0..window.height() {
+                let source_start = plane * source_area
+                    + (window.y() + local_y) * source_dimensions.width()
+                    + window.x();
+                let output_start = plane * output_area + local_y * output_dimensions.width();
+                let source_range = source_start..source_start + window.width();
+                let output_range = output_start..output_start + window.width();
+                output.pixels_mut()[output_range.clone()]
+                    .copy_from_slice(&source.pixels()[source_range.clone()]);
+                output.mask_mut().as_mut_slice()[output_range]
+                    .copy_from_slice(&source.mask().as_slice()[source_range]);
+            }
+        }
+        Ok(output)
     }
 
     #[test]
@@ -1111,6 +1444,112 @@ mod tests {
             plan_lanczos3_source_window(5, 5, 5, 5, 0, 0, AffineTransform::IDENTITY),
             Err(ResamplingError::ZeroBandHeight)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn exact_source_windows_reconstruct_the_complete_image_oracle() -> TestResult {
+        let mut source = image(17, 15, 3)?;
+        source.mark(8, 7, 0, PixelFlags::HOT)?;
+        source.mark(9, 8, 2, PixelFlags::SATURATED)?;
+        source.pixels_mut()[2 * 17 * 15 + 6 * 17 + 5] = f64::NAN;
+        let transform = AffineTransform::new(0.999, -0.018, 0.021, 1.002, 0.37, -0.41)?;
+        let oracle = resample_lanczos3(&source, 14, 13, transform)?;
+        let output_dimensions = Dimensions::new(14, 13, 3)?;
+        let mut assembled = ScientificImage::filled(output_dimensions, f64::NAN)?;
+        let mut statistics = ResamplingStatistics::default();
+
+        for reference_y in (0..13).step_by(4) {
+            let height = (13 - reference_y).min(4);
+            let plan =
+                Lanczos3BandPlan::new(source.dimensions(), 14, 13, reference_y, height, transform)?;
+            assert_eq!(plan.source_dimensions(), source.dimensions());
+            assert_eq!(plan.output_width(), 14);
+            assert_eq!(plan.output_height(), 13);
+            assert_eq!(plan.reference_y(), reference_y);
+            assert_eq!(plan.band_height(), height);
+            assert_eq!(plan.source_to_reference(), transform);
+            let window_image = plan
+                .source_window()
+                .map(|window| extract_window(&source, window))
+                .transpose()?;
+            let band = plan.resample(window_image.as_ref())?;
+            statistics = statistics.checked_add(band.statistics())?;
+            let band_dimensions = band.image().dimensions();
+            let band_area = band_dimensions.width() * band_dimensions.height();
+            let output_area = output_dimensions.width() * output_dimensions.height();
+            for plane in 0..output_dimensions.planes() {
+                for local_y in 0..band_dimensions.height() {
+                    let source_start = plane * band_area + local_y * band_dimensions.width();
+                    let target_start =
+                        plane * output_area + (reference_y + local_y) * output_dimensions.width();
+                    let source_range = source_start..source_start + band_dimensions.width();
+                    let target_range = target_start..target_start + output_dimensions.width();
+                    assembled.pixels_mut()[target_range.clone()]
+                        .copy_from_slice(&band.image().pixels()[source_range.clone()]);
+                    assembled.mask_mut().as_mut_slice()[target_range]
+                        .copy_from_slice(&band.image().mask().as_slice()[source_range]);
+                }
+            }
+        }
+
+        assert_eq!(statistics, oracle.statistics());
+        assert_eq!(assembled.mask(), oracle.image().mask());
+        for (&actual, &expected) in assembled.pixels().iter().zip(oracle.image().pixels()) {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn band_plan_rejects_missing_unexpected_and_misshaped_windows() -> TestResult {
+        let dimensions = Dimensions::new(8, 8, 1)?;
+        let intersecting =
+            Lanczos3BandPlan::new(dimensions, 8, 8, 0, 2, AffineTransform::IDENTITY)?;
+        assert!(matches!(
+            intersecting.resample(None),
+            Err(ResamplingError::MissingSourceWindow)
+        ));
+        let intersecting =
+            Lanczos3BandPlan::new(dimensions, 8, 8, 0, 2, AffineTransform::IDENTITY)?;
+        let wrong = image(8, 3, 1)?;
+        assert!(matches!(
+            intersecting.resample(Some(&wrong)),
+            Err(ResamplingError::SourceWindowDimensions { .. })
+        ));
+
+        let disjoint = Lanczos3BandPlan::new(
+            dimensions,
+            8,
+            8,
+            0,
+            2,
+            AffineTransform::new(1.0, 0.0, 0.0, 1.0, 100.0, 0.0)?,
+        )?;
+        assert_eq!(disjoint.source_window(), None);
+        let unnecessary = image(1, 1, 1)?;
+        assert!(matches!(
+            disjoint.resample(Some(&unnecessary)),
+            Err(ResamplingError::UnexpectedSourceWindow)
+        ));
+        let disjoint = Lanczos3BandPlan::new(
+            dimensions,
+            8,
+            8,
+            0,
+            2,
+            AffineTransform::new(1.0, 0.0, 0.0, 1.0, 100.0, 0.0)?,
+        )?;
+        let missing = disjoint.resample(None)?;
+        assert_eq!(missing.statistics().outside_footprint_samples(), 16);
+        assert!(
+            missing
+                .image()
+                .mask()
+                .as_slice()
+                .iter()
+                .all(|flags| *flags == PixelFlags::MISSING)
+        );
         Ok(())
     }
 }
