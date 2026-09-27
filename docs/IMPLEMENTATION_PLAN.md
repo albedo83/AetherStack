@@ -713,6 +713,17 @@ safety reasoning. They do not narrate obvious syntax.
     and frame identity. Next, define confidence and sparse-field policy, then
     compare this strict similarity path on synthetic sub-pixel and real camera
     frames before introducing broader affine or distortion models.
+40. Separate deterministic selection from scientific confidence. Consensus now
+    retains the best geometrically distinct competing transform using maximum
+    displacement across source corners and center, so a symmetric tie remains
+    visible. A versioned fail-closed gate reports every failed requirement for
+    triangle support, inlier ratio, distinct stars, winner margin, RMS/worst
+    residual, source/reference two-axis coverage, reflection, and truncated
+    evidence. Tests accept broad precise geometry; reject equal-support symmetry,
+    localized stars, and model truncation; and recover known noisy subpixel
+    rotation, scale, and translation. Next, exercise these diagnostics on the
+    ASI294MC Pro corpus and define camera-backed default thresholds before any
+    automatic registration is exposed in the desktop pipeline.
 
 ## 11. Stable-release definition
 

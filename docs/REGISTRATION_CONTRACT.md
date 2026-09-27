@@ -157,6 +157,37 @@ truncation. Current hard bounds are 100,000 seed models and 100 million point
 residual evaluations. Exceeding either configured budget is never treated as a
 valid partial consensus.
 
+Every evaluated seed is retained temporarily within the model bound so the
+winner can be compared with genuinely distinct alternatives. Two models are
+distinct when their maximum displacement over the four source-image corners and
+center reaches the configured separation threshold. The result preserves the
+best such competitor, its support, RMS, mirror state, seed, and separation. This
+prevents deterministic tie breaking from being mistaken for scientific
+certainty on symmetric fields.
+
+## Confidence gate
+
+`similarity-confidence-gate-v1` evaluates consensus evidence without changing
+the transform. Its report accepts only when all configured criteria pass and
+otherwise retains every rejection reason in a fixed order. Criteria cover:
+
+- minimum refined triangle support and support ratio among hypotheses with the
+  selected mirror state;
+- minimum distinct one-to-one star correspondences;
+- minimum support lead over the best geometrically distinct competitor;
+- RMS and maximum reference-pixel residual ceilings;
+- minimum horizontal and vertical star-span fractions in both source and
+  reference images;
+- explicit permission for reflection;
+- explicit permission for truncated source descriptors, reference descriptors,
+  or seed-model search.
+
+The report stores all four span fractions, inlier ratio, optional support margin,
+exact parameters, frame identities, and rejection list. A precise local cluster,
+an equal-support symmetric alternative, or an incomplete search therefore cannot
+silently become an automatic registration. Synthetic tests include noisy
+subpixel rotation, scale, and translation rather than exact descriptor equality.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -188,7 +219,7 @@ Production registration still requires:
 - deterministic multi-scale enhancement beyond the initial local descriptors;
 - translation-only, affine, and projective model selection beyond the strict
   similarity model;
-- confidence and sparse-field policies validated on representative real data;
+- confidence thresholds validated on representative real sparse and crowded data;
 - justified distortion models with bounded control-point counts;
 - flux-tested cubic and Lanczos resampling with conservative mask propagation;
 - common-footprint and coverage diagnostics;

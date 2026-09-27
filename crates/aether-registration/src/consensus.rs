@@ -7,7 +7,7 @@ use aether_review::FrameId;
 
 use crate::{
     AffineTransform, CoordinateError, DescriptorMatchCatalog, DescriptorMatchHypothesis,
-    FeatureCatalog, FeaturePair, RegistrationMatch, ResidualError, ResidualStatistics,
+    FeatureCatalog, FeaturePair, ImagePoint, RegistrationMatch, ResidualError, ResidualStatistics,
     evaluate_residuals,
 };
 
@@ -26,6 +26,7 @@ pub struct SimilarityConsensusParameters {
     maximum_residual_pixels: f64,
     minimum_inlier_hypotheses: usize,
     minimum_inlier_feature_pairs: usize,
+    minimum_competing_model_separation_pixels: f64,
     maximum_models: usize,
     maximum_residual_evaluations: usize,
 }
@@ -36,6 +37,7 @@ impl SimilarityConsensusParameters {
         maximum_residual_pixels: f64,
         minimum_inlier_hypotheses: usize,
         minimum_inlier_feature_pairs: usize,
+        minimum_competing_model_separation_pixels: f64,
         maximum_models: usize,
         maximum_residual_evaluations: usize,
     ) -> Result<Self, SimilarityConsensusError> {
@@ -47,6 +49,11 @@ impl SimilarityConsensusParameters {
         }
         if minimum_inlier_feature_pairs < 3 {
             return Err(SimilarityConsensusError::InvalidMinimumFeaturePairs);
+        }
+        if !minimum_competing_model_separation_pixels.is_finite()
+            || minimum_competing_model_separation_pixels <= 0.0
+        {
+            return Err(SimilarityConsensusError::InvalidCompetingModelSeparation);
         }
         if maximum_models == 0 || maximum_models > MAX_CONSENSUS_MODELS {
             return Err(SimilarityConsensusError::InvalidModelLimit {
@@ -66,6 +73,7 @@ impl SimilarityConsensusParameters {
             maximum_residual_pixels,
             minimum_inlier_hypotheses,
             minimum_inlier_feature_pairs,
+            minimum_competing_model_separation_pixels,
             maximum_models,
             maximum_residual_evaluations,
         })
@@ -87,6 +95,12 @@ impl SimilarityConsensusParameters {
     #[must_use]
     pub const fn minimum_inlier_feature_pairs(self) -> usize {
         self.minimum_inlier_feature_pairs
+    }
+
+    /// Minimum maximum control-point displacement identifying a distinct model.
+    #[must_use]
+    pub const fn minimum_competing_model_separation_pixels(self) -> f64 {
+        self.minimum_competing_model_separation_pixels
     }
 
     /// Maximum leading descriptor hypotheses allowed to seed models.
@@ -112,6 +126,8 @@ pub struct SimilarityConsensusStatistics {
     seed_inlier_hypotheses: usize,
     refined_inlier_hypotheses: usize,
     outlier_hypotheses: usize,
+    distinct_competing_models: usize,
+    selected_orientation_hypotheses: usize,
 }
 
 impl SimilarityConsensusStatistics {
@@ -156,6 +172,60 @@ impl SimilarityConsensusStatistics {
     pub const fn outlier_hypotheses(self) -> usize {
         self.outlier_hypotheses
     }
+
+    /// Evaluated seed models geometrically distinct from the winner.
+    #[must_use]
+    pub const fn distinct_competing_models(self) -> usize {
+        self.distinct_competing_models
+    }
+
+    /// Retained hypotheses eligible to vote for the selected mirror state.
+    #[must_use]
+    pub const fn selected_orientation_hypotheses(self) -> usize {
+        self.selected_orientation_hypotheses
+    }
+}
+
+/// Best evaluated transform that is geometrically distinct from the winner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompetingSimilarity {
+    seed_hypothesis_index: usize,
+    reflected: bool,
+    inlier_hypotheses: usize,
+    root_mean_square_pixels: f64,
+    maximum_separation_pixels: f64,
+}
+
+impl CompetingSimilarity {
+    /// Descriptor hypothesis that seeded this competing model.
+    #[must_use]
+    pub const fn seed_hypothesis_index(self) -> usize {
+        self.seed_hypothesis_index
+    }
+
+    /// Whether the competing model reverses orientation.
+    #[must_use]
+    pub const fn reflected(self) -> bool {
+        self.reflected
+    }
+
+    /// Triangle support of the competing model.
+    #[must_use]
+    pub const fn inlier_hypotheses(self) -> usize {
+        self.inlier_hypotheses
+    }
+
+    /// RMS over all triangle observations supporting the competing seed.
+    #[must_use]
+    pub const fn root_mean_square_pixels(self) -> f64 {
+        self.root_mean_square_pixels
+    }
+
+    /// Largest winner/competitor displacement across source control points.
+    #[must_use]
+    pub const fn maximum_separation_pixels(self) -> f64 {
+        self.maximum_separation_pixels
+    }
 }
 
 /// One inspectable source-to-reference similarity selected by robust consensus.
@@ -172,6 +242,7 @@ pub struct SimilarityConsensus {
     inlier_hypothesis_indices: Vec<usize>,
     inlier_feature_pairs: Vec<FeaturePair>,
     residual_statistics: ResidualStatistics,
+    competing_similarity: Option<CompetingSimilarity>,
     statistics: SimilarityConsensusStatistics,
     source_descriptor_catalog_truncated: bool,
     reference_descriptor_catalog_truncated: bool,
@@ -250,6 +321,12 @@ impl SimilarityConsensus {
         self.residual_statistics
     }
 
+    /// Best evaluated model distinct from the winner, when one exists.
+    #[must_use]
+    pub const fn competing_similarity(&self) -> Option<CompetingSimilarity> {
+        self.competing_similarity
+    }
+
     /// Complete search, refinement, and outlier accounting.
     #[must_use]
     pub const fn statistics(&self) -> SimilarityConsensusStatistics {
@@ -290,6 +367,7 @@ pub fn estimate_similarity_consensus(
         parameters.maximum_residual_pixels,
         parameters.minimum_inlier_hypotheses,
         parameters.minimum_inlier_feature_pairs,
+        parameters.minimum_competing_model_separation_pixels,
         parameters.maximum_models,
         parameters.maximum_residual_evaluations,
     )?;
@@ -305,7 +383,10 @@ pub fn estimate_similarity_consensus(
         models_discarded_by_limit: hypotheses.len() - model_count,
         ..SimilarityConsensusStatistics::default()
     };
-    let mut best: Option<ModelScore> = None;
+    let mut scores = Vec::new();
+    scores
+        .try_reserve_exact(model_count)
+        .map_err(|_| SimilarityConsensusError::AllocationFailed)?;
 
     for (seed_index, seed) in hypotheses.iter().copied().take(model_count).enumerate() {
         let seed_pairs =
@@ -323,15 +404,18 @@ pub fn estimate_similarity_consensus(
             &mut statistics,
         )?;
         statistics.models_evaluated = checked_increment(statistics.models_evaluated)?;
-        if best
-            .as_ref()
-            .is_none_or(|current| compare_model_scores(&score, current).is_lt())
-        {
-            best = Some(score);
-        }
+        scores.push(score);
     }
 
-    let seed = best.ok_or(SimilarityConsensusError::NoUsableModel)?;
+    let seed = scores
+        .iter()
+        .copied()
+        .min_by(compare_model_scores)
+        .ok_or(SimilarityConsensusError::NoUsableModel)?;
+    statistics.selected_orientation_hypotheses = hypotheses
+        .iter()
+        .filter(|hypothesis| hypothesis.reflected() == seed.reflected)
+        .count();
     statistics.seed_inlier_hypotheses = seed.inlier_hypotheses;
     if seed.inlier_hypotheses < parameters.minimum_inlier_hypotheses {
         return Err(SimilarityConsensusError::InsufficientHypothesisConsensus {
@@ -395,6 +479,38 @@ pub fn estimate_similarity_consensus(
         return Err(SimilarityConsensusError::NumericalOverflow);
     }
 
+    let mut competing: Option<(ModelScore, f64)> = None;
+    for score in scores.iter().copied() {
+        if score.seed_hypothesis_index == seed.seed_hypothesis_index {
+            continue;
+        }
+        let separation = maximum_transform_separation(
+            refined_transform,
+            score.transform,
+            source_features.width(),
+            source_features.height(),
+        )?;
+        if separation < parameters.minimum_competing_model_separation_pixels {
+            continue;
+        }
+        statistics.distinct_competing_models =
+            checked_increment(statistics.distinct_competing_models)?;
+        if competing
+            .as_ref()
+            .is_none_or(|(current, _)| compare_model_scores(&score, current).is_lt())
+        {
+            competing = Some((score, separation));
+        }
+    }
+    let competing_similarity =
+        competing.map(|(model, maximum_separation_pixels)| CompetingSimilarity {
+            seed_hypothesis_index: model.seed_hypothesis_index,
+            reflected: model.reflected,
+            inlier_hypotheses: model.inlier_hypotheses,
+            root_mean_square_pixels: model.root_mean_square_pixels,
+            maximum_separation_pixels,
+        });
+
     Ok(SimilarityConsensus {
         source_frame_id: source_features.frame_id().clone(),
         reference_frame_id: reference_features.frame_id().clone(),
@@ -407,10 +523,45 @@ pub fn estimate_similarity_consensus(
         inlier_hypothesis_indices,
         inlier_feature_pairs,
         residual_statistics,
+        competing_similarity,
         statistics,
         source_descriptor_catalog_truncated: matches.source_descriptor_catalog_truncated(),
         reference_descriptor_catalog_truncated: matches.reference_descriptor_catalog_truncated(),
     })
+}
+
+fn maximum_transform_separation(
+    first: AffineTransform,
+    second: AffineTransform,
+    width: usize,
+    height: usize,
+) -> Result<f64, SimilarityConsensusError> {
+    let maximum_x = width.saturating_sub(1) as f64;
+    let maximum_y = height.saturating_sub(1) as f64;
+    let points = [
+        ImagePoint::new(0.0, 0.0).map_err(SimilarityConsensusError::Coordinate)?,
+        ImagePoint::new(maximum_x, 0.0).map_err(SimilarityConsensusError::Coordinate)?,
+        ImagePoint::new(0.0, maximum_y).map_err(SimilarityConsensusError::Coordinate)?,
+        ImagePoint::new(maximum_x, maximum_y).map_err(SimilarityConsensusError::Coordinate)?,
+        ImagePoint::new(maximum_x * 0.5, maximum_y * 0.5)
+            .map_err(SimilarityConsensusError::Coordinate)?,
+    ];
+    let mut maximum = 0.0_f64;
+    for point in points {
+        let first_point = first
+            .apply(point)
+            .map_err(SimilarityConsensusError::Coordinate)?;
+        let second_point = second
+            .apply(point)
+            .map_err(SimilarityConsensusError::Coordinate)?;
+        let separation =
+            (first_point.x() - second_point.x()).hypot(first_point.y() - second_point.y());
+        if !separation.is_finite() {
+            return Err(SimilarityConsensusError::NumericalOverflow);
+        }
+        maximum = maximum.max(separation);
+    }
+    Ok(maximum)
 }
 
 fn validate_catalog_identities(
@@ -756,6 +907,8 @@ pub enum SimilarityConsensusError {
     InvalidMinimumHypotheses,
     /// At least three distinct feature pairs are required.
     InvalidMinimumFeaturePairs,
+    /// Distinct transform threshold must be finite and positive.
+    InvalidCompetingModelSeparation,
     /// The model limit was outside the supported range.
     InvalidModelLimit {
         /// Hard maximum.
@@ -834,6 +987,9 @@ impl Display for SimilarityConsensusError {
             }
             Self::InvalidMinimumFeaturePairs => {
                 formatter.write_str("consensus requires at least three distinct feature pairs")
+            }
+            Self::InvalidCompetingModelSeparation => {
+                formatter.write_str("competing model separation is invalid")
             }
             Self::InvalidModelLimit { maximum, actual } => write!(
                 formatter,
@@ -927,6 +1083,16 @@ mod tests {
         reference: &FeatureCatalog,
         reflection_policy: ReflectionPolicy,
     ) -> TestResult<DescriptorMatchCatalog> {
+        descriptor_matches_with_tolerance(source, reference, reflection_policy, 1.0e-10, 1.0e-10)
+    }
+
+    fn descriptor_matches_with_tolerance(
+        source: &FeatureCatalog,
+        reference: &FeatureCatalog,
+        reflection_policy: ReflectionPolicy,
+        side_ratio_tolerance: f64,
+        area_tolerance: f64,
+    ) -> TestResult<DescriptorMatchCatalog> {
         let descriptor_parameters = TriangleDescriptorParameters::new(
             source.features().len(),
             source.features().len().saturating_sub(1).clamp(2, 8),
@@ -937,8 +1103,8 @@ mod tests {
         let source_descriptors = build_triangle_descriptors(source, descriptor_parameters)?;
         let reference_descriptors = build_triangle_descriptors(reference, descriptor_parameters)?;
         let match_parameters = DescriptorMatchParameters::new(
-            1.0e-10,
-            1.0e-10,
+            side_ratio_tolerance,
+            area_tolerance,
             0.25,
             4.0,
             reflection_policy,
@@ -962,6 +1128,7 @@ mod tests {
             1.0e-7,
             minimum_inlier_hypotheses,
             3,
+            0.25,
             maximum_models,
             maximum_evaluations,
         )?)
@@ -1007,6 +1174,70 @@ mod tests {
         assert_eq!(consensus.inlier_feature_pairs().len(), source_points.len());
         assert!(consensus.residual_statistics().maximum_pixels() < 1.0e-11);
         assert_eq!(consensus.statistics().outlier_hypotheses(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_noisy_subpixel_ground_truth_without_exact_descriptor_equality() -> TestResult {
+        let source_points = [
+            (4.0, 8.0),
+            (18.0, 3.0),
+            (9.0, 31.0),
+            (33.0, 24.0),
+            (48.0, 11.0),
+            (57.0, 39.0),
+            (22.0, 52.0),
+            (69.0, 58.0),
+        ];
+        let noise = [
+            (0.04, -0.03),
+            (-0.06, 0.02),
+            (0.03, 0.07),
+            (-0.02, -0.05),
+            (0.08, 0.01),
+            (-0.04, 0.06),
+            (0.01, -0.08),
+            (-0.05, 0.03),
+        ];
+        let angle = 0.173_f64;
+        let scale = 0.97_f64;
+        let a = scale * angle.cos();
+        let b = scale * angle.sin();
+        let mut reference_points = [(0.0, 0.0); 8];
+        for (index, &(x, y)) in source_points.iter().enumerate() {
+            reference_points[index] = (
+                a.mul_add(x, (-b).mul_add(y, 7.25)) + noise[index].0,
+                b.mul_add(x, a.mul_add(y, -3.4)) + noise[index].1,
+            );
+        }
+        let source = feature_catalog('0', &source_points)?;
+        let reference = feature_catalog('a', &reference_points)?;
+        let descriptor_matches = descriptor_matches_with_tolerance(
+            &source,
+            &reference,
+            ReflectionPolicy::Forbid,
+            0.02,
+            0.02,
+        )?;
+
+        let consensus = estimate_similarity_consensus(
+            &source,
+            &reference,
+            &descriptor_matches,
+            SimilarityConsensusParameters::new(0.3, 2, 4, 0.25, 1_000, 1_000_000)?,
+        )?;
+
+        let [m00, m01, m10, m11, tx, ty] = consensus.transform().coefficients();
+        assert!((m00 - a).abs() < 0.002);
+        assert!((m01 + b).abs() < 0.002);
+        assert!((m10 - b).abs() < 0.002);
+        assert!((m11 - a).abs() < 0.002);
+        assert!((tx - 7.25).abs() < 0.08);
+        assert!((ty + 3.4).abs() < 0.08);
+        assert!((consensus.scale() - scale).abs() < 0.002);
+        assert!((consensus.rotation_radians() - angle).abs() < 0.002);
+        assert!(consensus.residual_statistics().maximum_pixels() < 0.12);
+        assert_eq!(consensus.inlier_feature_pairs().len(), source_points.len());
         Ok(())
     }
 
@@ -1089,6 +1320,15 @@ mod tests {
         assert_eq!(consensus.inlier_feature_pairs().len(), 4);
         assert!(consensus.statistics().refined_inlier_hypotheses() >= 2);
         assert!(consensus.statistics().outlier_hypotheses() > 0);
+        let competitor = consensus
+            .competing_similarity()
+            .ok_or("symmetric field did not retain a competing transform")?;
+        assert_eq!(
+            competitor.inlier_hypotheses(),
+            consensus.statistics().seed_inlier_hypotheses()
+        );
+        assert!(competitor.maximum_separation_pixels() > 10.0);
+        assert!(consensus.statistics().distinct_competing_models() > 0);
         assert!(consensus.residual_statistics().maximum_pixels() < 1.0e-11);
         Ok(())
     }
@@ -1130,11 +1370,11 @@ mod tests {
     #[test]
     fn validates_controls_and_frame_identity() -> TestResult {
         assert!(matches!(
-            SimilarityConsensusParameters::new(0.0, 2, 3, 1, 1),
+            SimilarityConsensusParameters::new(0.0, 2, 3, 0.25, 1, 1),
             Err(SimilarityConsensusError::InvalidResidualThreshold)
         ));
         assert!(matches!(
-            SimilarityConsensusParameters::new(1.0, 1, 3, 1, 1),
+            SimilarityConsensusParameters::new(1.0, 1, 3, 0.25, 1, 1),
             Err(SimilarityConsensusError::InvalidMinimumHypotheses)
         ));
 

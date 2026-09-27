@@ -4,6 +4,7 @@
 //! inspectable reference policy before later resampling stages, preventing the
 //! desktop shell from inventing scientific geometry.
 
+mod confidence;
 mod consensus;
 mod features;
 mod geometry;
@@ -11,10 +12,15 @@ mod matching;
 mod reference;
 mod triangles;
 
+pub use confidence::{
+    REGISTRATION_CONFIDENCE_ALGORITHM_ID, RegistrationConfidenceError,
+    RegistrationConfidenceParameters, RegistrationConfidenceRejection,
+    RegistrationConfidenceReport, assess_registration_confidence,
+};
 pub use consensus::{
-    MAX_CONSENSUS_MODELS, MAX_CONSENSUS_RESIDUAL_EVALUATIONS, SIMILARITY_CONSENSUS_ALGORITHM_ID,
-    SimilarityConsensus, SimilarityConsensusError, SimilarityConsensusParameters,
-    SimilarityConsensusStatistics, estimate_similarity_consensus,
+    CompetingSimilarity, MAX_CONSENSUS_MODELS, MAX_CONSENSUS_RESIDUAL_EVALUATIONS,
+    SIMILARITY_CONSENSUS_ALGORITHM_ID, SimilarityConsensus, SimilarityConsensusError,
+    SimilarityConsensusParameters, SimilarityConsensusStatistics, estimate_similarity_consensus,
 };
 pub use features::{
     FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog, FeatureCatalogError, FeatureExclusions,

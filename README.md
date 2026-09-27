@@ -110,7 +110,9 @@ optimized CPU and GPU paths must match.
   plus a bounded quantized descriptor index that preserves competing tolerant
   correspondences, scale estimates, mirror policy, and truncation evidence,
   followed by deterministic multi-triangle similarity consensus with explicit
-  inliers, outliers, residuals, one-to-one star mappings, and work budgets;
+  inliers, outliers, residuals, one-to-one star mappings, work budgets, competing
+  transform evidence, and a fail-closed confidence gate for support, ambiguity,
+  spatial coverage, residual quality, reflection, and truncated searches;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and
