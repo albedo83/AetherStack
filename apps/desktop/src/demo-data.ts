@@ -69,6 +69,7 @@ export const demoReviewModel: ReviewViewModel = {
       result: null,
       previewState: "idle",
       preview: null,
+      selectedProduct: "science",
       settings: {
         estimator: "strict_mean",
         lowFraction: 0.1,

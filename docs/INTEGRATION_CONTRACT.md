@@ -122,5 +122,9 @@ reads or integrates scientific pixels.
 After publication, the desktop may request a bounded display preview of the
 integrated product. Rust estimates the display transform and renders RGB or a
 selected scalar plane; the browser retains only a revocable PNG object URL.
+When rejection maps exist, the same viewer exposes explicit Science, Low
+reject, and High reject tabs. Each selection requests its own scalar preview
+from Rust, revokes the previous object URL, and rejects stale asynchronous
+responses by plan, science output, and selected product identity.
 This display path cannot mutate, replace, or validate the scientific FITS, and
 a preview failure does not invalidate a successfully published stack.

@@ -20,6 +20,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onExecuteRegisteredStack: vi.fn(),
     onCancelRegisteredStack: vi.fn(),
     onUpdateRegisteredStackSettings: vi.fn(),
+    onSelectRegisteredStackProduct: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -482,13 +483,13 @@ describe("frame review workspace", () => {
             memoryLimitBytes: 1_073_741_824,
             peakReservedBytes: 18_000_000,
             estimator: "registered-crop-mean-v1",
-            lowRejectionMapPath: null,
-            highRejectionMapPath: null,
-            rejectionMapSamplesWritten: null,
+            lowRejectionMapPath: "/results/integrated-rejection-low.fits",
+            highRejectionMapPath: "/results/integrated-rejection-high.fits",
+            rejectionMapSamplesWritten: 34_798_080,
           },
           previewState: "ready" as const,
           preview: {
-            frameId: `${planSha256}:registered-stack`,
+            frameId: `${planSha256}:registered-stack:science`,
             url: "blob:registered-stack",
           },
           message: "4128 × 2810 × 3 integrated atomically",
@@ -553,6 +554,10 @@ describe("frame review workspace", () => {
     expect(actions.onSelectRegisteredFrame).toHaveBeenCalledWith(frameB.id);
     fireEvent.click(getByRole(root, "button", { name: "Integrate crop" }));
     expect(actions.onExecuteRegisteredStack).toHaveBeenCalledOnce();
+    fireEvent.click(getByRole(root, "tab", { name: "Low reject" }));
+    expect(actions.onSelectRegisteredStackProduct).toHaveBeenCalledWith(
+      "rejection_low",
+    );
   });
 
   it("keeps robust integration controls explicit and model-driven", () => {

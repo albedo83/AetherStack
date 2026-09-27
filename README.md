@@ -157,7 +157,8 @@ optimized CPU and GPU paths must match.
   versioned percentile-clipped mean with exact low/high rejection evidence and
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
-  expert UI while strict mean remains the default;
+  expert UI while strict mean remains the default, with linked native previews
+  for science, low-tail, and high-tail products;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, streams scan-line bands without a
   full final-image allocation, calculates exact three-pass output statistics,

@@ -22,6 +22,7 @@ import type {
   FitsStatistics,
   FrameRole,
   LightFrameView,
+  RegisteredStackProductView,
   ReviewFrame,
   ReviewRejectionReason,
   ReviewState,
@@ -184,6 +185,9 @@ const screen = mountReviewScreen(root, model, {
         },
       },
     });
+  },
+  onSelectRegisteredStackProduct(product) {
+    selectRegisteredStackProduct(product);
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -675,6 +679,7 @@ function idleRegisteredStack(
     result: null,
     previewState: "idle",
     preview: null,
+    selectedProduct: "science",
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -940,6 +945,7 @@ async function executeStack(): Promise<void> {
         result: null,
         previewState: "idle",
         preview: null,
+        selectedProduct: "science",
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1001,12 +1007,13 @@ async function executeStack(): Promise<void> {
           result,
           previewState: "loading",
           preview: null,
+          selectedProduct: "science",
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
       },
     });
-    void loadRegisteredStackPreview(result);
+    void loadRegisteredStackPreview(result, "science");
   } catch (error) {
     if (ticket !== registeredStackTicket) return;
     const cancelled = nativeErrorCode(error) === "registered_stack_cancelled";
@@ -1059,27 +1066,31 @@ async function cancelStack(): Promise<void> {
 
 async function loadRegisteredStackPreview(
   result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  product: RegisteredStackProductView,
 ): Promise<void> {
   const ticket = ++registeredStackPreviewTicket;
+  const path = registeredStackProductPath(result, product);
+  if (!path) return;
   const content =
-    result.planes === 3
+    product === "science" && result.planes === 3
       ? ({ kind: "rgb" } as const)
       : ({ kind: "scalar", plane: 0 } as const);
   try {
     const transform = await estimateFitsPreviewTransform({
-      path: result.outputPath,
+      path,
       content,
       ...previewBounds,
     });
     if (
       ticket !== registeredStackPreviewTicket ||
-      model.registration.stack.result?.outputPath !== result.outputPath
+      model.registration.stack.result?.outputPath !== result.outputPath ||
+      model.registration.stack.selectedProduct !== product
     ) {
       return;
     }
     const resource = await requestFitsPreview({
-      frameId: `${result.planSha256}:registered-stack`,
-      path: result.outputPath,
+      frameId: `${result.planSha256}:registered-stack:${product}`,
+      path,
       content,
       ...previewBounds,
       blackPoint: transform.blackPoint,
@@ -1089,7 +1100,8 @@ async function loadRegisteredStackPreview(
     });
     if (
       ticket !== registeredStackPreviewTicket ||
-      model.registration.stack.result?.outputPath !== result.outputPath
+      model.registration.stack.result?.outputPath !== result.outputPath ||
+      model.registration.stack.selectedProduct !== product
     ) {
       resource.revoke();
       return;
@@ -1121,6 +1133,45 @@ async function loadRegisteredStackPreview(
       },
     });
   }
+}
+
+function registeredStackProductPath(
+  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  product: RegisteredStackProductView,
+): string | null {
+  switch (product) {
+    case "science":
+      return result.outputPath;
+    case "rejection_low":
+      return result.lowRejectionMapPath;
+    case "rejection_high":
+      return result.highRejectionMapPath;
+  }
+}
+
+function selectRegisteredStackProduct(
+  product: RegisteredStackProductView,
+): void {
+  const stack = model.registration.stack;
+  const result = stack.result;
+  if (!result || stack.state !== "completed") return;
+  if (!registeredStackProductPath(result, product)) return;
+  registeredStackPreviewTicket += 1;
+  registeredStackPreviewResource?.revoke();
+  registeredStackPreviewResource = null;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...stack,
+        selectedProduct: product,
+        previewState: "loading",
+        preview: null,
+      },
+    },
+  });
+  void loadRegisteredStackPreview(result, product);
 }
 
 function selectRegisteredFrame(frameId: string): void {

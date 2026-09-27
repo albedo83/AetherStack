@@ -949,6 +949,14 @@ safety reasoning. They do not narrate obvious syntax.
     accessibility, and production-build tests cover the complete path. Next,
     render low/high maps inside the result viewer with linked science/map
     navigation and a false-color rejection overlay.
+65. Add linked result-product navigation for Science, Low reject, and High
+    reject in the integrated viewer. Companion tabs remain disabled unless the
+    native transaction returned their paths. Every selection uses the bounded
+    Rust FITS renderer, treats maps as scalar planes, revokes the previous PNG,
+    and rejects stale responses against the plan, science output, and selected
+    product. Presenter and production-build tests cover availability, selection,
+    identity, and accessible tab semantics. Next, add a perceptually uniform
+    false-color rejection palette and science-overlay opacity control.
 
 ## 11. Stable-release definition
 

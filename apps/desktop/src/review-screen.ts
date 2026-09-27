@@ -185,6 +185,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-estimator-label]",
     ),
+    registeredStackProducts: requiredAll<HTMLButtonElement>(
+      root,
+      '[data-action="select-registered-stack-product"]',
+    ),
     registeredStackPreviewImage: required<HTMLImageElement>(
       root,
       "[data-registered-stack-preview-image]",
@@ -446,6 +450,17 @@ export function mountReviewScreen(
     }
     if (action === "cancel-registered-stack") {
       actions.onCancelRegisteredStack();
+      return;
+    }
+    if (action === "select-registered-stack-product") {
+      const product = actionElement.dataset.stackProduct;
+      if (
+        product === "science" ||
+        product === "rejection_low" ||
+        product === "rejection_high"
+      ) {
+        actions.onSelectRegisteredStackProduct(product);
+      }
       return;
     }
     if (action === "toggle-registered-play") {
@@ -1269,6 +1284,7 @@ interface RegistrationElements {
   readonly registeredStackMinimumRetained: HTMLInputElement;
   readonly registeredStackRejectionMaps: HTMLInputElement;
   readonly registeredStackEstimatorLabel: HTMLElement;
+  readonly registeredStackProducts: readonly HTMLButtonElement[];
   readonly registeredStackPreviewImage: HTMLImageElement;
   readonly registeredStackPreviewPlaceholder: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
@@ -1419,17 +1435,34 @@ function renderRegistration(
   elements.registeredStackEstimatorLabel.textContent = advancedEstimator
     ? "PERCENTILE F64"
     : "STRICT F64 MEAN";
+  for (const button of elements.registeredStackProducts) {
+    const product = button.dataset.stackProduct;
+    const available =
+      product === "science"
+        ? registration.stack.result !== null
+        : product === "rejection_low"
+          ? Boolean(registration.stack.result?.lowRejectionMapPath)
+          : Boolean(registration.stack.result?.highRejectionMapPath);
+    const selected = product === registration.stack.selectedProduct;
+    button.disabled = !available || stackBusy;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
   const stackPreviewReady =
     registration.stack.previewState === "ready" &&
     registration.stack.preview?.frameId ===
-      `${registration.stack.result?.planSha256}:registered-stack`;
+      `${registration.stack.result?.planSha256}:registered-stack:${registration.stack.selectedProduct}`;
   elements.registeredStackPreviewImage.hidden = !stackPreviewReady;
   elements.registeredStackPreviewPlaceholder.hidden = stackPreviewReady;
   elements.registeredStackPreviewImage.src = stackPreviewReady
     ? (registration.stack.preview?.url ?? "")
     : "";
   elements.registeredStackPreviewImage.alt = stackPreviewReady
-    ? "Integrated registered common-crop preview"
+    ? registration.stack.selectedProduct === "science"
+      ? "Integrated registered common-crop preview"
+      : registration.stack.selectedProduct === "rejection_low"
+        ? "Low-tail rejection map preview"
+        : "High-tail rejection map preview"
     : "";
   elements.registeredStackPreviewPlaceholder.textContent =
     registration.stack.previewState === "loading"
@@ -2551,6 +2584,11 @@ function shellMarkup(): string {
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
+                  <div class="registered-stack__product-tabs" role="tablist" aria-label="Integrated product view">
+                    <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="science" aria-selected="true">Science</button>
+                    <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_low" aria-selected="false" disabled>Low reject</button>
+                    <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_high" aria-selected="false" disabled>High reject</button>
+                  </div>
                   <div class="registered-stack__preview">
                     <img data-registered-stack-preview-image alt="" hidden />
                     <div data-registered-stack-preview-placeholder>The integrated common crop will appear here after publication</div>
