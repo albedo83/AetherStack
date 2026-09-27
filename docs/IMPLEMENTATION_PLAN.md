@@ -939,6 +939,16 @@ safety reasoning. They do not narrate obvious syntax.
     data. Path, provenance, estimator, memory, checksum, and rollback tests fail
     closed. Next, expose estimator parameters and optional rejection maps in a
     clearly separated desktop advanced mode.
+64. Expose robust integration through a collapsed desktop advanced section
+    while retaining strict compensated mean as the default. The presenter
+    offers the estimator, low/high fractions, retained-sample floor, and an
+    explicit rejection-map switch; changing any setting invalidates a stale
+    result preview. Typed IPC carries choices without processing pixels, and
+    Rust revalidates every value, derives adjacent map paths, binds provenance,
+    and executes the rollback-safe transaction. Native, bridge, presenter,
+    accessibility, and production-build tests cover the complete path. Next,
+    render low/high maps inside the result viewer with linked science/map
+    navigation and a false-color rejection overlay.
 
 ## 11. Stable-release definition
 

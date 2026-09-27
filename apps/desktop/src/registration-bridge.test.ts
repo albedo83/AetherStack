@@ -147,7 +147,17 @@ describe("native registration bridge", () => {
         planning,
         "a".repeat(64),
         artifacts,
-        { bandHeight: 128, memoryLimitBytes: 1_073_741_824 },
+        {
+          bandHeight: 128,
+          memoryLimitBytes: 1_073_741_824,
+          integration: {
+            estimator: "percentile_clipped",
+            lowFraction: 0.1,
+            highFraction: 0.1,
+            minimumRetainedSamples: 3,
+            generateRejectionMaps: true,
+          },
+        },
         onProgress,
       ),
     ).resolves.toBe(result);
@@ -159,6 +169,13 @@ describe("native registration bridge", () => {
         outputPath: "/results/integrated.fits",
         bandHeight: 128,
         memoryLimitBytes: 1_073_741_824,
+        integration: {
+          estimator: "percentile_clipped",
+          lowFraction: 0.1,
+          highFraction: 0.1,
+          minimumRetainedSamples: 3,
+          generateRejectionMaps: true,
+        },
       },
       onProgress: expect.objectContaining({ onmessage: onProgress }),
     });

@@ -13,6 +13,7 @@ import type {
   RegistrationExecutionProgress,
   RegistrationExecutionResult,
   RegistrationPlanPreview,
+  RegisteredStackIntegrationSettings,
   RegisteredStackProgress,
   RegisteredStackResult,
 } from "./registration-bridge.ts";
@@ -198,6 +199,7 @@ export interface RegistrationViewModel {
     readonly result: RegisteredStackResult | null;
     readonly previewState: "idle" | "loading" | "ready" | "error";
     readonly preview: FramePreview | null;
+    readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
   readonly resultReview: RegistrationResultReview;
@@ -251,6 +253,9 @@ export interface ReviewActions {
   readonly onCancelRegistration: () => void;
   readonly onExecuteRegisteredStack: () => void;
   readonly onCancelRegisteredStack: () => void;
+  readonly onUpdateRegisteredStackSettings: (
+    settings: RegisteredStackIntegrationSettings,
+  ) => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

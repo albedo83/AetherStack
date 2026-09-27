@@ -55,6 +55,7 @@ import {
   selectRegistrationOutputDirectory,
   selectRegisteredStackOutput,
   type RegistrationExecutionProgress,
+  type RegisteredStackIntegrationSettings,
   type RegisteredStackProgress,
 } from "./registration-bridge.ts";
 import { reconcileRegistrationSolutions } from "./registration-plan.ts";
@@ -161,6 +162,28 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelRegisteredStack() {
     void cancelStack();
+  },
+  onUpdateRegisteredStackSettings(settings) {
+    if (
+      model.registration.stack.state === "running" ||
+      model.registration.stack.state === "cancelling"
+    ) {
+      return;
+    }
+    registeredStackTicket += 1;
+    registeredStackPreviewTicket += 1;
+    registeredStackPreviewResource?.revoke();
+    registeredStackPreviewResource = null;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...idleRegisteredStack("Advanced integration settings updated"),
+          settings,
+        },
+      },
+    });
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -652,7 +675,18 @@ function idleRegisteredStack(
     result: null,
     previewState: "idle",
     preview: null,
+    settings: defaultRegisteredStackSettings(),
     message,
+  };
+}
+
+function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
+  return {
+    estimator: "strict_mean",
+    lowFraction: 0.1,
+    highFraction: 0.1,
+    minimumRetainedSamples: 3,
+    generateRejectionMaps: false,
   };
 }
 
@@ -872,6 +906,7 @@ async function executeStack(): Promise<void> {
   const plan = model.registration.plan;
   const registered = model.registration.execution.result;
   const stack = model.registration.stack;
+  const settings = stack.settings;
   if (
     model.registration.planState !== "ready" ||
     !plan ||
@@ -905,7 +940,11 @@ async function executeStack(): Promise<void> {
         result: null,
         previewState: "idle",
         preview: null,
-        message: "Integrating the sealed common crop with strict F64 mean…",
+        settings,
+        message:
+          settings.estimator === "strict_mean"
+            ? "Integrating the sealed common crop with strict F64 mean…"
+            : "Integrating with deterministic percentile rejection…",
       },
     },
   });
@@ -946,6 +985,7 @@ async function executeStack(): Promise<void> {
       {
         bandHeight: 128,
         memoryLimitBytes: model.calibration.lightSettings.memoryLimitBytes,
+        integration: settings,
       },
       onProgress,
     );
@@ -961,7 +1001,8 @@ async function executeStack(): Promise<void> {
           result,
           previewState: "loading",
           preview: null,
-          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · peak ${formatMemory(result.peakReservedBytes)}`,
+          settings,
+          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
       },
     });

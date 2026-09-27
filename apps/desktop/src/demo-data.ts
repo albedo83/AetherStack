@@ -69,6 +69,13 @@ export const demoReviewModel: ReviewViewModel = {
       result: null,
       previewState: "idle",
       preview: null,
+      settings: {
+        estimator: "strict_mean",
+        lowFraction: 0.1,
+        highFraction: 0.1,
+        minimumRetainedSamples: 3,
+        generateRejectionMaps: false,
+      },
       message: "Register the reviewed Lights to unlock integration",
     },
     resultReview: {

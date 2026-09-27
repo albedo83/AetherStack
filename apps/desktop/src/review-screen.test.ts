@@ -19,6 +19,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelRegistration: vi.fn(),
     onExecuteRegisteredStack: vi.fn(),
     onCancelRegisteredStack: vi.fn(),
+    onUpdateRegisteredStackSettings: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -465,6 +466,7 @@ describe("frame review workspace", () => {
           },
         },
         stack: {
+          ...demoReviewModel.registration.stack,
           state: "completed" as const,
           outputPath: "/results/integrated.fits",
           progress: null,
@@ -479,6 +481,10 @@ describe("frame review workspace", () => {
             bytesWritten: 278_400_000,
             memoryLimitBytes: 1_073_741_824,
             peakReservedBytes: 18_000_000,
+            estimator: "registered-crop-mean-v1",
+            lowRejectionMapPath: null,
+            highRejectionMapPath: null,
+            rejectionMapSamplesWritten: null,
           },
           previewState: "ready" as const,
           preview: {
@@ -547,6 +553,46 @@ describe("frame review workspace", () => {
     expect(actions.onSelectRegisteredFrame).toHaveBeenCalledWith(frameB.id);
     fireEvent.click(getByRole(root, "button", { name: "Integrate crop" }));
     expect(actions.onExecuteRegisteredStack).toHaveBeenCalledOnce();
+  });
+
+  it("keeps robust integration controls explicit and model-driven", () => {
+    const advanced: ReviewViewModel = {
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+      registration: {
+        ...demoReviewModel.registration,
+        stack: {
+          ...demoReviewModel.registration.stack,
+          settings: {
+            estimator: "percentile_clipped",
+            lowFraction: 0.12,
+            highFraction: 0.08,
+            minimumRetainedSamples: 5,
+            generateRejectionMaps: false,
+          },
+        },
+      },
+    };
+    const { root, actions } = fixture(advanced);
+    fireEvent.click(getByText(root, "Advanced integration"));
+    const estimator = getByRole<HTMLSelectElement>(root, "combobox", {
+      name: "Estimator",
+    });
+    const maps = getByRole<HTMLInputElement>(root, "checkbox", {
+      name: /Publish rejection evidence/,
+    });
+
+    expect(estimator.value).toBe("percentile_clipped");
+    expect(maps.disabled).toBe(false);
+    fireEvent.click(maps);
+
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenCalledWith({
+      estimator: "percentile_clipped",
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      minimumRetainedSamples: 5,
+      generateRejectionMaps: true,
+    });
   });
 
   it("keeps ambiguous Light associations visibly blocked", () => {

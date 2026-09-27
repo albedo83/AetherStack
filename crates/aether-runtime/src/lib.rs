@@ -43,6 +43,7 @@ pub use progress::{
     ProgressSequence, ProgressState, StageId, StageIdError,
 };
 pub use registered_stack::{
+    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters,
     REGISTERED_CROP_MEAN_ALGORITHM_ID, REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
     RegisteredRejectionMapOutput, RegisteredRejectionMapSummary, RegisteredStackError,
     RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackResult, RegisteredStackSource,

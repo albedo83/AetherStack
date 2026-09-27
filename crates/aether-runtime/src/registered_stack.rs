@@ -12,10 +12,10 @@ use aether_fits::{
     ValidationMode,
 };
 use aether_integration::{
-    ClippedPixelSupport, IntegrationError, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
-    PercentileClipParameters, PixelSupport, integrate_mean, integrate_percentile_clipped_mean,
-    materialize_percentile_rejection_map,
+    ClippedPixelSupport, IntegrationError, PixelSupport, integrate_mean,
+    integrate_percentile_clipped_mean, materialize_percentile_rejection_map,
 };
+pub use aether_integration::{PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters};
 use aether_registration::RegistrationPlan;
 use aether_review::FrameId;
 

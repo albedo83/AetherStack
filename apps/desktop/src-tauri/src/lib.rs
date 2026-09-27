@@ -42,11 +42,13 @@ use aether_review::{
 };
 use aether_runtime::{
     CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
-    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, PipelineSource,
-    ProgressState, REGISTERED_CROP_MEAN_ALGORITHM_ID, RegisteredStackError, RegisteredStackRequest,
-    RegisteredStackSource, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
-    RegistrationPlanSource, run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
-    run_master_plan, run_registered_stack, run_registration_plan,
+    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
+    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
+    RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
+    RegisteredStackRequest, RegisteredStackSource, RegistrationPlanExecutionError,
+    RegistrationPlanExecutionRequest, RegistrationPlanSource, run_calibrated_light_plan,
+    run_demosaiced_light_plan, run_light_plan, run_master_plan, run_registered_stack,
+    run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -228,6 +230,24 @@ struct RegisteredStackCommandRequest {
     output_path: PathBuf,
     band_height: usize,
     memory_limit_bytes: u64,
+    integration: RegisteredStackIntegrationSettings,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RegisteredStackEstimatorInput {
+    StrictMean,
+    PercentileClipped,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegisteredStackIntegrationSettings {
+    estimator: RegisteredStackEstimatorInput,
+    low_fraction: f64,
+    high_fraction: f64,
+    minimum_retained_samples: u32,
+    generate_rejection_maps: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -254,6 +274,10 @@ struct RegisteredStackResponse {
     bytes_written: u64,
     memory_limit_bytes: usize,
     peak_reserved_bytes: usize,
+    estimator: &'static str,
+    low_rejection_map_path: Option<String>,
+    high_rejection_map_path: Option<String>,
+    rejection_map_samples_written: Option<u64>,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -1359,6 +1383,27 @@ where
     if request.band_height == 0 || !request.output_path.is_absolute() {
         return Err(registered_stack_configuration_error());
     }
+    let integration = request.integration;
+    if matches!(
+        integration.estimator,
+        RegisteredStackEstimatorInput::StrictMean
+    ) && integration.generate_rejection_maps
+    {
+        return Err(registered_stack_configuration_error());
+    }
+    let estimator = match integration.estimator {
+        RegisteredStackEstimatorInput::StrictMean => RegisteredStackEstimator::StrictMean,
+        RegisteredStackEstimatorInput::PercentileClipped => {
+            RegisteredStackEstimator::PercentileClipped(
+                PercentileClipParameters::new(
+                    integration.low_fraction,
+                    integration.high_fraction,
+                    integration.minimum_retained_samples,
+                )
+                .map_err(|_| registered_stack_configuration_error())?,
+            )
+        }
+    };
     let plan = build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?;
     if plan.plan_sha256() != request.expected_plan_sha256 {
         return Err(PreviewCommandError::new(
@@ -1416,17 +1461,53 @@ where
         .canonical_sha256()
         .map_err(|_| registered_stack_artifact_error())?;
     let provenance = FitsOutputProvenance::new(
-        manifest_sha256,
+        manifest_sha256.clone(),
         "registered-stack",
-        REGISTERED_CROP_MEAN_ALGORITHM_ID,
+        estimator.algorithm_id(),
         source_count,
     )
     .and_then(|value| value.with_plan_sha256(plan.plan_sha256()))
     .map_err(|_| registered_stack_configuration_error())?;
     let output_path = request.output_path;
-    let execution = RegisteredStackRequest::new(plan, sources, output_path.clone(), provenance)
-        .and_then(|value| value.with_band_height(request.band_height))
-        .map_err(registered_stack_error)?;
+    let rejection_paths = integration
+        .generate_rejection_maps
+        .then(|| rejection_map_paths(&output_path))
+        .transpose()?;
+    let mut execution = RegisteredStackRequest::new_with_estimator(
+        plan,
+        sources,
+        output_path.clone(),
+        provenance,
+        estimator,
+    )
+    .and_then(|value| value.with_band_height(request.band_height))
+    .map_err(registered_stack_error)?;
+    if let Some((low_path, high_path)) = rejection_paths.as_ref() {
+        let low_provenance = FitsOutputProvenance::new(
+            manifest_sha256.clone(),
+            "registered-rejection-low",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            source_count,
+        )
+        .and_then(|value| value.with_plan_sha256(execution.plan().plan_sha256()))
+        .map_err(|_| registered_stack_configuration_error())?;
+        let high_provenance = FitsOutputProvenance::new(
+            manifest_sha256,
+            "registered-rejection-high",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            source_count,
+        )
+        .and_then(|value| value.with_plan_sha256(execution.plan().plan_sha256()))
+        .map_err(|_| registered_stack_configuration_error())?;
+        execution = execution
+            .with_rejection_map(RegisteredRejectionMapOutput::new(
+                low_path.clone(),
+                low_provenance,
+                high_path.clone(),
+                high_provenance,
+            ))
+            .map_err(registered_stack_error)?;
+    }
     let result = run_registered_stack(&execution, cancellation, &memory, |event| {
         progress(RegisteredStackProgress {
             sequence: event.sequence(),
@@ -1446,6 +1527,15 @@ where
     })?;
     let dimensions = result.dimensions();
     let summary = result.summary();
+    let rejection_map_summary = result.rejection_map_summary();
+    let low_rejection_map_path = rejection_paths
+        .as_ref()
+        .map(|(path, _)| unicode_registered_output_path(path))
+        .transpose()?;
+    let high_rejection_map_path = rejection_paths
+        .as_ref()
+        .map(|(_, path)| unicode_registered_output_path(path))
+        .transpose()?;
     Ok(RegisteredStackResponse {
         plan_sha256: request.expected_plan_sha256,
         output_path,
@@ -1457,6 +1547,45 @@ where
         bytes_written: summary.bytes_written(),
         memory_limit_bytes: memory.limit(),
         peak_reserved_bytes: result.peak_reserved_bytes(),
+        estimator: estimator.algorithm_id(),
+        low_rejection_map_path,
+        high_rejection_map_path,
+        rejection_map_samples_written: rejection_map_summary.map(|value| {
+            debug_assert_eq!(
+                value.low().samples_written(),
+                value.high().samples_written()
+            );
+            value.low().samples_written()
+        }),
+    })
+}
+
+fn rejection_map_paths(output: &Path) -> Result<(PathBuf, PathBuf), PreviewCommandError> {
+    let parent = output
+        .parent()
+        .ok_or_else(registered_stack_configuration_error)?;
+    let stem = output
+        .file_stem()
+        .ok_or_else(registered_stack_configuration_error)?;
+    let extension = output.extension();
+    let named = |suffix: &str| {
+        let mut name = stem.to_os_string();
+        name.push(suffix);
+        if let Some(extension) = extension {
+            name.push(".");
+            name.push(extension);
+        }
+        parent.join(name)
+    };
+    Ok((named("-rejection-low"), named("-rejection-high")))
+}
+
+fn unicode_registered_output_path(path: &Path) -> Result<String, PreviewCommandError> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        PreviewCommandError::new(
+            "registered_stack_output_path_not_unicode",
+            "A registered-stack output path cannot be represented as Unicode.",
+        )
     })
 }
 
@@ -3977,6 +4106,9 @@ mod tests {
         FitsOutputProvenance, write_f64_primary, write_f64_primary_atomic_new_with_provenance,
     };
     use aether_metadata::{Binning, CameraModel, CanonicalMetadata, CanonicalValue, Confidence};
+    use aether_runtime::{
+        REGISTERED_CROP_MEAN_ALGORITHM_ID, REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+    };
     use aether_session::{ManifestGroup, StrictGroupingKey, classify_frame, fingerprint_reader};
 
     use super::*;
@@ -4631,6 +4763,13 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::StrictMean,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    minimum_retained_samples: 3,
+                    generate_rejection_maps: false,
+                },
             },
             &CancellationToken::new(),
             |event| progress.push(event),
@@ -4647,9 +4786,82 @@ mod tests {
         );
         assert!(result.bytes_written > 0);
         assert!(result.peak_reserved_bytes <= result.memory_limit_bytes);
+        assert_eq!(result.estimator, REGISTERED_CROP_MEAN_ALGORITHM_ID);
+        assert!(result.low_rejection_map_path.is_none());
+        assert!(result.high_rejection_map_path.is_none());
+        assert!(result.rejection_map_samples_written.is_none());
         assert!(stack_path.is_file());
         assert_eq!(progress.first().map(|event| event.state), Some("started"));
         assert_eq!(progress.last().map(|event| event.state), Some("completed"));
+        Ok(())
+    }
+
+    #[test]
+    fn publishes_advanced_stack_and_both_rejection_maps() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let registered_root = directory.path().join("registered");
+        let stack_path = directory.path().join("advanced-stack.fits");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let registration_request =
+            registration_execution_request(&session, &artifact_root, registered_root)?;
+        let planning = registration_request.planning.clone();
+        let expected_plan_sha256 = registration_request.expected_plan_sha256.clone();
+        let registered = execute_registration_plan_sync(
+            &session,
+            registration_request,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+
+        let result = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256,
+                artifacts: registered
+                    .frames
+                    .into_iter()
+                    .map(|frame| RegistrationArtifactInput {
+                        frame_id: frame.frame_id,
+                        path: PathBuf::from(frame.output_path),
+                    })
+                    .collect(),
+                output_path: stack_path.clone(),
+                band_height: 32,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::PercentileClipped,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    minimum_retained_samples: 2,
+                    generate_rejection_maps: true,
+                },
+            },
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+
+        let low_path = directory.path().join("advanced-stack-rejection-low.fits");
+        let high_path = directory.path().join("advanced-stack-rejection-high.fits");
+        assert_eq!(
+            result.estimator,
+            REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID
+        );
+        assert_eq!(result.low_rejection_map_path.as_deref(), low_path.to_str());
+        assert_eq!(
+            result.high_rejection_map_path.as_deref(),
+            high_path.to_str()
+        );
+        assert_eq!(
+            result.rejection_map_samples_written,
+            Some(result.samples_written)
+        );
+        assert!(stack_path.is_file());
+        assert!(low_path.is_file());
+        assert!(high_path.is_file());
         Ok(())
     }
 
@@ -4691,6 +4903,13 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::StrictMean,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    minimum_retained_samples: 3,
+                    generate_rejection_maps: false,
+                },
             },
             &cancellation,
             |_| {},

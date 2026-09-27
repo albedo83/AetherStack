@@ -103,9 +103,14 @@ plan digests must agree, and publication never overwrites an existing file.
 The executor then publishes the three files as a rollback-safe set. If a later
 destination collides or publication fails, every earlier file created by that
 run is removed; pre-existing files are never modified. A rollback failure is a
-separate typed error so an operator can identify the incomplete set. The
-desktop continues to select the strict estimator until advanced controls can
-present these guarantees without hiding expert choices.
+separate typed error so an operator can identify the incomplete set.
+
+The desktop keeps strict mean as the visible default. Its collapsed advanced
+section can select the percentile estimator, configure both tail fractions and
+the retained-sample floor, and request both rejection maps. JavaScript only
+transports these values. Rust validates them again, derives adjacent create-new
+map destinations from the chosen science path, binds all provenance, and owns
+the complete transaction.
 
 The desktop adapter reconstructs the registration plan from the current
 reviewed Light membership before every stack run. It accepts only the complete

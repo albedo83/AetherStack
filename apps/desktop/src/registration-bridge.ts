@@ -117,6 +117,19 @@ export interface RegistrationExecutionSettings {
   readonly memoryLimitBytes: number;
 }
 
+export interface RegisteredStackIntegrationSettings {
+  readonly estimator: "strict_mean" | "percentile_clipped";
+  readonly lowFraction: number;
+  readonly highFraction: number;
+  readonly minimumRetainedSamples: number;
+  readonly generateRejectionMaps: boolean;
+}
+
+export interface RegisteredStackExecutionSettings
+  extends RegistrationExecutionSettings {
+  readonly integration: RegisteredStackIntegrationSettings;
+}
+
 export interface RegistrationExecutionProgress {
   readonly frameIndex: number;
   readonly frameCount: number;
@@ -167,6 +180,10 @@ export interface RegisteredStackResult {
   readonly bytesWritten: number;
   readonly memoryLimitBytes: number;
   readonly peakReservedBytes: number;
+  readonly estimator: string;
+  readonly lowRejectionMapPath: string | null;
+  readonly highRejectionMapPath: string | null;
+  readonly rejectionMapSamplesWritten: number | null;
 }
 
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */
@@ -243,7 +260,7 @@ export function executeRegisteredStack(
   planning: RegistrationPlanPreviewRequest,
   expectedPlanSha256: string,
   artifacts: readonly RegistrationArtifactInput[],
-  settings: RegistrationExecutionSettings,
+  settings: RegisteredStackExecutionSettings,
   onProgress: (progress: RegisteredStackProgress) => void,
 ): Promise<RegisteredStackResult> {
   const progress = new Channel<RegisteredStackProgress>();

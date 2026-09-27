@@ -4,6 +4,7 @@ import type {
   MasterPlanSettings,
   MasterProductPlan,
 } from "./calibration-bridge.ts";
+import type { RegisteredStackIntegrationSettings } from "./registration-bridge.ts";
 import type {
   ReviewActions,
   ReviewFrame,
@@ -159,6 +160,30 @@ export function mountReviewScreen(
     registeredStackOutput: required<HTMLElement>(
       root,
       "[data-registered-stack-output]",
+    ),
+    registeredStackEstimator: required<HTMLSelectElement>(
+      root,
+      "[data-registered-stack-estimator]",
+    ),
+    registeredStackLowFraction: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-low-fraction]",
+    ),
+    registeredStackHighFraction: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-high-fraction]",
+    ),
+    registeredStackMinimumRetained: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-minimum-retained]",
+    ),
+    registeredStackRejectionMaps: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-rejection-maps]",
+    ),
+    registeredStackEstimatorLabel: required<HTMLElement>(
+      root,
+      "[data-registered-stack-estimator-label]",
     ),
     registeredStackPreviewImage: required<HTMLImageElement>(
       root,
@@ -580,6 +605,17 @@ export function mountReviewScreen(
     }
     if (target === elements.registeredFrame) {
       actions.onSelectRegisteredFrame(elements.registeredFrame.value);
+      return;
+    }
+    if (
+      target === elements.registeredStackEstimator ||
+      target === elements.registeredStackLowFraction ||
+      target === elements.registeredStackHighFraction ||
+      target === elements.registeredStackMinimumRetained ||
+      target === elements.registeredStackRejectionMaps
+    ) {
+      const settings = registeredStackSettings(elements);
+      if (settings) actions.onUpdateRegisteredStackSettings(settings);
       return;
     }
     if (target === elements.lightOutputMode) {
@@ -1227,6 +1263,12 @@ interface RegistrationElements {
   readonly registeredStackMessage: HTMLElement;
   readonly registeredStackProgress: HTMLProgressElement;
   readonly registeredStackOutput: HTMLElement;
+  readonly registeredStackEstimator: HTMLSelectElement;
+  readonly registeredStackLowFraction: HTMLInputElement;
+  readonly registeredStackHighFraction: HTMLInputElement;
+  readonly registeredStackMinimumRetained: HTMLInputElement;
+  readonly registeredStackRejectionMaps: HTMLInputElement;
+  readonly registeredStackEstimatorLabel: HTMLElement;
   readonly registeredStackPreviewImage: HTMLImageElement;
   readonly registeredStackPreviewPlaceholder: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
@@ -1355,6 +1397,28 @@ function renderRegistration(
       ? "Registered identity set verified"
       : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
+  const stackSettings = registration.stack.settings;
+  const advancedEstimator = stackSettings.estimator === "percentile_clipped";
+  elements.registeredStackEstimator.value = stackSettings.estimator;
+  elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
+  elements.registeredStackHighFraction.value = String(
+    stackSettings.highFraction,
+  );
+  elements.registeredStackMinimumRetained.value = String(
+    stackSettings.minimumRetainedSamples,
+  );
+  elements.registeredStackRejectionMaps.checked =
+    stackSettings.generateRejectionMaps;
+  elements.registeredStackEstimator.disabled = stackBusy;
+  elements.registeredStackLowFraction.disabled = stackBusy || !advancedEstimator;
+  elements.registeredStackHighFraction.disabled = stackBusy || !advancedEstimator;
+  elements.registeredStackMinimumRetained.disabled =
+    stackBusy || !advancedEstimator;
+  elements.registeredStackRejectionMaps.disabled =
+    stackBusy || !advancedEstimator;
+  elements.registeredStackEstimatorLabel.textContent = advancedEstimator
+    ? "PERCENTILE F64"
+    : "STRICT F64 MEAN";
   const stackPreviewReady =
     registration.stack.previewState === "ready" &&
     registration.stack.preview?.frameId ===
@@ -1548,6 +1612,49 @@ function renderRegisteredResult(
       button.disabled = review.frames.length < 2;
     }
   }
+}
+
+function registeredStackSettings(
+  elements: Pick<
+    RegistrationElements,
+    | "registeredStackEstimator"
+    | "registeredStackLowFraction"
+    | "registeredStackHighFraction"
+    | "registeredStackMinimumRetained"
+    | "registeredStackRejectionMaps"
+  >,
+): RegisteredStackIntegrationSettings | null {
+  const estimator = elements.registeredStackEstimator.value;
+  if (estimator !== "strict_mean" && estimator !== "percentile_clipped") {
+    return null;
+  }
+  const lowFraction = elements.registeredStackLowFraction.valueAsNumber;
+  const highFraction = elements.registeredStackHighFraction.valueAsNumber;
+  const minimumRetainedSamples =
+    elements.registeredStackMinimumRetained.valueAsNumber;
+  if (
+    !Number.isFinite(lowFraction) ||
+    lowFraction < 0 ||
+    lowFraction >= 1 ||
+    !Number.isFinite(highFraction) ||
+    highFraction < 0 ||
+    highFraction >= 1 ||
+    lowFraction + highFraction >= 1 ||
+    !Number.isSafeInteger(minimumRetainedSamples) ||
+    minimumRetainedSamples < 1 ||
+    minimumRetainedSamples > 4_294_967_295
+  ) {
+    return null;
+  }
+  return {
+    estimator,
+    lowFraction,
+    highFraction,
+    minimumRetainedSamples,
+    generateRejectionMaps:
+      estimator === "percentile_clipped" &&
+      elements.registeredStackRejectionMaps.checked,
+  };
 }
 
 function calibrationSettings(
@@ -2410,9 +2517,38 @@ function shellMarkup(): string {
                       <p class="eyebrow">Final scientific product</p>
                       <h5 id="registered-stack-heading">Integrate common crop</h5>
                     </div>
-                    <span class="instrument-label">STRICT F64 MEAN</span>
+                    <span class="instrument-label" data-registered-stack-estimator-label>STRICT F64 MEAN</span>
                   </div>
                   <p data-registered-stack-message>Register the reviewed Lights to unlock integration</p>
+                  <details class="advanced-settings registered-stack__advanced">
+                    <summary>Advanced integration</summary>
+                    <div class="registered-stack__control-grid">
+                      <label class="control-field registered-stack__estimator">
+                        <span>Estimator</span>
+                        <select data-registered-stack-estimator>
+                          <option value="strict_mean">Strict compensated mean</option>
+                          <option value="percentile_clipped">Percentile-clipped mean</option>
+                        </select>
+                      </label>
+                      <label class="control-field">
+                        <span>Low-tail fraction</span>
+                        <input data-registered-stack-low-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                      </label>
+                      <label class="control-field">
+                        <span>High-tail fraction</span>
+                        <input data-registered-stack-high-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                      </label>
+                      <label class="control-field">
+                        <span>Minimum retained samples</span>
+                        <input data-registered-stack-minimum-retained type="number" min="1" max="4294967295" step="1" inputmode="numeric" />
+                      </label>
+                    </div>
+                    <label class="registered-stack__map-toggle">
+                      <input data-registered-stack-rejection-maps type="checkbox" />
+                      <span><strong>Publish rejection evidence</strong><small>Create separate low-tail and high-tail FITS maps beside the science product.</small></span>
+                    </label>
+                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Percentile clipping is deterministic and records masked, non-finite and rejected samples separately.</p>
+                  </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
                   <div class="registered-stack__preview">
