@@ -10,6 +10,7 @@ mod features;
 mod geometry;
 mod matching;
 mod reference;
+mod resampling;
 mod triangles;
 
 pub use confidence::{
@@ -40,6 +41,10 @@ pub use matching::{
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,
     ReferenceSelectionError, ReferenceSelectionEvidence, select_reference,
+};
+pub use resampling::{
+    LANCZOS3_RESAMPLING_ALGORITHM_ID, ResampledImage, ResamplingError, ResamplingStatistics,
+    resample_lanczos3,
 };
 pub use triangles::{
     MAX_DESCRIPTOR_ANCHORS, MAX_DESCRIPTOR_NEIGHBORS, MAX_TRIANGLE_DESCRIPTORS,

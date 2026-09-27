@@ -735,6 +735,16 @@ safety reasoning. They do not narrate obvious syntax.
     RMS. Next, compare transforms and registered pixels against an independent
     implementation, validate ToupTek 585C and more diverse fields, then implement
     flux- and mask-tested resampling before desktop automation.
+42. Fix the strict registration-resampling oracle before optimizing execution.
+    The new normalized binary64 Lanczos-3 path inverse-maps reference pixel
+    centers through the explicit source-to-reference transform, preserves exact
+    integer samples, retains negative lobes, uses compensated numerator and
+    weight sums, and refuses incomplete or unusable non-zero support with exact
+    mask evidence. Tests lock planar identity, integer and fractional shifts,
+    constant preservation, point-source flux, unclipped output, invalid support,
+    footprint accounting, and output validation. Next, create a bounded band
+    executor with bitwise oracle comparison, derive the common valid footprint,
+    and connect accepted registration plans to atomic FITS publication.
 
 ## 11. Stable-release definition
 

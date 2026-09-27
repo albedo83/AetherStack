@@ -115,6 +115,10 @@ optimized CPU and GPU paths must match.
   support, ambiguity, spatial coverage, residual quality, reflection, and
   truncated searches, plus a path-free end-to-end diagnostic validated across
   the local ten-Light ASI294MC Pro session;
+- a strict normalized `f64` Lanczos-3 registration-resampling oracle with exact
+  integer-coordinate sampling, compensated weights, unclipped output,
+  conservative non-zero-tap mask propagation, complete footprint accounting,
+  and synthetic constant-field and point-source flux tests;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

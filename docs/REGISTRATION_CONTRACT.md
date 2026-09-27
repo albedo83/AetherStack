@@ -4,10 +4,9 @@ Registration operates on immutable linear scientific images. Display stretches,
 preview reductions, viewport transforms, and browser coordinates never enter
 feature matching, transform estimation, residual measurement, or resampling.
 
-The initial implementation fixes the coordinate and automatic-reference rules.
-It deliberately does not claim that star matching or resampling is implemented.
-Those stages must extend this contract and pass their own synthetic and
-real-corpus release gates.
+The implementation fixes coordinate, reference-selection, feature matching,
+similarity-consensus, confidence, and strict Lanczos-3 resampling rules. Runtime
+publication and broader transform models remain separate release gates.
 
 ## Scientific coordinate convention
 
@@ -211,6 +210,36 @@ one detection pixel spans two sensor pixels, that is 0.426–0.465 source pixels
 These measurements validate this camera/session profile only; no private file
 name, digest, target, coordinate, or image data is retained in the repository.
 
+## Strict Lanczos-3 resampling oracle
+
+`lanczos3-normalized-f64-v1` resamples every planar channel in the reference
+coordinate system. The supplied transform always remains source-to-reference;
+the resampler computes its inverse once and evaluates that inverse at each
+integer-centered output pixel. For source distance `d`, the one-dimensional
+kernel is `sinc(pi*d) * sinc(pi*d/3)` for `abs(d) < 3` and zero otherwise. Exact
+integer offsets are returned as analytical zeros, making identity and integer
+translation paths bit-exact for clear samples instead of introducing tiny
+floating-point neighbor weights.
+
+The two-dimensional kernel is separable. Products and normalization weights are
+accumulated in deterministic order with compensated binary64 sums, then divided
+by the measured weight sum. Values are not clipped, so scientifically meaningful
+negative lobes and overshoot remain available to later processing. Tests prove
+constant-field preservation and unit integrated flux for an isolated source
+under a fractional translation.
+
+Every mathematically non-zero tap must lie inside the source and contain a clear,
+finite sample. A footprint crossing the source boundary produces `NaN` with the
+`MISSING` flag. Unusable support produces `NaN` with the union of all source
+flags, plus `INVALID` for an otherwise unflagged non-finite input. Zero-weight
+taps never spread unrelated defects. Statistics account for every output sample
+as interpolated, outside the footprint, or withheld by masked support.
+
+The current whole-image scalar implementation is the numerical oracle, not the
+final high-volume executor. A banded or tiled implementation must use global
+coordinates and pass bitwise differential tests against this oracle before it
+can replace it in production.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -244,7 +273,8 @@ Production registration still requires:
   similarity model;
 - confidence thresholds validated on broader sparse and crowded real data;
 - justified distortion models with bounded control-point counts;
-- flux-tested cubic and Lanczos resampling with conservative mask propagation;
+- bounded banded Lanczos execution with oracle differential tests, plus a
+  separately identified cubic option if real comparisons justify it;
 - common-footprint and coverage diagnostics;
 - synthetic sub-pixel ground truth for shifts, scale, rotation, mirroring,
   distortion, crowding, partial overlap, hot pixels, and outliers;
