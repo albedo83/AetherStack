@@ -7,6 +7,7 @@
 mod confidence;
 mod consensus;
 mod features;
+mod footprint;
 mod geometry;
 mod matching;
 mod reference;
@@ -27,6 +28,11 @@ pub use features::{
     FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog, FeatureCatalogError, FeatureExclusions,
     FeatureSelectionParameters, MAX_REGISTRATION_FEATURES, MAX_REGISTRATION_MEASUREMENTS,
     RegistrationFeature, build_feature_catalog,
+};
+pub use footprint::{
+    COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID, CommonFootprintError, CommonFootprintReport,
+    MAX_COMMON_FOOTPRINT_EVALUATIONS, MAX_COMMON_FOOTPRINT_FRAMES, ReferenceRectangle,
+    RegistrationFootprint, derive_common_lanczos3_footprint,
 };
 pub use geometry::{
     AffineTransform, CoordinateError, ImagePoint, RegistrationMatch, ResidualError,

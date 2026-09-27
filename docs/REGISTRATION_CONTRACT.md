@@ -240,6 +240,28 @@ final high-volume executor. A banded or tiled implementation must use global
 coordinates and pass bitwise differential tests against this oracle before it
 can replace it in production.
 
+## Common geometric footprint and autocrop
+
+`common-lanczos3-footprint-v1` evaluates only image extents and accepted
+source-to-reference transforms. At each reference pixel it applies every inverse
+transform and asks whether all mathematically non-zero Lanczos-3 taps lie inside
+that source. Exact integer mappings retain their analytical one-tap support;
+fractional mappings require the complete six-tap support on both axes. This is
+the same discrete boundary rule as the resampling oracle.
+
+Pixel masks and values are deliberately excluded. A hot, cold, saturated, or
+missing sample may invalidate nearby resampled values and later reduce their
+integration support, but it cannot redefine the geometric overlap or collapse
+the autocrop around one local defect.
+
+The scanner keeps a height histogram and monotonic stack proportional to output
+width, not image area. It reports the exact number of common-support reference
+pixels and the largest axis-aligned rectangle entirely contained in that support.
+Equal-area rectangles prefer smaller top coordinate, smaller left coordinate,
+larger width, then larger height. No overlap is an explicit absent rectangle,
+not an invented zero-sized crop. Frame count and pixel/frame evaluations have
+public hard bounds.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -275,7 +297,7 @@ Production registration still requires:
 - justified distortion models with bounded control-point counts;
 - bounded banded Lanczos execution with oracle differential tests, plus a
   separately identified cubic option if real comparisons justify it;
-- common-footprint and coverage diagnostics;
+- desktop preview and explicit user override of the computed common footprint;
 - synthetic sub-pixel ground truth for shifts, scale, rotation, mirroring,
   distortion, crowding, partial overlap, hot pixels, and outliers;
 - inspected ASI294MC Pro comparison against an independent implementation and

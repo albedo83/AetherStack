@@ -139,7 +139,7 @@ evidence, not automatically an AetherStack default.
 | Image registration | Provide robust matching, transforms, interpolation, and residual diagnostics. | Pixel coordinates, affine composition/inversion, compensated residual summaries, inspectable automatic-reference ranking, bounded quality-derived feature catalogs, local invariant triangle descriptors, tolerant ambiguity-preserving matching, deterministic support-ranked bijective consensus, competing-model evidence, a fail-closed confidence report, and a strict flux-tested normalized Lanczos-3 oracle implemented; a path-free raw-CFA diagnostic passes all nine ASI294MC Pro session comparisons without truncation; independent comparison, ToupTek validation, broader models, bounded execution, and publication remain |
 | Local normalization | Fit guarded background and scale models with inspectable samples and residuals. | Planned |
 | Image integration | Provide deterministic weighted robust estimators, support maps, and rejection maps. | Planned |
-| Autocrop | Derive the maximal valid common footprint and preview its coordinate transform. | Planned |
+| Autocrop | Derive the maximal valid common footprint and preview its coordinate transform. | Exact bounded all-frame Lanczos-support scan and deterministic largest-rectangle crop implemented; desktop preview, override, and registered-output wiring remain |
 | Automatic integration mode | Publish the exact estimator, rejection method, and chosen parameters. | Planned |
 | Astrometric solution | Keep solving optional and handle offline/catalog failure explicitly. | Research-gated |
 

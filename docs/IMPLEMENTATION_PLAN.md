@@ -745,6 +745,15 @@ safety reasoning. They do not narrate obvious syntax.
     footprint accounting, and output validation. Next, create a bounded band
     executor with bitwise oracle comparison, derive the common valid footprint,
     and connect accepted registration plans to atomic FITS publication.
+43. Derive autocrop from exact interpolation support rather than image content.
+    The bounded common-footprint scanner inverse-maps every discrete reference
+    center through every accepted transform, applies the same analytical-zero
+    Lanczos boundary rule as resampling, and finds the largest all-covered
+    rectangle with width-proportional histogram storage. It excludes pixel masks
+    by design so local defects cannot shrink the geometric field, retains exact
+    coverage counts, uses documented tie breakers, and reports no-overlap
+    explicitly. Next, expose this crop in the registration diagnostic and build
+    the bounded band executor and atomic registered-FITS transaction.
 
 ## 11. Stable-release definition
 
