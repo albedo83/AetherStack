@@ -1,8 +1,9 @@
 //! Deterministic strict-reference image integration.
 //!
-//! The first implemented estimator is an unweighted arithmetic mean. Robust
-//! rejection and weighting belong to later versioned algorithms; this primitive
-//! supplies the transparent CPU oracle for the initial vertical slice.
+//! The strict unweighted mean is the transparent CPU oracle. A separately
+//! versioned percentile-clipped mean adds deterministic low/high rank rejection
+//! with exact per-pixel evidence; weighting and adaptive rejection remain
+//! explicit future algorithms.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -15,6 +16,104 @@ pub struct PixelSupport {
     accepted: u32,
     masked: u32,
     non_finite: u32,
+}
+
+/// Per-pixel accounting for deterministic rank-based rejection.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ClippedPixelSupport {
+    accepted: u32,
+    masked: u32,
+    non_finite: u32,
+    low_rejected: u32,
+    high_rejected: u32,
+}
+
+impl ClippedPixelSupport {
+    /// Finite samples retained in the final mean.
+    #[must_use]
+    pub const fn accepted(self) -> u32 {
+        self.accepted
+    }
+
+    /// Samples excluded by a non-clear quality mask.
+    #[must_use]
+    pub const fn masked(self) -> u32 {
+        self.masked
+    }
+
+    /// Unmasked NaN or infinite samples.
+    #[must_use]
+    pub const fn non_finite(self) -> u32 {
+        self.non_finite
+    }
+
+    /// Finite samples rejected from the low end of sorted rank order.
+    #[must_use]
+    pub const fn low_rejected(self) -> u32 {
+        self.low_rejected
+    }
+
+    /// Finite samples rejected from the high end of sorted rank order.
+    #[must_use]
+    pub const fn high_rejected(self) -> u32 {
+        self.high_rejected
+    }
+
+    /// Total input samples represented by this record.
+    #[must_use]
+    pub const fn total(self) -> u32 {
+        self.accepted + self.masked + self.non_finite + self.low_rejected + self.high_rejected
+    }
+}
+
+/// Validated controls for deterministic percentile rejection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PercentileClipParameters {
+    low_fraction: f64,
+    high_fraction: f64,
+    minimum_retained: u32,
+}
+
+impl PercentileClipParameters {
+    /// Validates exclusive low/high fractions and the retained-sample floor.
+    pub fn new(
+        low_fraction: f64,
+        high_fraction: f64,
+        minimum_retained: u32,
+    ) -> Result<Self, IntegrationError> {
+        if !low_fraction.is_finite()
+            || !high_fraction.is_finite()
+            || !(0.0..1.0).contains(&low_fraction)
+            || !(0.0..1.0).contains(&high_fraction)
+            || low_fraction + high_fraction >= 1.0
+            || minimum_retained == 0
+        {
+            return Err(IntegrationError::InvalidPercentileParameters);
+        }
+        Ok(Self {
+            low_fraction,
+            high_fraction,
+            minimum_retained,
+        })
+    }
+
+    /// Fraction rejected from the low sorted tail.
+    #[must_use]
+    pub const fn low_fraction(self) -> f64 {
+        self.low_fraction
+    }
+
+    /// Fraction rejected from the high sorted tail.
+    #[must_use]
+    pub const fn high_fraction(self) -> f64 {
+        self.high_fraction
+    }
+
+    /// Minimum finite samples required after clipping.
+    #[must_use]
+    pub const fn minimum_retained(self) -> u32 {
+        self.minimum_retained
+    }
 }
 
 impl PixelSupport {
@@ -48,6 +147,33 @@ impl PixelSupport {
 pub struct MeanIntegration {
     image: ScientificImage,
     support: Vec<PixelSupport>,
+}
+
+/// Percentile-clipped image and exact per-pixel rejection accounting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PercentileClippedIntegration {
+    image: ScientificImage,
+    support: Vec<ClippedPixelSupport>,
+}
+
+impl PercentileClippedIntegration {
+    /// Integrated image after rank rejection.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Exact accepted and rejected counts in planar sample order.
+    #[must_use]
+    pub fn support(&self) -> &[ClippedPixelSupport] {
+        &self.support
+    }
+
+    /// Consumes the result into its scientific image and evidence map.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, Vec<ClippedPixelSupport>) {
+        (self.image, self.support)
+    }
 }
 
 /// Inclusive origin and exclusive extent for strict spatial integration.
@@ -141,6 +267,8 @@ pub enum IntegrationError {
         /// Maximum supported count.
         maximum: u32,
     },
+    /// Percentile fractions or the retained-sample floor are invalid.
+    InvalidPercentileParameters,
     /// An input does not match the first image's dimensions.
     DimensionMismatch {
         /// Zero-based input position.
@@ -185,6 +313,11 @@ pub enum IntegrationError {
         /// Number of per-pixel records requested.
         elements: usize,
     },
+    /// Reusable finite-sample sorting storage could not be reserved.
+    SampleAllocationFailed {
+        /// Maximum samples retained for one output pixel.
+        elements: usize,
+    },
     /// Output image allocation or construction failed.
     Core(CoreError),
 }
@@ -196,6 +329,9 @@ impl Display for IntegrationError {
             Self::TooManyInputImages { count, maximum } => write!(
                 formatter,
                 "mean integration received {count} images; support map maximum is {maximum}"
+            ),
+            Self::InvalidPercentileParameters => formatter.write_str(
+                "percentile fractions must be finite, nonnegative, total below one, with a positive retained minimum",
             ),
             Self::DimensionMismatch {
                 input_index,
@@ -242,6 +378,10 @@ impl Display for IntegrationError {
                 formatter,
                 "cannot reserve memory for {elements} pixel support records"
             ),
+            Self::SampleAllocationFailed { elements } => write!(
+                formatter,
+                "cannot reserve memory for {elements} finite samples"
+            ),
             Self::Core(error) => Display::fmt(error, formatter),
         }
     }
@@ -253,12 +393,14 @@ impl Error for IntegrationError {
             Self::Core(error) => Some(error),
             Self::NoInputImages
             | Self::TooManyInputImages { .. }
+            | Self::InvalidPercentileParameters
             | Self::DimensionMismatch { .. }
             | Self::InvalidRegion { .. }
             | Self::RegionOutsideInput { .. }
             | Self::InternalImageInvariant { .. }
             | Self::InternalAccountingInvariant { .. }
-            | Self::SupportAllocationFailed { .. } => None,
+            | Self::SupportAllocationFailed { .. }
+            | Self::SampleAllocationFailed { .. } => None,
         }
     }
 }
@@ -314,6 +456,150 @@ pub fn integrate_mean_region(
     region: IntegrationRegion,
 ) -> Result<MeanIntegration, IntegrationError> {
     integrate_mean_impl(inputs, region)
+}
+
+/// Integrates equal-sized images after deterministic percentile-tail rejection.
+///
+/// Clear finite samples are sorted with IEEE total ordering at each pixel.
+/// `floor(n * low_fraction)` and `floor(n * high_fraction)` samples are removed
+/// from the respective tails only when at least `minimum_retained` samples
+/// remain. Masked and non-finite samples are excluded before rank calculation.
+/// The retained mean uses the same normalized Neumaier summation as
+/// [`integrate_mean`]. Exact low/high counts are retained for future rejection
+/// map publication.
+///
+/// # Errors
+///
+/// Returns a typed error for empty or mismatched input, excessive input count,
+/// invalid controls, invariant failure, or bounded allocation failure.
+pub fn integrate_percentile_clipped_mean(
+    inputs: &[&ScientificImage],
+    parameters: PercentileClipParameters,
+) -> Result<PercentileClippedIntegration, IntegrationError> {
+    let Some(first) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let dimensions = first.dimensions();
+    for (input_index, input) in inputs.iter().enumerate().skip(1) {
+        let actual = input.dimensions();
+        if actual != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual,
+            });
+        }
+    }
+    let mut output =
+        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: dimensions.pixel_count(),
+        })?;
+    support.resize(dimensions.pixel_count(), ClippedPixelSupport::default());
+    let mut finite = Vec::new();
+    finite.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+
+    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
+    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut support)
+        .enumerate()
+    {
+        finite.clear();
+        let mut combined_rejected_flags = PixelFlags::CLEAR;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if !flags.is_clear() {
+                output_support.masked += 1;
+                combined_rejected_flags |= flags;
+            } else if !value.is_finite() {
+                output_support.non_finite += 1;
+            } else {
+                finite.push(value);
+            }
+        }
+        if finite.is_empty() {
+            *output = f64::NAN;
+            let mut flags = combined_rejected_flags | PixelFlags::MISSING;
+            if output_support.non_finite > 0 {
+                flags |= PixelFlags::INVALID;
+            }
+            *output_flags = flags;
+        } else {
+            finite.sort_by(f64::total_cmp);
+            let mut low = fraction_count(finite.len(), parameters.low_fraction);
+            let mut high = fraction_count(finite.len(), parameters.high_fraction);
+            let retained = finite.len().saturating_sub(low).saturating_sub(high);
+            if retained < usize::try_from(parameters.minimum_retained).unwrap_or(usize::MAX) {
+                low = 0;
+                high = 0;
+            }
+            let retained = &finite[low..finite.len() - high];
+            output_support.low_rejected =
+                u32::try_from(low).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            output_support.high_rejected =
+                u32::try_from(high).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            output_support.accepted = u32::try_from(retained.len()).map_err(|_| {
+                IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                }
+            })?;
+            *output = stable_mean(retained);
+            *output_flags = PixelFlags::CLEAR;
+        }
+        if output_support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: output_support.total(),
+            });
+        }
+    }
+
+    Ok(PercentileClippedIntegration {
+        image: output,
+        support,
+    })
+}
+
+fn fraction_count(count: usize, fraction: f64) -> usize {
+    ((count as f64) * fraction).floor() as usize
+}
+
+fn stable_mean(values: &[f64]) -> f64 {
+    let scale = values
+        .iter()
+        .fold(0.0_f64, |scale, value| scale.max(value.abs()));
+    if scale == 0.0 {
+        return 0.0;
+    }
+    let minimum = values[0];
+    let maximum = values[values.len() - 1];
+    let divisor = values.len() as f64;
+    let mut normalized = CompensatedSum::new();
+    for value in values {
+        normalized.add((value / scale) / divisor);
+    }
+    canonical_zero(normalized.total().max(minimum / scale).min(maximum / scale) * scale)
 }
 
 fn integrate_mean_impl(
@@ -595,6 +881,82 @@ mod tests {
 
         assert!((result.image().pixels()[0] - expected).abs() <= f64::EPSILON);
         Ok(())
+    }
+
+    #[test]
+    fn percentile_clipping_rejects_exact_sorted_tails_and_records_maps() -> TestResult {
+        let inputs = [0.0, 10.0, 11.0, 12.0, 100.0]
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+        let parameters = PercentileClipParameters::new(0.2, 0.2, 3)?;
+
+        let result = integrate_percentile_clipped_mean(&references, parameters)?;
+
+        assert_eq!(result.image().pixels(), &[11.0]);
+        assert_eq!(
+            result.support(),
+            &[ClippedPixelSupport {
+                accepted: 3,
+                masked: 0,
+                non_finite: 0,
+                low_rejected: 1,
+                high_rejected: 1,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn percentile_clipping_keeps_mask_and_non_finite_evidence_separate() -> TestResult {
+        let valid = image(vec![2.0])?;
+        let mut masked = image(vec![100.0])?;
+        masked.mask_mut().as_mut_slice()[0] = PixelFlags::SATURATED;
+        let invalid = image(vec![f64::NAN])?;
+        let parameters = PercentileClipParameters::new(0.25, 0.25, 1)?;
+
+        let result = integrate_percentile_clipped_mean(&[&valid, &masked, &invalid], parameters)?;
+
+        assert_eq!(result.image().pixels(), &[2.0]);
+        assert_eq!(result.support()[0].accepted(), 1);
+        assert_eq!(result.support()[0].masked(), 1);
+        assert_eq!(result.support()[0].non_finite(), 1);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].high_rejected(), 0);
+        assert_eq!(result.support()[0].total(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn percentile_clipping_respects_the_minimum_and_large_value_precision() -> TestResult {
+        let first = image(vec![f64::MAX])?;
+        let second = image(vec![f64::MAX])?;
+        let parameters = PercentileClipParameters::new(0.49, 0.49, 2)?;
+
+        let result = integrate_percentile_clipped_mean(&[&first, &second], parameters)?;
+
+        assert_eq!(result.image().pixels()[0].to_bits(), f64::MAX.to_bits());
+        assert_eq!(result.support()[0].accepted(), 2);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].high_rejected(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn percentile_parameters_fail_closed() {
+        for (low, high, retained) in [
+            (-0.1, 0.0, 1),
+            (0.0, f64::NAN, 1),
+            (0.5, 0.5, 1),
+            (1.0, 0.0, 1),
+            (0.0, 0.0, 0),
+        ] {
+            assert_eq!(
+                PercentileClipParameters::new(low, high, retained),
+                Err(IntegrationError::InvalidPercentileParameters)
+            );
+        }
     }
 
     #[test]

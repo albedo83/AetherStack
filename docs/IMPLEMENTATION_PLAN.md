@@ -922,6 +922,14 @@ safety reasoning. They do not narrate obvious syntax.
     keeps preview failure separate from scientific product validity. The final
     product remains an untouched binary64 FITS. Next, design and persist
     high/low rejection-map products without weakening the strict estimator.
+62. Add the first independently versioned robust estimator: deterministic
+    percentile-tail rejection followed by the scaled compensated mean. Exact
+    support records separate accepted, masked, non-finite, low-rejected, and
+    high-rejected samples. Runtime execution supports the estimator in bounded
+    bands under `registered-percentile-mean-v1`, including support storage and
+    sorting scratch in the memory budget, while strict mean remains the desktop
+    default. Next, atomically publish the evidence records as companion maps
+    before exposing these advanced controls.
 
 ## 11. Stable-release definition
 

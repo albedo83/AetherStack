@@ -43,8 +43,9 @@ pub use progress::{
     ProgressSequence, ProgressState, StageId, StageIdError,
 };
 pub use registered_stack::{
-    REGISTERED_CROP_MEAN_ALGORITHM_ID, RegisteredStackError, RegisteredStackRequest,
-    RegisteredStackResult, RegisteredStackSource, run_registered_stack,
+    REGISTERED_CROP_MEAN_ALGORITHM_ID, REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+    RegisteredStackError, RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackResult,
+    RegisteredStackSource, run_registered_stack,
 };
 pub use registration::{
     RegisteredFrameExecutionResult, RegistrationPipelineError, RegistrationPlanExecutionError,

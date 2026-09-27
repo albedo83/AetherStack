@@ -153,7 +153,8 @@ optimized CPU and GPU paths must match.
   exporter that revalidates every calibrated input before set publication;
 - strict unweighted mean integration with compensated normalized accumulation,
   exact per-pixel support accounting, and direct multi-plane region integration
-  for a sealed common crop without full-frame crop copies;
+  for a sealed common crop without full-frame crop copies, plus an independently
+  versioned percentile-clipped mean with exact low/high rejection evidence;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, streams scan-line bands without a
   full final-image allocation, calculates exact three-pass output statistics,

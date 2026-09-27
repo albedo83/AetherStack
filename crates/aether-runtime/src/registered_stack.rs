@@ -10,7 +10,10 @@ use aether_fits::{
     HeaderReadOptions, ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus,
     ValidationMode,
 };
-use aether_integration::{IntegrationError, PixelSupport, integrate_mean};
+use aether_integration::{
+    ClippedPixelSupport, IntegrationError, PercentileClipParameters, PixelSupport, integrate_mean,
+    integrate_percentile_clipped_mean,
+};
 use aether_registration::RegistrationPlan;
 use aether_review::FrameId;
 
@@ -23,9 +26,31 @@ use crate::{
 
 /// Strict estimator identity for a plan-bound registered common-crop stack.
 pub const REGISTERED_CROP_MEAN_ALGORITHM_ID: &str = "registered-crop-mean-v1";
+/// Versioned deterministic percentile-clipped registered stack identity.
+pub const REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-percentile-mean-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
+
+/// Scientific estimator selected for one registered common-crop stack.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegisteredStackEstimator {
+    /// Strict unweighted mean of every usable sample.
+    StrictMean,
+    /// Sorted low/high percentile rejection followed by the strict mean.
+    PercentileClipped(PercentileClipParameters),
+}
+
+impl RegisteredStackEstimator {
+    /// Stable provenance identity required for this estimator.
+    #[must_use]
+    pub const fn algorithm_id(self) -> &'static str {
+        match self {
+            Self::StrictMean => REGISTERED_CROP_MEAN_ALGORITHM_ID,
+            Self::PercentileClipped(_) => REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+        }
+    }
+}
 
 /// One immutable registered FITS artifact bound to its reviewed frame.
 #[derive(Clone, Debug)]
@@ -64,6 +89,7 @@ pub struct RegisteredStackRequest {
     band_height: usize,
     header_options: HeaderReadOptions,
     validation_mode: ValidationMode,
+    estimator: RegisteredStackEstimator,
 }
 
 impl RegisteredStackRequest {
@@ -74,12 +100,29 @@ impl RegisteredStackRequest {
         output: PathBuf,
         provenance: FitsOutputProvenance,
     ) -> Result<Self, RegisteredStackError> {
+        Self::new_with_estimator(
+            plan,
+            sources,
+            output,
+            provenance,
+            RegisteredStackEstimator::StrictMean,
+        )
+    }
+
+    /// Builds a request for an explicit versioned estimator.
+    pub fn new_with_estimator(
+        plan: RegistrationPlan,
+        sources: Vec<RegisteredStackSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        estimator: RegisteredStackEstimator,
+    ) -> Result<Self, RegisteredStackError> {
         if sources.len() != plan.frames().len() {
             return Err(RegisteredStackError::SourceSetMismatch);
         }
         let source_count =
             u32::try_from(sources.len()).map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
-        if provenance.algorithm_id() != REGISTERED_CROP_MEAN_ALGORITHM_ID {
+        if provenance.algorithm_id() != estimator.algorithm_id() {
             return Err(RegisteredStackError::ProvenanceAlgorithmMismatch);
         }
         if provenance.source_count() != source_count {
@@ -116,6 +159,7 @@ impl RegisteredStackRequest {
             band_height: DEFAULT_BAND_HEIGHT,
             header_options: HeaderReadOptions::default(),
             validation_mode: ValidationMode::Strict,
+            estimator,
         })
     }
 
@@ -156,6 +200,12 @@ impl RegisteredStackRequest {
     #[must_use]
     pub fn output(&self) -> &Path {
         &self.output
+    }
+
+    /// Versioned integration estimator.
+    #[must_use]
+    pub const fn estimator(&self) -> RegisteredStackEstimator {
+        self.estimator
     }
 }
 
@@ -482,7 +532,12 @@ where
                 .checkpoint()
                 .map_err(RegisteredStackError::Cancelled)?;
             let height = (crop.height() - offset_y).min(request.band_height);
-            let reserved = planned_band_bytes(crop.width(), height, request.sources.len())?;
+            let reserved = planned_band_bytes(
+                crop.width(),
+                height,
+                request.sources.len(),
+                request.estimator,
+            )?;
             let _band = memory
                 .try_reserve(reserved)
                 .map_err(RegisteredStackError::Memory)?;
@@ -514,11 +569,22 @@ where
                 );
             }
             let references = images.iter().collect::<Vec<_>>();
-            let integrated =
-                integrate_mean(&references).map_err(RegisteredStackError::Integration)?;
-            writer
-                .write_image_chunk(integrated.image())
-                .map_err(RegisteredStackError::Publish)?;
+            match request.estimator {
+                RegisteredStackEstimator::StrictMean => {
+                    let integrated =
+                        integrate_mean(&references).map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                }
+                RegisteredStackEstimator::PercentileClipped(parameters) => {
+                    let integrated = integrate_percentile_clipped_mean(&references, parameters)
+                        .map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                }
+            }
             *completed = completed
                 .checked_add(1)
                 .ok_or(RegisteredStackError::WorkSizeOverflow)?;
@@ -642,6 +708,7 @@ fn planned_band_bytes(
     width: usize,
     height: usize,
     source_count: usize,
+    estimator: RegisteredStackEstimator,
 ) -> Result<usize, RegisteredStackError> {
     let samples = width
         .checked_mul(height)
@@ -652,10 +719,14 @@ fn planned_band_bytes(
     let sources = image
         .checked_mul(source_count)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+    let support_size = match estimator {
+        RegisteredStackEstimator::StrictMean => size_of::<PixelSupport>(),
+        RegisteredStackEstimator::PercentileClipped(_) => size_of::<ClippedPixelSupport>(),
+    };
     let output = image
         .checked_add(
             samples
-                .checked_mul(size_of::<PixelSupport>())
+                .checked_mul(support_size)
                 .ok_or(RegisteredStackError::WorkSizeOverflow)?,
         )
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
@@ -667,10 +738,17 @@ fn planned_band_bytes(
             size_of::<aether_core::ScientificImage>() + size_of::<&aether_core::ScientificImage>(),
         )
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+    let estimator_scratch = match estimator {
+        RegisteredStackEstimator::StrictMean => 0,
+        RegisteredStackEstimator::PercentileClipped(_) => source_count
+            .checked_mul(size_of::<f64>())
+            .ok_or(RegisteredStackError::WorkSizeOverflow)?,
+    };
     sources
         .checked_add(output)
         .and_then(|value| value.checked_add(decode))
         .and_then(|value| value.checked_add(vector_storage))
+        .and_then(|value| value.checked_add(estimator_scratch))
         .ok_or(RegisteredStackError::WorkSizeOverflow)
 }
 
@@ -855,6 +933,66 @@ mod tests {
                 .pixels()
                 .iter()
                 .all(|value| value.to_bits() == 3.0_f64.to_bits())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn executes_versioned_percentile_rejection_in_bounded_bands() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let identities = ['a', 'b', 'c', 'd', 'e']
+            .into_iter()
+            .map(id)
+            .collect::<Result<Vec<_>, _>>()?;
+        let plan = RegistrationPlan::new(
+            identities[0].clone(),
+            12,
+            10,
+            identities
+                .iter()
+                .cloned()
+                .map(|frame_id| {
+                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
+                })
+                .collect(),
+        )?;
+        let sources = identities
+            .into_iter()
+            .zip([0.0, 10.0, 11.0, 12.0, 100.0])
+            .map(|(frame_id, value)| registered_source(&directory, &plan, frame_id, value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+            5,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            directory.0.join("percentile-stack.fits"),
+            provenance,
+            RegisteredStackEstimator::PercentileClipped(PercentileClipParameters::new(
+                0.2, 0.2, 3,
+            )?),
+        )?
+        .with_band_height(3)?;
+        let memory = MemoryBudget::new(16 * 1_024 * 1_024)?;
+
+        let result = run_registered_stack(&request, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(result.dimensions(), Dimensions::new(12, 10, 3)?);
+        assert!(result.peak_reserved_bytes() <= memory.limit());
+        let file = File::open(request.output())?;
+        let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+        assert!(reader.verify_checksums()?.is_fully_verified());
+        let output = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+        assert!(
+            output
+                .pixels()
+                .iter()
+                .all(|value| value.to_bits() == 11.0_f64.to_bits())
         );
         Ok(())
     }

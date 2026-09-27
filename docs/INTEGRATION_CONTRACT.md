@@ -50,6 +50,21 @@ that a full-frame region is bit-identical to `integrate_mean`, that multi-plane
 crop coordinates preserve planar order, and that excluded-sample accounting is
 unchanged inside a crop.
 
+## Percentile-clipped mean
+
+`integrate_percentile_clipped_mean` is a separate deterministic estimator, not
+a hidden mode of the strict mean. At each pixel, clear finite samples are
+sorted with IEEE total ordering. The algorithm rejects
+`floor(n × low_fraction)` and `floor(n × high_fraction)` samples from the two
+tails only when the configured minimum number of retained samples remains.
+Masked and non-finite samples never enter rank calculation.
+
+The retained samples use the same scaled Neumaier mean as the strict oracle.
+Every pixel reports accepted, masked, non-finite, low-rejected, and
+high-rejected counts whose sum equals the input count. These records are the
+scientific source for future low/high rejection-map FITS products; support
+absence is never mislabeled as statistical rejection.
+
 ## Registered stack execution
 
 `run_registered_stack` is the bounded FITS-to-FITS orchestration for a sealed
@@ -67,6 +82,13 @@ After private checksum readback, every source is fingerprinted again before the
 create-new publication. Cancellation, insufficient memory, source mutation,
 stale plan evidence, checksum failure, or an existing destination leaves no
 new public product.
+
+The runtime exposes the percentile estimator under
+`registered-percentile-mean-v1`. Its provenance identity is distinct from
+`registered-crop-mean-v1`, and its larger support record plus reusable sorting
+scratch are included in the logical memory reservation. The desktop continues
+to select the strict estimator until advanced controls and rejection-map
+publication are available together.
 
 The desktop adapter reconstructs the registration plan from the current
 reviewed Light membership before every stack run. It accepts only the complete
