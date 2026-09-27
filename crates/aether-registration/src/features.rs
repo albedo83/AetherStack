@@ -508,6 +508,40 @@ const fn canonical_zero(value: f64) -> f64 {
 }
 
 #[cfg(test)]
+pub(crate) fn feature_catalog_for_tests(
+    frame_id: FrameId,
+    points: &[(f64, f64)],
+) -> Result<FeatureCatalog, FeatureCatalogError> {
+    let parameters = FeatureSelectionParameters::new(1.0, 0.9, 0.0, points.len().max(1))?;
+    let mut features = Vec::new();
+    features
+        .try_reserve_exact(points.len())
+        .map_err(|_| FeatureCatalogError::AllocationFailed)?;
+    for (rank, &(x, y)) in points.iter().enumerate() {
+        features.push(RegistrationFeature {
+            rank,
+            point: ImagePoint::new(x, y).map_err(FeatureCatalogError::Coordinate)?,
+            peak: 1_000.0 - rank as f64,
+            flux_above_background: 10_000.0 - rank as f64,
+            background_snr: 100.0 - rank as f64,
+            fwhm_major_pixels: 3.0,
+            fwhm_minor_pixels: 3.0,
+            eccentricity: 0.0,
+            measurement_pixels: 9,
+        });
+    }
+    Ok(FeatureCatalog {
+        frame_id,
+        width: 100,
+        height: 100,
+        parameters,
+        source_measurements: points.len(),
+        exclusions: FeatureExclusions::default(),
+        features,
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use std::error::Error as StdError;
 

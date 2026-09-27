@@ -104,7 +104,9 @@ optimized CPU and GPU paths must match.
   compensated residual summaries, and an input-order-invariant automatic
   reference policy that retains complete per-metric ranking evidence, plus a
   bounded matching-feature catalog derived directly from the canonical quality
-  measurements with explicit saturation, SNR, shape, border, and count evidence;
+  measurements with explicit saturation, SNR, shape, border, and count evidence,
+  and deduplicated local triangle descriptors invariant under translation,
+  rotation, and uniform scale while retaining mirror orientation diagnostics;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

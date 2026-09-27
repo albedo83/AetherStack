@@ -76,6 +76,39 @@ coordinate failure, and evidence-count inconsistency remain explicit errors.
 The catalog is intended for calibrated mono or linear RGB luminance products.
 Raw-CFA cell coordinates must not be mixed with full-resolution coordinates.
 
+## Local triangle descriptors
+
+`local-triangle-ratios-v1` builds candidate geometry from the ranked feature
+catalog without enumerating every global triplet. It visits at most 4,096
+leading features as anchors. For each anchor it sorts the other features by
+Euclidean distance and combines at most the nearest 32 neighbors in pairs. The
+validated worst-case bound is 2.1 million attempted local triangles, and no more
+than one million unique descriptors may be emitted.
+
+Every triangle stores the shortest/longest and middle/longest side ratios plus
+`abs(cross) / longest_side²`. These three quantities are invariant under
+translation, rotation, and uniform scale. The absolute longest side remains as
+evidence for later scale estimation. Vertices use a canonical order of apex,
+short-side endpoint, and middle-side endpoint, with feature rank resolving an
+exact isosceles tie. Orientation is evaluated in the downward-positive image
+coordinate system. It is not part of the invariant ratio key: rotation and
+scale preserve it, while reflection reverses it and can therefore be diagnosed
+or explicitly allowed by the future matcher.
+
+Triangles below the absolute size threshold or normalized-area threshold are
+rejected before matching. Repeated discovery of the same three feature ranks
+from another anchor is counted and deduplicated. Generation order is fully
+deterministic. When the output bound is filled, the engine continues only until
+it proves that another unique valid triangle exists, marks the catalog as
+stopped at the output limit, and terminates instead of hiding unbounded work.
+The output records visited anchors, attempted triangles, size and degeneracy
+rejections, duplicates, exact parameters, and source feature count.
+
+Descriptor similarity tolerances and correspondence ambiguity are intentionally
+absent here. The subsequent matcher must compare invariant values with explicit
+error budgets, preserve all competing candidates within configured bounds, and
+must not infer a unique star mapping from one triangle alone.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -104,7 +137,7 @@ the automatic winner.
 
 Production registration still requires:
 
-- deterministic multi-scale enhancement and invariant feature descriptors;
+- deterministic multi-scale enhancement beyond the initial local descriptors;
 - robust correspondence search with explicit ambiguity and sparse-field errors;
 - translation, affine, and projective model fitting with inspectable inliers;
 - justified distortion models with bounded control-point counts;

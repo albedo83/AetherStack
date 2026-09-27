@@ -7,6 +7,7 @@
 mod features;
 mod geometry;
 mod reference;
+mod triangles;
 
 pub use features::{
     FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog, FeatureCatalogError, FeatureExclusions,
@@ -20,4 +21,10 @@ pub use geometry::{
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,
     ReferenceSelectionError, ReferenceSelectionEvidence, select_reference,
+};
+pub use triangles::{
+    MAX_DESCRIPTOR_ANCHORS, MAX_DESCRIPTOR_NEIGHBORS, MAX_TRIANGLE_DESCRIPTORS,
+    TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptor, TriangleDescriptorCatalog,
+    TriangleDescriptorError, TriangleDescriptorParameters, TriangleDescriptorStatistics,
+    TriangleOrientation, build_triangle_descriptors,
 };

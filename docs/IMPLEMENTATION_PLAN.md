@@ -679,6 +679,17 @@ safety reasoning. They do not narrate obvious syntax.
     mutually exclusive exclusions, dimensions, margins, and invalid controls.
     Next, build scale- and rotation-invariant local descriptors from these
     catalogs, with ambiguity bounds before correspondence search.
+37. Build bounded local triangle descriptors without global combinatorial work.
+    High-ranked anchors use a bounded nearest-neighbor set; unique triangles
+    retain canonical feature mappings, two side ratios, normalized area,
+    absolute scale evidence, and mirror-sensitive orientation. Controls limit
+    anchors, neighbors, geometric degeneracy, attempted work, and output count.
+    Statistics distinguish short, degenerate, duplicate, and explicitly
+    truncated work. Tests prove translation/rotation/scale invariance, mirror
+    reversal, canonical 3-4-5 geometry, deduplication, output-limit termination,
+    insufficient support, and invalid controls. Next, implement a tolerant
+    descriptor index and ambiguity-preserving correspondence hypotheses before
+    any transform is accepted.
 
 ## 11. Stable-release definition
 
