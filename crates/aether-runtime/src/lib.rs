@@ -10,6 +10,7 @@ mod master_plan;
 mod memory;
 mod pipeline;
 mod progress;
+mod registration;
 
 pub use cancellation::{CancellationToken, Cancelled};
 pub use demosaic::{
@@ -39,4 +40,8 @@ pub use pipeline::{
 pub use progress::{
     MAX_PROGRESS_CODE_BYTES, MAX_STAGE_ID_BYTES, ProgressEvent, ProgressEventError,
     ProgressSequence, ProgressState, StageId, StageIdError,
+};
+pub use registration::{
+    RegistrationPipelineError, StrictRegistrationRequest, StrictRegistrationResult,
+    run_strict_registration_pipeline,
 };

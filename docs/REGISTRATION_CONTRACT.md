@@ -258,6 +258,15 @@ storage. Multi-plane, masked, non-finite, fractional-transform tests assemble
 all window-backed bands and require bitwise equality with the whole-image
 oracle, including masks and support counters.
 
+The strict runtime traverses FITS planes in storage order and bands from top to
+bottom. It decodes only the planned rectangle, reserves the larger of decode and
+kernel working sets against the shared memory budget, streams the output into a
+private checksum-generating FITS, validates its dimensions and checksums, and
+revalidates the source fingerprint before atomic create-new publication.
+Cancellation, memory exhaustion, source mutation, readback failure, and any
+scientific error leave the destination absent. Band height is an execution
+choice only: tested alternatives produce identical FITS bytes.
+
 ## Common geometric footprint and autocrop
 
 `common-lanczos3-footprint-v1` evaluates only image extents and accepted

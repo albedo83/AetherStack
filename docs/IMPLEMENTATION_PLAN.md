@@ -777,6 +777,14 @@ safety reasoning. They do not narrate obvious syntax.
     multi-plane differential test reconstructs the entire registered result and
     requires bitwise oracle parity for pixels, masks, and support accounting.
     Next, connect this contract to bounded FITS reads and atomic publication.
+47. Publish registered frames as strict bounded transactions. The runtime reads
+    only each plan's exact rectangle and plane, reserves decode/kernel peaks,
+    streams canonical binary64 samples into a private checksummed FITS, validates
+    the complete staged product, re-fingerprints the source, and finally uses
+    create-new atomic publication. Cancellation, insufficient memory, mutation,
+    or failure leaves no destination. Tests require byte-identical output across
+    band heights and bitwise equality with the full-image multi-plane oracle.
+    Next, expose accepted transforms and common-crop preview in the desktop plan.
 
 ## 11. Stable-release definition
 

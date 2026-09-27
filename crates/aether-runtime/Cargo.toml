@@ -17,6 +17,7 @@ aether-demosaic = { path = "../aether-demosaic" }
 aether-fits = { path = "../aether-fits" }
 aether-integration = { path = "../aether-integration" }
 aether-metadata = { path = "../aether-metadata" }
+aether-registration = { path = "../aether-registration" }
 aether-session = { path = "../aether-session" }
 serde.workspace = true
 

@@ -46,6 +46,28 @@ impl ResamplingStatistics {
     pub const fn masked_support_samples(self) -> usize {
         self.masked_support_samples
     }
+
+    /// Combines disjoint output regions with checked accounting.
+    pub fn checked_add(self, other: Self) -> Result<Self, ResamplingError> {
+        Ok(Self {
+            total_samples: self
+                .total_samples
+                .checked_add(other.total_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+            interpolated_samples: self
+                .interpolated_samples
+                .checked_add(other.interpolated_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+            outside_footprint_samples: self
+                .outside_footprint_samples
+                .checked_add(other.outside_footprint_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+            masked_support_samples: self
+                .masked_support_samples
+                .checked_add(other.masked_support_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+        })
+    }
 }
 
 /// A fully materialized strict CPU reference result.
@@ -508,29 +530,6 @@ impl Error for ResamplingError {
             | Self::NumericalOverflow
             | Self::CountOverflow => None,
         }
-    }
-}
-
-impl ResamplingStatistics {
-    fn checked_add(self, other: Self) -> Result<Self, ResamplingError> {
-        Ok(Self {
-            total_samples: self
-                .total_samples
-                .checked_add(other.total_samples)
-                .ok_or(ResamplingError::CountOverflow)?,
-            interpolated_samples: self
-                .interpolated_samples
-                .checked_add(other.interpolated_samples)
-                .ok_or(ResamplingError::CountOverflow)?,
-            outside_footprint_samples: self
-                .outside_footprint_samples
-                .checked_add(other.outside_footprint_samples)
-                .ok_or(ResamplingError::CountOverflow)?,
-            masked_support_samples: self
-                .masked_support_samples
-                .checked_add(other.masked_support_samples)
-                .ok_or(ResamplingError::CountOverflow)?,
-        })
     }
 }
 
