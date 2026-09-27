@@ -578,7 +578,7 @@ describe("frame review workspace", () => {
         },
       },
     };
-    const { root, actions } = fixture(advanced);
+    const { root, actions, controller } = fixture(advanced);
     fireEvent.click(getByText(root, "Advanced integration"));
     const estimator = getByRole<HTMLSelectElement>(root, "combobox", {
       name: "Estimator",
@@ -588,6 +588,7 @@ describe("frame review workspace", () => {
     });
 
     expect(estimator.value).toBe("percentile_clipped");
+    expect(estimator.classList.contains("instrument-select")).toBe(true);
     expect(maps.disabled).toBe(false);
     fireEvent.click(maps);
 
@@ -598,6 +599,36 @@ describe("frame review workspace", () => {
       minimumRetainedSamples: 5,
       generateRejectionMaps: true,
     });
+
+    fireEvent.click(
+      getByRole(root, "button", { name: "Increase low-tail fraction" }),
+    );
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "percentile_clipped",
+      lowFraction: 0.13,
+      highFraction: 0.08,
+      minimumRetainedSamples: 5,
+      generateRejectionMaps: true,
+    });
+
+    controller.update({
+      ...advanced,
+      registration: {
+        ...advanced.registration,
+        stack: {
+          ...advanced.registration.stack,
+          settings: {
+            ...advanced.registration.stack.settings,
+            estimator: "strict_mean",
+          },
+        },
+      },
+    });
+    expect(
+      getByRole<HTMLButtonElement>(root, "button", {
+        name: "Increase low-tail fraction",
+      }).disabled,
+    ).toBe(true);
   });
 
   it("keeps ambiguous Light associations visibly blocked", () => {
@@ -655,6 +686,15 @@ describe("frame review workspace", () => {
     expect(actions.onUpdateCalibrationSettings).toHaveBeenCalledWith({
       flatPedestalPolicy: "require_bias",
       maximumExposureDeltaSeconds: 0.25,
+      maximumTemperatureDeltaC: 2,
+      maximumLightDarkTemperatureDeltaC: 2,
+    });
+    fireEvent.click(
+      getByRole(root, "button", { name: "Increase exposure tolerance" }),
+    );
+    expect(actions.onUpdateCalibrationSettings).toHaveBeenLastCalledWith({
+      flatPedestalPolicy: "require_bias",
+      maximumExposureDeltaSeconds: 0.26,
       maximumTemperatureDeltaC: 2,
       maximumLightDarkTemperatureDeltaC: 2,
     });

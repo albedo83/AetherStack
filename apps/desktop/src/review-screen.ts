@@ -417,6 +417,22 @@ export function mountReviewScreen(
     if (!actionElement) return;
     const action = actionElement.dataset.action;
 
+    if (action === "step-number") {
+      const stepper = actionElement.closest<HTMLElement>("[data-stepper]");
+      const input = stepper?.querySelector<HTMLInputElement>(
+        'input[type="number"]',
+      );
+      if (!input || input.disabled) return;
+      if (actionElement.dataset.stepDirection === "down") {
+        input.stepDown();
+      } else {
+        input.stepUp();
+      }
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.focus();
+      return;
+    }
+
     if (action === "select-workspace") {
       const workspace = actionElement.dataset.workspace;
       if (
@@ -788,6 +804,7 @@ export function mountReviewScreen(
     }
     renderCalibration(elements, model);
     renderRegistration(elements, model);
+    syncStepperStates(root);
     elements.importSession.disabled = importing || masterBusy;
     elements.importSession.textContent = importing
       ? "Scanning FITS…"
@@ -1004,6 +1021,20 @@ function isTextEntryTarget(target: Element | null): boolean {
     target instanceof HTMLSelectElement ||
     (target?.closest('[contenteditable="true"]') ?? null) !== null
   );
+}
+
+function syncStepperStates(root: HTMLElement): void {
+  for (const stepper of root.querySelectorAll<HTMLElement>("[data-stepper]")) {
+    const input = stepper.querySelector<HTMLInputElement>(
+      'input[type="number"]',
+    );
+    if (!input) continue;
+    for (const button of stepper.querySelectorAll<HTMLButtonElement>(
+      'button[data-action="step-number"]',
+    )) {
+      button.disabled = input.disabled;
+    }
+  }
 }
 
 function qualityButtonLabel(frame: ReviewFrame | null): string {
@@ -1426,8 +1457,10 @@ function renderRegistration(
   elements.registeredStackRejectionMaps.checked =
     stackSettings.generateRejectionMaps;
   elements.registeredStackEstimator.disabled = stackBusy;
-  elements.registeredStackLowFraction.disabled = stackBusy || !advancedEstimator;
-  elements.registeredStackHighFraction.disabled = stackBusy || !advancedEstimator;
+  elements.registeredStackLowFraction.disabled =
+    stackBusy || !advancedEstimator;
+  elements.registeredStackHighFraction.disabled =
+    stackBusy || !advancedEstimator;
   elements.registeredStackMinimumRetained.disabled =
     stackBusy || !advancedEstimator;
   elements.registeredStackRejectionMaps.disabled =
@@ -2442,11 +2475,11 @@ function shellMarkup(): string {
               </div>
               <label class="control-field">
                 <span>Reference frame</span>
-                <select data-registration-reference></select>
+                <select class="instrument-select" data-registration-reference></select>
               </label>
               <label class="control-field">
                 <span>Source frame</span>
-                <select data-registration-source></select>
+                <select class="instrument-select" data-registration-source></select>
               </label>
               <p class="control-note">The solver detects on the CFA-safe luminance plane, then lifts the accepted transform back to exact source-pixel coordinates.</p>
               <section class="registration-plan" aria-labelledby="registration-plan-heading">
@@ -2527,7 +2560,7 @@ function shellMarkup(): string {
                 <div class="registered-review__toolbar">
                   <label>
                     <span class="sr-only">Registered frame</span>
-                    <select data-registered-frame aria-label="Registered frame" disabled></select>
+                    <select class="instrument-select" data-registered-frame aria-label="Registered frame" disabled></select>
                   </label>
                   <span data-registered-preview-position>0 / 0</span>
                 </div>
@@ -2558,22 +2591,34 @@ function shellMarkup(): string {
                     <div class="registered-stack__control-grid">
                       <label class="control-field registered-stack__estimator">
                         <span>Estimator</span>
-                        <select data-registered-stack-estimator>
+                        <select class="instrument-select" data-registered-stack-estimator>
                           <option value="strict_mean">Strict compensated mean</option>
                           <option value="percentile_clipped">Percentile-clipped mean</option>
                         </select>
                       </label>
                       <label class="control-field">
                         <span>Low-tail fraction</span>
-                        <input data-registered-stack-low-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease low-tail fraction">−</button>
+                          <input data-registered-stack-low-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase low-tail fraction">+</button>
+                        </span>
                       </label>
                       <label class="control-field">
                         <span>High-tail fraction</span>
-                        <input data-registered-stack-high-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease high-tail fraction">−</button>
+                          <input data-registered-stack-high-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase high-tail fraction">+</button>
+                        </span>
                       </label>
                       <label class="control-field">
                         <span>Minimum retained samples</span>
-                        <input data-registered-stack-minimum-retained type="number" min="1" max="4294967295" step="1" inputmode="numeric" />
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease minimum retained samples">−</button>
+                          <input data-registered-stack-minimum-retained type="number" min="1" max="4294967295" step="1" inputmode="numeric" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase minimum retained samples">+</button>
+                        </span>
                       </label>
                     </div>
                     <label class="registered-stack__map-toggle">
@@ -2629,7 +2674,7 @@ function shellMarkup(): string {
               </div>
               <label class="control-field">
                 <span>Selection policy</span>
-                <select data-pedestal-policy>
+                <select class="instrument-select" data-pedestal-policy>
                   <option value="prefer_matched_dark_then_bias">Prefer matched dark, then bias</option>
                   <option value="require_matched_dark">Require matched dark</option>
                   <option value="require_bias">Require true bias</option>
@@ -2638,16 +2683,16 @@ function shellMarkup(): string {
               <div class="control-pair">
                 <label class="control-field">
                   <span>Exposure tolerance</span>
-                  <span class="number-control"><input data-exposure-tolerance type="number" min="0" step="0.01" inputmode="decimal" /><b>s</b></span>
+                  <span class="instrument-stepper number-control" data-stepper><button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease exposure tolerance">−</button><input data-exposure-tolerance type="number" min="0" step="0.01" inputmode="decimal" /><button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase exposure tolerance">+</button><b>s</b></span>
                 </label>
                 <label class="control-field">
                   <span>Temperature tolerance</span>
-                  <span class="number-control"><input data-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><b>°C</b></span>
+                  <span class="instrument-stepper number-control" data-stepper><button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease temperature tolerance">−</button><input data-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase temperature tolerance">+</button><b>°C</b></span>
                 </label>
               </div>
               <label class="control-field">
                 <span>Light ↔ Dark temperature tolerance</span>
-                <span class="number-control"><input data-light-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><b>°C</b></span>
+                <span class="instrument-stepper number-control" data-stepper><button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease Light to Dark temperature tolerance">−</button><input data-light-temperature-tolerance type="number" min="0" step="0.1" inputmode="decimal" /><button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase Light to Dark temperature tolerance">+</button><b>°C</b></span>
               </label>
               <p class="control-note">Exact camera, axes, gain, offset, binning and CFA phase are always required. Filter is not used to match darks or biases.</p>
               <details class="advanced-settings">
@@ -2684,7 +2729,7 @@ function shellMarkup(): string {
                     <code class="plan-digest" data-light-digest></code>
                     <label class="light-output-mode">
                       <span>Output</span>
-                      <select data-light-output-mode aria-label="Light output mode">
+                      <select class="instrument-select" data-light-output-mode aria-label="Light output mode">
                         <option value="calibrated_frames">Calibrated frames</option>
                         <option value="integrated">Integrated group</option>
                       </select>

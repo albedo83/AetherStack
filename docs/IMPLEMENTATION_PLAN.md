@@ -957,6 +957,15 @@ safety reasoning. They do not narrate obvious syntax.
     product. Presenter and production-build tests cover availability, selection,
     identity, and accessible tab semantics. Next, add a perceptually uniform
     false-color rejection palette and science-overlay opacity control.
+66. Establish a reusable dark instrument-control language without replacing
+    native accessibility semantics. Selects retain their platform popup and
+    keyboard model behind a consistent beveled face, while number inputs gain
+    explicit decrement and increment controls, direct entry, focus treatment,
+    disabled-state synchronization, and readable units. The narrow calibration
+    console uses full-width control rows instead of compressing decimal values.
+    Presenter interaction, accessibility, formatting, production-build, and
+    visual-browser checks cover the result. Next, apply the same control system
+    to the rejection-map palette and science-overlay opacity control.
 
 ## 11. Stable-release definition
 

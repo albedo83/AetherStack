@@ -1367,21 +1367,11 @@ button:active:not(:disabled) {
   gap: 10px;
 }
 
-.number-control {
-  position: relative;
-}
-
-.number-control input {
-  padding-right: 36px;
-}
-
-.number-control b {
-  position: absolute;
-  top: 50%;
-  right: 11px;
-  color: var(--text-dim);
-  font-size: 10px;
-  transform: translateY(-50%);
+/* The calibration console is deliberately narrow; full-width rows keep
+ * decimal values readable between the two stepping buttons. */
+.calibration-console .control-pair {
+  grid-template-columns: 1fr;
+  gap: 0;
 }
 
 .control-note,
@@ -1571,6 +1561,173 @@ button:active:not(:disabled) {
 .light-output-mode select:disabled {
   color: #788595;
   opacity: 0.65;
+}
+
+/*
+ * Selects retain their native popup and keyboard semantics. Only the closed
+ * instrument face is drawn here, so platform accessibility remains intact.
+ */
+.instrument-select {
+  appearance: none;
+  padding-right: 42px !important;
+  color-scheme: dark;
+  background:
+    linear-gradient(45deg, transparent 48%, #a9c4dc 50%) calc(100% - 18px)
+      calc(50% - 2px) / 6px 6px no-repeat,
+    linear-gradient(135deg, #a9c4dc 50%, transparent 52%) calc(100% - 13px)
+      calc(50% - 2px) / 6px 6px no-repeat,
+    linear-gradient(#405165, #405165) calc(100% - 36px) 50% / 1px 64% no-repeat,
+    linear-gradient(
+      180deg,
+      #263646 0%,
+      #172330 48%,
+      #101821 52%,
+      #0b1118 100%
+    ) !important;
+  border-color: #52657a !important;
+  box-shadow:
+    inset 0 1px #ffffff1f,
+    inset 0 -2px 5px #0008,
+    0 2px 6px #0008 !important;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    filter 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.instrument-select:hover:not(:disabled) {
+  border-color: #7792ab !important;
+  filter: brightness(1.08);
+}
+
+.instrument-select:focus-visible {
+  outline: 2px solid var(--focus) !important;
+  outline-offset: 2px !important;
+  border-color: #8fc8ef !important;
+  box-shadow:
+    inset 0 1px #ffffff2b,
+    0 0 0 3px #42b8ff24,
+    0 3px 9px #000a !important;
+}
+
+.instrument-select:disabled {
+  color: #778493;
+  filter: saturate(0.45);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.instrument-select option {
+  color: #e8f1fa;
+  background: #111a24;
+}
+
+/*
+ * Number inputs use explicit, large stepping buttons while preserving direct
+ * text entry and the browser's ArrowUp/ArrowDown behavior on the input itself.
+ */
+.instrument-stepper {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  min-width: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0b1016, #121923);
+  border: 1px solid #46586b;
+  border-radius: var(--radius-sm);
+  box-shadow:
+    inset 0 3px 8px #000b,
+    0 2px 6px #0007,
+    0 1px #ffffff0b;
+}
+
+.instrument-stepper.number-control {
+  grid-template-columns: 36px minmax(0, 1fr) 36px auto;
+}
+
+.control-field .instrument-stepper input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 8px;
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: textfield;
+}
+
+.instrument-stepper input::-webkit-inner-spin-button,
+.instrument-stepper input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.instrument-stepper button {
+  display: grid;
+  min-width: 36px;
+  min-height: 42px;
+  padding: 0;
+  place-items: center;
+  color: #b9cee0;
+  font:
+    700 18px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  background: linear-gradient(180deg, #2a3b4c, #182431 55%, #111923);
+  border: 0;
+  border-right: 1px solid #425365;
+  box-shadow:
+    inset 0 1px #ffffff1e,
+    inset 0 -2px 4px #0008;
+  cursor: pointer;
+  transition:
+    color 100ms ease,
+    filter 100ms ease;
+}
+
+.instrument-stepper button:nth-of-type(2) {
+  border-right: 0;
+  border-left: 1px solid #425365;
+}
+
+.instrument-stepper button:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.18);
+}
+
+.instrument-stepper button:active:not(:disabled) {
+  background: linear-gradient(180deg, #111923, #233344);
+  box-shadow: inset 0 2px 5px #000d;
+}
+
+.instrument-stepper button:focus-visible,
+.instrument-stepper input:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.instrument-stepper:has(input:disabled) {
+  opacity: 0.55;
+}
+
+.instrument-stepper:has(input:disabled) button {
+  pointer-events: none;
+}
+
+.number-control b {
+  display: grid;
+  min-width: 30px;
+  padding: 0 8px 0 3px;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .light-association-panel__heading {
