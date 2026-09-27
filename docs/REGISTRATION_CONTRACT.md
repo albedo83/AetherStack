@@ -340,4 +340,7 @@ identities, canonicalizes discovery order by identity, requires the declared
 reference to match the output canvas with the exact identity transform, and
 derives one all-frame Lanczos-3 footprint. Duplicate identities, a missing or
 geometrically inconsistent reference, bounded-work failures, allocation
-failure, and an empty common rectangle are explicit plan errors.
+failure, and an empty common rectangle are explicit plan errors. Its canonical
+SHA-256 binds the algorithm identifiers, reference identity and canvas,
+identity-sorted source dimensions, exact binary64 transform bits, coverage, and
+crop without retaining machine paths.

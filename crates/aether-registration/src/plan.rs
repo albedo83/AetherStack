@@ -2,14 +2,17 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use aether_review::FrameId;
+use sha2::{Digest, Sha256};
 
 use crate::{
-    AffineTransform, CommonFootprintError, CommonFootprintReport, MAX_COMMON_FOOTPRINT_FRAMES,
-    RegistrationFootprint, derive_common_lanczos3_footprint,
+    AffineTransform, COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID, CommonFootprintError,
+    CommonFootprintReport, MAX_COMMON_FOOTPRINT_FRAMES, RegistrationFootprint,
+    derive_common_lanczos3_footprint,
 };
 
 /// Stable identifier for the geometry-only multi-frame plan contract.
 pub const REGISTRATION_PLAN_ALGORITHM_ID: &str = "registration-plan-v1";
+const REGISTRATION_PLAN_DIGEST_DOMAIN: &[u8] = b"aether-registration-plan-v1\0";
 
 /// One reviewed Light and its accepted transform into reference coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +76,7 @@ pub struct RegistrationPlan {
     reference_height: usize,
     frames: Vec<PlannedRegistrationFrame>,
     common_footprint: CommonFootprintReport,
+    plan_sha256: String,
 }
 
 impl RegistrationPlan {
@@ -140,6 +144,13 @@ impl RegistrationPlan {
         if common_footprint.crop().is_none() {
             return Err(RegistrationPlanError::NoCommonCrop);
         }
+        let plan_sha256 = canonical_plan_sha256(
+            &reference_frame_id,
+            reference_width,
+            reference_height,
+            &frames,
+            common_footprint,
+        )?;
 
         Ok(Self {
             reference_frame_id,
@@ -147,6 +158,7 @@ impl RegistrationPlan {
             reference_height,
             frames,
             common_footprint,
+            plan_sha256,
         })
     }
 
@@ -185,6 +197,72 @@ impl RegistrationPlan {
     pub const fn common_footprint(&self) -> CommonFootprintReport {
         self.common_footprint
     }
+
+    /// SHA-256 of the versioned canonical binary plan encoding.
+    ///
+    /// The digest binds the reference identity and canvas, identity-sorted
+    /// source dimensions and transform bits, footprint algorithm, coverage,
+    /// and exact crop. It contains no paths or acquisition metadata.
+    #[must_use]
+    pub fn plan_sha256(&self) -> &str {
+        &self.plan_sha256
+    }
+}
+
+fn canonical_plan_sha256(
+    reference_frame_id: &FrameId,
+    reference_width: usize,
+    reference_height: usize,
+    frames: &[PlannedRegistrationFrame],
+    common_footprint: CommonFootprintReport,
+) -> Result<String, RegistrationPlanError> {
+    let mut hasher = Sha256::new();
+    hasher.update(REGISTRATION_PLAN_DIGEST_DOMAIN);
+    update_length_prefixed(&mut hasher, REGISTRATION_PLAN_ALGORITHM_ID)?;
+    update_length_prefixed(&mut hasher, COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID)?;
+    update_length_prefixed(&mut hasher, reference_frame_id.as_str())?;
+    update_usize(&mut hasher, reference_width)?;
+    update_usize(&mut hasher, reference_height)?;
+    update_usize(&mut hasher, frames.len())?;
+    for frame in frames {
+        update_length_prefixed(&mut hasher, frame.frame_id.as_str())?;
+        update_usize(&mut hasher, frame.source_width)?;
+        update_usize(&mut hasher, frame.source_height)?;
+        for coefficient in frame.source_to_reference.coefficients() {
+            hasher.update(coefficient.to_bits().to_be_bytes());
+        }
+    }
+    update_usize(&mut hasher, common_footprint.covered_pixels())?;
+    let crop = common_footprint
+        .crop()
+        .ok_or(RegistrationPlanError::NoCommonCrop)?;
+    update_usize(&mut hasher, crop.x())?;
+    update_usize(&mut hasher, crop.y())?;
+    update_usize(&mut hasher, crop.width())?;
+    update_usize(&mut hasher, crop.height())?;
+    Ok(encode_lower_hex(&hasher.finalize()))
+}
+
+fn update_length_prefixed(hasher: &mut Sha256, value: &str) -> Result<(), RegistrationPlanError> {
+    update_usize(hasher, value.len())?;
+    hasher.update(value.as_bytes());
+    Ok(())
+}
+
+fn update_usize(hasher: &mut Sha256, value: usize) -> Result<(), RegistrationPlanError> {
+    let value = u64::try_from(value).map_err(|_| RegistrationPlanError::EncodingOverflow)?;
+    hasher.update(value.to_be_bytes());
+    Ok(())
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 /// Failure to create a complete immutable registration plan.
@@ -212,6 +290,8 @@ pub enum RegistrationPlanError {
     Footprint(CommonFootprintError),
     /// Accepted transforms have no rectangular common Lanczos support.
     NoCommonCrop,
+    /// A platform-sized value cannot be represented in the portable encoding.
+    EncodingOverflow,
 }
 
 impl Display for RegistrationPlanError {
@@ -238,6 +318,9 @@ impl Display for RegistrationPlanError {
             Self::NoCommonCrop => formatter.write_str(
                 "registration plan transforms do not share a rectangular Lanczos footprint",
             ),
+            Self::EncodingOverflow => formatter.write_str(
+                "registration plan cannot be represented in its portable digest encoding",
+            ),
         }
     }
 }
@@ -251,7 +334,8 @@ impl Error for RegistrationPlanError {
             | Self::DuplicateFrame(_)
             | Self::ReferenceMissing
             | Self::ReferenceGeometryMismatch
-            | Self::NoCommonCrop => None,
+            | Self::NoCommonCrop
+            | Self::EncodingOverflow => None,
         }
     }
 }
@@ -291,6 +375,14 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.algorithm_id(), REGISTRATION_PLAN_ALGORITHM_ID);
+        assert_eq!(first.plan_sha256(), second.plan_sha256());
+        assert_eq!(first.plan_sha256().len(), 64);
+        assert!(
+            first
+                .plan_sha256()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
         assert_eq!(first.frames()[0].frame_id(), &id('a')?);
         assert_eq!(first.frames()[1].frame_id(), &id('b')?);
         let crop = first.common_footprint().crop().ok_or("crop missing")?;
@@ -298,6 +390,31 @@ mod tests {
             (crop.x(), crop.y(), crop.width(), crop.height()),
             (2, 1, 10, 9)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn digest_changes_when_one_transform_changes() -> TestResult {
+        let first = RegistrationPlan::new(
+            id('a')?,
+            12,
+            10,
+            vec![
+                frame('a', AffineTransform::IDENTITY)?,
+                frame('b', AffineTransform::new(1.0, 0.0, 0.0, 1.0, 1.0, 0.0)?)?,
+            ],
+        )?;
+        let changed = RegistrationPlan::new(
+            id('a')?,
+            12,
+            10,
+            vec![
+                frame('a', AffineTransform::IDENTITY)?,
+                frame('b', AffineTransform::new(1.0, 0.0, 0.0, 1.0, 2.0, 0.0)?)?,
+            ],
+        )?;
+
+        assert_ne!(first.plan_sha256(), changed.plan_sha256());
         Ok(())
     }
 

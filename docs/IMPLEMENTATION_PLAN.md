@@ -801,9 +801,11 @@ safety reasoning. They do not narrate obvious syntax.
     accepted source-to-reference transforms, canonical identity order, and the
     single exact all-frame Lanczos crop. It refuses undersized sets, duplicates,
     a missing or inconsistent reference, bounded footprint failures, allocation
-    failure, and empty common support before any output work begins. Next, bind
-    confidence-gated pair diagnostics to this plan and assign its atomic runtime
-    outputs without re-deriving geometry.
+    failure, and empty common support before any output work begins. A
+    domain-separated canonical SHA-256 binds every identity, exact transform
+    bit, algorithm, coverage decision, and crop without paths. Next, bind
+    confidence-gated pair diagnostics to this digest and assign its atomic
+    runtime outputs without re-deriving geometry.
 
 ## 11. Stable-release definition
 

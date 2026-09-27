@@ -13,6 +13,7 @@ publish = false
 aether-core = { path = "../aether-core" }
 aether-quality = { path = "../aether-quality" }
 aether-review = { path = "../aether-review" }
+sha2.workspace = true
 
 [lints]
 workspace = true
