@@ -130,6 +130,33 @@ comparison budget fail explicitly. Current hard bounds are 256 retained
 candidates per source descriptor, one million global hypotheses, and 50 million
 exact comparisons.
 
+## Similarity consensus
+
+`triangle-similarity-consensus-v1` evaluates leading descriptor hypotheses as
+deterministic transform seeds. Each seed fits a least-squares source-to-reference
+similarity from its three canonical star pairs. Orientation-preserving models use
+one uniform scale and rotation; reflected models use the corresponding
+orientation-reversing basis. Hypotheses with different mirror state never vote
+for one another.
+
+A triangle supports a model only when all three transformed stars are within the
+inclusive residual threshold in reference pixels. Candidate ordering prefers
+more supporting triangles, then lower compensated RMS residual, lower descriptor
+distance, non-reflected geometry, and stable hypothesis index. The winning model
+must have at least two supporting triangles and three distinct feature pairs.
+Its distinct pairs must form a one-to-one mapping: contradictory source or
+reference assignments fail explicitly instead of being averaged.
+
+The winner is refitted in binary64 least squares over all distinct inlier pairs,
+then rescored. Minimum support is enforced again after refinement. The result
+contains the affine representation, uniform scale, rotation, mirror state,
+winning seed, sorted inlier triangle indices, sorted distinct star pairs, and a
+strict compensated residual summary. It also records candidate, evaluated,
+truncated, inlier, outlier, and point-evaluation counts plus upstream descriptor
+truncation. Current hard bounds are 100,000 seed models and 100 million point
+residual evaluations. Exceeding either configured budget is never treated as a
+valid partial consensus.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -159,8 +186,9 @@ the automatic winner.
 Production registration still requires:
 
 - deterministic multi-scale enhancement beyond the initial local descriptors;
-- robust consensus across descriptor hypotheses with explicit sparse-field errors;
-- translation, affine, and projective model fitting with inspectable inliers;
+- translation-only, affine, and projective model selection beyond the strict
+  similarity model;
+- confidence and sparse-field policies validated on representative real data;
 - justified distortion models with bounded control-point counts;
 - flux-tested cubic and Lanczos resampling with conservative mask propagation;
 - common-footprint and coverage diagnostics;

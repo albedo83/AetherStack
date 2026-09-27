@@ -1,15 +1,21 @@
 //! Deterministic coordinate, transform, residual, and reference-selection core.
 //!
-//! This crate deliberately stops before star matching and resampling. It fixes
-//! the coordinate conventions and inspectable reference policy those later
-//! stages must obey, preventing the desktop shell from inventing geometry.
+//! It fixes coordinate conventions, matching, similarity consensus, and an
+//! inspectable reference policy before later resampling stages, preventing the
+//! desktop shell from inventing scientific geometry.
 
+mod consensus;
 mod features;
 mod geometry;
 mod matching;
 mod reference;
 mod triangles;
 
+pub use consensus::{
+    MAX_CONSENSUS_MODELS, MAX_CONSENSUS_RESIDUAL_EVALUATIONS, SIMILARITY_CONSENSUS_ALGORITHM_ID,
+    SimilarityConsensus, SimilarityConsensusError, SimilarityConsensusParameters,
+    SimilarityConsensusStatistics, estimate_similarity_consensus,
+};
 pub use features::{
     FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog, FeatureCatalogError, FeatureExclusions,
     FeatureSelectionParameters, MAX_REGISTRATION_FEATURES, MAX_REGISTRATION_MEASUREMENTS,

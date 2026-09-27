@@ -700,6 +700,19 @@ safety reasoning. They do not narrate obvious syntax.
     policy, symmetric ambiguity, both retention limits, exhausted comparison
     budgets, empty geometry, and invalid controls. Next, form robust transform
     hypotheses and require consensus across independent feature correspondences.
+39. Require deterministic multi-triangle consensus before accepting a
+    similarity transform. Every bounded seed is fitted in compensated binary64
+    arithmetic and scored only against hypotheses with the same mirror state;
+    all three stars must pass the reference-pixel residual threshold. The winner
+    is refitted over distinct one-to-one star pairs and rescored, with minimum
+    support enforced after refinement. Results expose the transform, scale,
+    rotation, reflection, seed, triangle inliers, star correspondences, strict
+    residuals, outliers, input truncation, and complete work accounting. Tests
+    cover exact rotation/scale/translation, reflection, competing symmetric
+    transforms, model truncation, sparse support, exhausted work, validation,
+    and frame identity. Next, define confidence and sparse-field policy, then
+    compare this strict similarity path on synthetic sub-pixel and real camera
+    frames before introducing broader affine or distortion models.
 
 ## 11. Stable-release definition
 

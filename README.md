@@ -108,7 +108,9 @@ optimized CPU and GPU paths must match.
   and deduplicated local triangle descriptors invariant under translation,
   rotation, and uniform scale while retaining mirror orientation diagnostics,
   plus a bounded quantized descriptor index that preserves competing tolerant
-  correspondences, scale estimates, mirror policy, and truncation evidence;
+  correspondences, scale estimates, mirror policy, and truncation evidence,
+  followed by deterministic multi-triangle similarity consensus with explicit
+  inliers, outliers, residuals, one-to-one star mappings, and work budgets;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and
