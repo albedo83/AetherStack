@@ -10,9 +10,10 @@ use aether_fits::{
     ValidationMode,
 };
 use aether_registration::{
-    AffineTransform, LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandPlan, ResamplingError,
-    ResamplingStatistics,
+    AffineTransform, LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandPlan, RegistrationPlan,
+    ResamplingError, ResamplingStatistics,
 };
+use aether_review::FrameId;
 
 use crate::pipeline::{dimensions_from_axes, open_reader, verify_source};
 use crate::{
@@ -37,6 +38,7 @@ pub struct StrictRegistrationRequest {
     band_height: usize,
     header_options: HeaderReadOptions,
     validation_mode: ValidationMode,
+    plan_source_dimensions: Option<(usize, usize)>,
 }
 
 impl StrictRegistrationRequest {
@@ -72,7 +74,48 @@ impl StrictRegistrationRequest {
             band_height: DEFAULT_BAND_HEIGHT,
             header_options: HeaderReadOptions::default(),
             validation_mode: ValidationMode::Strict,
+            plan_source_dimensions: None,
         })
+    }
+
+    /// Builds a request directly from one immutable multi-frame plan entry.
+    ///
+    /// The portable path and recorded fingerprint are re-derived into the same
+    /// [`FrameId`] used by review. Geometry and output dimensions come only
+    /// from the plan, while FITS provenance must carry its exact canonical
+    /// digest. This prevents callers from substituting an unreviewed transform.
+    pub fn from_plan(
+        source: PipelineSource,
+        portable_relative_path: &str,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        plan: &RegistrationPlan,
+    ) -> Result<Self, RegistrationPipelineError> {
+        if provenance.plan_sha256() != Some(plan.plan_sha256()) {
+            return Err(RegistrationPipelineError::ProvenancePlanMismatch);
+        }
+        let frame_id = FrameId::derive(
+            portable_relative_path,
+            source.fingerprint().byte_length(),
+            source.fingerprint().sha256(),
+        )
+        .map_err(|_| RegistrationPipelineError::PlanSourceIdentityMismatch)?;
+        let planned = plan
+            .frames()
+            .iter()
+            .find(|frame| frame.frame_id() == &frame_id)
+            .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?;
+        let expected_dimensions = (planned.source_width(), planned.source_height());
+        let mut request = Self::new(
+            source,
+            output,
+            provenance,
+            planned.source_to_reference(),
+            plan.reference_width(),
+            plan.reference_height(),
+        )?;
+        request.plan_source_dimensions = Some(expected_dimensions);
+        Ok(request)
     }
 
     /// Replaces the maximum number of output rows held by one band.
@@ -159,6 +202,12 @@ pub enum RegistrationPipelineError {
     },
     /// Provenance does not carry the supplied source's exact SHA-256.
     ProvenanceSourceMismatch,
+    /// FITS provenance is not bound to the reviewed registration plan.
+    ProvenancePlanMismatch,
+    /// Portable path plus fingerprint does not identify a frame in the plan.
+    PlanSourceIdentityMismatch,
+    /// Decoded source dimensions disagree with the plan entry.
+    PlanSourceDimensionsMismatch,
     /// Band height must be positive.
     ZeroBandHeight,
     /// The requested reference canvas violates the shared dimension contract.
@@ -191,6 +240,9 @@ impl RegistrationPipelineError {
             Self::ProvenanceAlgorithmMismatch => "registration-provenance-algorithm",
             Self::ProvenanceSourceCount { .. } => "registration-provenance-count",
             Self::ProvenanceSourceMismatch => "registration-provenance-source",
+            Self::ProvenancePlanMismatch => "registration-provenance-plan",
+            Self::PlanSourceIdentityMismatch => "registration-plan-source",
+            Self::PlanSourceDimensionsMismatch => "registration-plan-dimensions",
             Self::ZeroBandHeight => "registration-band-height",
             Self::OutputDimensions(_) => "registration-output-dimensions",
             Self::Input(_) => "registration-input",
@@ -219,6 +271,13 @@ impl Display for RegistrationPipelineError {
             Self::ProvenanceSourceMismatch => {
                 formatter.write_str("registration provenance is not bound to the exact source")
             }
+            Self::ProvenancePlanMismatch => formatter
+                .write_str("registration provenance is not bound to the reviewed plan digest"),
+            Self::PlanSourceIdentityMismatch => {
+                formatter.write_str("registration source identity is absent from the reviewed plan")
+            }
+            Self::PlanSourceDimensionsMismatch => formatter
+                .write_str("registration source dimensions disagree with the reviewed plan"),
             Self::ZeroBandHeight => {
                 formatter.write_str("registration band height must be positive")
             }
@@ -262,6 +321,9 @@ impl Error for RegistrationPipelineError {
             Self::ProvenanceAlgorithmMismatch
             | Self::ProvenanceSourceCount { .. }
             | Self::ProvenanceSourceMismatch
+            | Self::ProvenancePlanMismatch
+            | Self::PlanSourceIdentityMismatch
+            | Self::PlanSourceDimensionsMismatch
             | Self::ZeroBandHeight
             | Self::WorkSizeOverflow
             | Self::InvalidStagedOutput => None,
@@ -363,6 +425,11 @@ where
     .map_err(RegistrationPipelineError::Input)?;
     let source_dimensions = dimensions_from_axes(input, reader.descriptor().axes())
         .map_err(RegistrationPipelineError::Input)?;
+    if let Some(expected) = request.plan_source_dimensions
+        && expected != (source_dimensions.width(), source_dimensions.height())
+    {
+        return Err(RegistrationPipelineError::PlanSourceDimensionsMismatch);
+    }
     let output_dimensions = Dimensions::new(
         request.output_width,
         request.output_height,
@@ -578,7 +645,7 @@ mod tests {
 
     use aether_core::ScientificImage;
     use aether_fits::write_f64_primary_atomic_new;
-    use aether_registration::resample_lanczos3;
+    use aether_registration::{PlannedRegistrationFrame, RegistrationPlan, resample_lanczos3};
     use aether_session::fingerprint_reader;
 
     use super::*;
@@ -626,6 +693,98 @@ mod tests {
         )?
         .with_source_sha256(fingerprint.sha256())?;
         Ok((PipelineSource::new(path, fingerprint), provenance, image))
+    }
+
+    fn plan_for_source(
+        source: &PipelineSource,
+        source_width: usize,
+        source_height: usize,
+        transform: AffineTransform,
+    ) -> Result<RegistrationPlan, Box<dyn Error>> {
+        let source_id = FrameId::derive(
+            "source.fits",
+            source.fingerprint().byte_length(),
+            source.fingerprint().sha256(),
+        )?;
+        let reference_id = FrameId::new("b".repeat(64))?;
+        Ok(RegistrationPlan::new(
+            reference_id.clone(),
+            11,
+            9,
+            vec![
+                PlannedRegistrationFrame::new(source_id, source_width, source_height, transform),
+                PlannedRegistrationFrame::new(reference_id, 11, 9, AffineTransform::IDENTITY),
+            ],
+        )?)
+    }
+
+    #[test]
+    fn plan_bound_request_derives_geometry_and_rejects_stale_identity() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (source, provenance, _) = source_and_provenance(&directory)?;
+        let transform = AffineTransform::new(1.0, 0.0, 0.0, 1.0, 1.0, 0.0)?;
+        let plan = plan_for_source(&source, 11, 9, transform)?;
+        assert!(matches!(
+            StrictRegistrationRequest::from_plan(
+                source.clone(),
+                "source.fits",
+                directory.0.join("missing-plan.fits"),
+                provenance.clone(),
+                &plan,
+            ),
+            Err(RegistrationPipelineError::ProvenancePlanMismatch)
+        ));
+
+        let bound_provenance = provenance.clone().with_plan_sha256(plan.plan_sha256())?;
+        assert!(matches!(
+            StrictRegistrationRequest::from_plan(
+                source.clone(),
+                "different.fits",
+                directory.0.join("wrong-source.fits"),
+                bound_provenance.clone(),
+                &plan,
+            ),
+            Err(RegistrationPipelineError::PlanSourceIdentityMismatch)
+        ));
+
+        let request = StrictRegistrationRequest::from_plan(
+            source,
+            "source.fits",
+            directory.0.join("bound.fits"),
+            bound_provenance,
+            &plan,
+        )?;
+        assert_eq!(request.source_to_reference, transform);
+        assert_eq!((request.output_width, request.output_height), (11, 9));
+        assert_eq!(request.plan_source_dimensions, Some((11, 9)));
+        Ok(())
+    }
+
+    #[test]
+    fn plan_bound_execution_rechecks_decoded_source_dimensions() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (source, provenance, _) = source_and_provenance(&directory)?;
+        let plan = plan_for_source(&source, 10, 9, AffineTransform::IDENTITY)?;
+        let output = directory.0.join("dimension-mismatch.fits");
+        let request = StrictRegistrationRequest::from_plan(
+            source,
+            "source.fits",
+            output.clone(),
+            provenance.with_plan_sha256(plan.plan_sha256())?,
+            &plan,
+        )?;
+
+        assert!(matches!(
+            run_strict_registration_pipeline(
+                &request,
+                &CancellationToken::new(),
+                &MemoryBudget::new(2_000_000)?,
+                |_| {},
+            ),
+            Err(RegistrationPipelineError::PlanSourceDimensionsMismatch)
+        ));
+        assert!(!output.exists());
+        Ok(())
     }
 
     #[test]

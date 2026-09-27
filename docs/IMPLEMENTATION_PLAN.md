@@ -806,6 +806,14 @@ safety reasoning. They do not narrate obvious syntax.
     bit, algorithm, coverage decision, and crop without paths. Next, bind
     confidence-gated pair diagnostics to this digest and assign its atomic
     runtime outputs without re-deriving geometry.
+50. Bind one registered output to reviewed plan evidence. The runtime now
+    re-derives a source's stable review identity from portable relative path,
+    byte length, and content SHA-256; obtains transform and reference canvas
+    only from the canonical plan; requires the output provenance to carry that
+    exact plan digest; and rechecks decoded source dimensions before staging.
+    Tests reject missing digest, a substituted portable identity, and dimension
+    drift without publishing output. Next, wrap these plan-bound requests in an
+    all-or-nothing multi-frame transaction with shared cancellation and progress.
 
 ## 11. Stable-release definition
 

@@ -344,3 +344,11 @@ failure, and an empty common rectangle are explicit plan errors. Its canonical
 SHA-256 binds the algorithm identifiers, reference identity and canvas,
 identity-sorted source dimensions, exact binary64 transform bits, coverage, and
 crop without retaining machine paths.
+
+The strict runtime's plan-bound constructor accepts a local source only with
+its portable session-relative path. It re-derives the reviewed `FrameId` from
+that path plus the recorded byte length and content SHA-256, looks up geometry
+inside the immutable plan, and requires FITS provenance to carry the exact plan
+digest. It also rechecks decoded source dimensions before creating output. The
+older direct constructor remains the numerical oracle boundary; production
+orchestration must use the plan-bound path.

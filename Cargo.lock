@@ -128,6 +128,7 @@ dependencies = [
  "aether-integration",
  "aether-metadata",
  "aether-registration",
+ "aether-review",
  "aether-session",
  "serde",
  "serde_json",

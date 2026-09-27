@@ -102,6 +102,12 @@ skipping the mean reduction. Its fixed identifier is
 `strict-calibrated-light-v1`, its source count is exactly one, and its progress
 stage is `strict-light-calibration`. This is the lossless intermediate needed by
 frame review, debayering, registration, and optional calibrated-frame export.
+
+Strict registration exposes a plan-bound request constructor for orchestration.
+It derives the reviewed frame identity from the portable relative path and
+recorded source fingerprint, obtains transform and canvas only from the
+canonical registration plan, requires matching plan SHA-256 in output
+provenance, and verifies decoded source dimensions before staging a FITS file.
 The operation identifier participates in checkpoint keys, preventing a
 single-frame calibrated tile from colliding with an integrated tile.
 
