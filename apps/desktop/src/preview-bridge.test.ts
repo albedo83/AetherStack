@@ -105,4 +105,28 @@ describe("native preview bridge", () => {
     expect(revokeObjectUrl).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:aether-preview");
   });
+
+  it("forwards an explicit diagnostic palette without changing scalar content", async () => {
+    vi.mocked(invoke).mockResolvedValue(new ArrayBuffer(8));
+
+    await requestFitsPreview({
+      frameId: "c".repeat(64),
+      path: "/selected/rejection-low.fits",
+      content: { kind: "scalar", plane: 0 },
+      maximumWidth: 800,
+      maximumHeight: 600,
+      blackPoint: 0,
+      whitePoint: 12,
+      midtone: 0.5,
+      transfer: { kind: "linear" },
+      palette: "rejection_low",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("render_fits_preview", {
+      request: expect.objectContaining({
+        content: { kind: "scalar", plane: 0 },
+        palette: "rejection_low",
+      }),
+    });
+  });
 });

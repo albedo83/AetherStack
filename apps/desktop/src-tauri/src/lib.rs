@@ -22,9 +22,9 @@ use aether_fits::{
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
     AUTO_STRETCH_ALGORITHM_ID, AutomaticDisplayTransform, FitsPreviewParameters, MissingPixelStyle,
-    PreviewLimits, RgbaPreview, ScalarPreview, build_fits_preview, choose_reduction_level,
-    estimate_display_transform, estimate_rgb_display_transform, render_grayscale_rgba8,
-    render_rgb_rgba8,
+    PreviewLimits, RgbaPreview, ScalarPalette, ScalarPreview, build_fits_preview,
+    choose_reduction_level, estimate_display_transform, estimate_rgb_display_transform,
+    render_false_color_rgba8, render_grayscale_rgba8, render_rgb_rgba8,
 };
 use aether_quality::{
     BackgroundParameters, CFA_CELL_MEAN_ALGORITHM_ID, FrameQualityError,
@@ -79,6 +79,8 @@ struct FitsPreviewRequest {
     white_point: f64,
     midtone: f64,
     transfer: PreviewTransfer,
+    #[serde(default)]
+    palette: PreviewPalette,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +102,17 @@ struct FitsPreviewEstimateRequest {
 enum FitsPreviewContent {
     Scalar { plane: u64 },
     Rgb,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PreviewPalette {
+    #[default]
+    Grayscale,
+    #[serde(rename = "rejection_low")]
+    LowRejection,
+    #[serde(rename = "rejection_high")]
+    HighRejection,
 }
 
 #[derive(Debug, Serialize)]
@@ -3869,9 +3882,31 @@ fn render_fits_preview_png<R: Read + Seek>(
                 request.maximum_width,
                 request.maximum_height,
             )?;
-            render_grayscale_rgba8(&scalar, transform, MissingPixelStyle::Checkerboard)
+            match request.palette {
+                PreviewPalette::Grayscale => {
+                    render_grayscale_rgba8(&scalar, transform, MissingPixelStyle::Checkerboard)
+                }
+                PreviewPalette::LowRejection => render_false_color_rgba8(
+                    &scalar,
+                    transform,
+                    MissingPixelStyle::Checkerboard,
+                    ScalarPalette::LowRejection,
+                ),
+                PreviewPalette::HighRejection => render_false_color_rgba8(
+                    &scalar,
+                    transform,
+                    MissingPixelStyle::Checkerboard,
+                    ScalarPalette::HighRejection,
+                ),
+            }
         }
         FitsPreviewContent::Rgb => {
+            if !matches!(request.palette, PreviewPalette::Grayscale) {
+                return Err(PreviewCommandError::new(
+                    "preview_palette_invalid",
+                    "Diagnostic palettes require one scalar FITS plane.",
+                ));
+            }
             let [red, green, blue] =
                 build_rgb_preview(&mut input, request.maximum_width, request.maximum_height)?;
             render_rgb_rgba8(
@@ -4153,6 +4188,7 @@ mod tests {
             white_point: 8.0,
             midtone: 0.5,
             transfer,
+            palette: PreviewPalette::Grayscale,
         }
     }
 
@@ -4533,6 +4569,39 @@ mod tests {
     }
 
     #[test]
+    fn renders_distinct_false_color_rejection_previews() -> TestResult {
+        let mut low_request = request(PreviewTransfer::Linear);
+        low_request.palette = PreviewPalette::LowRejection;
+        let low = render_fits_preview_png(Cursor::new(fits_bytes()?), &low_request)?;
+        let mut high_request = request(PreviewTransfer::Linear);
+        high_request.palette = PreviewPalette::HighRejection;
+        let high = render_fits_preview_png(Cursor::new(fits_bytes()?), &high_request)?;
+
+        assert_eq!(&low[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&high[..8], b"\x89PNG\r\n\x1a\n");
+        assert_ne!(low, high);
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_frontend_rejection_palette_names() -> TestResult {
+        let decoded: FitsPreviewRequest = serde_json::from_value(serde_json::json!({
+            "path": "rejection.fits",
+            "content": { "kind": "scalar", "plane": 0 },
+            "maximumWidth": 800,
+            "maximumHeight": 600,
+            "blackPoint": 0.0,
+            "whitePoint": 4.0,
+            "midtone": 0.5,
+            "transfer": { "kind": "linear" },
+            "palette": "rejection_low"
+        }))?;
+
+        assert!(matches!(decoded.palette, PreviewPalette::LowRejection));
+        Ok(())
+    }
+
+    #[test]
     fn renders_planar_rgb_in_canonical_channel_order() -> TestResult {
         let mut rgb_request = request(PreviewTransfer::Linear);
         rgb_request.content = FitsPreviewContent::Rgb;
@@ -4548,6 +4617,19 @@ mod tests {
 
         assert_eq!(info.color_type, png::ColorType::Rgba);
         assert_eq!(&pixels[..4], &[21, 43, 64, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_diagnostic_palette_for_rgb_content() -> TestResult {
+        let mut invalid = request(PreviewTransfer::Linear);
+        invalid.content = FitsPreviewContent::Rgb;
+        invalid.palette = PreviewPalette::LowRejection;
+
+        let Err(error) = render_fits_preview_png(Cursor::new(rgb_fits_bytes()?), &invalid) else {
+            return Err("an RGB diagnostic palette was accepted".into());
+        };
+        assert_eq!(error.code, "preview_palette_invalid");
         Ok(())
     }
 
@@ -5601,6 +5683,7 @@ mod tests {
             white_point: estimate.white_point,
             midtone: estimate.midtone,
             transfer: PreviewTransfer::Midtones,
+            palette: PreviewPalette::Grayscale,
         };
         let encoded = render_fits_preview_png(File::open(&transform.path)?, &transform)?;
         assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");

@@ -137,7 +137,8 @@ const registrationPreviewCache = new BoundedPreviewCache(
 const registrationPreviewPrefetch =
   new PreviewPrefetchCoordinator<PreviewResource>();
 let ephemeralRegistrationPreview: PreviewResource | null = null;
-let registeredStackPreviewResource: PreviewResource | null = null;
+let registeredStackSciencePreviewResource: PreviewResource | null = null;
+let registeredStackDiagnosticPreviewResource: PreviewResource | null = null;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -173,8 +174,7 @@ const screen = mountReviewScreen(root, model, {
     }
     registeredStackTicket += 1;
     registeredStackPreviewTicket += 1;
-    registeredStackPreviewResource?.revoke();
-    registeredStackPreviewResource = null;
+    clearRegisteredStackPreviewResources();
     update({
       ...model,
       registration: {
@@ -188,6 +188,16 @@ const screen = mountReviewScreen(root, model, {
   },
   onSelectRegisteredStackProduct(product) {
     selectRegisteredStackProduct(product);
+  },
+  onSetRegisteredStackOverlayOpacity(opacity) {
+    if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: { ...model.registration.stack, overlayOpacity: opacity },
+      },
+    });
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -679,7 +689,9 @@ function idleRegisteredStack(
     result: null,
     previewState: "idle",
     preview: null,
+    sciencePreview: null,
     selectedProduct: "science",
+    overlayOpacity: 0.65,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -945,7 +957,9 @@ async function executeStack(): Promise<void> {
         result: null,
         previewState: "idle",
         preview: null,
+        sciencePreview: null,
         selectedProduct: "science",
+        overlayOpacity: stack.overlayOpacity,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1007,7 +1021,9 @@ async function executeStack(): Promise<void> {
           result,
           previewState: "loading",
           preview: null,
+          sciencePreview: null,
           selectedProduct: "science",
+          overlayOpacity: model.registration.stack.overlayOpacity,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1069,45 +1085,33 @@ async function loadRegisteredStackPreview(
   product: RegisteredStackProductView,
 ): Promise<void> {
   const ticket = ++registeredStackPreviewTicket;
-  const path = registeredStackProductPath(result, product);
-  if (!path) return;
-  const content =
-    product === "science" && result.planes === 3
-      ? ({ kind: "rgb" } as const)
-      : ({ kind: "scalar", plane: 0 } as const);
+  let scienceResource: PreviewResource | null = null;
+  let diagnosticResource: PreviewResource | null = null;
   try {
-    const transform = await estimateFitsPreviewTransform({
-      path,
-      content,
-      ...previewBounds,
-    });
+    scienceResource = await requestRegisteredStackProductPreview(
+      result,
+      "science",
+    );
+    if (product !== "science") {
+      diagnosticResource = await requestRegisteredStackProductPreview(
+        result,
+        product,
+      );
+    }
     if (
       ticket !== registeredStackPreviewTicket ||
       model.registration.stack.result?.outputPath !== result.outputPath ||
       model.registration.stack.selectedProduct !== product
     ) {
+      scienceResource.revoke();
+      diagnosticResource?.revoke();
       return;
     }
-    const resource = await requestFitsPreview({
-      frameId: `${result.planSha256}:registered-stack:${product}`,
-      path,
-      content,
-      ...previewBounds,
-      blackPoint: transform.blackPoint,
-      whitePoint: transform.whitePoint,
-      midtone: transform.midtone,
-      transfer: { kind: "midtones" },
-    });
-    if (
-      ticket !== registeredStackPreviewTicket ||
-      model.registration.stack.result?.outputPath !== result.outputPath ||
-      model.registration.stack.selectedProduct !== product
-    ) {
-      resource.revoke();
-      return;
-    }
-    registeredStackPreviewResource?.revoke();
-    registeredStackPreviewResource = resource;
+    clearRegisteredStackPreviewResources();
+    registeredStackSciencePreviewResource = scienceResource;
+    registeredStackDiagnosticPreviewResource = diagnosticResource;
+    const selectedPreview =
+      diagnosticResource?.preview ?? scienceResource.preview;
     update({
       ...model,
       registration: {
@@ -1115,11 +1119,14 @@ async function loadRegisteredStackPreview(
         stack: {
           ...model.registration.stack,
           previewState: "ready",
-          preview: resource.preview,
+          preview: selectedPreview,
+          sciencePreview: scienceResource.preview,
         },
       },
     });
   } catch {
+    scienceResource?.revoke();
+    diagnosticResource?.revoke();
     if (ticket !== registeredStackPreviewTicket) return;
     update({
       ...model,
@@ -1129,10 +1136,44 @@ async function loadRegisteredStackPreview(
           ...model.registration.stack,
           previewState: "error",
           preview: null,
+          sciencePreview: null,
         },
       },
     });
   }
+}
+
+async function requestRegisteredStackProductPreview(
+  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  product: RegisteredStackProductView,
+): Promise<PreviewResource> {
+  const path = registeredStackProductPath(result, product);
+  if (!path) throw new Error("registered stack product is unavailable");
+  const content =
+    product === "science" && result.planes === 3
+      ? ({ kind: "rgb" } as const)
+      : ({ kind: "scalar", plane: 0 } as const);
+  const transform = await estimateFitsPreviewTransform({
+    path,
+    content,
+    ...previewBounds,
+  });
+  return requestFitsPreview({
+    frameId: `${result.planSha256}:registered-stack:${product}`,
+    path,
+    content,
+    ...previewBounds,
+    blackPoint: transform.blackPoint,
+    whitePoint: transform.whitePoint,
+    midtone: transform.midtone,
+    transfer: { kind: "midtones" },
+    palette:
+      product === "rejection_low"
+        ? "rejection_low"
+        : product === "rejection_high"
+          ? "rejection_high"
+          : "grayscale",
+  });
 }
 
 function registeredStackProductPath(
@@ -1157,8 +1198,7 @@ function selectRegisteredStackProduct(
   if (!result || stack.state !== "completed") return;
   if (!registeredStackProductPath(result, product)) return;
   registeredStackPreviewTicket += 1;
-  registeredStackPreviewResource?.revoke();
-  registeredStackPreviewResource = null;
+  clearRegisteredStackPreviewResources();
   update({
     ...model,
     registration: {
@@ -1168,6 +1208,7 @@ function selectRegisteredStackProduct(
         selectedProduct: product,
         previewState: "loading",
         preview: null,
+        sciencePreview: null,
       },
     },
   });
@@ -2486,6 +2527,13 @@ function releaseEphemeralRegistrationPreview(): void {
   ephemeralRegistrationPreview = null;
 }
 
+function clearRegisteredStackPreviewResources(): void {
+  registeredStackSciencePreviewResource?.revoke();
+  registeredStackDiagnosticPreviewResource?.revoke();
+  registeredStackSciencePreviewResource = null;
+  registeredStackDiagnosticPreviewResource = null;
+}
+
 function clearRegistrationPreviewResources(): void {
   registrationPreviewTicket += 1;
   registeredStackPreviewTicket += 1;
@@ -2493,8 +2541,7 @@ function clearRegistrationPreviewResources(): void {
   registrationPreviewPrefetch.cancel();
   releaseEphemeralRegistrationPreview();
   registrationPreviewCache.clear();
-  registeredStackPreviewResource?.revoke();
-  registeredStackPreviewResource = null;
+  clearRegisteredStackPreviewResources();
   stopRegistrationBlinkTimer();
 }
 

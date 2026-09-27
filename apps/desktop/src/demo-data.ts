@@ -69,7 +69,9 @@ export const demoReviewModel: ReviewViewModel = {
       result: null,
       previewState: "idle",
       preview: null,
+      sciencePreview: null,
       selectedProduct: "science",
+      overlayOpacity: 0.65,
       settings: {
         estimator: "strict_mean",
         lowFraction: 0.1,

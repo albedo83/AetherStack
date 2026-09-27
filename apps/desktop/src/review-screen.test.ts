@@ -21,6 +21,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelRegisteredStack: vi.fn(),
     onUpdateRegisteredStackSettings: vi.fn(),
     onSelectRegisteredStackProduct: vi.fn(),
+    onSetRegisteredStackOverlayOpacity: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -521,7 +522,7 @@ describe("frame review workspace", () => {
         },
       },
     };
-    const { root, actions } = fixture(ready);
+    const { root, actions, controller } = fixture(ready);
 
     expect(
       getByRole(root, "heading", { name: "Registered Blink" }),
@@ -557,6 +558,42 @@ describe("frame review workspace", () => {
     fireEvent.click(getByRole(root, "tab", { name: "Low reject" }));
     expect(actions.onSelectRegisteredStackProduct).toHaveBeenCalledWith(
       "rejection_low",
+    );
+
+    controller.update({
+      ...ready,
+      registration: {
+        ...ready.registration,
+        stack: {
+          ...ready.registration.stack,
+          selectedProduct: "rejection_low",
+          sciencePreview: {
+            frameId: `${planSha256}:registered-stack:science`,
+            url: "blob:registered-stack",
+          },
+          preview: {
+            frameId: `${planSha256}:registered-stack:rejection_low`,
+            url: "blob:registered-stack-low",
+          },
+        },
+      },
+    });
+    expect(
+      getByRole<HTMLImageElement>(root, "img", {
+        name: "Integrated science preview beneath the rejection overlay",
+      }).src,
+    ).toContain("blob:registered-stack");
+    expect(
+      getByRole<HTMLImageElement>(root, "img", {
+        name: "Low-tail rejection map preview",
+      }).style.opacity,
+    ).toBe("0.65");
+    const opacity = getByRole<HTMLInputElement>(root, "slider", {
+      name: "Rejection map opacity over science",
+    });
+    fireEvent.input(opacity, { target: { value: "42" } });
+    expect(actions.onSetRegisteredStackOverlayOpacity).toHaveBeenCalledWith(
+      0.42,
     );
   });
 

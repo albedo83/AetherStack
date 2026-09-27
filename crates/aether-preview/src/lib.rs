@@ -25,6 +25,18 @@ pub const MAX_REDUCTION_LEVEL: u8 = 15;
 /// Stable identifier for the first robust display-only stretch estimator.
 pub const AUTO_STRETCH_ALGORITHM_ID: &str = "aether-preview-auto-stretch-v1";
 
+/// Sequential display palette for scalar diagnostic products.
+///
+/// These palettes affect only RGBA preview bytes. They never alter scalar
+/// samples, masks, statistics, or any persisted scientific product.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScalarPalette {
+    /// Viridis-family progression used for low-tail rejection counts.
+    LowRejection,
+    /// Inferno-family progression used for high-tail rejection counts.
+    HighRejection,
+}
+
 const AUTO_STRETCH_SHADOW_SIGMA: f64 = 2.8;
 const AUTO_STRETCH_TARGET_BACKGROUND: f64 = 0.25;
 const AUTO_STRETCH_HIGH_QUANTILE: f64 = 0.9995;
@@ -802,6 +814,103 @@ pub fn render_grayscale_rgba8(
     })
 }
 
+/// Maps one scalar preview to a perceptually ordered diagnostic palette.
+///
+/// The mapped lightness increases with the displayed rejection count, while
+/// low- and high-tail maps use visibly distinct hue progressions. Missing
+/// pixels retain the selected presentation instead of receiving a false count;
+/// exact zero counts are transparent so they cannot tint a science underlay.
+///
+/// # Errors
+///
+/// Returns a typed overflow, allocation, invariant, or mapping failure.
+pub fn render_false_color_rgba8(
+    preview: &ScalarPreview,
+    transform: DisplayTransform,
+    missing_style: MissingPixelStyle,
+    palette: ScalarPalette,
+) -> Result<RgbaPreview, PreviewError> {
+    let pixel_count = preview
+        .width
+        .checked_mul(preview.height)
+        .ok_or(PreviewError::SizeOverflow)?;
+    if preview.values.len() != pixel_count
+        || preview.valid_support.len() != pixel_count
+        || preview.excluded_support.len() != pixel_count
+        || preview.excluded_flags.len() != pixel_count
+    {
+        return Err(PreviewError::PreviewInvariant);
+    }
+    let byte_count = pixel_count
+        .checked_mul(4)
+        .ok_or(PreviewError::SizeOverflow)?;
+    let mut pixels = try_filled_vec(byte_count, 0_u8)?;
+    let scale = transform.white_point() - transform.black_point();
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(PreviewError::InvalidDisplayTransform);
+    }
+
+    for index in 0..pixel_count {
+        let byte_index = index.checked_mul(4).ok_or(PreviewError::SizeOverflow)?;
+        let target = pixels
+            .get_mut(byte_index..byte_index + 4)
+            .ok_or(PreviewError::PreviewInvariant)?;
+        if preview.valid_support[index] == 0 {
+            target.copy_from_slice(&missing_rgba(index, preview.width, missing_style));
+            continue;
+        }
+        if preview.values[index] == 0.0 {
+            target.copy_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        let normalized =
+            ((preview.values[index] - transform.black_point()) / scale).clamp(0.0, 1.0);
+        let mapped = map_transfer(normalized, transform)?;
+        if !mapped.is_finite() {
+            return Err(PreviewError::NumericalOverflow);
+        }
+        let [red, green, blue] = sequential_palette_color(mapped, palette);
+        target.copy_from_slice(&[red, green, blue, 255]);
+    }
+
+    Ok(RgbaPreview {
+        width: preview.width,
+        height: preview.height,
+        display_transform_version: transform.version(),
+        pixels,
+    })
+}
+
+fn sequential_palette_color(value: f64, palette: ScalarPalette) -> [u8; 3] {
+    const LOW_REJECTION: [[u8; 3]; 5] = [
+        [68, 1, 84],
+        [59, 82, 139],
+        [33, 145, 140],
+        [94, 201, 98],
+        [253, 231, 37],
+    ];
+    const HIGH_REJECTION: [[u8; 3]; 5] = [
+        [0, 0, 4],
+        [87, 16, 110],
+        [188, 55, 84],
+        [249, 142, 9],
+        [252, 255, 164],
+    ];
+    let anchors = match palette {
+        ScalarPalette::LowRejection => LOW_REJECTION,
+        ScalarPalette::HighRejection => HIGH_REJECTION,
+    };
+    let scaled = value.clamp(0.0, 1.0) * 4.0;
+    let lower = (scaled.floor() as usize).min(3);
+    let fraction = scaled - lower as f64;
+    let interpolate = |channel: usize| {
+        let start = f64::from(anchors[lower][channel]);
+        let end = f64::from(anchors[lower + 1][channel]);
+        (start + (end - start) * fraction).round().clamp(0.0, 255.0) as u8
+    };
+    [interpolate(0), interpolate(1), interpolate(2)]
+}
+
 /// Maps three congruent linear previews to packed RGBA8 with one linked stretch.
 ///
 /// A pixel is displayed only when all three channels have valid support. This
@@ -1350,6 +1459,36 @@ mod tests {
             rgba.pixels(),
             &[0, 0, 0, 255, 128, 128, 128, 255, 255, 255, 255, 255]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_palettes_have_exact_distinct_ordered_endpoints() -> TestResult {
+        let mut reader = fits_reader(3, 1, vec![0.0, 0.5, 1.0])?;
+        let preview = build_fits_preview(&mut reader, parameters(0, 3)?)?;
+        let transform = DisplayTransform::new(0.0, 1.0, 0.5, TransferFunction::Linear)?;
+        let low = render_false_color_rgba8(
+            &preview,
+            transform,
+            MissingPixelStyle::Transparent,
+            ScalarPalette::LowRejection,
+        )?;
+        let high = render_false_color_rgba8(
+            &preview,
+            transform,
+            MissingPixelStyle::Transparent,
+            ScalarPalette::HighRejection,
+        )?;
+
+        assert_eq!(
+            low.pixels(),
+            &[0, 0, 0, 0, 33, 145, 140, 255, 253, 231, 37, 255]
+        );
+        assert_eq!(
+            high.pixels(),
+            &[0, 0, 0, 0, 188, 55, 84, 255, 252, 255, 164, 255]
+        );
+        assert_ne!(low.pixels(), high.pixels());
         Ok(())
     }
 

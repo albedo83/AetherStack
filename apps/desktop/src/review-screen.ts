@@ -193,6 +193,22 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-preview-image]",
     ),
+    registeredStackScienceImage: required<HTMLImageElement>(
+      root,
+      "[data-registered-stack-science-image]",
+    ),
+    registeredStackOverlayControl: required<HTMLElement>(
+      root,
+      "[data-registered-stack-overlay-control]",
+    ),
+    registeredStackOverlayOpacity: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-overlay-opacity]",
+    ),
+    registeredStackOverlayValue: required<HTMLOutputElement>(
+      root,
+      "[data-registered-stack-overlay-value]",
+    ),
     registeredStackPreviewPlaceholder: required<HTMLElement>(
       root,
       "[data-registered-stack-preview-placeholder]",
@@ -668,6 +684,14 @@ export function mountReviewScreen(
     if (settings) actions.onUpdateCalibrationSettings(settings);
   };
 
+  const onInput = (event: Event): void => {
+    if (event.target !== elements.registeredStackOverlayOpacity) return;
+    const opacity = elements.registeredStackOverlayOpacity.valueAsNumber / 100;
+    if (Number.isFinite(opacity)) {
+      actions.onSetRegisteredStackOverlayOpacity(opacity);
+    }
+  };
+
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && !elements.rejectDialog.hidden) {
       closeRejectDialog();
@@ -988,12 +1012,14 @@ export function mountReviewScreen(
   const destroy = (): void => {
     root.removeEventListener("click", onClick);
     root.removeEventListener("change", onChange);
+    root.removeEventListener("input", onInput);
     root.removeEventListener("keydown", onKeyDown);
     root.replaceChildren();
   };
 
   root.addEventListener("click", onClick);
   root.addEventListener("change", onChange);
+  root.addEventListener("input", onInput);
   root.addEventListener("keydown", onKeyDown);
   update(initialModel);
 
@@ -1317,6 +1343,10 @@ interface RegistrationElements {
   readonly registeredStackEstimatorLabel: HTMLElement;
   readonly registeredStackProducts: readonly HTMLButtonElement[];
   readonly registeredStackPreviewImage: HTMLImageElement;
+  readonly registeredStackScienceImage: HTMLImageElement;
+  readonly registeredStackOverlayControl: HTMLElement;
+  readonly registeredStackOverlayOpacity: HTMLInputElement;
+  readonly registeredStackOverlayValue: HTMLOutputElement;
   readonly registeredStackPreviewPlaceholder: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
   readonly registeredPreviewImage: HTMLImageElement;
@@ -1485,11 +1515,27 @@ function renderRegistration(
     registration.stack.previewState === "ready" &&
     registration.stack.preview?.frameId ===
       `${registration.stack.result?.planSha256}:registered-stack:${registration.stack.selectedProduct}`;
+  const diagnosticProduct = registration.stack.selectedProduct !== "science";
+  const scienceUnderlayReady =
+    stackPreviewReady &&
+    diagnosticProduct &&
+    registration.stack.sciencePreview?.frameId ===
+      `${registration.stack.result?.planSha256}:registered-stack:science`;
   elements.registeredStackPreviewImage.hidden = !stackPreviewReady;
+  elements.registeredStackScienceImage.hidden = !scienceUnderlayReady;
   elements.registeredStackPreviewPlaceholder.hidden = stackPreviewReady;
+  elements.registeredStackScienceImage.src = scienceUnderlayReady
+    ? (registration.stack.sciencePreview?.url ?? "")
+    : "";
+  elements.registeredStackScienceImage.alt = scienceUnderlayReady
+    ? "Integrated science preview beneath the rejection overlay"
+    : "";
   elements.registeredStackPreviewImage.src = stackPreviewReady
     ? (registration.stack.preview?.url ?? "")
     : "";
+  elements.registeredStackPreviewImage.style.opacity = diagnosticProduct
+    ? String(registration.stack.overlayOpacity)
+    : "1";
   elements.registeredStackPreviewImage.alt = stackPreviewReady
     ? registration.stack.selectedProduct === "science"
       ? "Integrated registered common-crop preview"
@@ -1497,6 +1543,14 @@ function renderRegistration(
         ? "Low-tail rejection map preview"
         : "High-tail rejection map preview"
     : "";
+  elements.registeredStackOverlayControl.hidden =
+    !diagnosticProduct || !stackPreviewReady;
+  elements.registeredStackOverlayOpacity.value = String(
+    Math.round(registration.stack.overlayOpacity * 100),
+  );
+  elements.registeredStackOverlayValue.value = `${Math.round(registration.stack.overlayOpacity * 100)}%`;
+  elements.registeredStackOverlayValue.textContent =
+    elements.registeredStackOverlayValue.value;
   elements.registeredStackPreviewPlaceholder.textContent =
     registration.stack.previewState === "loading"
       ? "Rendering the integrated FITS preview…"
@@ -2635,9 +2689,15 @@ function shellMarkup(): string {
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_high" aria-selected="false" disabled>High reject</button>
                   </div>
                   <div class="registered-stack__preview">
-                    <img data-registered-stack-preview-image alt="" hidden />
+                    <img class="registered-stack__science-layer" data-registered-stack-science-image alt="" hidden />
+                    <img class="registered-stack__diagnostic-layer" data-registered-stack-preview-image alt="" hidden />
                     <div data-registered-stack-preview-placeholder>The integrated common crop will appear here after publication</div>
                   </div>
+                  <label class="registered-stack__overlay-control" data-registered-stack-overlay-control hidden>
+                    <span>Science overlay</span>
+                    <input id="registered-stack-overlay-opacity" data-registered-stack-overlay-opacity type="range" min="0" max="100" step="1" value="65" aria-label="Rejection map opacity over science" />
+                    <output data-registered-stack-overlay-value for="registered-stack-overlay-opacity">65%</output>
+                  </label>
                   <div class="registered-stack__actions">
                     <button class="button button--primary" type="button" data-action="execute-registered-stack" disabled>Integrate crop</button>
                     <button class="button button--danger" type="button" data-action="cancel-registered-stack" hidden>Cancel</button>

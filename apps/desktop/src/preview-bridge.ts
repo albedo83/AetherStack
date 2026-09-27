@@ -12,6 +12,8 @@ export type FitsPreviewContent =
   | { readonly kind: "scalar"; readonly plane: number }
   | { readonly kind: "rgb" };
 
+export type PreviewPalette = "grayscale" | "rejection_low" | "rejection_high";
+
 export interface FitsPreviewRequest {
   readonly frameId: string;
   readonly path: string;
@@ -22,6 +24,7 @@ export interface FitsPreviewRequest {
   readonly whitePoint: number;
   readonly midtone: number;
   readonly transfer: PreviewTransfer;
+  readonly palette?: PreviewPalette;
 }
 
 export interface FitsPreviewEstimateRequest {

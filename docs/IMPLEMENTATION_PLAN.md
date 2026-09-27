@@ -966,6 +966,16 @@ safety reasoning. They do not narrate obvious syntax.
     Presenter interaction, accessibility, formatting, production-build, and
     visual-browser checks cover the result. Next, apply the same control system
     to the rejection-map palette and science-overlay opacity control.
+67. Make rejection evidence visually actionable without modifying scientific
+    products. Rust maps scalar low-tail counts through a Viridis-family palette
+    and high-tail counts through an Inferno-family palette; exact zero counts
+    are transparent, missing support remains explicit, and RGB requests reject
+    diagnostic palettes. The desktop layers the bounded diagnostic PNG over a
+    separately rendered science preview with an accessible live opacity control,
+    stale-response guards, and deterministic resource revocation. Native,
+    bridge, presenter, accessibility, and production-build tests cover the full
+    path. Next, add quantitative rejection histograms and per-pixel inspection
+    before expanding the estimator family.
 
 ## 11. Stable-release definition
 

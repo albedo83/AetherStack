@@ -25,9 +25,7 @@ export type WorkspaceView = "frames" | "calibration" | "registration";
 export type LightFrameView = "raw" | "calibrated";
 
 export type RegisteredStackProductView =
-  | "science"
-  | "rejection_low"
-  | "rejection_high";
+  "science" | "rejection_low" | "rejection_high";
 
 export type ReviewState = "undecided" | "accepted" | "rejected";
 
@@ -204,7 +202,9 @@ export interface RegistrationViewModel {
     readonly result: RegisteredStackResult | null;
     readonly previewState: "idle" | "loading" | "ready" | "error";
     readonly preview: FramePreview | null;
+    readonly sciencePreview: FramePreview | null;
     readonly selectedProduct: RegisteredStackProductView;
+    readonly overlayOpacity: number;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
@@ -265,6 +265,7 @@ export interface ReviewActions {
   readonly onSelectRegisteredStackProduct: (
     product: RegisteredStackProductView,
   ) => void;
+  readonly onSetRegisteredStackOverlayOpacity: (opacity: number) => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;
