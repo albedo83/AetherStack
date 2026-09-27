@@ -690,6 +690,16 @@ safety reasoning. They do not narrate obvious syntax.
     insufficient support, and invalid controls. Next, implement a tolerant
     descriptor index and ambiguity-preserving correspondence hypotheses before
     any transform is accepted.
+38. Match invariant descriptors without hiding ambiguity or unbounded work. A
+    sorted three-dimensional grid examines only neighboring tolerance cells,
+    then verifies exact invariant errors, scale range, and an explicit mirror
+    policy. Per-descriptor and global best sets remain bounded and deterministic;
+    the result retains canonical feature pairs, normalized errors, scale, mirror
+    state, comparison counts, ambiguity counts, both discard counts, and input
+    truncation evidence. Tests cover rotation/translation/scale, reflection
+    policy, symmetric ambiguity, both retention limits, exhausted comparison
+    budgets, empty geometry, and invalid controls. Next, form robust transform
+    hypotheses and require consensus across independent feature correspondences.
 
 ## 11. Stable-release definition
 

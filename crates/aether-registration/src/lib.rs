@@ -6,6 +6,7 @@
 
 mod features;
 mod geometry;
+mod matching;
 mod reference;
 mod triangles;
 
@@ -17,6 +18,12 @@ pub use features::{
 pub use geometry::{
     AffineTransform, CoordinateError, ImagePoint, RegistrationMatch, ResidualError,
     ResidualStatistics, evaluate_residuals,
+};
+pub use matching::{
+    DESCRIPTOR_MATCH_ALGORITHM_ID, DescriptorMatchCatalog, DescriptorMatchError,
+    DescriptorMatchHypothesis, DescriptorMatchParameters, DescriptorMatchStatistics, FeaturePair,
+    MAX_DESCRIPTOR_COMPARISONS, MAX_MATCH_CANDIDATES_PER_DESCRIPTOR, MAX_MATCH_HYPOTHESES,
+    ReflectionPolicy, match_triangle_descriptors,
 };
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,

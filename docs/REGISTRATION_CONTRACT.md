@@ -104,10 +104,31 @@ stopped at the output limit, and terminates instead of hiding unbounded work.
 The output records visited anchors, attempted triangles, size and degeneracy
 rejections, duplicates, exact parameters, and source feature count.
 
-Descriptor similarity tolerances and correspondence ambiguity are intentionally
-absent here. The subsequent matcher must compare invariant values with explicit
-error budgets, preserve all competing candidates within configured bounds, and
-must not infer a unique star mapping from one triangle alone.
+## Tolerant descriptor matching
+
+`triangle-grid-hypotheses-v1` compares the three invariant descriptor values
+with explicit absolute error budgets. Reference descriptors are sorted into a
+three-dimensional integer grid whose cell widths equal those budgets. A source
+descriptor searches only its at most 27 adjacent cells and then applies the
+exact side-ratio, normalized-area, scale, and reflection-policy checks. This
+keeps lookup deterministic without treating quantization as scientific proof.
+
+Every accepted triangle hypothesis retains its source and reference descriptor
+indices, all three canonical feature-rank pairs, maximum side-ratio error,
+area error, normalized three-dimensional distance, scale estimate, and mirror
+state. The matcher deliberately does not select a transform or collapse a
+triangle to a unique star mapping. It retains the best configured number of
+candidates per source descriptor and the best configured number globally,
+ordered by normalized error and stable indices.
+
+Exact comparisons, geometric candidates, source descriptors without a match,
+ambiguous source descriptors, both levels of discarded candidates, and retained
+reflections are counted. The output also propagates whether either input
+descriptor catalog was truncated. Allocation, arithmetic overflow, empty
+catalogs, identical frame identities, invalid controls, and an exceeded exact
+comparison budget fail explicitly. Current hard bounds are 256 retained
+candidates per source descriptor, one million global hypotheses, and 50 million
+exact comparisons.
 
 ## Automatic reference selection
 
@@ -138,7 +159,7 @@ the automatic winner.
 Production registration still requires:
 
 - deterministic multi-scale enhancement beyond the initial local descriptors;
-- robust correspondence search with explicit ambiguity and sparse-field errors;
+- robust consensus across descriptor hypotheses with explicit sparse-field errors;
 - translation, affine, and projective model fitting with inspectable inliers;
 - justified distortion models with bounded control-point counts;
 - flux-tested cubic and Lanczos resampling with conservative mask propagation;

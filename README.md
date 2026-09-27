@@ -106,7 +106,9 @@ optimized CPU and GPU paths must match.
   bounded matching-feature catalog derived directly from the canonical quality
   measurements with explicit saturation, SNR, shape, border, and count evidence,
   and deduplicated local triangle descriptors invariant under translation,
-  rotation, and uniform scale while retaining mirror orientation diagnostics;
+  rotation, and uniform scale while retaining mirror orientation diagnostics,
+  plus a bounded quantized descriptor index that preserves competing tolerant
+  correspondences, scale estimates, mirror policy, and truncation evidence;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and
