@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, FitsOutputProvenance,
-    HeaderReadOptions, ImageRegion, PrimaryImageReader, StoredSampleFormat,
+    HeaderReadOptions, ImageRegion, PrimaryImageReader, SampleStatus, StoredSampleFormat,
     primary_image_statistics,
 };
 use aether_metadata::{BayerPattern, FrameType};
@@ -65,6 +65,8 @@ use tauri::ipc::Response;
 
 const MAX_DESKTOP_PREVIEW_PIXELS: usize = 2 * 1_024 * 1_024;
 const DESKTOP_PREVIEW_IO_CHUNK_SAMPLES: usize = 256 * 1_024;
+const REJECTION_HISTOGRAM_ALGORITHM_ID: &str = "rejection-count-histogram-v1";
+const MAX_REJECTION_HISTOGRAM_BINS: usize = 4_096;
 const MAX_DESKTOP_QUALITY_SOURCE_PIXELS: u64 = 64 * 1_024 * 1_024;
 const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
 
@@ -132,6 +134,30 @@ struct EstimatedDisplayTransform {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FitsStatisticsRequest {
     path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RejectionHistogramRequest {
+    path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectionHistogramBin {
+    rejected_count: u32,
+    samples: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectionHistogramResponse {
+    algorithm_id: &'static str,
+    total_samples: u64,
+    zero_samples: u64,
+    rejected_samples: u64,
+    maximum_rejected_count: u32,
+    bins: Vec<RejectionHistogramBin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -907,6 +933,24 @@ async fn inspect_fits_statistics(
                 "The FITS statistics worker stopped before producing a result.",
             )
         })?
+}
+
+#[tauri::command]
+async fn inspect_rejection_histogram(
+    request: RejectionHistogramRequest,
+) -> Result<RejectionHistogramResponse, PreviewCommandError> {
+    validate_runtime_source_path(&request.path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = File::open(&request.path).map_err(|_| {
+            PreviewCommandError::new(
+                "fits_open_failed",
+                "The rejection-map FITS file could not be opened.",
+            )
+        })?;
+        inspect_rejection_histogram_reader(file)
+    })
+    .await
+    .map_err(|_| preview_worker_error())?
 }
 
 #[tauri::command]
@@ -1846,6 +1890,86 @@ fn validate_runtime_source_path(path: &Path) -> Result<(), PreviewCommandError> 
             "A native FITS operation requires an absolute source path.",
         ))
     }
+}
+
+fn inspect_rejection_histogram_reader<R: Read + Seek>(
+    input: R,
+) -> Result<RejectionHistogramResponse, PreviewCommandError> {
+    let mut reader =
+        PrimaryImageReader::open(input, HeaderReadOptions::default()).map_err(|_| {
+            PreviewCommandError::new(
+                "rejection_histogram_header_failed",
+                "The rejection-map primary header could not be inspected.",
+            )
+        })?;
+    let total_samples = reader.descriptor().pixel_count();
+    let mut bins = BTreeMap::<u32, u64>::new();
+    let mut values = vec![0.0; DESKTOP_PREVIEW_IO_CHUNK_SAMPLES];
+    let mut statuses = vec![SampleStatus::Valid; DESKTOP_PREVIEW_IO_CHUNK_SAMPLES];
+    let mut start = 0_u64;
+    while start < total_samples {
+        let remaining = total_samples - start;
+        let count = usize::try_from(remaining.min(DESKTOP_PREVIEW_IO_CHUNK_SAMPLES as u64))
+            .map_err(|_| rejection_histogram_error())?;
+        reader
+            .read_physical_samples(start, &mut values[..count], &mut statuses[..count])
+            .map_err(|_| rejection_histogram_error())?;
+        for (&value, &status) in values[..count].iter().zip(&statuses[..count]) {
+            if status != SampleStatus::Valid
+                || !value.is_finite()
+                || value < 0.0
+                || value.fract() != 0.0
+                || value > f64::from(u32::MAX)
+            {
+                return Err(PreviewCommandError::new(
+                    "rejection_histogram_sample_invalid",
+                    "A rejection map contains a missing, non-finite, negative, or fractional count.",
+                ));
+            }
+            let rejected_count = value as u32;
+            if !bins.contains_key(&rejected_count) && bins.len() >= MAX_REJECTION_HISTOGRAM_BINS {
+                return Err(PreviewCommandError::new(
+                    "rejection_histogram_bins_exceeded",
+                    "The rejection map contains too many distinct count values.",
+                ));
+            }
+            let samples = bins.entry(rejected_count).or_default();
+            *samples = samples
+                .checked_add(1)
+                .ok_or_else(rejection_histogram_error)?;
+        }
+        start = start
+            .checked_add(u64::try_from(count).map_err(|_| rejection_histogram_error())?)
+            .ok_or_else(rejection_histogram_error)?;
+    }
+
+    let zero_samples = bins.get(&0).copied().unwrap_or(0);
+    let rejected_samples = total_samples
+        .checked_sub(zero_samples)
+        .ok_or_else(rejection_histogram_error)?;
+    let maximum_rejected_count = bins.last_key_value().map_or(0, |(&count, _)| count);
+    let bins = bins
+        .into_iter()
+        .map(|(rejected_count, samples)| RejectionHistogramBin {
+            rejected_count,
+            samples,
+        })
+        .collect();
+    Ok(RejectionHistogramResponse {
+        algorithm_id: REJECTION_HISTOGRAM_ALGORITHM_ID,
+        total_samples,
+        zero_samples,
+        rejected_samples,
+        maximum_rejected_count,
+        bins,
+    })
+}
+
+fn rejection_histogram_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "rejection_histogram_failed",
+        "The rejection-count histogram could not be calculated exactly.",
+    )
 }
 
 fn inspect_fits_statistics_sync(
@@ -4118,6 +4242,7 @@ pub fn run() -> Result<(), tauri::Error> {
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
+            inspect_rejection_histogram,
             preview_master_plan,
             preview_registration_plan,
             render_fits_preview,
@@ -4598,6 +4723,47 @@ mod tests {
         }))?;
 
         assert!(matches!(decoded.palette, PreviewPalette::LowRejection));
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_histogram_counts_every_exact_integer_sample() -> TestResult {
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(8, 1, 1)?,
+            vec![0.0, 0.0, 1.0, 1.0, 1.0, 3.0, 3.0, 5.0],
+        )?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+
+        let histogram = inspect_rejection_histogram_reader(Cursor::new(bytes))?;
+
+        assert_eq!(histogram.algorithm_id, REJECTION_HISTOGRAM_ALGORITHM_ID);
+        assert_eq!(histogram.total_samples, 8);
+        assert_eq!(histogram.zero_samples, 2);
+        assert_eq!(histogram.rejected_samples, 6);
+        assert_eq!(histogram.maximum_rejected_count, 5);
+        assert_eq!(
+            histogram
+                .bins
+                .iter()
+                .map(|bin| (bin.rejected_count, bin.samples))
+                .collect::<Vec<_>>(),
+            vec![(0, 2), (1, 3), (3, 2), (5, 1)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_histogram_refuses_fractional_counts() -> TestResult {
+        let image = ScientificImage::from_pixels(Dimensions::new(2, 1, 1)?, vec![0.0, 1.5])?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+
+        let Err(error) = inspect_rejection_histogram_reader(Cursor::new(bytes)) else {
+            return Err("fractional rejection count was accepted".into());
+        };
+
+        assert_eq!(error.code, "rejection_histogram_sample_invalid");
         Ok(())
     }
 

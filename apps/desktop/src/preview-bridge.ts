@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { FramePreview } from "./model.ts";
+import type { FramePreview, RejectionHistogram } from "./model.ts";
 
 export type PreviewTransfer =
   | { readonly kind: "linear" }
@@ -59,6 +59,15 @@ export function estimateFitsPreviewTransform(
 ): Promise<EstimatedDisplayTransform> {
   return invoke<EstimatedDisplayTransform>("estimate_fits_preview_transform", {
     request,
+  });
+}
+
+/** Streams one exact count histogram from a published rejection-map FITS. */
+export function inspectRejectionHistogram(
+  path: string,
+): Promise<RejectionHistogram> {
+  return invoke<RejectionHistogram>("inspect_rejection_histogram", {
+    request: { path },
   });
 }
 

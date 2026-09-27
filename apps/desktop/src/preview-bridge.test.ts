@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   estimateFitsPreviewTransform,
+  inspectRejectionHistogram,
   requestFitsPreview,
 } from "./preview-bridge.ts";
 
@@ -127,6 +128,29 @@ describe("native preview bridge", () => {
         content: { kind: "scalar", plane: 0 },
         palette: "rejection_low",
       }),
+    });
+  });
+
+  it("requests an exact native rejection-count histogram", async () => {
+    const histogram = {
+      algorithmId: "rejection-count-histogram-v1",
+      totalSamples: 8,
+      zeroSamples: 2,
+      rejectedSamples: 6,
+      maximumRejectedCount: 3,
+      bins: [
+        { rejectedCount: 0, samples: 2 },
+        { rejectedCount: 1, samples: 4 },
+        { rejectedCount: 3, samples: 2 },
+      ],
+    };
+    vi.mocked(invoke).mockResolvedValue(histogram);
+
+    await expect(
+      inspectRejectionHistogram("/selected/rejection-low.fits"),
+    ).resolves.toBe(histogram);
+    expect(invoke).toHaveBeenCalledWith("inspect_rejection_histogram", {
+      request: { path: "/selected/rejection-low.fits" },
     });
   });
 });

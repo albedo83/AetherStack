@@ -72,6 +72,8 @@ export const demoReviewModel: ReviewViewModel = {
       sciencePreview: null,
       selectedProduct: "science",
       overlayOpacity: 0.65,
+      histogramState: "idle",
+      histogram: null,
       settings: {
         estimator: "strict_mean",
         lowFraction: 0.1,

@@ -575,6 +575,20 @@ describe("frame review workspace", () => {
             frameId: `${planSha256}:registered-stack:rejection_low`,
             url: "blob:registered-stack-low",
           },
+          histogramState: "ready",
+          histogram: {
+            algorithmId: "rejection-count-histogram-v1",
+            totalSamples: 1_000,
+            zeroSamples: 925,
+            rejectedSamples: 75,
+            maximumRejectedCount: 3,
+            bins: [
+              { rejectedCount: 0, samples: 925 },
+              { rejectedCount: 1, samples: 60 },
+              { rejectedCount: 2, samples: 12 },
+              { rejectedCount: 3, samples: 3 },
+            ],
+          },
         },
       },
     });
@@ -595,6 +609,10 @@ describe("frame review workspace", () => {
     expect(actions.onSetRegisteredStackOverlayOpacity).toHaveBeenCalledWith(
       0.42,
     );
+    expect(root.textContent).toContain(
+      "75 affected samples · 7.500% · maximum 3",
+    );
+    expect(root.textContent).toContain("60");
   });
 
   it("keeps robust integration controls explicit and model-driven", () => {

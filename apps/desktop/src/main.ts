@@ -31,6 +31,7 @@ import type {
 } from "./model.ts";
 import {
   estimateFitsPreviewTransform,
+  inspectRejectionHistogram,
   requestFitsPreview,
   type EstimatedDisplayTransform,
   type FitsPreviewRequest,
@@ -692,6 +693,8 @@ function idleRegisteredStack(
     sciencePreview: null,
     selectedProduct: "science",
     overlayOpacity: 0.65,
+    histogramState: "idle",
+    histogram: null,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -960,6 +963,8 @@ async function executeStack(): Promise<void> {
         sciencePreview: null,
         selectedProduct: "science",
         overlayOpacity: stack.overlayOpacity,
+        histogramState: "idle",
+        histogram: null,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1024,6 +1029,8 @@ async function executeStack(): Promise<void> {
           sciencePreview: null,
           selectedProduct: "science",
           overlayOpacity: model.registration.stack.overlayOpacity,
+          histogramState: "idle",
+          histogram: null,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1121,9 +1128,14 @@ async function loadRegisteredStackPreview(
           previewState: "ready",
           preview: selectedPreview,
           sciencePreview: scienceResource.preview,
+          histogramState: product === "science" ? "idle" : "loading",
+          histogram: null,
         },
       },
     });
+    if (product !== "science") {
+      void loadRegisteredStackHistogram(result, product, ticket);
+    }
   } catch {
     scienceResource?.revoke();
     diagnosticResource?.revoke();
@@ -1137,6 +1149,51 @@ async function loadRegisteredStackPreview(
           previewState: "error",
           preview: null,
           sciencePreview: null,
+          histogramState: "idle",
+          histogram: null,
+        },
+      },
+    });
+  }
+}
+
+async function loadRegisteredStackHistogram(
+  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  product: Exclude<RegisteredStackProductView, "science">,
+  ticket: number,
+): Promise<void> {
+  const path = registeredStackProductPath(result, product);
+  if (!path) return;
+  try {
+    const histogram = await inspectRejectionHistogram(path);
+    if (
+      ticket !== registeredStackPreviewTicket ||
+      model.registration.stack.result?.outputPath !== result.outputPath ||
+      model.registration.stack.selectedProduct !== product
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          histogramState: "ready",
+          histogram,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== registeredStackPreviewTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          histogramState: "error",
+          histogram: null,
         },
       },
     });
@@ -1209,6 +1266,8 @@ function selectRegisteredStackProduct(
         previewState: "loading",
         preview: null,
         sciencePreview: null,
+        histogramState: product === "science" ? "idle" : "loading",
+        histogram: null,
       },
     },
   });

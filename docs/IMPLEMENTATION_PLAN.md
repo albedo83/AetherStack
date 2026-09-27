@@ -976,6 +976,16 @@ safety reasoning. They do not narrate obvious syntax.
     bridge, presenter, accessibility, and production-build tests cover the full
     path. Next, add quantitative rejection histograms and per-pixel inspection
     before expanding the estimator family.
+68. Add an exact, bounded rejection-count histogram for every published map.
+    The native inspector streams fixed-size FITS chunks, accepts only finite
+    non-negative integer counts, bounds distinct bins, checks all counters, and
+    reports zero, affected, maximum, and per-count sample totals under a stable
+    algorithm identifier. The desktop loads this evidence independently from
+    the PNG so a diagnostic failure cannot invalidate the scientific product or
+    its preview, and renders a bounded accessible distribution below the overlay.
+    Native malformed-count, bridge, presenter, accessibility, lint, and build
+    tests cover the path. Next, add exact coordinate inspection for science and
+    both rejection maps.
 
 ## 11. Stable-release definition
 

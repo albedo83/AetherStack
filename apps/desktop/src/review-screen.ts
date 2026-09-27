@@ -209,6 +209,18 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-overlay-value]",
     ),
+    registeredStackHistogram: required<HTMLElement>(
+      root,
+      "[data-registered-stack-histogram]",
+    ),
+    registeredStackHistogramSummary: required<HTMLElement>(
+      root,
+      "[data-registered-stack-histogram-summary]",
+    ),
+    registeredStackHistogramBins: required<HTMLElement>(
+      root,
+      "[data-registered-stack-histogram-bins]",
+    ),
     registeredStackPreviewPlaceholder: required<HTMLElement>(
       root,
       "[data-registered-stack-preview-placeholder]",
@@ -1347,6 +1359,9 @@ interface RegistrationElements {
   readonly registeredStackOverlayControl: HTMLElement;
   readonly registeredStackOverlayOpacity: HTMLInputElement;
   readonly registeredStackOverlayValue: HTMLOutputElement;
+  readonly registeredStackHistogram: HTMLElement;
+  readonly registeredStackHistogramSummary: HTMLElement;
+  readonly registeredStackHistogramBins: HTMLElement;
   readonly registeredStackPreviewPlaceholder: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
   readonly registeredPreviewImage: HTMLImageElement;
@@ -1551,6 +1566,7 @@ function renderRegistration(
   elements.registeredStackOverlayValue.value = `${Math.round(registration.stack.overlayOpacity * 100)}%`;
   elements.registeredStackOverlayValue.textContent =
     elements.registeredStackOverlayValue.value;
+  renderRejectionHistogram(elements, registration.stack);
   elements.registeredStackPreviewPlaceholder.textContent =
     registration.stack.previewState === "loading"
       ? "Rendering the integrated FITS preview…"
@@ -1674,6 +1690,56 @@ function renderRegistration(
       list.append(item);
     }
     elements.registrationRejections.replaceChildren(heading, list);
+  }
+}
+
+function renderRejectionHistogram(
+  elements: RegistrationElements,
+  stack: ReviewViewModel["registration"]["stack"],
+): void {
+  const visible = stack.selectedProduct !== "science";
+  elements.registeredStackHistogram.hidden = !visible;
+  elements.registeredStackHistogramBins.replaceChildren();
+  if (!visible) return;
+  if (stack.histogramState === "loading") {
+    elements.registeredStackHistogramSummary.textContent =
+      "Reading exact rejection counts…";
+    return;
+  }
+  if (stack.histogramState === "error" || !stack.histogram) {
+    elements.registeredStackHistogramSummary.textContent =
+      "The map is valid, but its count distribution is unavailable.";
+    return;
+  }
+
+  const histogram = stack.histogram;
+  const fraction =
+    histogram.totalSamples === 0
+      ? 0
+      : (100 * histogram.rejectedSamples) / histogram.totalSamples;
+  elements.registeredStackHistogramSummary.textContent = `${histogram.rejectedSamples.toLocaleString("en-US")} affected samples · ${fraction.toFixed(3)}% · maximum ${histogram.maximumRejectedCount}`;
+  const positiveBins = histogram.bins.filter((bin) => bin.rejectedCount > 0);
+  const visibleBins = positiveBins.slice(0, 32);
+  const maximumSamples = Math.max(1, ...visibleBins.map((bin) => bin.samples));
+  const rows = visibleBins.map((bin) => {
+    const row = document.createElement("div");
+    row.className = "rejection-histogram__bin";
+    const label = document.createElement("span");
+    label.textContent = `${bin.rejectedCount}×`;
+    const track = document.createElement("i");
+    const fill = document.createElement("b");
+    fill.style.width = `${(100 * bin.samples) / maximumSamples}%`;
+    track.append(fill);
+    const samples = document.createElement("strong");
+    samples.textContent = bin.samples.toLocaleString("en-US");
+    row.append(label, track, samples);
+    return row;
+  });
+  elements.registeredStackHistogramBins.replaceChildren(...rows);
+  if (positiveBins.length > visibleBins.length) {
+    const remainder = document.createElement("small");
+    remainder.textContent = `+ ${positiveBins.length - visibleBins.length} higher-count bins retained in the exact result`;
+    elements.registeredStackHistogramBins.append(remainder);
   }
 }
 
@@ -2698,6 +2764,13 @@ function shellMarkup(): string {
                     <input id="registered-stack-overlay-opacity" data-registered-stack-overlay-opacity type="range" min="0" max="100" step="1" value="65" aria-label="Rejection map opacity over science" />
                     <output data-registered-stack-overlay-value for="registered-stack-overlay-opacity">65%</output>
                   </label>
+                  <section class="rejection-histogram" data-registered-stack-histogram aria-label="Exact rejection-count distribution" hidden>
+                    <div class="rejection-histogram__heading">
+                      <span>Exact count distribution</span>
+                      <strong data-registered-stack-histogram-summary></strong>
+                    </div>
+                    <div class="rejection-histogram__bins" data-registered-stack-histogram-bins></div>
+                  </section>
                   <div class="registered-stack__actions">
                     <button class="button button--primary" type="button" data-action="execute-registered-stack" disabled>Integrate crop</button>
                     <button class="button button--danger" type="button" data-action="cancel-registered-stack" hidden>Cancel</button>

@@ -27,6 +27,20 @@ export type LightFrameView = "raw" | "calibrated";
 export type RegisteredStackProductView =
   "science" | "rejection_low" | "rejection_high";
 
+export interface RejectionHistogramBin {
+  readonly rejectedCount: number;
+  readonly samples: number;
+}
+
+export interface RejectionHistogram {
+  readonly algorithmId: string;
+  readonly totalSamples: number;
+  readonly zeroSamples: number;
+  readonly rejectedSamples: number;
+  readonly maximumRejectedCount: number;
+  readonly bins: readonly RejectionHistogramBin[];
+}
+
 export type ReviewState = "undecided" | "accepted" | "rejected";
 
 export type ReviewRejectionReason =
@@ -205,6 +219,8 @@ export interface RegistrationViewModel {
     readonly sciencePreview: FramePreview | null;
     readonly selectedProduct: RegisteredStackProductView;
     readonly overlayOpacity: number;
+    readonly histogramState: "idle" | "loading" | "ready" | "error";
+    readonly histogram: RejectionHistogram | null;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
