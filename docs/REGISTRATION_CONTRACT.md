@@ -236,9 +236,12 @@ taps never spread unrelated defects. Statistics account for every output sample
 as interpolated, outside the footprint, or withheld by masked support.
 
 The current whole-image scalar implementation is the numerical oracle, not the
-final high-volume executor. A banded or tiled implementation must use global
-coordinates and pass bitwise differential tests against this oracle before it
-can replace it in production.
+final high-volume executor. The bounded executor walks top to bottom, retains at
+most the configured number of output rows, evaluates every sample in global
+reference coordinates, and has bitwise differential coverage against this
+oracle across multiple planes, partial final bands, boundary loss, masks, and
+non-finite source values. File-backed source windows and transactional FITS
+publication remain runtime responsibilities.
 
 ## Common geometric footprint and autocrop
 

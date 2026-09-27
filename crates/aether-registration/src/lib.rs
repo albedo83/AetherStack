@@ -49,8 +49,8 @@ pub use reference::{
     ReferenceSelectionError, ReferenceSelectionEvidence, select_reference,
 };
 pub use resampling::{
-    LANCZOS3_RESAMPLING_ALGORITHM_ID, ResampledImage, ResamplingError, ResamplingStatistics,
-    resample_lanczos3,
+    LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandExecutor, ResampledBand, ResampledImage,
+    ResamplingError, ResamplingStatistics, resample_lanczos3,
 };
 pub use triangles::{
     MAX_DESCRIPTOR_ANCHORS, MAX_DESCRIPTOR_NEIGHBORS, MAX_TRIANGLE_DESCRIPTORS,

@@ -118,7 +118,8 @@ optimized CPU and GPU paths must match.
 - a strict normalized `f64` Lanczos-3 registration-resampling oracle with exact
   integer-coordinate sampling, compensated weights, unclipped output,
   conservative non-zero-tap mask propagation, complete footprint accounting,
-  and synthetic constant-field and point-source flux tests, plus a bounded exact
+  synthetic constant-field and point-source flux tests, and a bounded band
+  executor proven bit-exact against the complete-image oracle, plus an exact
   common-support scan that derives the largest deterministic autocrop without
   letting isolated sensor defects shrink the geometric field;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,

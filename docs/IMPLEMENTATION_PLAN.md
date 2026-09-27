@@ -754,6 +754,14 @@ safety reasoning. They do not narrate obvious syntax.
     coverage counts, uses documented tie breakers, and reports no-overlap
     explicitly. Next, expose this crop in the registration diagnostic and build
     the bounded band executor and atomic registered-FITS transaction.
+44. Bound registered output materialization without changing the numerical
+    contract. The Lanczos-3 band executor validates its canvas once, traverses
+    top to bottom in global reference coordinates, holds no more than the chosen
+    number of output rows, aggregates exact support counts, and returns stable
+    completion. Differential tests reconstruct a multi-plane result containing
+    boundary loss, sensor flags, and a non-finite input and require bitwise pixel
+    equality plus identical masks and counters against the full-image oracle.
+    Next, connect bands to windowed FITS input and atomic registered-FITS output.
 
 ## 11. Stable-release definition
 

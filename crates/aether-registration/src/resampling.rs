@@ -56,6 +56,146 @@ pub struct ResampledImage {
     statistics: ResamplingStatistics,
 }
 
+/// One bounded, reference-aligned output band.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResampledBand {
+    reference_y: usize,
+    image: ScientificImage,
+    statistics: ResamplingStatistics,
+}
+
+impl ResampledBand {
+    /// First reference row represented by this band.
+    #[must_use]
+    pub const fn reference_y(&self) -> usize {
+        self.reference_y
+    }
+
+    /// Complete support accounting for this band only.
+    #[must_use]
+    pub const fn statistics(&self) -> ResamplingStatistics {
+        self.statistics
+    }
+
+    /// Band pixels and conservative mask, stored plane-major.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Consumes the band and returns its image storage.
+    #[must_use]
+    pub fn into_image(self) -> ScientificImage {
+        self.image
+    }
+}
+
+/// Stateful bounded-memory traversal of a complete reference canvas.
+#[derive(Debug)]
+pub struct Lanczos3BandExecutor<'a> {
+    source: &'a ScientificImage,
+    output_dimensions: Dimensions,
+    source_to_reference: AffineTransform,
+    reference_to_source: AffineTransform,
+    band_height: usize,
+    next_reference_y: usize,
+    statistics: ResamplingStatistics,
+}
+
+impl<'a> Lanczos3BandExecutor<'a> {
+    /// Validates a deterministic top-to-bottom band traversal.
+    pub fn new(
+        source: &'a ScientificImage,
+        output_width: usize,
+        output_height: usize,
+        band_height: usize,
+        source_to_reference: AffineTransform,
+    ) -> Result<Self, ResamplingError> {
+        if band_height == 0 {
+            return Err(ResamplingError::ZeroBandHeight);
+        }
+        let output_dimensions =
+            Dimensions::new(output_width, output_height, source.dimensions().planes())?;
+        let reference_to_source = source_to_reference
+            .inverse()
+            .map_err(ResamplingError::Coordinate)?;
+        Ok(Self {
+            source,
+            output_dimensions,
+            source_to_reference,
+            reference_to_source,
+            band_height,
+            next_reference_y: 0,
+            statistics: ResamplingStatistics::default(),
+        })
+    }
+
+    /// Versioned interpolation and support policy shared with the scalar oracle.
+    #[must_use]
+    pub const fn algorithm_id(&self) -> &'static str {
+        LANCZOS3_RESAMPLING_ALGORITHM_ID
+    }
+
+    /// Exact source-to-reference transform used by every band.
+    #[must_use]
+    pub const fn source_to_reference(&self) -> AffineTransform {
+        self.source_to_reference
+    }
+
+    /// Complete output dimensions, independent of the chosen band height.
+    #[must_use]
+    pub const fn output_dimensions(&self) -> Dimensions {
+        self.output_dimensions
+    }
+
+    /// Requested maximum number of output rows held by one returned band.
+    #[must_use]
+    pub const fn band_height(&self) -> usize {
+        self.band_height
+    }
+
+    /// Support accounting for all bands returned so far.
+    #[must_use]
+    pub const fn statistics(&self) -> ResamplingStatistics {
+        self.statistics
+    }
+
+    /// Returns whether every output row has been produced successfully.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.next_reference_y == self.output_dimensions.height()
+    }
+
+    /// Produces the next top-to-bottom band using global reference coordinates.
+    ///
+    /// Returned storage never exceeds `output_width * band_height * planes`.
+    /// `Ok(None)` is stable after completion, allowing simple writer loops.
+    pub fn next_band(&mut self) -> Result<Option<ResampledBand>, ResamplingError> {
+        if self.is_complete() {
+            return Ok(None);
+        }
+        let remaining = self
+            .output_dimensions
+            .height()
+            .checked_sub(self.next_reference_y)
+            .ok_or(ResamplingError::CountOverflow)?;
+        let height = remaining.min(self.band_height);
+        let band = resample_lanczos3_band(
+            self.source,
+            self.output_dimensions.width(),
+            self.next_reference_y,
+            height,
+            self.reference_to_source,
+        )?;
+        self.statistics = self.statistics.checked_add(band.statistics)?;
+        self.next_reference_y = self
+            .next_reference_y
+            .checked_add(height)
+            .ok_or(ResamplingError::CountOverflow)?;
+        Ok(Some(band))
+    }
+}
+
 impl ResampledImage {
     /// Versioned interpolation and support policy.
     #[must_use]
@@ -91,6 +231,8 @@ impl ResampledImage {
 /// Failure raised before a complete resampled image can be returned.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResamplingError {
+    /// A bounded executor must make progress by at least one row.
+    ZeroBandHeight,
     /// Output dimensions or allocation violated the shared image contract.
     Core(CoreError),
     /// Transform inversion or application failed.
@@ -104,6 +246,7 @@ pub enum ResamplingError {
 impl Display for ResamplingError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ZeroBandHeight => formatter.write_str("resampling band height must be positive"),
             Self::Core(error) => write!(formatter, "cannot construct resampled image: {error}"),
             Self::Coordinate(error) => {
                 write!(formatter, "cannot map resampling coordinate: {error}")
@@ -121,8 +264,31 @@ impl Error for ResamplingError {
         match self {
             Self::Core(error) => Some(error),
             Self::Coordinate(error) => Some(error),
-            Self::NumericalOverflow | Self::CountOverflow => None,
+            Self::ZeroBandHeight | Self::NumericalOverflow | Self::CountOverflow => None,
         }
+    }
+}
+
+impl ResamplingStatistics {
+    fn checked_add(self, other: Self) -> Result<Self, ResamplingError> {
+        Ok(Self {
+            total_samples: self
+                .total_samples
+                .checked_add(other.total_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+            interpolated_samples: self
+                .interpolated_samples
+                .checked_add(other.interpolated_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+            outside_footprint_samples: self
+                .outside_footprint_samples
+                .checked_add(other.outside_footprint_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+            masked_support_samples: self
+                .masked_support_samples
+                .checked_add(other.masked_support_samples)
+                .ok_or(ResamplingError::CountOverflow)?,
+        })
     }
 }
 
@@ -325,6 +491,115 @@ pub fn resample_lanczos3(
     Ok(ResampledImage {
         image: output,
         source_to_reference,
+        statistics,
+    })
+}
+
+fn resample_lanczos3_band(
+    source: &ScientificImage,
+    output_width: usize,
+    reference_y: usize,
+    band_height: usize,
+    reference_to_source: AffineTransform,
+) -> Result<ResampledBand, ResamplingError> {
+    let source_dimensions = source.dimensions();
+    let band_dimensions = Dimensions::new(output_width, band_height, source_dimensions.planes())?;
+    let mut output = ScientificImage::filled(band_dimensions, f64::NAN)?;
+    let band_area = output_width
+        .checked_mul(band_height)
+        .ok_or(ResamplingError::CountOverflow)?;
+    let source_area = source_dimensions
+        .width()
+        .checked_mul(source_dimensions.height())
+        .ok_or(ResamplingError::CountOverflow)?;
+    let mut statistics = ResamplingStatistics {
+        total_samples: band_dimensions.pixel_count(),
+        ..ResamplingStatistics::default()
+    };
+
+    for band_y in 0..band_height {
+        let output_y = reference_y
+            .checked_add(band_y)
+            .ok_or(ResamplingError::CountOverflow)?;
+        for output_x in 0..output_width {
+            let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
+                .map_err(ResamplingError::Coordinate)?;
+            let source_point = reference_to_source
+                .apply(reference_point)
+                .map_err(ResamplingError::Coordinate)?;
+            let x_kernel = AxisKernel::new(source_point.x(), source_dimensions.width())?;
+            let y_kernel = AxisKernel::new(source_point.y(), source_dimensions.height())?;
+            if !x_kernel.complete || !y_kernel.complete {
+                for plane in 0..source_dimensions.planes() {
+                    let output_index =
+                        linear_index(band_area, output_width, output_x, band_y, plane)?;
+                    output.mask_mut().as_mut_slice()[output_index] = PixelFlags::MISSING;
+                    statistics.outside_footprint_samples =
+                        checked_increment(statistics.outside_footprint_samples)?;
+                }
+                continue;
+            }
+
+            for plane in 0..source_dimensions.planes() {
+                let mut weighted_sum = CompensatedSum::new();
+                let mut weight_sum = CompensatedSum::new();
+                let mut combined_flags = PixelFlags::CLEAR;
+                for y_tap in y_kernel.active() {
+                    for x_tap in x_kernel.active() {
+                        let weight = x_tap.weight * y_tap.weight;
+                        if !weight.is_finite() {
+                            return Err(ResamplingError::NumericalOverflow);
+                        }
+                        let source_index = linear_index(
+                            source_area,
+                            source_dimensions.width(),
+                            x_tap.index,
+                            y_tap.index,
+                            plane,
+                        )?;
+                        let value = source.pixels()[source_index];
+                        combined_flags |= source.mask().as_slice()[source_index];
+                        if value.is_finite() {
+                            weighted_sum.add(value * weight);
+                        } else {
+                            combined_flags |= PixelFlags::INVALID;
+                        }
+                        weight_sum.add(weight);
+                    }
+                }
+                let output_index = linear_index(band_area, output_width, output_x, band_y, plane)?;
+                if !combined_flags.is_clear() {
+                    output.mask_mut().as_mut_slice()[output_index] = combined_flags;
+                    statistics.masked_support_samples =
+                        checked_increment(statistics.masked_support_samples)?;
+                    continue;
+                }
+                let denominator = weight_sum.total();
+                if !denominator.is_finite() || denominator.abs() < MINIMUM_WEIGHT_SUM {
+                    return Err(ResamplingError::NumericalOverflow);
+                }
+                let value = weighted_sum.total() / denominator;
+                if !value.is_finite() {
+                    return Err(ResamplingError::NumericalOverflow);
+                }
+                output.pixels_mut()[output_index] = canonical_zero(value);
+                statistics.interpolated_samples =
+                    checked_increment(statistics.interpolated_samples)?;
+            }
+        }
+    }
+
+    let accounted = statistics
+        .interpolated_samples
+        .checked_add(statistics.outside_footprint_samples)
+        .and_then(|value| value.checked_add(statistics.masked_support_samples))
+        .ok_or(ResamplingError::CountOverflow)?;
+    if accounted != statistics.total_samples {
+        return Err(ResamplingError::CountOverflow);
+    }
+    Ok(ResampledBand {
+        reference_y,
+        image: output,
         statistics,
     })
 }
@@ -569,6 +844,76 @@ mod tests {
         assert_eq!(result.algorithm_id(), LANCZOS3_RESAMPLING_ALGORITHM_ID);
         assert_eq!(result.source_to_reference(), AffineTransform::IDENTITY);
         assert_eq!(result.statistics().total_samples(), 16);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_bands_are_bit_exact_against_the_complete_image_oracle() -> TestResult {
+        let mut source = image(17, 15, 3)?;
+        source.mark(8, 7, 0, PixelFlags::HOT)?;
+        source.mark(9, 8, 2, PixelFlags::SATURATED)?;
+        let nonfinite_index = 2 * 17 * 15 + 6 * 17 + 5;
+        source.pixels_mut()[nonfinite_index] = f64::NAN;
+        let transform = AffineTransform::new(0.999, -0.018, 0.021, 1.002, 0.37, -0.41)?;
+        let oracle = resample_lanczos3(&source, 14, 13, transform)?;
+        let output_dimensions = Dimensions::new(14, 13, 3)?;
+        for band_height in [1, 4, 13, 32] {
+            let mut assembled = ScientificImage::filled(output_dimensions, f64::NAN)?;
+            let mut executor = Lanczos3BandExecutor::new(&source, 14, 13, band_height, transform)?;
+            let mut expected_y = 0;
+
+            while let Some(band) = executor.next_band()? {
+                assert_eq!(band.reference_y(), expected_y);
+                let band_dimensions = band.image().dimensions();
+                assert_eq!(band_dimensions.width(), 14);
+                assert!(band_dimensions.height() <= band_height);
+                expected_y += band_dimensions.height();
+                let band_area = band_dimensions.width() * band_dimensions.height();
+                let output_area = output_dimensions.width() * output_dimensions.height();
+                for plane in 0..output_dimensions.planes() {
+                    for local_y in 0..band_dimensions.height() {
+                        let source_start = plane * band_area + local_y * band_dimensions.width();
+                        let target_start = plane * output_area
+                            + (band.reference_y() + local_y) * output_dimensions.width();
+                        let source_range = source_start..source_start + band_dimensions.width();
+                        let target_range = target_start..target_start + output_dimensions.width();
+                        assembled.pixels_mut()[target_range.clone()]
+                            .copy_from_slice(&band.image().pixels()[source_range.clone()]);
+                        assembled.mask_mut().as_mut_slice()[target_range]
+                            .copy_from_slice(&band.image().mask().as_slice()[source_range]);
+                    }
+                }
+            }
+
+            assert_eq!(expected_y, output_dimensions.height());
+            assert!(executor.is_complete());
+            assert_eq!(executor.next_band()?, None);
+            assert_eq!(executor.next_band()?, None);
+            assert_eq!(executor.statistics(), oracle.statistics());
+            assert_eq!(executor.algorithm_id(), oracle.algorithm_id());
+            assert_eq!(executor.source_to_reference(), transform);
+            assert_eq!(executor.output_dimensions(), output_dimensions);
+            assert_eq!(executor.band_height(), band_height);
+            assert_eq!(assembled.mask(), oracle.image().mask());
+            for (&actual, &expected) in assembled.pixels().iter().zip(oracle.image().pixels()) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn band_executor_rejects_zero_height_and_invalid_output_dimensions() -> TestResult {
+        let source = image(4, 4, 1)?;
+
+        assert!(matches!(
+            Lanczos3BandExecutor::new(&source, 4, 4, 0, AffineTransform::IDENTITY),
+            Err(ResamplingError::ZeroBandHeight)
+        ));
+        assert!(matches!(
+            Lanczos3BandExecutor::new(&source, 0, 4, 1, AffineTransform::IDENTITY),
+            Err(ResamplingError::Core(CoreError::ZeroDimension { .. }))
+        ));
         Ok(())
     }
 }
