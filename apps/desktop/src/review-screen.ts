@@ -64,6 +64,14 @@ export function mountReviewScreen(
       root,
       '[data-action="analyze-registration"]',
     ),
+    executeRegistration: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-registration"]',
+    ),
+    cancelRegistration: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-registration"]',
+    ),
     registrationStatus: required<HTMLElement>(
       root,
       "[data-registration-status]",
@@ -114,6 +122,22 @@ export function mountReviewScreen(
     registrationPlanDigest: required<HTMLElement>(
       root,
       "[data-registration-plan-digest]",
+    ),
+    registrationExecution: required<HTMLElement>(
+      root,
+      "[data-registration-execution]",
+    ),
+    registrationExecutionMessage: required<HTMLElement>(
+      root,
+      "[data-registration-execution-message]",
+    ),
+    registrationExecutionProgress: required<HTMLProgressElement>(
+      root,
+      "[data-registration-execution-progress]",
+    ),
+    registrationExecutionOutput: required<HTMLElement>(
+      root,
+      "[data-registration-execution-output]",
     ),
     calibrationStatus: required<HTMLElement>(root, "[data-calibration-status]"),
     calibrationProducts: required<HTMLElement>(
@@ -324,6 +348,14 @@ export function mountReviewScreen(
     }
     if (action === "analyze-registration") {
       actions.onAnalyzeRegistration();
+      return;
+    }
+    if (action === "execute-registration") {
+      actions.onExecuteRegistration();
+      return;
+    }
+    if (action === "cancel-registration") {
+      actions.onCancelRegistration();
       return;
     }
     if (action === "execute-master-plan") {
@@ -605,7 +637,11 @@ export function mountReviewScreen(
     const importing = model.sessionStatus.tone === "busy";
     const masterBusy =
       model.calibration.execution.state === "running" ||
-      model.calibration.execution.state === "cancelling";
+      model.calibration.execution.state === "cancelling" ||
+      model.calibration.lightExecution.state === "running" ||
+      model.calibration.lightExecution.state === "cancelling" ||
+      model.registration.execution.state === "running" ||
+      model.registration.execution.state === "cancelling";
     const decisionBusy = model.decisionPending || importing || masterBusy;
     const decisionsAvailable = reviewCommandsAvailable(model);
     elements.framesWorkspace.hidden = model.activeWorkspace !== "frames";
@@ -1083,6 +1119,8 @@ interface RegistrationElements {
   readonly registrationReference: HTMLSelectElement;
   readonly registrationSource: HTMLSelectElement;
   readonly analyzeRegistration: HTMLButtonElement;
+  readonly executeRegistration: HTMLButtonElement;
+  readonly cancelRegistration: HTMLButtonElement;
   readonly registrationStatus: HTMLElement;
   readonly registrationRms: HTMLElement;
   readonly registrationInliers: HTMLElement;
@@ -1098,6 +1136,10 @@ interface RegistrationElements {
   readonly registrationPlanProgress: HTMLElement;
   readonly registrationPlanFrames: HTMLOListElement;
   readonly registrationPlanDigest: HTMLElement;
+  readonly registrationExecution: HTMLElement;
+  readonly registrationExecutionMessage: HTMLElement;
+  readonly registrationExecutionProgress: HTMLProgressElement;
+  readonly registrationExecutionOutput: HTMLElement;
 }
 
 function renderRegistration(
@@ -1124,8 +1166,13 @@ function renderRegistration(
   const source = registration.frames.find(
     (frame) => frame.id === registration.sourceFrameId,
   );
+  const executionBusy =
+    registration.execution.state === "running" ||
+    registration.execution.state === "cancelling";
   const running =
-    registration.state === "running" || registration.planState === "building";
+    registration.state === "running" ||
+    registration.planState === "building" ||
+    executionBusy;
   const pairReady =
     !!reference?.sourcePath &&
     !!source?.sourcePath &&
@@ -1157,6 +1204,41 @@ function renderRegistration(
   elements.registrationPlanDigest.textContent = registration.plan
     ? `SHA-256 ${registration.plan.planSha256}`
     : "The final digest appears after native reconstruction";
+  const calibratedFrames =
+    model.calibration.lightExecution.result?.calibratedFrames ?? [];
+  const artifactSetReady =
+    registration.plan !== null &&
+    registration.plan.frames.every((planned) =>
+      calibratedFrames.some(
+        (artifact) => artifact.sourceFrameId === planned.frameId,
+      ),
+    );
+  elements.executeRegistration.disabled =
+    registration.planState !== "ready" || !artifactSetReady || executionBusy;
+  elements.executeRegistration.hidden = executionBusy;
+  elements.cancelRegistration.hidden = !executionBusy;
+  elements.cancelRegistration.disabled =
+    registration.execution.state === "cancelling";
+  elements.registrationExecution.dataset.state = registration.execution.state;
+  elements.registrationExecutionMessage.textContent =
+    registration.execution.message;
+  elements.registrationExecutionOutput.textContent =
+    registration.execution.outputDirectory ??
+    (artifactSetReady
+      ? "Calibrated identity set verified"
+      : "Calibrated Light artifacts required");
+  elements.registrationExecutionOutput.title =
+    registration.execution.outputDirectory ?? "";
+  const executionProgress = registration.execution.progress;
+  if (executionProgress?.totalUnits) {
+    elements.registrationExecutionProgress.max = executionProgress.totalUnits;
+    elements.registrationExecutionProgress.value =
+      executionProgress.completedUnits;
+  } else {
+    elements.registrationExecutionProgress.removeAttribute("value");
+    elements.registrationExecutionProgress.max = 1;
+  }
+  elements.registrationExecutionProgress.hidden = !executionBusy;
   elements.registrationPlanFrames.replaceChildren(
     ...registration.frames.map((frame) => {
       const item = document.createElement("li");
@@ -1329,7 +1411,10 @@ function renderCalibration(
   const lightExecution = calibration.lightExecution;
   const lightBusy =
     lightExecution.state === "running" || lightExecution.state === "cancelling";
-  const executionBusy = masterBusy || lightBusy;
+  const registrationBusy =
+    model.registration.execution.state === "running" ||
+    model.registration.execution.state === "cancelling";
+  const executionBusy = masterBusy || lightBusy || registrationBusy;
   elements.refreshMasterPlan.disabled =
     calibration.state === "loading" ||
     !model.reviewSessionReady ||
@@ -1997,7 +2082,7 @@ function shellMarkup(): string {
             <div>
               <p class="eyebrow">Registration laboratory</p>
               <h2 id="registration-heading">Solve geometry before moving pixels</h2>
-              <p class="workspace-intro">Inspect a deterministic star-field solution, its confidence evidence and the exact common footprint. This diagnostic never writes image pixels.</p>
+              <p class="workspace-intro">Inspect a deterministic star-field solution, its confidence evidence and the exact common footprint. Geometry review never writes pixels; execution publishes only a complete sealed set.</p>
             </div>
             <div class="workspace-heading__actions">
               <span class="registration-readiness" data-registration-status role="status" aria-live="polite"></span>
@@ -2033,6 +2118,22 @@ function shellMarkup(): string {
                 </div>
                 <ol data-registration-plan-frames aria-label="Registration plan frame status"></ol>
                 <code class="registration-plan__digest" data-registration-plan-digest>The final digest appears after native reconstruction</code>
+              </section>
+              <section class="registration-execution" data-registration-execution data-state="idle" aria-labelledby="registration-execution-heading">
+                <div class="registration-execution__heading">
+                  <div>
+                    <p class="eyebrow">Atomic execution</p>
+                    <h4 id="registration-execution-heading">Register calibrated Lights</h4>
+                  </div>
+                  <span class="instrument-label">RGB / MONO</span>
+                </div>
+                <p data-registration-execution-message>Calibrate the reviewed Lights to unlock registration</p>
+                <progress data-registration-execution-progress aria-label="Registration progress" hidden></progress>
+                <code data-registration-execution-output>Calibrated Light artifacts required</code>
+                <div class="registration-execution__actions">
+                  <button class="button button--primary" type="button" data-action="execute-registration" disabled>Register all frames</button>
+                  <button class="button button--danger" type="button" data-action="cancel-registration" hidden>Cancel</button>
+                </div>
               </section>
               <div class="registration-signal" aria-hidden="true">
                 <span></span><span></span><span></span><span></span><span></span>

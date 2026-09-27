@@ -15,6 +15,8 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSelectRegistrationReference: vi.fn(),
     onSelectRegistrationSource: vi.fn(),
     onAnalyzeRegistration: vi.fn(),
+    onExecuteRegistration: vi.fn(),
+    onCancelRegistration: vi.fn(),
     onUpdateCalibrationSettings: vi.fn(),
     onUpdateLightOutputMode: vi.fn(),
     onRefreshMasterPlan: vi.fn(),
@@ -227,6 +229,7 @@ describe("frame review workspace", () => {
       solutions: [],
       planState: "idle" as const,
       plan: null,
+      execution: demoReviewModel.registration.execution,
       diagnostic: {
         schemaVersion: 2,
         profileId: "registration-v1",
@@ -314,7 +317,7 @@ describe("frame review workspace", () => {
         },
       },
     };
-    const { root, actions } = fixture(ready);
+    const { root, actions, controller } = fixture(ready);
 
     expect(
       getByRole(root, "heading", {
@@ -330,6 +333,58 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain(`SHA-256 ${"f".repeat(64)}`);
     expect(root.textContent).toContain("Reference");
     expect(root.textContent).toContain("Accepted");
+    expect(
+      getByRole(root, "button", { name: "Register all frames" }).hasAttribute(
+        "disabled",
+      ),
+    ).toBe(true);
+    controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        lightExecution: {
+          ...ready.calibration.lightExecution,
+          state: "completed",
+          result: {
+            manifestSha256: "a".repeat(64),
+            masterPlanSha256: "b".repeat(64),
+            lightPlanSha256: "c".repeat(64),
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 1_024,
+            outputMode: "calibrated_frames",
+            products: [],
+            calibratedFrames: frames.map((frame, index) => ({
+              groupId: "light-uvir",
+              sourceIndex: index,
+              sourceFrameId: frame.id,
+              sourceLabel: frame.label,
+              sourceSha256: String(index + 1).repeat(64),
+              outputPath: `/calibrated/${index}.fits`,
+              rgbOutputPath: `/rgb/${index}.fits`,
+              totalSamples: 1,
+              usableSamples: 1,
+              maskedSamples: 0,
+              nonFiniteSamples: 0,
+              minimum: 1,
+              maximum: 1,
+              mean: 1,
+              populationStandardDeviation: 0,
+              samplesWritten: 1,
+              substitutedSamples: 0,
+              bytesWritten: 2_880,
+              tilesProcessed: 1,
+              tilesReused: 0,
+            })),
+          },
+        },
+      },
+    });
+    const execute = getByRole(root, "button", {
+      name: "Register all frames",
+    });
+    expect(execute.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(execute);
+    expect(actions.onExecuteRegistration).toHaveBeenCalledOnce();
     fireEvent.click(getByRole(root, "button", { name: "Analyze geometry" }));
     expect(actions.onAnalyzeRegistration).toHaveBeenCalledOnce();
   });

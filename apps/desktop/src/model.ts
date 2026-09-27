@@ -10,6 +10,8 @@ import type {
 } from "./calibration-bridge.ts";
 import type {
   RegistrationDiagnostic,
+  RegistrationExecutionProgress,
+  RegistrationExecutionResult,
   RegistrationPlanPreview,
 } from "./registration-bridge.ts";
 
@@ -162,6 +164,13 @@ export interface RegistrationViewModel {
   readonly solutions: readonly AcceptedRegistrationSolution[];
   readonly planState: "idle" | "building" | "ready" | "error";
   readonly plan: RegistrationPlanPreview | null;
+  readonly execution: {
+    readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+    readonly outputDirectory: string | null;
+    readonly progress: RegistrationExecutionProgress | null;
+    readonly result: RegistrationExecutionResult | null;
+    readonly message: string;
+  };
   readonly message: string;
 }
 
@@ -208,6 +217,8 @@ export interface ReviewActions {
   readonly onSelectRegistrationReference: (frameId: string) => void;
   readonly onSelectRegistrationSource: (frameId: string) => void;
   readonly onAnalyzeRegistration: () => void;
+  readonly onExecuteRegistration: () => void;
+  readonly onCancelRegistration: () => void;
   readonly onUpdateCalibrationSettings: (settings: MasterPlanSettings) => void;
   readonly onUpdateLightOutputMode: (
     mode: LightExecutionSettings["outputMode"],

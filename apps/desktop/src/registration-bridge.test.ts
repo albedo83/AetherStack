@@ -1,12 +1,23 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelRegistrationPlan,
   diagnoseFitsRegistration,
+  executeRegistrationPlan,
   previewRegistrationPlan,
+  selectRegistrationOutputDirectory,
+  type RegistrationExecutionProgress,
 } from "./registration-bridge.ts";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  Channel: vi.fn(function MockChannel(this: { onmessage?: unknown }) {
+    this.onmessage = undefined;
+  }),
+}));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -51,5 +62,59 @@ describe("native registration bridge", () => {
         sourceFrameIds: ["2".repeat(64), "3".repeat(64)],
       },
     });
+  });
+
+  it("binds atomic execution to the sealed digest and artifact identities", async () => {
+    const result = { planSha256: "a".repeat(64), frames: [] };
+    vi.mocked(invoke).mockResolvedValue(result);
+    const planning = {
+      referenceFrameId: "1".repeat(64),
+      sourceFrameIds: ["2".repeat(64)],
+    };
+    const artifacts = [
+      { frameId: "1".repeat(64), path: "/linear/reference.fits" },
+      { frameId: "2".repeat(64), path: "/linear/source.fits" },
+    ];
+    const onProgress = vi.fn<(event: RegistrationExecutionProgress) => void>();
+
+    await expect(
+      executeRegistrationPlan(
+        "/registered",
+        planning,
+        "a".repeat(64),
+        artifacts,
+        { bandHeight: 128, memoryLimitBytes: 1_073_741_824 },
+        onProgress,
+      ),
+    ).resolves.toBe(result);
+
+    expect(Channel).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith("execute_registration_plan", {
+      request: {
+        planning,
+        expectedPlanSha256: "a".repeat(64),
+        artifacts,
+        outputDirectory: "/registered",
+        bandHeight: 128,
+        memoryLimitBytes: 1_073_741_824,
+      },
+      onProgress: expect.objectContaining({ onmessage: onProgress }),
+    });
+  });
+
+  it("uses native destination selection and cancellation", async () => {
+    vi.mocked(open).mockResolvedValue("/registered");
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    await expect(selectRegistrationOutputDirectory()).resolves.toBe(
+      "/registered",
+    );
+    expect(open).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Select a directory for registered Light frames",
+    });
+    await expect(cancelRegistrationPlan()).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("cancel_registration_plan");
   });
 });

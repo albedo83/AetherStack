@@ -83,7 +83,9 @@ optimized CPU and GPU paths must match.
   solver, exposes confidence metrics and the accepted full-resolution affine
   matrix, previews the analytical common crop, then asks Rust to re-resolve the
   complete imported Light set, rerun every confidence gate, and seal the
-  canonical multi-frame plan digest without trusting frontend geometry;
+  canonical multi-frame plan digest without trusting frontend geometry; the
+  reviewed digest and identity-bound calibrated RGB or mono artifacts then feed
+  one bounded, cancellable, rollback-safe all-frame publication transaction;
   separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,

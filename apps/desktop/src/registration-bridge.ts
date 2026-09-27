@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 export interface RegistrationDiagnosticRequest {
   readonly sourcePath: string;
@@ -106,6 +107,46 @@ export interface RegistrationPlanPreview {
   readonly frames: readonly RegistrationPlannedFrame[];
 }
 
+export interface RegistrationArtifactInput {
+  readonly frameId: string;
+  readonly path: string;
+}
+
+export interface RegistrationExecutionSettings {
+  readonly bandHeight: number;
+  readonly memoryLimitBytes: number;
+}
+
+export interface RegistrationExecutionProgress {
+  readonly frameIndex: number;
+  readonly frameCount: number;
+  readonly frameId: string;
+  readonly sequence: number;
+  readonly stage: string;
+  readonly state: "started" | "running" | "completed" | "cancelled" | "failed";
+  readonly completedUnits: number;
+  readonly totalUnits: number | null;
+  readonly code: string | null;
+}
+
+export interface ExecutedRegisteredFrame {
+  readonly frameId: string;
+  readonly outputPath: string;
+  readonly samplesWritten: number;
+  readonly substitutedSamples: number;
+  readonly bytesWritten: number;
+  readonly interpolatedSamples: number;
+  readonly outsideFootprintSamples: number;
+  readonly maskedSupportSamples: number;
+}
+
+export interface RegistrationExecutionResult {
+  readonly planSha256: string;
+  readonly memoryLimitBytes: number;
+  readonly peakReservedBytes: number;
+  readonly frames: readonly ExecutedRegisteredFrame[];
+}
+
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */
 export function diagnoseFitsRegistration(
   request: RegistrationDiagnosticRequest,
@@ -122,4 +163,44 @@ export function previewRegistrationPlan(
   return invoke<RegistrationPlanPreview>("preview_registration_plan", {
     request,
   });
+}
+
+/** Opens a native destination chooser for the complete registered frame set. */
+export async function selectRegistrationOutputDirectory(): Promise<
+  string | null
+> {
+  const path = await open({
+    directory: true,
+    multiple: false,
+    title: "Select a directory for registered Light frames",
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/** Executes the reviewed plan as one rollback-safe native publication transaction. */
+export function executeRegistrationPlan(
+  outputDirectory: string,
+  planning: RegistrationPlanPreviewRequest,
+  expectedPlanSha256: string,
+  artifacts: readonly RegistrationArtifactInput[],
+  settings: RegistrationExecutionSettings,
+  onProgress: (progress: RegistrationExecutionProgress) => void,
+): Promise<RegistrationExecutionResult> {
+  const progress = new Channel<RegistrationExecutionProgress>();
+  progress.onmessage = onProgress;
+  return invoke<RegistrationExecutionResult>("execute_registration_plan", {
+    request: {
+      planning,
+      expectedPlanSha256,
+      artifacts,
+      outputDirectory,
+      ...settings,
+    },
+    onProgress: progress,
+  });
+}
+
+/** Requests cooperative cancellation of the active registration transaction. */
+export function cancelRegistrationPlan(): Promise<boolean> {
+  return invoke<boolean>("cancel_registration_plan");
 }

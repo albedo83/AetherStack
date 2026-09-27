@@ -853,6 +853,19 @@ safety reasoning. They do not narrate obvious syntax.
     confidence-rejected requests fail closed. Next, bind that reviewed digest
     to the calibrated RGB artifact set and execute the existing all-or-nothing
     runtime transaction from the desktop.
+55. Execute the sealed registration plan from the desktop. The command accepts
+    the reviewed digest, stable identities, and absolute calibrated artifact
+    paths, then reconstructs the plan from the immutable manifest before any
+    output work. Every artifact is fingerprinted and bound to its embedded
+    reviewed identity; RGB color-camera products and calibrated mono products
+    share the same strict path. One native execution slot, bounded memory,
+    frame-and-band progress, cooperative cancellation, create-new publication,
+    and rollback protect the complete set. The dark Registration laboratory
+    exposes artifact readiness, destination, progress, cancellation, peak
+    memory, and completion without presenting partial products. Tests execute
+    a shifted synthetic FITS plan end to end and prove a stale digest publishes
+    nothing. Next, bind manual Review acceptance to eligible plan membership and
+    add a registered-frame Blink result view.
 
 ## 11. Stable-release definition
 

@@ -50,7 +50,10 @@ the presenter sends only stable identities: Rust resolves the immutable
 manifest, reruns every diagnostic and confidence gate, builds the canonical
 all-frame geometry, and returns a visible sealed digest and common crop. The
 desktop never treats frontend matrices as scientific evidence. Registered
-pixels are not yet published, and the surface says so explicitly.
+pixels are enabled only when every sealed identity has a calibrated artifact.
+The execution panel shows destination, frame-and-band progress, cancellation,
+peak memory, and the final complete product count. A shared native execution
+slot prevents calibration and registration memory budgets from multiplying.
 
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch

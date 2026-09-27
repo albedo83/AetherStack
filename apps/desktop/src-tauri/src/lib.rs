@@ -41,8 +41,10 @@ use aether_review::{
 };
 use aether_runtime::{
     CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
-    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, ProgressState,
-    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan, run_master_plan,
+    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget, PipelineSource,
+    ProgressState, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
+    RegistrationPlanSource, run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
+    run_master_plan, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -51,7 +53,8 @@ use aether_session::{
     LightMasterCandidateCompatibility, LightMasterKind, LightMasterMatchField,
     LightMasterMismatchReason, ManifestFile, ManifestGroup, MasterPlan, MasterPlanOptions,
     MasterProductKind, PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason,
-    PedestalSourceKind, SessionManifest, TemperatureBasis, generate_manifest_from_directory,
+    PedestalSourceKind, SessionManifest, TemperatureBasis, fingerprint_reader,
+    generate_manifest_from_directory,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Response;
@@ -121,7 +124,7 @@ struct RegistrationDiagnosticRequest {
     reference_path: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegistrationPlanPreviewRequest {
     reference_frame_id: String,
@@ -158,6 +161,60 @@ struct RegistrationCropResponse {
     y: usize,
     width: usize,
     height: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistrationArtifactInput {
+    frame_id: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistrationPlanExecutionCommandRequest {
+    planning: RegistrationPlanPreviewRequest,
+    expected_plan_sha256: String,
+    artifacts: Vec<RegistrationArtifactInput>,
+    output_directory: PathBuf,
+    band_height: usize,
+    memory_limit_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistrationExecutionProgress {
+    frame_index: usize,
+    frame_count: usize,
+    frame_id: String,
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistrationPlanExecutionResponse {
+    plan_sha256: String,
+    memory_limit_bytes: usize,
+    peak_reserved_bytes: usize,
+    frames: Vec<ExecutedRegisteredFrame>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutedRegisteredFrame {
+    frame_id: String,
+    output_path: String,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    interpolated_samples: usize,
+    outside_footprint_samples: usize,
+    masked_support_samples: usize,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -832,6 +889,48 @@ async fn preview_registration_plan(
         })?
 }
 
+#[tauri::command]
+async fn execute_registration_plan(
+    request: RegistrationPlanExecutionCommandRequest,
+    on_progress: tauri::ipc::Channel<RegistrationExecutionProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<RegistrationPlanExecutionResponse, PreviewCommandError> {
+    if !request.output_directory.is_absolute()
+        || request
+            .artifacts
+            .iter()
+            .any(|artifact| !artifact.path.is_absolute())
+    {
+        return Err(registration_execution_configuration_error());
+    }
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_registration_plan_sync(&session, request, &worker_cancellation, |event| {
+            let _ignored = on_progress.send(event);
+        })
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "registration_execution_interrupted",
+            "The registration worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_registration_plan(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "registration_execution_missing")
+}
+
 #[derive(Debug)]
 struct RegistrationNativeSource {
     path: PathBuf,
@@ -843,16 +942,25 @@ fn preview_registration_plan_sync(
     session: &ImportedNativeSession,
     request: RegistrationPlanPreviewRequest,
 ) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
+    let plan = build_registration_plan_sync(session, &request)?;
+    registration_plan_response(&plan)
+}
+
+fn build_registration_plan_sync(
+    session: &ImportedNativeSession,
+    request: &RegistrationPlanPreviewRequest,
+) -> Result<RegistrationPlan, PreviewCommandError> {
     let sources = registration_native_sources(session)?;
-    let reference_id =
-        FrameId::new(request.reference_frame_id).map_err(|_| registration_plan_input_error())?;
+    let reference_id = FrameId::new(request.reference_frame_id.clone())
+        .map_err(|_| registration_plan_input_error())?;
     let reference = sources
         .get(&reference_id)
         .ok_or_else(registration_plan_input_error)?;
     let requested_count = request.source_frame_ids.len();
     let requested_ids = request
         .source_frame_ids
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|value| FrameId::new(value).map_err(|_| registration_plan_input_error()))
         .collect::<Result<BTreeSet<_>, _>>()?;
     let expected_ids = sources
@@ -898,13 +1006,18 @@ fn preview_registration_plan_sync(
             transform,
         ));
     }
-    let plan = RegistrationPlan::new(
+    RegistrationPlan::new(
         reference_id.clone(),
         reference.width,
         reference.height,
         planned,
     )
-    .map_err(|_| registration_plan_geometry_error())?;
+    .map_err(|_| registration_plan_geometry_error())
+}
+
+fn registration_plan_response(
+    plan: &RegistrationPlan,
+) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
     let crop = plan
         .common_footprint()
         .crop()
@@ -923,7 +1036,7 @@ fn preview_registration_plan_sync(
     Ok(RegistrationPlanPreviewResponse {
         schema_version: 1,
         plan_sha256: plan.plan_sha256().to_owned(),
-        reference_frame_id: reference_id.as_str().to_owned(),
+        reference_frame_id: plan.reference_frame_id().as_str().to_owned(),
         reference_width: plan.reference_width(),
         reference_height: plan.reference_height(),
         covered_pixels: plan.common_footprint().covered_pixels(),
@@ -933,6 +1046,134 @@ fn preview_registration_plan_sync(
             width: crop.width(),
             height: crop.height(),
         },
+        frames,
+    })
+}
+
+fn execute_registration_plan_sync<F>(
+    session: &ImportedNativeSession,
+    request: RegistrationPlanExecutionCommandRequest,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<RegistrationPlanExecutionResponse, PreviewCommandError>
+where
+    F: FnMut(RegistrationExecutionProgress),
+{
+    if !session.root.is_absolute()
+        || !request.output_directory.is_absolute()
+        || request.band_height == 0
+    {
+        return Err(registration_execution_configuration_error());
+    }
+    request.output_directory.to_str().ok_or_else(|| {
+        PreviewCommandError::new(
+            "registration_output_path_not_unicode",
+            "The registration output directory cannot be represented as Unicode.",
+        )
+    })?;
+    let plan = build_registration_plan_sync(session, &request.planning)?;
+    if plan.plan_sha256() != request.expected_plan_sha256 {
+        return Err(PreviewCommandError::new(
+            "registration_plan_stale",
+            "The reviewed registration digest no longer matches native evidence.",
+        ));
+    }
+    if request.artifacts.len() != plan.frames().len() {
+        return Err(registration_artifact_set_error());
+    }
+    let mut artifacts = BTreeMap::new();
+    for artifact in request.artifacts {
+        if !artifact.path.is_absolute() {
+            return Err(registration_execution_configuration_error());
+        }
+        let frame_id =
+            FrameId::new(artifact.frame_id).map_err(|_| registration_artifact_set_error())?;
+        if artifacts.insert(frame_id, artifact.path).is_some() {
+            return Err(registration_artifact_set_error());
+        }
+    }
+    let expected_ids = plan
+        .frames()
+        .iter()
+        .map(|frame| frame.frame_id().clone())
+        .collect::<BTreeSet<_>>();
+    if artifacts.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
+        return Err(registration_artifact_set_error());
+    }
+
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| registration_execution_configuration_error())?;
+    let memory = MemoryBudget::new(memory_limit)
+        .map_err(|_| registration_execution_configuration_error())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(artifacts.len())
+        .map_err(|_| registration_execution_allocation_error())?;
+    for (frame_id, path) in artifacts {
+        let mut input = File::open(&path).map_err(|_| registration_artifact_error())?;
+        let fingerprint =
+            fingerprint_reader(&mut input).map_err(|_| registration_artifact_error())?;
+        sources.push(RegistrationPlanSource::from_reviewed_artifact(
+            PipelineSource::new(path, fingerprint),
+            frame_id,
+        ));
+    }
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| registration_artifact_error())?;
+    let execution = RegistrationPlanExecutionRequest::new(
+        plan,
+        sources,
+        request.output_directory,
+        manifest_sha256,
+        "registration-all-lights",
+    )
+    .and_then(|value| value.with_band_height(request.band_height))
+    .map_err(registration_execution_error)?;
+    let result = run_registration_plan(&execution, cancellation, &memory, |event| {
+        let stage = event.stage();
+        progress(RegistrationExecutionProgress {
+            frame_index: event.frame_index(),
+            frame_count: event.frame_count(),
+            frame_id: event.frame_id().as_str().to_owned(),
+            sequence: stage.sequence(),
+            stage: stage.stage().as_str().to_owned(),
+            state: progress_state_name(stage.state()),
+            completed_units: stage.completed_units(),
+            total_units: stage.total_units(),
+            code: stage.code().map(str::to_owned),
+        });
+    })
+    .map_err(registration_execution_error)?;
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(result.frames().len())
+        .map_err(|_| registration_execution_allocation_error())?;
+    for frame in result.frames() {
+        let output_path = frame.output().to_str().map(str::to_owned).ok_or_else(|| {
+            PreviewCommandError::new(
+                "registration_output_path_not_unicode",
+                "A registered output path cannot be represented as Unicode.",
+            )
+        })?;
+        let write = frame.summary();
+        let statistics = frame.statistics();
+        frames.push(ExecutedRegisteredFrame {
+            frame_id: frame.frame_id().as_str().to_owned(),
+            output_path,
+            samples_written: write.samples_written(),
+            substituted_samples: write.substituted_samples(),
+            bytes_written: write.bytes_written(),
+            interpolated_samples: statistics.interpolated_samples(),
+            outside_footprint_samples: statistics.outside_footprint_samples(),
+            masked_support_samples: statistics.masked_support_samples(),
+        });
+    }
+    Ok(RegistrationPlanExecutionResponse {
+        plan_sha256: result.plan_sha256().to_owned(),
+        memory_limit_bytes: memory.limit(),
+        peak_reserved_bytes: result.peak_reserved_bytes(),
         frames,
     })
 }
@@ -1017,6 +1258,67 @@ const fn registration_plan_geometry_error() -> PreviewCommandError {
         "registration_plan_geometry_invalid",
         "The accepted transforms do not form a valid common registration plan.",
     )
+}
+
+const fn registration_execution_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_execution_configuration_invalid",
+        "Registration execution requires absolute paths and positive bounded resources.",
+    )
+}
+
+const fn registration_artifact_set_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_artifact_set_invalid",
+        "The calibrated artifact identities do not match the sealed registration plan.",
+    )
+}
+
+const fn registration_artifact_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_artifact_invalid",
+        "A calibrated registration artifact could not be opened or fingerprinted.",
+    )
+}
+
+const fn registration_execution_allocation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_execution_allocation_failed",
+        "Registration could not reserve its bounded transaction bookkeeping.",
+    )
+}
+
+fn registration_execution_error(error: RegistrationPlanExecutionError) -> PreviewCommandError {
+    match error {
+        RegistrationPlanExecutionError::Cancelled(_) => PreviewCommandError::new(
+            "registration_execution_cancelled",
+            "Registration was cancelled before the complete frame set was published.",
+        ),
+        RegistrationPlanExecutionError::DestinationExists(_) => PreviewCommandError::new(
+            "registration_destination_exists",
+            "A registered destination already exists; no output was replaced.",
+        ),
+        RegistrationPlanExecutionError::InvalidSourceIdentity
+        | RegistrationPlanExecutionError::SourceSetMismatch => registration_artifact_set_error(),
+        RegistrationPlanExecutionError::InvalidOutputDirectory => {
+            registration_execution_configuration_error()
+        }
+        RegistrationPlanExecutionError::AllocationFailed => {
+            registration_execution_allocation_error()
+        }
+        RegistrationPlanExecutionError::Provenance(_)
+        | RegistrationPlanExecutionError::FramePipeline { .. } => PreviewCommandError::new(
+            "registration_execution_failed",
+            "A registered frame failed native validation; the complete set remains unpublished.",
+        ),
+        RegistrationPlanExecutionError::CreateStagingDirectory(_)
+        | RegistrationPlanExecutionError::PublishProduct { .. }
+        | RegistrationPlanExecutionError::SyncOutputDirectory(_)
+        | RegistrationPlanExecutionError::RollbackPublication { .. } => PreviewCommandError::new(
+            "registration_publication_failed",
+            "The registered frame set could not be published as one atomic transaction.",
+        ),
+    }
 }
 
 fn validate_runtime_source_path(path: &Path) -> Result<(), PreviewCommandError> {
@@ -3267,10 +3569,12 @@ pub fn run() -> Result<(), tauri::Error> {
             apply_review_decision,
             cancel_light_plan,
             cancel_master_plan,
+            cancel_registration_plan,
             diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_light_plan,
             execute_master_plan,
+            execute_registration_plan,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
@@ -3293,7 +3597,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use aether_core::{Dimensions, ScientificImage};
-    use aether_fits::write_f64_primary;
+    use aether_fits::{
+        FitsOutputProvenance, write_f64_primary, write_f64_primary_atomic_new_with_provenance,
+    };
     use aether_metadata::{Binning, CameraModel, CanonicalMetadata, CanonicalValue, Confidence};
     use aether_session::{ManifestGroup, StrictGroupingKey, classify_frame, fingerprint_reader};
 
@@ -3566,6 +3872,48 @@ mod tests {
         })
     }
 
+    fn registration_execution_request(
+        session: &ImportedNativeSession,
+        artifact_directory: &Path,
+        output_directory: PathBuf,
+    ) -> TestResult<RegistrationPlanExecutionCommandRequest> {
+        fs::create_dir(artifact_directory)?;
+        fs::create_dir(&output_directory)?;
+        let sources = registration_native_sources(session)?;
+        let mut frame_ids = sources.keys();
+        let reference = frame_ids.next().ok_or("reference Light missing")?.clone();
+        let source = frame_ids.next().ok_or("source Light missing")?.clone();
+        let planning = RegistrationPlanPreviewRequest {
+            reference_frame_id: reference.as_str().to_owned(),
+            source_frame_ids: vec![source.as_str().to_owned()],
+        };
+        let plan = build_registration_plan_sync(session, &planning)?;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(256, 256, 3)?,
+            vec![1_000.0; 256 * 256 * 3],
+        )?;
+        let mut artifacts = Vec::new();
+        for (index, frame_id) in [reference, source].into_iter().enumerate() {
+            let path = artifact_directory.join(format!("linear-{index}.fits"));
+            let provenance =
+                FitsOutputProvenance::new("a".repeat(64), "light-uvir", "linear-rgb-v1", 1)?
+                    .with_frame_id_sha256(frame_id.as_str())?;
+            write_f64_primary_atomic_new_with_provenance(&path, &image, &provenance)?;
+            artifacts.push(RegistrationArtifactInput {
+                frame_id: frame_id.as_str().to_owned(),
+                path,
+            });
+        }
+        Ok(RegistrationPlanExecutionCommandRequest {
+            planning,
+            expected_plan_sha256: plan.plan_sha256().to_owned(),
+            artifacts,
+            output_directory,
+            band_height: 32,
+            memory_limit_bytes: 16 * 1_024 * 1_024,
+        })
+    }
+
     fn master_execution_request(
         session: &ImportedNativeSession,
         output_directory: PathBuf,
@@ -3791,6 +4139,84 @@ mod tests {
             .ok_or("an incomplete or duplicate Light identity set was accepted")?;
             assert_eq!(error.code, "registration_plan_input_invalid");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn executes_the_sealed_registration_plan_as_one_artifact_transaction() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let output_root = directory.path().join("registered");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let request =
+            registration_execution_request(&session, &artifact_root, output_root.clone())?;
+        let expected_digest = request.expected_plan_sha256.clone();
+        let mut progress = Vec::new();
+
+        let result = execute_registration_plan_sync(
+            &session,
+            request,
+            &CancellationToken::new(),
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.plan_sha256, expected_digest);
+        assert_eq!(result.frames.len(), 2);
+        assert!(result.peak_reserved_bytes > 0);
+        assert!(result.peak_reserved_bytes <= result.memory_limit_bytes);
+        assert!(result.frames.iter().all(|frame| {
+            Path::new(&frame.output_path).is_file()
+                && frame.samples_written == 256 * 256 * 3
+                && frame.bytes_written > 0
+        }));
+        assert!(progress.iter().all(|event| event.frame_count == 2));
+        assert_eq!(fs::read_dir(output_root)?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_registration_digest_publishes_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let output_root = directory.path().join("registered");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let mut request =
+            registration_execution_request(&session, &artifact_root, output_root.clone())?;
+        request.expected_plan_sha256 = "0".repeat(64);
+
+        let error =
+            execute_registration_plan_sync(&session, request, &CancellationToken::new(), |_| {})
+                .err()
+                .ok_or("a stale registration digest was executed")?;
+
+        assert_eq!(error.code, "registration_plan_stale");
+        assert_eq!(fs::read_dir(output_root)?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_desktop_registration_publishes_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let output_root = directory.path().join("registered");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let request =
+            registration_execution_request(&session, &artifact_root, output_root.clone())?;
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+
+        let error = execute_registration_plan_sync(&session, request, &cancellation, |_| {})
+            .err()
+            .ok_or("cancelled desktop registration succeeded")?;
+
+        assert_eq!(error.code, "registration_execution_cancelled");
+        assert_eq!(fs::read_dir(output_root)?.count(), 0);
         Ok(())
     }
 

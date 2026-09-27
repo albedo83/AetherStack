@@ -55,6 +55,13 @@ export const demoReviewModel: ReviewViewModel = {
     solutions: [],
     planState: "idle",
     plan: null,
+    execution: {
+      state: "idle",
+      outputDirectory: null,
+      progress: null,
+      result: null,
+      message: "Calibrate the reviewed Lights to unlock registration",
+    },
     message: "Import a session to solve a Light frame pair",
   },
   calibration: {

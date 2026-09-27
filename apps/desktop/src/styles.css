@@ -606,6 +606,70 @@ button:active:not(:disabled) {
   border-top: 1px solid #273342;
 }
 
+.registration-execution {
+  display: grid;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 13px;
+  background: linear-gradient(145deg, #121b25, #090e14);
+  border: 1px solid #344253;
+  border-radius: var(--radius-md);
+  box-shadow:
+    inset 0 1px #ffffff10,
+    inset 0 -4px 12px #0008;
+}
+
+.registration-execution__heading,
+.registration-execution__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.registration-execution h4,
+.registration-execution p {
+  margin: 0;
+}
+
+.registration-execution h4 {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.registration-execution p {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.registration-execution progress {
+  width: 100%;
+}
+
+.registration-execution code {
+  overflow: hidden;
+  color: #7f92a8;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registration-execution__actions .button {
+  flex: 1;
+}
+
+.registration-execution[data-state="completed"] {
+  border-color: #34735a;
+  box-shadow:
+    inset 0 1px #84efb31c,
+    0 0 18px #39d98a0c;
+}
+
+.registration-execution[data-state="error"] {
+  border-color: #78404a;
+}
+
 .registration-signal {
   display: flex;
   align-items: end;

@@ -336,8 +336,12 @@ to Rust. The native plan-preview command resolves the complete Light set from
 the immutable imported manifest, reruns every pair diagnostic and confidence
 gate, constructs `registration-plan-v1`, and returns its digest and all-frame
 crop. It never accepts transforms, dimensions, coverage, or crop values from
-the web presenter. The UI remains execution-safe: it seals and reviews the
-plan, but does not yet publish registered pixels.
+the web presenter. Execution then requires one calibrated artifact for every
+sealed identity and the exact reviewed digest. Rust reconstructs the plan again,
+fingerprints each artifact, verifies its embedded review identity, and runs the
+complete rollback-safe publication transaction under one bounded memory budget.
+The UI streams frame-and-band progress and offers cooperative cancellation; it
+never presents a partially published set.
 
 The geometry core also provides `registration-plan-v1`, the immutable boundary
 for that future orchestration. It requires at least two unique reviewed frame

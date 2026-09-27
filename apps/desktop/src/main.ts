@@ -46,8 +46,12 @@ import {
   type FrameQualityResult,
 } from "./quality-bridge.ts";
 import {
+  cancelRegistrationPlan,
   diagnoseFitsRegistration,
+  executeRegistrationPlan,
   previewRegistrationPlan,
+  selectRegistrationOutputDirectory,
+  type RegistrationExecutionProgress,
 } from "./registration-bridge.ts";
 import { reconcileRegistrationSolutions } from "./registration-plan.ts";
 import { runSerialBatch } from "./quality-batch.ts";
@@ -113,6 +117,7 @@ let masterPlanTicket = 0;
 let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
 let registrationTicket = 0;
+let registrationExecutionTicket = 0;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -126,6 +131,12 @@ const screen = mountReviewScreen(root, model, {
   },
   onAnalyzeRegistration() {
     void analyzeRegistration();
+  },
+  onExecuteRegistration() {
+    void executeRegistration();
+  },
+  onCancelRegistration() {
+    void cancelRegistration();
   },
   onUpdateCalibrationSettings(settings) {
     updateCalibrationSettings(settings);
@@ -213,7 +224,8 @@ async function importSession(): Promise<void> {
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
-    isActiveExecutionState(model.calibration.lightExecution.state)
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isActiveExecutionState(model.registration.execution.state)
   ) {
     return;
   }
@@ -258,7 +270,10 @@ function installImportedSession(session: ImportedSession): void {
   decisionCache.clear();
   masterPlanTicket += 1;
   masterExecutionTicket += 1;
+  lightExecutionTicket += 1;
+  registrationExecutionTicket += 1;
   registrationTicket += 1;
+  registrationExecutionTicket += 1;
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -317,6 +332,13 @@ function installImportedSession(session: ImportedSession): void {
       solutions: [],
       planState: "idle",
       plan: null,
+      execution: {
+        state: "idle",
+        outputDirectory: null,
+        progress: null,
+        result: null,
+        message: "Export calibrated Lights to unlock registration",
+      },
       message:
         registrationFrames.length >= 2
           ? "Choose a Light pair, then run the native geometric solver"
@@ -376,6 +398,10 @@ function selectRegistrationFrame(
       solutions: role === "reference" ? [] : model.registration.solutions,
       planState: role === "reference" ? "idle" : model.registration.planState,
       plan: role === "reference" ? null : model.registration.plan,
+      execution:
+        role === "reference"
+          ? idleRegistrationExecution("Reference changed · rebuild the plan")
+          : model.registration.execution,
       message: "Pair changed · run the native geometric solver",
     },
   });
@@ -408,6 +434,9 @@ async function analyzeRegistration(): Promise<void> {
       diagnostic: null,
       planState: "idle",
       plan: null,
+      execution: idleRegistrationExecution(
+        "Geometry changed · reseal before registration",
+      ),
       message: "Detecting stars and testing deterministic geometry…",
     },
   });
@@ -534,17 +563,202 @@ async function rebuildRegistrationPlan(
   }
 }
 
+function idleRegistrationExecution(
+  message: string,
+): ReviewViewModel["registration"]["execution"] {
+  return {
+    state: "idle",
+    outputDirectory: null,
+    progress: null,
+    result: null,
+    message,
+  };
+}
+
+async function executeRegistration(): Promise<void> {
+  const plan = model.registration.plan;
+  const calibration = model.calibration.lightExecution.result;
+  const execution = model.registration.execution;
+  if (
+    model.registration.planState !== "ready" ||
+    !plan ||
+    !calibration ||
+    calibration.outputMode !== "calibrated_frames" ||
+    execution.state === "running" ||
+    execution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.execution.state) ||
+    isActiveExecutionState(model.calibration.lightExecution.state)
+  ) {
+    return;
+  }
+  const artifacts = plan.frames.map((planned) => {
+    const calibrated = calibration.calibratedFrames.find(
+      (frame) => frame.sourceFrameId === planned.frameId,
+    );
+    return calibrated
+      ? {
+          frameId: planned.frameId,
+          path: calibrated.rgbOutputPath ?? calibrated.outputPath,
+        }
+      : null;
+  });
+  if (artifacts.some((artifact) => artifact === null)) {
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        execution: {
+          ...execution,
+          state: "error",
+          message:
+            "The calibrated artifact set does not match every sealed Light identity",
+        },
+      },
+    });
+    return;
+  }
+  const selectedPlanDigest = plan.planSha256;
+  const outputDirectory = await selectRegistrationOutputDirectory();
+  if (
+    !outputDirectory ||
+    model.registration.plan?.planSha256 !== selectedPlanDigest
+  ) {
+    return;
+  }
+  const ticket = ++registrationExecutionTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      execution: {
+        state: "running",
+        outputDirectory,
+        progress: null,
+        result: null,
+        message: "Preparing the atomic registered-frame transaction…",
+      },
+    },
+  });
+  const onProgress = (progress: RegistrationExecutionProgress): void => {
+    if (ticket !== registrationExecutionTicket) return;
+    const state = model.registration.execution.state;
+    if (state !== "running" && state !== "cancelling") return;
+    const units = progress.totalUnits
+      ? ` · ${progress.completedUnits}/${progress.totalUnits}`
+      : "";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        execution: {
+          ...model.registration.execution,
+          state,
+          progress,
+          message: `Frame ${progress.frameIndex + 1}/${progress.frameCount} · ${progress.stage}${units}`,
+        },
+      },
+    });
+  };
+  try {
+    const result = await executeRegistrationPlan(
+      outputDirectory,
+      {
+        referenceFrameId: plan.referenceFrameId,
+        sourceFrameIds: plan.frames
+          .filter((frame) => !frame.reference)
+          .map((frame) => frame.frameId),
+      },
+      plan.planSha256,
+      artifacts.filter((artifact) => artifact !== null),
+      {
+        bandHeight: 128,
+        memoryLimitBytes: model.calibration.lightSettings.memoryLimitBytes,
+      },
+      onProgress,
+    );
+    if (ticket !== registrationExecutionTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        execution: {
+          state: "completed",
+          outputDirectory,
+          progress: model.registration.execution.progress,
+          result,
+          message: `${result.frames.length} registered frames published atomically · peak ${formatMemory(result.peakReservedBytes)}`,
+        },
+      },
+    });
+  } catch (error) {
+    if (ticket !== registrationExecutionTicket) return;
+    const cancelled =
+      nativeErrorCode(error) === "registration_execution_cancelled";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        execution: {
+          ...model.registration.execution,
+          state: cancelled ? "idle" : "error",
+          result: null,
+          message: cancelled
+            ? "Registration cancelled · no partial frame set published"
+            : "Registration failed safely · no existing output was modified",
+        },
+      },
+    });
+  }
+}
+
+async function cancelRegistration(): Promise<void> {
+  if (model.registration.execution.state !== "running") return;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      execution: {
+        ...model.registration.execution,
+        state: "cancelling",
+        message: "Cancellation requested · finishing the current bounded band…",
+      },
+    },
+  });
+  try {
+    await cancelRegistrationPlan();
+  } catch {
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        execution: {
+          ...model.registration.execution,
+          state: "error",
+          message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
 function updateCalibrationSettings(settings: MasterPlanSettings): void {
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
-    model.calibration.lightExecution.state === "cancelling"
+    model.calibration.lightExecution.state === "cancelling" ||
+    isActiveExecutionState(model.registration.execution.state)
   ) {
     return;
   }
   update({
     ...model,
+    registration: {
+      ...model.registration,
+      execution: idleRegistrationExecution(
+        "Calibration changed · export fresh Light artifacts",
+      ),
+    },
     calibration: {
       ...model.calibration,
       settings,
@@ -581,7 +795,8 @@ async function executeMasters(): Promise<void> {
     execution.state === "running" ||
     execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
-    model.calibration.lightExecution.state === "cancelling"
+    model.calibration.lightExecution.state === "cancelling" ||
+    isActiveExecutionState(model.registration.execution.state)
   ) {
     return;
   }
@@ -597,7 +812,8 @@ async function executeMasters(): Promise<void> {
     model.calibration.plan?.planSha256 !== selectedPlanSha256 ||
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
-    isActiveExecutionState(model.calibration.lightExecution.state)
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isActiveExecutionState(model.registration.execution.state)
   ) {
     return;
   }
@@ -726,7 +942,8 @@ async function executeLights(): Promise<void> {
     execution.state === "running" ||
     execution.state === "cancelling" ||
     model.calibration.execution.state === "running" ||
-    model.calibration.execution.state === "cancelling"
+    model.calibration.execution.state === "cancelling" ||
+    isActiveExecutionState(model.registration.execution.state)
   ) {
     return;
   }
@@ -739,7 +956,8 @@ async function executeLights(): Promise<void> {
   if (
     importedSession !== selectedSession ||
     model.calibration.plan?.planSha256 !== selectedMasterPlanSha256 ||
-    model.calibration.plan?.lightPlan?.planSha256 !== selectedLightPlanSha256
+    model.calibration.plan?.lightPlan?.planSha256 !== selectedLightPlanSha256 ||
+    isActiveExecutionState(model.registration.execution.state)
   ) {
     return;
   }
@@ -762,6 +980,12 @@ async function executeLights(): Promise<void> {
   }
   update({
     ...model,
+    registration: {
+      ...model.registration,
+      execution: idleRegistrationExecution(
+        "Light calibration is running · wait for the complete artifact set",
+      ),
+    },
     lightFrameView: leavingCalibratedView ? "raw" : model.lightFrameView,
     frames: rawFrames,
     selectedFrameId: leavingCalibratedView
@@ -1632,6 +1856,9 @@ function disposeRuntimeResources(): void {
     model.calibration.lightExecution.state === "cancelling"
   ) {
     void cancelLightPlan();
+  }
+  if (isActiveExecutionState(model.registration.execution.state)) {
+    void cancelRegistrationPlan();
   }
   stopBlinkTimer();
   clearPreviewResources();
