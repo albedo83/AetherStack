@@ -10,6 +10,9 @@ use std::fmt::{Display, Formatter};
 
 use aether_core::{CompensatedSum, CoreError, Dimensions, PixelFlags, ScientificImage};
 
+/// Plane-major low/high count map emitted from percentile support evidence.
+pub const PERCENTILE_REJECTION_MAP_ALGORITHM_ID: &str = "percentile-rejection-map-v1";
+
 /// Per-pixel accounting for one mean integration.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PixelSupport {
@@ -176,6 +179,74 @@ impl PercentileClippedIntegration {
     }
 }
 
+/// Exact low/high rejection-count images in original planar order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PercentileRejectionMaps {
+    low: ScientificImage,
+    high: ScientificImage,
+}
+
+impl PercentileRejectionMaps {
+    /// Counts rejected from the low sorted tail.
+    #[must_use]
+    pub const fn low(&self) -> &ScientificImage {
+        &self.low
+    }
+
+    /// Counts rejected from the high sorted tail.
+    #[must_use]
+    pub const fn high(&self) -> &ScientificImage {
+        &self.high
+    }
+
+    /// Consumes both exact count maps.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, ScientificImage) {
+        (self.low, self.high)
+    }
+}
+
+/// Materializes exact low/high rejection counts as two scientific images.
+///
+/// Each result keeps the source dimensions and planar order. Every `u32` count
+/// is exactly representable as binary64 and every output mask is clear. Masked
+/// and non-finite exclusions remain in the support records and are deliberately
+/// not mislabeled as statistical rejects.
+///
+/// # Errors
+///
+/// Returns an error when the support length differs from the source sample
+/// count.
+pub fn materialize_percentile_rejection_map(
+    source_dimensions: Dimensions,
+    support: &[ClippedPixelSupport],
+) -> Result<PercentileRejectionMaps, IntegrationError> {
+    if support.len() != source_dimensions.pixel_count() {
+        return Err(IntegrationError::SupportLengthMismatch {
+            expected: source_dimensions.pixel_count(),
+            actual: support.len(),
+        });
+    }
+    let mut low = Vec::new();
+    low.try_reserve_exact(source_dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: source_dimensions.pixel_count(),
+        })?;
+    low.extend(support.iter().map(|entry| f64::from(entry.low_rejected)));
+    let mut high = Vec::new();
+    high.try_reserve_exact(source_dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: source_dimensions.pixel_count(),
+        })?;
+    high.extend(support.iter().map(|entry| f64::from(entry.high_rejected)));
+    Ok(PercentileRejectionMaps {
+        low: ScientificImage::from_pixels(source_dimensions, low)
+            .map_err(IntegrationError::Core)?,
+        high: ScientificImage::from_pixels(source_dimensions, high)
+            .map_err(IntegrationError::Core)?,
+    })
+}
+
 /// Inclusive origin and exclusive extent for strict spatial integration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IntegrationRegion {
@@ -318,6 +389,13 @@ pub enum IntegrationError {
         /// Maximum samples retained for one output pixel.
         elements: usize,
     },
+    /// A support slice does not describe every source sample exactly once.
+    SupportLengthMismatch {
+        /// Required support record count.
+        expected: usize,
+        /// Supplied support record count.
+        actual: usize,
+    },
     /// Output image allocation or construction failed.
     Core(CoreError),
 }
@@ -382,6 +460,10 @@ impl Display for IntegrationError {
                 formatter,
                 "cannot reserve memory for {elements} finite samples"
             ),
+            Self::SupportLengthMismatch { expected, actual } => write!(
+                formatter,
+                "rejection-map support has {actual} records; expected {expected}"
+            ),
             Self::Core(error) => Display::fmt(error, formatter),
         }
     }
@@ -400,7 +482,8 @@ impl Error for IntegrationError {
             | Self::InternalImageInvariant { .. }
             | Self::InternalAccountingInvariant { .. }
             | Self::SupportAllocationFailed { .. }
-            | Self::SampleAllocationFailed { .. } => None,
+            | Self::SampleAllocationFailed { .. }
+            | Self::SupportLengthMismatch { .. } => None,
         }
     }
 }
@@ -957,6 +1040,62 @@ mod tests {
                 Err(IntegrationError::InvalidPercentileParameters)
             );
         }
+    }
+
+    #[test]
+    fn materializes_exact_low_then_high_rejection_planes() -> TestResult {
+        let dimensions = Dimensions::new(2, 1, 2)?;
+        let support = [
+            ClippedPixelSupport {
+                low_rejected: 1,
+                high_rejected: 5,
+                ..ClippedPixelSupport::default()
+            },
+            ClippedPixelSupport {
+                low_rejected: 2,
+                high_rejected: 6,
+                ..ClippedPixelSupport::default()
+            },
+            ClippedPixelSupport {
+                low_rejected: 3,
+                high_rejected: 7,
+                ..ClippedPixelSupport::default()
+            },
+            ClippedPixelSupport {
+                low_rejected: 4,
+                high_rejected: 8,
+                ..ClippedPixelSupport::default()
+            },
+        ];
+
+        let maps = materialize_percentile_rejection_map(dimensions, &support)?;
+
+        assert_eq!(maps.low().dimensions(), dimensions);
+        assert_eq!(maps.high().dimensions(), dimensions);
+        assert_eq!(maps.low().pixels(), &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(maps.high().pixels(), &[5.0, 6.0, 7.0, 8.0]);
+        assert!(
+            maps.low()
+                .mask()
+                .as_slice()
+                .iter()
+                .chain(maps.high().mask().as_slice())
+                .all(|flags| flags.is_clear())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_map_requires_one_support_record_per_source_sample() -> TestResult {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        assert_eq!(
+            materialize_percentile_rejection_map(dimensions, &[ClippedPixelSupport::default()]),
+            Err(IntegrationError::SupportLengthMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        );
+        Ok(())
     }
 
     #[test]

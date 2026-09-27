@@ -1667,14 +1667,19 @@ fn registered_stack_error(error: RegisteredStackError) -> PreviewCommandError {
         RegisteredStackError::ZeroBandHeight
         | RegisteredStackError::ProvenanceAlgorithmMismatch
         | RegisteredStackError::ProvenanceSourceCountMismatch
-        | RegisteredStackError::ProvenancePlanMismatch => registered_stack_configuration_error(),
+        | RegisteredStackError::ProvenancePlanMismatch
+        | RegisteredStackError::RejectionMapRequiresPercentileEstimator
+        | RegisteredStackError::RejectionMapProvenanceMismatch
+        | RegisteredStackError::DuplicateOutputPath => registered_stack_configuration_error(),
         RegisteredStackError::Memory(_) | RegisteredStackError::AllocationFailed => {
             registered_stack_allocation_error()
         }
-        RegisteredStackError::Publish(_) => PreviewCommandError::new(
-            "registered_stack_publication_failed",
-            "The integrated common crop could not be published atomically.",
-        ),
+        RegisteredStackError::Publish(_) | RegisteredStackError::RollbackPublishedOutput(_) => {
+            PreviewCommandError::new(
+                "registered_stack_publication_failed",
+                "The integrated common crop could not be published atomically.",
+            )
+        }
         RegisteredStackError::DimensionMismatch { .. }
         | RegisteredStackError::PlaneCountMismatch { .. }
         | RegisteredStackError::Input(_)

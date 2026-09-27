@@ -61,9 +61,16 @@ Masked and non-finite samples never enter rank calculation.
 
 The retained samples use the same scaled Neumaier mean as the strict oracle.
 Every pixel reports accepted, masked, non-finite, low-rejected, and
-high-rejected counts whose sum equals the input count. These records are the
-scientific source for future low/high rejection-map FITS products; support
-absence is never mislabeled as statistical rejection.
+high-rejected counts whose sum equals the input count. Support absence is never
+mislabeled as statistical rejection.
+
+When requested, `materialize_percentile_rejection_map` converts the rejection
+evidence into two separate binary64 images with the same width, height, plane
+count, and planar order as the integrated band. One image contains exact
+low-tail counts and the other exact high-tail counts. The source counts are
+`u32`, so their conversion to `f64` is exact. Map masks are clear because
+masked and non-finite exclusions remain different support categories and are
+not statistical rejections.
 
 ## Registered stack execution
 
@@ -86,9 +93,19 @@ new public product.
 The runtime exposes the percentile estimator under
 `registered-percentile-mean-v1`. Its provenance identity is distinct from
 `registered-crop-mean-v1`, and its larger support record plus reusable sorting
-scratch are included in the logical memory reservation. The desktop continues
-to select the strict estimator until advanced controls and rejection-map
-publication are available together.
+scratch are included in the logical memory reservation. Optional low/high maps
+use the separate `percentile-rejection-map-v1` provenance identity. Their two
+band images and three FITS writer buffers are also included in the reservation.
+
+Science and both companion files are completely written and checksum-verified
+while private. Their destinations must be distinct, their source counts and
+plan digests must agree, and publication never overwrites an existing file.
+The executor then publishes the three files as a rollback-safe set. If a later
+destination collides or publication fails, every earlier file created by that
+run is removed; pre-existing files are never modified. A rollback failure is a
+separate typed error so an operator can identify the incomplete set. The
+desktop continues to select the strict estimator until advanced controls can
+present these guarantees without hiding expert choices.
 
 The desktop adapter reconstructs the registration plan from the current
 reviewed Light membership before every stack run. It accepts only the complete

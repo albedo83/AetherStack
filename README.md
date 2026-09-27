@@ -154,7 +154,9 @@ optimized CPU and GPU paths must match.
 - strict unweighted mean integration with compensated normalized accumulation,
   exact per-pixel support accounting, and direct multi-plane region integration
   for a sealed common crop without full-frame crop copies, plus an independently
-  versioned percentile-clipped mean with exact low/high rejection evidence;
+  versioned percentile-clipped mean with exact low/high rejection evidence and
+  optional checksum-verified low/high FITS maps published with the science
+  product as one rollback-safe, create-new set;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, streams scan-line bands without a
   full final-image allocation, calculates exact three-pass output statistics,

@@ -930,6 +930,15 @@ safety reasoning. They do not narrate obvious syntax.
     sorting scratch in the memory budget, while strict mean remains the desktop
     default. Next, atomically publish the evidence records as companion maps
     before exposing these advanced controls.
+63. Publish percentile rejection evidence as two independent binary64 FITS
+    products. Low-tail and high-tail counts preserve source dimensions, planar
+    order, and exact integer values under `percentile-rejection-map-v1`.
+    Science and both maps are fully staged and checksum-verified before a
+    rollback-safe create-new publication set; a late companion collision
+    removes every product created by the run while preserving pre-existing
+    data. Path, provenance, estimator, memory, checksum, and rollback tests fail
+    closed. Next, expose estimator parameters and optional rejection maps in a
+    clearly separated desktop advanced mode.
 
 ## 11. Stable-release definition
 

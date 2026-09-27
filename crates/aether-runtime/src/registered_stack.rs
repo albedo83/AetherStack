@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::fs;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
@@ -11,8 +12,9 @@ use aether_fits::{
     ValidationMode,
 };
 use aether_integration::{
-    ClippedPixelSupport, IntegrationError, PercentileClipParameters, PixelSupport, integrate_mean,
-    integrate_percentile_clipped_mean,
+    ClippedPixelSupport, IntegrationError, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+    PercentileClipParameters, PixelSupport, integrate_mean, integrate_percentile_clipped_mean,
+    materialize_percentile_rejection_map,
 };
 use aether_registration::RegistrationPlan;
 use aether_review::FrameId;
@@ -90,6 +92,46 @@ pub struct RegisteredStackRequest {
     header_options: HeaderReadOptions,
     validation_mode: ValidationMode,
     estimator: RegisteredStackEstimator,
+    rejection_map: Option<RegisteredRejectionMapOutput>,
+}
+
+/// Optional companion FITS containing exact low/high rejection counts.
+#[derive(Clone, Debug)]
+pub struct RegisteredRejectionMapOutput {
+    low_output: PathBuf,
+    low_provenance: FitsOutputProvenance,
+    high_output: PathBuf,
+    high_provenance: FitsOutputProvenance,
+}
+
+impl RegisteredRejectionMapOutput {
+    /// Binds distinct create-new low/high destinations to their provenance.
+    #[must_use]
+    pub const fn new(
+        low_output: PathBuf,
+        low_provenance: FitsOutputProvenance,
+        high_output: PathBuf,
+        high_provenance: FitsOutputProvenance,
+    ) -> Self {
+        Self {
+            low_output,
+            low_provenance,
+            high_output,
+            high_provenance,
+        }
+    }
+
+    /// Low-tail rejection-count FITS destination.
+    #[must_use]
+    pub fn low_output(&self) -> &Path {
+        &self.low_output
+    }
+
+    /// High-tail rejection-count FITS destination.
+    #[must_use]
+    pub fn high_output(&self) -> &Path {
+        &self.high_output
+    }
 }
 
 impl RegisteredStackRequest {
@@ -160,6 +202,7 @@ impl RegisteredStackRequest {
             header_options: HeaderReadOptions::default(),
             validation_mode: ValidationMode::Strict,
             estimator,
+            rejection_map: None,
         })
     }
 
@@ -207,6 +250,35 @@ impl RegisteredStackRequest {
     pub const fn estimator(&self) -> RegisteredStackEstimator {
         self.estimator
     }
+
+    /// Adds a low/high rejection-map product to the same publication unit.
+    pub fn with_rejection_map(
+        mut self,
+        output: RegisteredRejectionMapOutput,
+    ) -> Result<Self, RegisteredStackError> {
+        if !matches!(
+            self.estimator,
+            RegisteredStackEstimator::PercentileClipped(_)
+        ) {
+            return Err(RegisteredStackError::RejectionMapRequiresPercentileEstimator);
+        }
+        let provenances = [&output.low_provenance, &output.high_provenance];
+        if provenances.iter().any(|provenance| {
+            provenance.algorithm_id() != PERCENTILE_REJECTION_MAP_ALGORITHM_ID
+                || provenance.source_count() != self.provenance.source_count()
+                || provenance.plan_sha256() != Some(self.plan.plan_sha256())
+        }) {
+            return Err(RegisteredStackError::RejectionMapProvenanceMismatch);
+        }
+        if output.low_output == self.output
+            || output.high_output == self.output
+            || output.low_output == output.high_output
+        {
+            return Err(RegisteredStackError::DuplicateOutputPath);
+        }
+        self.rejection_map = Some(output);
+        Ok(self)
+    }
 }
 
 /// Completed common-crop registered stack.
@@ -215,6 +287,28 @@ pub struct RegisteredStackResult {
     dimensions: Dimensions,
     summary: FitsWriteSummary,
     peak_reserved_bytes: usize,
+    rejection_map_summary: Option<RegisteredRejectionMapSummary>,
+}
+
+/// Write accounting for a published pair of low/high rejection maps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisteredRejectionMapSummary {
+    low: FitsWriteSummary,
+    high: FitsWriteSummary,
+}
+
+impl RegisteredRejectionMapSummary {
+    /// Low-tail map write accounting.
+    #[must_use]
+    pub const fn low(self) -> FitsWriteSummary {
+        self.low
+    }
+
+    /// High-tail map write accounting.
+    #[must_use]
+    pub const fn high(self) -> FitsWriteSummary {
+        self.high
+    }
 }
 
 impl RegisteredStackResult {
@@ -235,6 +329,12 @@ impl RegisteredStackResult {
     pub const fn peak_reserved_bytes(self) -> usize {
         self.peak_reserved_bytes
     }
+
+    /// Published rejection-map accounting when requested.
+    #[must_use]
+    pub const fn rejection_map_summary(self) -> Option<RegisteredRejectionMapSummary> {
+        self.rejection_map_summary
+    }
 }
 
 /// Failure of strict registered common-crop integration.
@@ -248,6 +348,12 @@ pub enum RegisteredStackError {
     ProvenanceSourceCountMismatch,
     /// Output provenance is not bound to the exact registration plan.
     ProvenancePlanMismatch,
+    /// Rejection maps are meaningful only for a rejecting estimator.
+    RejectionMapRequiresPercentileEstimator,
+    /// Rejection-map provenance is inconsistent with the stack request.
+    RejectionMapProvenanceMismatch,
+    /// Science and companion products cannot target the same path.
+    DuplicateOutputPath,
     /// A band cannot contain zero rows.
     ZeroBandHeight,
     /// A registered artifact does not carry its expected reviewed identity.
@@ -286,6 +392,8 @@ pub enum RegisteredStackError {
     Memory(MemoryBudgetError),
     /// Private FITS construction or atomic publication failed.
     Publish(AtomicFitsWriteError),
+    /// A product created by this transaction could not be removed during rollback.
+    RollbackPublishedOutput(std::io::Error),
     /// Complete private output or a registered input failed checksum validation.
     InvalidStagedOutput,
     /// Work-unit, coordinate, or byte accounting overflowed.
@@ -307,6 +415,9 @@ impl RegisteredStackError {
             Self::ProvenanceAlgorithmMismatch => "registered-stack-provenance-algorithm",
             Self::ProvenanceSourceCountMismatch => "registered-stack-provenance-count",
             Self::ProvenancePlanMismatch => "registered-stack-provenance-plan",
+            Self::RejectionMapRequiresPercentileEstimator => "registered-stack-map-estimator",
+            Self::RejectionMapProvenanceMismatch => "registered-stack-map-provenance",
+            Self::DuplicateOutputPath => "registered-stack-output-path",
             Self::ZeroBandHeight => "registered-stack-band-height",
             Self::ArtifactIdentityMismatch { .. } => "registered-stack-artifact-identity",
             Self::ArtifactPlanMismatch { .. } => "registered-stack-artifact-plan",
@@ -317,6 +428,7 @@ impl RegisteredStackError {
             Self::Integration(_) => "registered-stack-integration",
             Self::Memory(_) => "registered-stack-memory",
             Self::Publish(_) => "registered-stack-publish",
+            Self::RollbackPublishedOutput(_) => "registered-stack-rollback",
             Self::InvalidStagedOutput => "registered-stack-readback",
             Self::WorkSizeOverflow => "registered-stack-work-size",
             Self::AllocationFailed => "registered-stack-allocation",
@@ -341,6 +453,15 @@ impl Display for RegisteredStackError {
             }
             Self::ProvenancePlanMismatch => {
                 formatter.write_str("output provenance does not bind the sealed registration plan")
+            }
+            Self::RejectionMapRequiresPercentileEstimator => {
+                formatter.write_str("rejection maps require the percentile-clipped estimator")
+            }
+            Self::RejectionMapProvenanceMismatch => {
+                formatter.write_str("rejection-map provenance does not match the stack request")
+            }
+            Self::DuplicateOutputPath => {
+                formatter.write_str("science and rejection-map outputs must use distinct paths")
             }
             Self::ZeroBandHeight => {
                 formatter.write_str("registered stack band height must be positive")
@@ -379,6 +500,10 @@ impl Display for RegisteredStackError {
             Self::Integration(error) => Display::fmt(error, formatter),
             Self::Memory(error) => Display::fmt(error, formatter),
             Self::Publish(error) => Display::fmt(error, formatter),
+            Self::RollbackPublishedOutput(error) => write!(
+                formatter,
+                "cannot remove a published registered-stack product during rollback: {error}"
+            ),
             Self::InvalidStagedOutput => {
                 formatter.write_str("private registered stack failed checksum readback")
             }
@@ -401,6 +526,7 @@ impl Error for RegisteredStackError {
             Self::Integration(error) => Some(error),
             Self::Memory(error) => Some(error),
             Self::Publish(error) => Some(error),
+            Self::RollbackPublishedOutput(error) => Some(error),
             Self::Cancelled(error) => Some(error),
             Self::StageId(error) => Some(error),
             Self::Progress(error) => Some(error),
@@ -517,8 +643,16 @@ where
         progress,
     )?;
 
+    let writer_count = if request.rejection_map.is_some() {
+        3
+    } else {
+        1
+    };
+    let writer_bytes = STREAM_WRITER_BUFFER_BYTES
+        .checked_mul(writer_count)
+        .ok_or(RegisteredStackError::WorkSizeOverflow)?;
     let _writer = memory
-        .try_reserve(STREAM_WRITER_BUFFER_BYTES)
+        .try_reserve(writer_bytes)
         .map_err(RegisteredStackError::Memory)?;
     let mut writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
         &request.output,
@@ -526,6 +660,26 @@ where
         &request.provenance,
     )
     .map_err(RegisteredStackError::Publish)?;
+    let mut rejection_writers = request
+        .rejection_map
+        .as_ref()
+        .map(|maps| {
+            Ok::<_, RegisteredStackError>((
+                AtomicF64PrimaryStreamWriter::create_with_provenance(
+                    &maps.low_output,
+                    output_dimensions,
+                    &maps.low_provenance,
+                )
+                .map_err(RegisteredStackError::Publish)?,
+                AtomicF64PrimaryStreamWriter::create_with_provenance(
+                    &maps.high_output,
+                    output_dimensions,
+                    &maps.high_provenance,
+                )
+                .map_err(RegisteredStackError::Publish)?,
+            ))
+        })
+        .transpose()?;
     for plane in 0..planes {
         for offset_y in (0..crop.height()).step_by(request.band_height) {
             cancellation
@@ -537,6 +691,7 @@ where
                 height,
                 request.sources.len(),
                 request.estimator,
+                request.rejection_map.is_some(),
             )?;
             let _band = memory
                 .try_reserve(reserved)
@@ -583,6 +738,19 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
+                        let maps = materialize_percentile_rejection_map(
+                            integrated.image().dimensions(),
+                            integrated.support(),
+                        )
+                        .map_err(RegisteredStackError::Integration)?;
+                        low_writer
+                            .write_image_chunk(maps.low())
+                            .map_err(RegisteredStackError::Publish)?;
+                        high_writer
+                            .write_image_chunk(maps.high())
+                            .map_err(RegisteredStackError::Publish)?;
+                    }
                 }
             }
             *completed = completed
@@ -601,6 +769,15 @@ where
     }
     let staged = writer.finish().map_err(RegisteredStackError::Publish)?;
     validate_staged(&staged, output_dimensions)?;
+    let staged_rejection_maps = rejection_writers
+        .map(|(low, high)| {
+            let low = low.finish().map_err(RegisteredStackError::Publish)?;
+            validate_staged(&low, output_dimensions)?;
+            let high = high.finish().map_err(RegisteredStackError::Publish)?;
+            validate_staged(&high, output_dimensions)?;
+            Ok::<_, RegisteredStackError>((low, high))
+        })
+        .transpose()?;
     *completed = completed
         .checked_add(1)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
@@ -617,7 +794,53 @@ where
     cancellation
         .checkpoint()
         .map_err(RegisteredStackError::Cancelled)?;
-    let summary = staged.publish().map_err(RegisteredStackError::Publish)?;
+    let summary = match staged.publish() {
+        Ok(summary) => summary,
+        Err(error) => {
+            if error.output_is_published() {
+                rollback_published(&[&request.output])?;
+            }
+            return Err(RegisteredStackError::Publish(error));
+        }
+    };
+    let rejection_map_summary = if let Some((low, high)) = staged_rejection_maps {
+        let map_paths = request
+            .rejection_map
+            .as_ref()
+            .ok_or(RegisteredStackError::RejectionMapProvenanceMismatch)?;
+        let low_summary = match low.publish() {
+            Ok(summary) => summary,
+            Err(error) => {
+                if error.output_is_published() {
+                    rollback_published(&[&map_paths.low_output, &request.output])?;
+                } else {
+                    rollback_published(&[&request.output])?;
+                }
+                return Err(RegisteredStackError::Publish(error));
+            }
+        };
+        let high_summary = match high.publish() {
+            Ok(summary) => summary,
+            Err(error) => {
+                if error.output_is_published() {
+                    rollback_published(&[
+                        &map_paths.high_output,
+                        &map_paths.low_output,
+                        &request.output,
+                    ])?;
+                } else {
+                    rollback_published(&[&map_paths.low_output, &request.output])?;
+                }
+                return Err(RegisteredStackError::Publish(error));
+            }
+        };
+        Some(RegisteredRejectionMapSummary {
+            low: low_summary,
+            high: high_summary,
+        })
+    } else {
+        None
+    };
     *completed = completed
         .checked_add(1)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
@@ -625,7 +848,15 @@ where
         dimensions: output_dimensions,
         summary,
         peak_reserved_bytes: memory.peak(),
+        rejection_map_summary,
     })
+}
+
+fn rollback_published(paths: &[&Path]) -> Result<(), RegisteredStackError> {
+    for path in paths {
+        fs::remove_file(path).map_err(RegisteredStackError::RollbackPublishedOutput)?;
+    }
+    Ok(())
 }
 
 fn validate_sources(
@@ -709,6 +940,7 @@ fn planned_band_bytes(
     height: usize,
     source_count: usize,
     estimator: RegisteredStackEstimator,
+    rejection_maps: bool,
 ) -> Result<usize, RegisteredStackError> {
     let samples = width
         .checked_mul(height)
@@ -744,11 +976,19 @@ fn planned_band_bytes(
             .checked_mul(size_of::<f64>())
             .ok_or(RegisteredStackError::WorkSizeOverflow)?,
     };
+    let rejection_map_images = if rejection_maps {
+        image
+            .checked_mul(2)
+            .ok_or(RegisteredStackError::WorkSizeOverflow)?
+    } else {
+        0
+    };
     sources
         .checked_add(output)
         .and_then(|value| value.checked_add(decode))
         .and_then(|value| value.checked_add(vector_storage))
         .and_then(|value| value.checked_add(estimator_scratch))
+        .and_then(|value| value.checked_add(rejection_map_images))
         .ok_or(RegisteredStackError::WorkSizeOverflow)
 }
 
@@ -797,6 +1037,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::fs::{self, File};
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -903,6 +1144,72 @@ mod tests {
         .with_band_height(2)?)
     }
 
+    fn percentile_stack_request(
+        directory: &TestDirectory,
+    ) -> Result<(RegisteredStackRequest, PathBuf, PathBuf), Box<dyn Error>> {
+        let identities = ['a', 'b', 'c', 'd', 'e']
+            .into_iter()
+            .map(id)
+            .collect::<Result<Vec<_>, _>>()?;
+        let plan = RegistrationPlan::new(
+            identities[0].clone(),
+            12,
+            10,
+            identities
+                .iter()
+                .cloned()
+                .map(|frame_id| {
+                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
+                })
+                .collect(),
+        )?;
+        let sources = identities
+            .into_iter()
+            .zip([0.0, 10.0, 11.0, 12.0, 100.0])
+            .map(|(frame_id, value)| registered_source(directory, &plan, frame_id, value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+            5,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let low_path = directory.0.join("percentile-low-rejection.fits");
+        let high_path = directory.0.join("percentile-high-rejection.fits");
+        let low_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-rejection-low",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            5,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let high_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-rejection-high",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            5,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            directory.0.join("percentile-stack.fits"),
+            provenance,
+            RegisteredStackEstimator::PercentileClipped(PercentileClipParameters::new(
+                0.2, 0.2, 3,
+            )?),
+        )?
+        .with_band_height(3)?
+        .with_rejection_map(RegisteredRejectionMapOutput::new(
+            low_path.clone(),
+            low_provenance,
+            high_path.clone(),
+            high_provenance,
+        ))?;
+        Ok((request, low_path, high_path))
+    }
+
     #[test]
     fn integrates_only_the_sealed_crop_and_publishes_checksums() -> TestResult {
         let directory = TestDirectory::new()?;
@@ -940,50 +1247,18 @@ mod tests {
     #[test]
     fn executes_versioned_percentile_rejection_in_bounded_bands() -> TestResult {
         let directory = TestDirectory::new()?;
-        let identities = ['a', 'b', 'c', 'd', 'e']
-            .into_iter()
-            .map(id)
-            .collect::<Result<Vec<_>, _>>()?;
-        let plan = RegistrationPlan::new(
-            identities[0].clone(),
-            12,
-            10,
-            identities
-                .iter()
-                .cloned()
-                .map(|frame_id| {
-                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
-                })
-                .collect(),
-        )?;
-        let sources = identities
-            .into_iter()
-            .zip([0.0, 10.0, 11.0, 12.0, 100.0])
-            .map(|(frame_id, value)| registered_source(&directory, &plan, frame_id, value))
-            .collect::<Result<Vec<_>, _>>()?;
-        let provenance = FitsOutputProvenance::new(
-            "a".repeat(64),
-            "registered-stack",
-            REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
-            5,
-        )?
-        .with_plan_sha256(plan.plan_sha256())?;
-        let request = RegisteredStackRequest::new_with_estimator(
-            plan,
-            sources,
-            directory.0.join("percentile-stack.fits"),
-            provenance,
-            RegisteredStackEstimator::PercentileClipped(PercentileClipParameters::new(
-                0.2, 0.2, 3,
-            )?),
-        )?
-        .with_band_height(3)?;
+        let (request, low_path, high_path) = percentile_stack_request(&directory)?;
         let memory = MemoryBudget::new(16 * 1_024 * 1_024)?;
 
         let result = run_registered_stack(&request, &CancellationToken::new(), &memory, |_| {})?;
 
         assert_eq!(result.dimensions(), Dimensions::new(12, 10, 3)?);
         assert!(result.peak_reserved_bytes() <= memory.limit());
+        let map_summary = result
+            .rejection_map_summary()
+            .ok_or("rejection maps were not published")?;
+        assert_eq!(map_summary.low().samples_written(), 12 * 10 * 3);
+        assert_eq!(map_summary.high().samples_written(), 12 * 10 * 3);
         let file = File::open(request.output())?;
         let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
         assert!(reader.verify_checksums()?.is_fully_verified());
@@ -994,6 +1269,120 @@ mod tests {
                 .iter()
                 .all(|value| value.to_bits() == 11.0_f64.to_bits())
         );
+        for path in [low_path, high_path] {
+            let file = File::open(path)?;
+            let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+            assert!(reader.verify_checksums()?.is_fully_verified());
+            let map = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+            assert!(
+                map.pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == 1.0_f64.to_bits())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn companion_collision_rolls_back_every_product_created_by_the_run() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, low_path, high_path) = percentile_stack_request(&directory)?;
+        let science_path = request.output().to_owned();
+        let blocker = b"pre-existing user data";
+        let final_private_validation = 13;
+        let collision_error = RefCell::new(None);
+
+        let error = run_registered_stack(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(16 * 1_024 * 1_024)?,
+            |event| {
+                if event.state() == ProgressState::Running
+                    && event.completed_units() == final_private_validation
+                {
+                    *collision_error.borrow_mut() = fs::write(&high_path, blocker).err();
+                }
+            },
+        )
+        .err()
+        .ok_or("a colliding companion destination unexpectedly succeeded")?;
+
+        if let Some(error) = collision_error.into_inner() {
+            return Err(error.into());
+        }
+
+        assert!(matches!(error, RegisteredStackError::Publish(_)));
+        assert!(!science_path.exists());
+        assert!(!low_path.exists());
+        assert_eq!(fs::read(&high_path)?, blocker);
+        Ok(())
+    }
+
+    #[test]
+    fn strict_mean_rejects_rejection_map_configuration() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let request = stack_request(&directory)?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-rejection",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(request.plan().plan_sha256())?;
+
+        let error = request
+            .with_rejection_map(RegisteredRejectionMapOutput::new(
+                directory.0.join("low.fits"),
+                provenance.clone(),
+                directory.0.join("high.fits"),
+                provenance,
+            ))
+            .err()
+            .ok_or("strict mean unexpectedly accepted rejection maps")?;
+
+        assert!(matches!(
+            error,
+            RegisteredStackError::RejectionMapRequiresPercentileEstimator
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_map_paths_and_provenance_fail_closed() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, _, _) = percentile_stack_request(&directory)?;
+        let configured = request
+            .rejection_map
+            .as_ref()
+            .ok_or("test request is missing rejection-map configuration")?;
+        let duplicate = RegisteredRejectionMapOutput::new(
+            request.output().to_owned(),
+            configured.low_provenance.clone(),
+            directory.0.join("distinct-high.fits"),
+            configured.high_provenance.clone(),
+        );
+        assert!(matches!(
+            request.clone().with_rejection_map(duplicate),
+            Err(RegisteredStackError::DuplicateOutputPath)
+        ));
+
+        let wrong_plan = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-rejection-low",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            5,
+        )?
+        .with_plan_sha256("b".repeat(64))?;
+        let mismatched = RegisteredRejectionMapOutput::new(
+            directory.0.join("wrong-low.fits"),
+            wrong_plan,
+            directory.0.join("valid-high.fits"),
+            configured.high_provenance.clone(),
+        );
+        assert!(matches!(
+            request.with_rejection_map(mismatched),
+            Err(RegisteredStackError::RejectionMapProvenanceMismatch)
+        ));
         Ok(())
     }
 
