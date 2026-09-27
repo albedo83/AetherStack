@@ -1,0 +1,23 @@
+[package]
+name = "aether-register"
+description = "Privacy-preserving FITS registration diagnostics for AetherStack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+aether-fits = { path = "../aether-fits" }
+aether-quality = { path = "../aether-quality" }
+aether-registration = { path = "../aether-registration" }
+aether-review = { path = "../aether-review" }
+aether-session = { path = "../aether-session" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

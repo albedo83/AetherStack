@@ -85,6 +85,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-register"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-fits",
+ "aether-quality",
+ "aether-registration",
+ "aether-review",
+ "aether-session",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aether-registration"
 version = "0.1.0"
 dependencies = [

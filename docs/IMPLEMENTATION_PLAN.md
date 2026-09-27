@@ -724,6 +724,17 @@ safety reasoning. They do not narrate obvious syntax.
     rotation, scale, and translation. Next, exercise these diagnostics on the
     ASI294MC Pro corpus and define camera-backed default thresholds before any
     automatic registration is exposed in the desktop pipeline.
+41. Exercise the complete raw-CFA registration chain on the local ASI294MC Pro
+    session. A new path-free Rust diagnostic connects strict FITS decoding,
+    phase-neutral CFA preparation, quality measurement, features, descriptors,
+    matching, consensus, and confidence under one versioned bounded profile.
+    Real dense-field evidence exposed colliding but plausible triangle votes;
+    consensus now ranks them by support and residual and extracts a deterministic
+    bijective star assignment. All nine source-to-reference comparisons pass
+    without truncation with 908–1,022 star pairs and 0.213–0.233 detection-pixel
+    RMS. Next, compare transforms and registered pixels against an independent
+    implementation, validate ToupTek 585C and more diverse fields, then implement
+    flux- and mask-tested resampling before desktop automation.
 
 ## 11. Stable-release definition
 

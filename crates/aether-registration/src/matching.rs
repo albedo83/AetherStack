@@ -158,6 +158,15 @@ pub struct FeaturePair {
 }
 
 impl FeaturePair {
+    /// Builds an already-validated internal rank correspondence.
+    #[cfg(test)]
+    pub(crate) const fn new(source_rank: usize, reference_rank: usize) -> Self {
+        Self {
+            source_rank,
+            reference_rank,
+        }
+    }
+
     /// Source feature rank.
     #[must_use]
     pub const fn source_rank(self) -> usize {

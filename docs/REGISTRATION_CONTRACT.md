@@ -144,11 +144,15 @@ inclusive residual threshold in reference pixels. Candidate ordering prefers
 more supporting triangles, then lower compensated RMS residual, lower descriptor
 distance, non-reflected geometry, and stable hypothesis index. The winning model
 must have at least two supporting triangles and three distinct feature pairs.
-Its distinct pairs must form a one-to-one mapping: contradictory source or
-reference assignments fail explicitly instead of being averaged.
 
-The winner is refitted in binary64 least squares over all distinct inlier pairs,
-then rescored. Minimum support is enforced again after refinement. The result
+The winner is refitted in binary64 least squares over a deterministic bijective
+subset of its inlier pairs, then rescored. Dense or partly symmetric fields can
+place several individually plausible counterparts inside the residual radius.
+Candidates are ranked by independent triangle support, residual, source rank,
+and reference rank; a stable greedy assignment then admits each source and
+reference feature at most once. Ambiguity is resolved explicitly rather than
+aborting a valid real-field consensus or silently fitting duplicate stars.
+Minimum support is enforced again after refinement. The result
 contains the affine representation, uniform scale, rotation, mirror state,
 winning seed, sorted inlier triangle indices, sorted distinct star pairs, and a
 strict compensated residual summary. It also records candidate, evaluated,
@@ -188,6 +192,25 @@ an equal-support symmetric alternative, or an incomplete search therefore cannot
 silently become an automatic registration. Synthetic tests include noisy
 subpixel rotation, scale, and translation rather than exact descriptor equality.
 
+## Raw-CFA diagnostic profile
+
+`aether-register` connects the strict FITS decoder to phase-neutral 2 × 2 CFA
+cell means, canonical quality measurement, feature filtering, local triangles,
+descriptor matching, similarity consensus, and the confidence gate. Its
+`raw-cfa-registration-precision-v1` JSON contains content identities and
+aggregate evidence but never input paths, source header cards, acquisition
+metadata, target names, or pixel values. The schema is marked diagnostic-only
+because resampling is not yet part of this operation.
+
+The local ASI294MC Pro validation session uses one fixed Light as reference and
+the other nine as sources. All nine comparisons passed the untruncated
+confidence gate. Each comparison retained 908–1,022 distinct bijective star
+pairs, covered at least 98.0% of the detection-plane height and 98.6% of its
+width, and produced RMS residuals from 0.213 to 0.233 detection pixels. Since
+one detection pixel spans two sensor pixels, that is 0.426–0.465 source pixels.
+These measurements validate this camera/session profile only; no private file
+name, digest, target, coordinate, or image data is retained in the repository.
+
 ## Automatic reference selection
 
 Each eligible frame supplies a stable content-derived `FrameId` and four
@@ -219,14 +242,14 @@ Production registration still requires:
 - deterministic multi-scale enhancement beyond the initial local descriptors;
 - translation-only, affine, and projective model selection beyond the strict
   similarity model;
-- confidence thresholds validated on representative real sparse and crowded data;
+- confidence thresholds validated on broader sparse and crowded real data;
 - justified distortion models with bounded control-point counts;
 - flux-tested cubic and Lanczos resampling with conservative mask propagation;
 - common-footprint and coverage diagnostics;
 - synthetic sub-pixel ground truth for shifts, scale, rotation, mirroring,
   distortion, crowding, partial overlap, hot pixels, and outliers;
-- inspected ASI294MC Pro and ToupTek 585C comparisons against an independent
-  implementation.
+- inspected ASI294MC Pro comparison against an independent implementation and
+  equivalent ToupTek 585C validation.
 
 Until those gates pass, reference selection and affine residuals are foundation
 APIs and diagnostics, not evidence of a complete registration pipeline.

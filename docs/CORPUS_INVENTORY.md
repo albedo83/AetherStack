@@ -41,6 +41,15 @@ Comparison tooling must discover products from validated metadata and content,
 not from a hard-coded directory layout. No source or reference product is
 committed to the repository.
 
+The first native raw-CFA registration diagnostic fixed one of the ten Lights as
+the reference and compared each of the remaining nine Lights. All nine passed
+the fail-closed similarity confidence gate without descriptor or model-search
+truncation. Comparisons retained 908–1,022 bijective stellar correspondences,
+spanned at least 98.6% of the detection width and 98.0% of its height, and had
+RMS residuals of 0.213–0.233 detection pixels (0.426–0.465 sensor pixels). Only
+these aggregate ranges are retained; file names, content identities, target
+metadata, coordinates, transforms, and individual measurements remain local.
+
 ## Corpus size
 
 | Extension | Count |

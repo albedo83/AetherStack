@@ -110,9 +110,11 @@ optimized CPU and GPU paths must match.
   plus a bounded quantized descriptor index that preserves competing tolerant
   correspondences, scale estimates, mirror policy, and truncation evidence,
   followed by deterministic multi-triangle similarity consensus with explicit
-  inliers, outliers, residuals, one-to-one star mappings, work budgets, competing
-  transform evidence, and a fail-closed confidence gate for support, ambiguity,
-  spatial coverage, residual quality, reflection, and truncated searches;
+  inliers, outliers, residuals, support-ranked one-to-one star mappings, work
+  budgets, competing transform evidence, and a fail-closed confidence gate for
+  support, ambiguity, spatial coverage, residual quality, reflection, and
+  truncated searches, plus a path-free end-to-end diagnostic validated across
+  the local ten-Light ASI294MC Pro session;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and
@@ -215,6 +217,18 @@ Calculate strict pixel statistics without loading complete images:
 cargo run -p aether-stats -- /path/to/fits-file-or-directory
 cargo run -p aether-stats -- --strict --jsonl /path/to/fits-corpus
 ```
+
+Diagnose raw-CFA similarity registration without disclosing either input path
+in the JSON report:
+
+```shell
+cargo run --release -p aether-register -- source.fits reference.fits
+cargo run --release -p aether-register -- --compact source.fits reference.fits
+```
+
+The current profile is deliberately marked `diagnostic_only`. Passing its
+confidence gate proves that the measured similarity is strongly supported; it
+does not yet resample or publish a registered image.
 
 Full acquisition data must never be committed. Test cases must use small,
 redistributable synthetic fixtures with no private paths, coordinates, object

@@ -710,9 +710,109 @@ fn collect_inliers(
             feature_pairs.extend(hypothesis.feature_pairs());
         }
     }
-    feature_pairs.sort_unstable_by_key(|pair| (pair.source_rank(), pair.reference_rank()));
-    feature_pairs.dedup();
+    let feature_pairs = select_bijective_pairs(
+        transform,
+        source_features,
+        reference_features,
+        feature_pairs,
+        parameters,
+        statistics,
+    )?;
     Ok((hypothesis_indices, feature_pairs))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SupportedFeaturePair {
+    pair: FeaturePair,
+    triangle_support: usize,
+    residual_pixels: f64,
+}
+
+/// Resolves collisions between individually plausible triangle correspondences.
+///
+/// Dense or partly symmetric star fields can place two different references
+/// within the residual radius of one source. Treating that normal ambiguity as
+/// a fatal error makes real-field consensus brittle. Candidates are therefore
+/// ranked by independent triangle support, then geometric residual and stable
+/// feature ranks, before a deterministic one-to-one assignment is extracted.
+fn select_bijective_pairs(
+    transform: AffineTransform,
+    source_features: &FeatureCatalog,
+    reference_features: &FeatureCatalog,
+    mut pairs: Vec<FeaturePair>,
+    parameters: SimilarityConsensusParameters,
+    statistics: &mut SimilarityConsensusStatistics,
+) -> Result<Vec<FeaturePair>, SimilarityConsensusError> {
+    pairs.sort_unstable_by_key(|pair| (pair.source_rank(), pair.reference_rank()));
+    let mut candidates = Vec::new();
+    candidates
+        .try_reserve_exact(pairs.len())
+        .map_err(|_| SimilarityConsensusError::AllocationFailed)?;
+    let mut start = 0_usize;
+    while start < pairs.len() {
+        let pair = pairs[start];
+        let mut end = start + 1;
+        while end < pairs.len() && pairs[end] == pair {
+            end = checked_increment(end)?;
+        }
+        statistics.residual_evaluations = checked_increment(statistics.residual_evaluations)?;
+        if statistics.residual_evaluations > parameters.maximum_residual_evaluations {
+            return Err(SimilarityConsensusError::EvaluationLimitExceeded {
+                maximum: parameters.maximum_residual_evaluations,
+            });
+        }
+        let correspondence = resolve_feature_pair(source_features, reference_features, pair)?;
+        candidates.push(SupportedFeaturePair {
+            pair,
+            triangle_support: end - start,
+            residual_pixels: residual_pixels(transform, correspondence)?,
+        });
+        start = end;
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .triangle_support
+            .cmp(&left.triangle_support)
+            .then_with(|| left.residual_pixels.total_cmp(&right.residual_pixels))
+            .then_with(|| left.pair.source_rank().cmp(&right.pair.source_rank()))
+            .then_with(|| left.pair.reference_rank().cmp(&right.pair.reference_rank()))
+    });
+
+    let mut source_assigned = Vec::new();
+    source_assigned
+        .try_reserve_exact(source_features.features().len())
+        .map_err(|_| SimilarityConsensusError::AllocationFailed)?;
+    source_assigned.resize(source_features.features().len(), false);
+    let mut reference_assigned = Vec::new();
+    reference_assigned
+        .try_reserve_exact(reference_features.features().len())
+        .map_err(|_| SimilarityConsensusError::AllocationFailed)?;
+    reference_assigned.resize(reference_features.features().len(), false);
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(candidates.len())
+        .map_err(|_| SimilarityConsensusError::AllocationFailed)?;
+    for candidate in candidates {
+        let Some(source_slot) = source_assigned.get_mut(candidate.pair.source_rank()) else {
+            return Err(SimilarityConsensusError::MissingSourceRank {
+                rank: candidate.pair.source_rank(),
+            });
+        };
+        let Some(reference_slot) = reference_assigned.get_mut(candidate.pair.reference_rank())
+        else {
+            return Err(SimilarityConsensusError::MissingReferenceRank {
+                rank: candidate.pair.reference_rank(),
+            });
+        };
+        if *source_slot || *reference_slot {
+            continue;
+        }
+        *source_slot = true;
+        *reference_slot = true;
+        selected.push(candidate.pair);
+    }
+    selected.sort_unstable_by_key(|pair| (pair.source_rank(), pair.reference_rank()));
+    Ok(selected)
 }
 
 fn resolved_matches(
@@ -1330,6 +1430,36 @@ mod tests {
         assert!(competitor.maximum_separation_pixels() > 10.0);
         assert!(consensus.statistics().distinct_competing_models() > 0);
         assert!(consensus.residual_statistics().maximum_pixels() < 1.0e-11);
+        Ok(())
+    }
+
+    #[test]
+    fn resolves_colliding_triangle_votes_into_stable_bijective_pairs() -> TestResult {
+        let points = [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0)];
+        let source = feature_catalog('a', &points)?;
+        let reference = feature_catalog('b', &points)?;
+        let dominant = FeaturePair::new(0, 0);
+        let collision = FeaturePair::new(0, 1);
+        let second = FeaturePair::new(1, 1);
+        let third = FeaturePair::new(2, 2);
+        let candidates = vec![
+            dominant, dominant, dominant, collision, second, second, third, third,
+        ];
+        let parameters = parameters(2, 10, 100)?;
+        let mut statistics = SimilarityConsensusStatistics::default();
+
+        let selected = select_bijective_pairs(
+            AffineTransform::IDENTITY,
+            &source,
+            &reference,
+            candidates,
+            parameters,
+            &mut statistics,
+        )?;
+
+        assert_eq!(selected, vec![dominant, second, third]);
+        validate_one_to_one_pairs(&source, &reference, &selected)?;
+        assert_eq!(statistics.residual_evaluations(), 4);
         Ok(())
     }
 
