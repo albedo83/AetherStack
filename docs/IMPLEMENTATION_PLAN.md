@@ -762,6 +762,13 @@ safety reasoning. They do not narrate obvious syntax.
     boundary loss, sensor flags, and a non-finite input and require bitwise pixel
     equality plus identical masks and counters against the full-image oracle.
     Next, connect bands to windowed FITS input and atomic registered-FITS output.
+45. Plan exact file-backed reads for each registered band. The source-window
+    planner scans discrete global output centers with the production inverse
+    transform and exact non-zero Lanczos taps, returning the smallest source
+    rectangle actually required by complete kernels. Integer alignment adds no
+    artificial halo, fractional coordinates retain every necessary tap, and a
+    disjoint band becomes an explicit no-read result. Next, make the band kernel
+    consume these windows and bind it to transactional FITS publication.
 
 ## 11. Stable-release definition
 

@@ -64,6 +64,41 @@ pub struct ResampledBand {
     statistics: ResamplingStatistics,
 }
 
+/// Smallest rectangular source region containing every tap used by one band.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Lanczos3SourceWindow {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+impl Lanczos3SourceWindow {
+    /// First included source column.
+    #[must_use]
+    pub const fn x(self) -> usize {
+        self.x
+    }
+
+    /// First included source row.
+    #[must_use]
+    pub const fn y(self) -> usize {
+        self.y
+    }
+
+    /// Number of included source columns.
+    #[must_use]
+    pub const fn width(self) -> usize {
+        self.width
+    }
+
+    /// Number of included source rows.
+    #[must_use]
+    pub const fn height(self) -> usize {
+        self.height
+    }
+}
+
 impl ResampledBand {
     /// First reference row represented by this band.
     #[must_use]
@@ -233,6 +268,15 @@ impl ResampledImage {
 pub enum ResamplingError {
     /// A bounded executor must make progress by at least one row.
     ZeroBandHeight,
+    /// The requested reference rows do not fit inside the output canvas.
+    ReferenceBandOutOfBounds {
+        /// First requested reference row.
+        y: usize,
+        /// Requested row count.
+        height: usize,
+        /// Complete output height.
+        output_height: usize,
+    },
     /// Output dimensions or allocation violated the shared image contract.
     Core(CoreError),
     /// Transform inversion or application failed.
@@ -247,6 +291,14 @@ impl Display for ResamplingError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ZeroBandHeight => formatter.write_str("resampling band height must be positive"),
+            Self::ReferenceBandOutOfBounds {
+                y,
+                height,
+                output_height,
+            } => write!(
+                formatter,
+                "reference band y={y}, height={height} exceeds output height {output_height}"
+            ),
             Self::Core(error) => write!(formatter, "cannot construct resampled image: {error}"),
             Self::Coordinate(error) => {
                 write!(formatter, "cannot map resampling coordinate: {error}")
@@ -264,7 +316,10 @@ impl Error for ResamplingError {
         match self {
             Self::Core(error) => Some(error),
             Self::Coordinate(error) => Some(error),
-            Self::ZeroBandHeight | Self::NumericalOverflow | Self::CountOverflow => None,
+            Self::ZeroBandHeight
+            | Self::ReferenceBandOutOfBounds { .. }
+            | Self::NumericalOverflow
+            | Self::CountOverflow => None,
         }
     }
 }
@@ -367,6 +422,89 @@ impl AxisKernel {
     fn active(&self) -> &[AxisTap] {
         &self.taps[..self.count]
     }
+}
+
+/// Plans the exact source rectangle needed to resample one reference band.
+///
+/// Every discrete output center is inverse-mapped and evaluated with the same
+/// analytical-zero Lanczos policy as the numerical oracle. Only taps belonging
+/// to complete two-dimensional kernels contribute to the rectangle; samples
+/// outside the source footprint need no source I/O because they become missing.
+/// `None` therefore means the entire output band is outside the source.
+pub fn plan_lanczos3_source_window(
+    source_width: usize,
+    source_height: usize,
+    output_width: usize,
+    output_height: usize,
+    reference_y: usize,
+    band_height: usize,
+    source_to_reference: AffineTransform,
+) -> Result<Option<Lanczos3SourceWindow>, ResamplingError> {
+    if band_height == 0 {
+        return Err(ResamplingError::ZeroBandHeight);
+    }
+    Dimensions::new(source_width, source_height, 1)?;
+    Dimensions::new(output_width, output_height, 1)?;
+    let band_bottom = reference_y
+        .checked_add(band_height)
+        .ok_or(ResamplingError::CountOverflow)?;
+    if reference_y >= output_height || band_bottom > output_height {
+        return Err(ResamplingError::ReferenceBandOutOfBounds {
+            y: reference_y,
+            height: band_height,
+            output_height,
+        });
+    }
+    let reference_to_source = source_to_reference
+        .inverse()
+        .map_err(ResamplingError::Coordinate)?;
+    let mut minimum_x = usize::MAX;
+    let mut minimum_y = usize::MAX;
+    let mut maximum_x = 0_usize;
+    let mut maximum_y = 0_usize;
+    let mut has_support = false;
+
+    for output_y in reference_y..band_bottom {
+        for output_x in 0..output_width {
+            let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
+                .map_err(ResamplingError::Coordinate)?;
+            let source_point = reference_to_source
+                .apply(reference_point)
+                .map_err(ResamplingError::Coordinate)?;
+            let x_kernel = AxisKernel::new(source_point.x(), source_width)?;
+            let y_kernel = AxisKernel::new(source_point.y(), source_height)?;
+            if !x_kernel.complete || !y_kernel.complete {
+                continue;
+            }
+            for tap in x_kernel.active() {
+                minimum_x = minimum_x.min(tap.index);
+                maximum_x = maximum_x.max(tap.index);
+            }
+            for tap in y_kernel.active() {
+                minimum_y = minimum_y.min(tap.index);
+                maximum_y = maximum_y.max(tap.index);
+            }
+            has_support = true;
+        }
+    }
+
+    if !has_support {
+        return Ok(None);
+    }
+    let width = maximum_x
+        .checked_sub(minimum_x)
+        .and_then(|span| span.checked_add(1))
+        .ok_or(ResamplingError::CountOverflow)?;
+    let height = maximum_y
+        .checked_sub(minimum_y)
+        .and_then(|span| span.checked_add(1))
+        .ok_or(ResamplingError::CountOverflow)?;
+    Ok(Some(Lanczos3SourceWindow {
+        x: minimum_x,
+        y: minimum_y,
+        width,
+        height,
+    }))
 }
 
 /// Resamples every source plane into a reference-aligned output rectangle.
@@ -913,6 +1051,65 @@ mod tests {
         assert!(matches!(
             Lanczos3BandExecutor::new(&source, 0, 4, 1, AffineTransform::IDENTITY),
             Err(ResamplingError::Core(CoreError::ZeroDimension { .. }))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn source_window_uses_exact_nonzero_taps_in_global_coordinates() -> TestResult {
+        let identity = plan_lanczos3_source_window(20, 20, 5, 8, 3, 2, AffineTransform::IDENTITY)?
+            .ok_or("identity band unexpectedly outside source")?;
+        assert_eq!(
+            identity,
+            Lanczos3SourceWindow {
+                x: 0,
+                y: 3,
+                width: 5,
+                height: 2,
+            }
+        );
+
+        let fractional = plan_lanczos3_source_window(
+            20,
+            20,
+            5,
+            8,
+            2,
+            2,
+            AffineTransform::new(1.0, 0.0, 0.0, 1.0, -5.5, -4.25)?,
+        )?
+        .ok_or("fractional band unexpectedly outside source")?;
+        assert_eq!(
+            fractional,
+            Lanczos3SourceWindow {
+                x: 3,
+                y: 4,
+                width: 10,
+                height: 7,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_window_reports_disjoint_and_invalid_bands_explicitly() -> TestResult {
+        let disjoint = plan_lanczos3_source_window(
+            5,
+            5,
+            5,
+            5,
+            0,
+            5,
+            AffineTransform::new(1.0, 0.0, 0.0, 1.0, 100.0, 0.0)?,
+        )?;
+        assert_eq!(disjoint, None);
+        assert!(matches!(
+            plan_lanczos3_source_window(5, 5, 5, 5, 4, 2, AffineTransform::IDENTITY),
+            Err(ResamplingError::ReferenceBandOutOfBounds { .. })
+        ));
+        assert!(matches!(
+            plan_lanczos3_source_window(5, 5, 5, 5, 0, 0, AffineTransform::IDENTITY),
+            Err(ResamplingError::ZeroBandHeight)
         ));
         Ok(())
     }

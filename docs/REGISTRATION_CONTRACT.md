@@ -243,6 +243,13 @@ oracle across multiple planes, partial final bands, boundary loss, masks, and
 non-finite source values. File-backed source windows and transactional FITS
 publication remain runtime responsibilities.
 
+Before decoding each band, the source-window planner evaluates the exact same
+inverse transform and analytical-zero kernels. It returns the smallest rectangle
+containing every non-zero tap of every complete output kernel. Entirely disjoint
+bands require no source read. Integer-aligned transforms consequently request no
+invented halo, while fractional transforms include all six taps per affected
+axis. This plan is geometric and does not inspect pixel values or masks.
+
 ## Common geometric footprint and autocrop
 
 `common-lanczos3-footprint-v1` evaluates only image extents and accepted
