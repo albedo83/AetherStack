@@ -79,6 +79,11 @@ stores the manifest digest and `AETHPLN` stores the canonical Light-plan digest.
 Each individual product also stores its exact source SHA-256 as `AETHINP`. The
 Light plan itself stores the canonical master-plan digest, providing a complete
 transitive provenance chain without embedding local paths.
+Calibrated and RGB individual products also carry `AETHFID`, the stable review
+identity derived from the raw manifest path, byte length, and fingerprint. RGB
+`AETHINP` identifies the calibrated CFA artifact, whereas `AETHFID` still names
+the same reviewed Light. The RGB executor verifies the calibrated header's
+`AETHFID` before propagating it.
 
 The desktop response binds every individual product to the stable review-frame
 identity derived from that same manifest source. Blink may therefore exchange

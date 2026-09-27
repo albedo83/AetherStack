@@ -14,7 +14,7 @@ const INITIAL_CHECKSUM_VALUE: &str = "0000000000000000";
 /// Canonical quiet-NaN payload used for unavailable floating FITS samples.
 pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 /// Version of the provenance cards emitted by this writer.
-pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 3;
+pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 4;
 /// Maximum byte length of a canonical output algorithm identifier.
 pub const MAX_FITS_ALGORITHM_ID_BYTES: usize = 32;
 /// Maximum byte length of a portable session group identifier.
@@ -29,6 +29,7 @@ pub struct FitsOutputProvenance {
     algorithm_id: String,
     source_count: u32,
     source_sha256: Option<String>,
+    frame_id_sha256: Option<String>,
 }
 
 impl FitsOutputProvenance {
@@ -70,6 +71,7 @@ impl FitsOutputProvenance {
             algorithm_id,
             source_count,
             source_sha256: None,
+            frame_id_sha256: None,
         })
     }
 
@@ -146,6 +148,33 @@ impl FitsOutputProvenance {
     pub fn source_sha256(&self) -> Option<&str> {
         self.source_sha256.as_deref()
     }
+
+    /// Binds a single-frame artifact to its stable reviewed frame identity.
+    ///
+    /// Unlike `AETHINP`, which identifies the immediate pixel input and changes
+    /// after calibration or demosaicing, this value follows the logical frame
+    /// through derived products. It lets later stages prove that transformed
+    /// pixels still belong to the Light accepted during review.
+    pub fn with_frame_id_sha256(
+        mut self,
+        frame_id_sha256: impl Into<String>,
+    ) -> Result<Self, FitsProvenanceError> {
+        if self.source_count != 1 {
+            return Err(FitsProvenanceError::FrameIdRequiresSingleSource);
+        }
+        let frame_id_sha256 = frame_id_sha256.into();
+        if !is_lower_sha256(&frame_id_sha256) {
+            return Err(FitsProvenanceError::InvalidFrameIdSha256);
+        }
+        self.frame_id_sha256 = Some(frame_id_sha256);
+        Ok(self)
+    }
+
+    /// Stable reviewed frame identity carried through derived products.
+    #[must_use]
+    pub fn frame_id_sha256(&self) -> Option<&str> {
+        self.frame_id_sha256.as_deref()
+    }
 }
 
 /// Failure to construct canonical FITS output provenance.
@@ -163,8 +192,12 @@ pub enum FitsProvenanceError {
     ZeroSourceCount,
     /// Per-source identity is not full lowercase SHA-256 hex.
     InvalidSourceSha256,
+    /// Reviewed frame identity is not full lowercase SHA-256 hex.
+    InvalidFrameIdSha256,
     /// Per-source identity cannot describe a multi-source product.
     SourceDigestRequiresSingleSource,
+    /// Reviewed frame identity applies only to a single-frame product.
+    FrameIdRequiresSingleSource,
 }
 
 impl Display for FitsProvenanceError {
@@ -184,9 +217,14 @@ impl Display for FitsProvenanceError {
             Self::InvalidSourceSha256 => {
                 formatter.write_str("source SHA-256 must be 64 lowercase hexadecimal digits")
             }
+            Self::InvalidFrameIdSha256 => {
+                formatter.write_str("reviewed frame ID must be 64 lowercase hexadecimal digits")
+            }
             Self::SourceDigestRequiresSingleSource => {
                 formatter.write_str("source SHA-256 requires exactly one represented source")
             }
+            Self::FrameIdRequiresSingleSource => formatter
+                .write_str("reviewed frame identity requires exactly one represented source"),
         }
     }
 }
@@ -590,7 +628,7 @@ pub fn write_f64_primary<W: Write>(
 ///
 /// In addition to [`write_f64_primary`]'s image contract, this emits `CREATOR`,
 /// `AETHVER`, `AETHMAN`, optional `AETHPLN`, `AETHGRP`, `AETHALG`, `AETHSRC`,
-/// and optional single-source `AETHINP`
+/// optional immediate-input `AETHINP`, and optional reviewed-frame `AETHFID`
 /// cards. Identifiers are validated by [`FitsOutputProvenance`] before any
 /// output is accepted.
 ///
@@ -708,6 +746,9 @@ fn write_primary_header<W: Write>(
         )?;
         if let Some(source_sha256) = provenance.source_sha256() {
             write_string_card(&mut header, "AETHINP", source_sha256, &mut header_bytes)?;
+        }
+        if let Some(frame_id_sha256) = provenance.frame_id_sha256() {
+            write_string_card(&mut header, "AETHFID", frame_id_sha256, &mut header_bytes)?;
         }
     }
     let checksum_offsets = if include_checksums {
@@ -1067,6 +1108,7 @@ mod tests {
         assert_eq!(provenance.algorithm_id(), "strict-mean-v1");
         assert_eq!(provenance.source_count(), 3);
         assert_eq!(provenance.source_sha256(), None);
+        assert_eq!(provenance.frame_id_sha256(), None);
 
         let explicit_group =
             FitsOutputProvenance::new("a".repeat(64), "light-001", "strict-mean-v1", 3)?;
@@ -1112,6 +1154,10 @@ mod tests {
             provenance.clone().with_source_sha256("d".repeat(64)),
             Err(FitsProvenanceError::SourceDigestRequiresSingleSource)
         ));
+        assert!(matches!(
+            provenance.clone().with_frame_id_sha256("d".repeat(64)),
+            Err(FitsProvenanceError::FrameIdRequiresSingleSource)
+        ));
         let single = FitsOutputProvenance::new(
             "a".repeat(64),
             "light-001",
@@ -1122,9 +1168,22 @@ mod tests {
             single.clone().with_source_sha256("D".repeat(64)),
             Err(FitsProvenanceError::InvalidSourceSha256)
         ));
+        assert!(matches!(
+            single.clone().with_frame_id_sha256("D".repeat(64)),
+            Err(FitsProvenanceError::InvalidFrameIdSha256)
+        ));
         assert_eq!(
-            single.with_source_sha256("d".repeat(64))?.source_sha256(),
+            single
+                .clone()
+                .with_source_sha256("d".repeat(64))?
+                .source_sha256(),
             Some("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+        );
+        assert_eq!(
+            single
+                .with_frame_id_sha256("e".repeat(64))?
+                .frame_id_sha256(),
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
         );
         Ok(())
     }
@@ -1139,7 +1198,8 @@ mod tests {
             1,
         )?
         .with_plan_sha256("c".repeat(64))?
-        .with_source_sha256("d".repeat(64))?;
+        .with_source_sha256("d".repeat(64))?
+        .with_frame_id_sha256("e".repeat(64))?;
         let mut output = Vec::new();
 
         write_f64_primary_with_provenance(&mut output, &image, &provenance)?;
@@ -1164,6 +1224,7 @@ mod tests {
             Some(i64::from(provenance.source_count()))
         );
         assert_eq!(header.string("AETHINP"), provenance.source_sha256());
+        assert_eq!(header.string("AETHFID"), provenance.frame_id_sha256());
         Ok(())
     }
 

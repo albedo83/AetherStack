@@ -14,6 +14,7 @@ use aether_fits::{
     PrimaryImageReader,
 };
 use aether_metadata::{BayerPattern, FrameType};
+use aether_review::FrameId;
 use aether_session::{
     FingerprintError, LightCalibrationPlan, LightCalibrationPlanError, LightMasterAssociation,
     LightMasterKind, ManifestError, ManifestFile, ManifestGroup, MasterPlan, MasterPlanError,
@@ -303,6 +304,7 @@ impl LightProductExecutionResult {
 pub struct CalibratedLightFrameExecutionResult {
     group_id: String,
     source_index: usize,
+    source_frame_id: FrameId,
     source_sha256: String,
     output: PathBuf,
     statistics: ImageStatistics,
@@ -322,6 +324,12 @@ impl CalibratedLightFrameExecutionResult {
     #[must_use]
     pub const fn source_index(&self) -> usize {
         self.source_index
+    }
+
+    /// Stable reviewed identity carried in `AETHFID`.
+    #[must_use]
+    pub const fn source_frame_id(&self) -> &FrameId {
+        &self.source_frame_id
     }
 
     /// Exact path-free SHA-256 identity embedded as `AETHINP`.
@@ -450,6 +458,7 @@ impl DemosaicedLightPlanProgressEvent {
 pub struct DemosaicedLightFrameExecutionResult {
     group_id: String,
     source_index: usize,
+    source_frame_id: FrameId,
     calibrated_sha256: String,
     pattern: BayerPattern,
     output: PathBuf,
@@ -467,6 +476,12 @@ impl DemosaicedLightFrameExecutionResult {
     #[must_use]
     pub const fn source_index(&self) -> usize {
         self.source_index
+    }
+
+    /// Stable reviewed identity inherited from the raw Light.
+    #[must_use]
+    pub const fn source_frame_id(&self) -> &FrameId {
+        &self.source_frame_id
     }
 
     /// SHA-256 of the exact calibrated CFA input embedded as `AETHINP`.
@@ -1186,6 +1201,7 @@ where
                 }
             })?;
             let source_sha256 = signal.fingerprint().sha256().to_owned();
+            let source_frame_id = reviewed_frame_id(&request.manifest, group, source_index)?;
             let provenance = FitsOutputProvenance::new(
                 &manifest_sha256,
                 group.id(),
@@ -1194,6 +1210,7 @@ where
             )
             .and_then(|value| value.with_plan_sha256(&light_plan_sha256))
             .and_then(|value| value.with_source_sha256(&source_sha256))
+            .and_then(|value| value.with_frame_id_sha256(source_frame_id.as_str()))
             .map_err(LightPlanExecutionError::Provenance)?;
             let pipeline = StrictCalibrationRequest::new(
                 signal,
@@ -1235,6 +1252,7 @@ where
             frames.push(CalibratedLightFrameExecutionResult {
                 group_id: group.id().to_owned(),
                 source_index,
+                source_frame_id,
                 source_sha256,
                 output: public_output,
                 statistics: completed.statistics(),
@@ -1338,6 +1356,7 @@ where
                 }
             })?;
             let calibrated_sha256 = fingerprint.sha256().to_owned();
+            let source_frame_id = calibrated_frame.source_frame_id().clone();
             let source = PipelineSource::new(calibrated_frame.output().to_path_buf(), fingerprint);
             let staged_output = staging
                 .path()
@@ -1350,6 +1369,7 @@ where
             )
             .and_then(|value| value.with_plan_sha256(&light_plan_sha256))
             .and_then(|value| value.with_source_sha256(&calibrated_sha256))
+            .and_then(|value| value.with_frame_id_sha256(source_frame_id.as_str()))
             .map_err(LightPlanExecutionError::Provenance)?;
             let pipeline = StrictDemosaicRequest::new(
                 source.clone(),
@@ -1396,6 +1416,7 @@ where
             frames.push(DemosaicedLightFrameExecutionResult {
                 group_id: group.id().to_owned(),
                 source_index,
+                source_frame_id,
                 calibrated_sha256,
                 pattern: pattern.clone(),
                 output: public_output,
@@ -1809,7 +1830,8 @@ fn validate_calibrated_provenance(
         && header.string("AETHGRP") == Some(frame.group_id())
         && header.string("AETHALG") == Some(STRICT_CALIBRATED_LIGHT_ALGORITHM_ID)
         && header.integer("AETHSRC") == Some(1)
-        && header.string("AETHINP") == Some(frame.source_sha256());
+        && header.string("AETHINP") == Some(frame.source_sha256())
+        && header.string("AETHFID") == Some(frame.source_frame_id().as_str());
     let valid_checksums = reader
         .verify_checksums()
         .map_err(|source| LightPlanExecutionError::OpenCalibrated {
@@ -1932,6 +1954,25 @@ fn find_file<'a>(manifest: &'a SessionManifest, relative_path: &str) -> Option<&
         .files()
         .iter()
         .find(|file| file.relative_path() == relative_path)
+}
+
+fn reviewed_frame_id(
+    manifest: &SessionManifest,
+    group: &ManifestGroup,
+    source_index: usize,
+) -> Result<FrameId, LightPlanExecutionError> {
+    let relative_path = group
+        .files()
+        .get(source_index)
+        .ok_or(LightPlanExecutionError::CalibratedFrameSetMismatch)?;
+    let file = find_file(manifest, relative_path)
+        .ok_or(LightPlanExecutionError::CalibratedFrameSetMismatch)?;
+    FrameId::derive(
+        file.relative_path(),
+        file.fingerprint().byte_length(),
+        file.fingerprint().sha256(),
+    )
+    .map_err(|_| LightPlanExecutionError::CalibratedFrameSetMismatch)
 }
 
 fn light_product_file_name(group_id: &str) -> String {
@@ -2441,6 +2482,10 @@ mod tests {
                 header.string("AETHINP"),
                 Some(expected_source_digests[source_index].as_str())
             );
+            assert_eq!(
+                header.string("AETHFID"),
+                Some(frame.source_frame_id().as_str())
+            );
             let image = reader.read_region_image(ImageRegion::new(0, 0, 0, 3, 1))?;
             assert_eq!(
                 image
@@ -2539,6 +2584,10 @@ mod tests {
             assert_eq!(
                 header.string("AETHINP"),
                 Some(expected_calibrated_digests[source_index].as_str())
+            );
+            assert_eq!(
+                header.string("AETHFID"),
+                Some(frame.source_frame_id().as_str())
             );
             assert!(reader.verify_checksums()?.is_fully_verified());
             for plane in 0..3 {

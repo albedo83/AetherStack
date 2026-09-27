@@ -832,6 +832,15 @@ safety reasoning. They do not narrate obvious syntax.
     not discard unrelated accepted transforms. Next, construct the immutable
     native plan from this complete evidence while preserving the required CFA
     diagnostic to calibrated-linear-RGB execution boundary.
+53. Preserve reviewed identity across derived pixel artifacts. FITS provenance
+    version 4 adds `AETHFID` for a stable single-frame review identity distinct
+    from the immediate-input `AETHINP`. Calibrated CFA and demosaiced RGB outputs
+    derive and propagate it from the canonical manifest. Registration can now
+    bind plan geometry to a calibrated linear artifact only when its embedded
+    identity matches, and propagates the identity to registered outputs. Tests
+    reject substitution before publication and execute a complete artifact-
+    backed plan. Next, assemble and submit the native plan from the desktop's
+    complete accepted evidence and exact RGB artifact set.
 
 ## 11. Stable-release definition
 

@@ -49,7 +49,7 @@ or `-`. The versioned algorithm identifier is limited to 32 ASCII bytes and uses
 only lowercase letters, digits, `.`, `_`, and `-`. Its first byte must be a
 lowercase letter or digit. A product must represent at least one source image.
 
-`write_f64_primary_with_provenance` emits version 3 of these cards before `END`:
+`write_f64_primary_with_provenance` emits version 4 of these cards before `END`:
 
 | Card | Meaning |
 | --- | --- |
@@ -61,6 +61,7 @@ lowercase letter or digit. A product must represent at least one source image.
 | `AETHALG` | Versioned integration algorithm identifier |
 | `AETHSRC` | Number of source images represented by the product |
 | `AETHINP` | Optional exact source SHA-256 for a single-frame product |
+| `AETHFID` | Optional stable reviewed-frame ID for a single-frame product |
 
 `AETHPLN` is mandatory for plan-driven calibration products and absent for
 products that do not depend on a plan. A master product stores its canonical
@@ -73,6 +74,11 @@ selected master, selected pedestal, and recorded candidate diagnostic.
 frame self-identifying without exposing its local path or acquisition filename.
 The runtime requires it to equal the signal fingerprint before single-Light
 calibration begins.
+
+`AETHFID` is also accepted only when `AETHSRC = 1`. It remains constant across
+calibration, demosaicing, registration, and later single-frame stages, while
+`AETHINP` changes to identify each stage's immediate input bytes. This separates
+logical review identity from physical artifact identity without storing a path.
 
 A demosaiced individual frame also requires `AETHSRC = 1` and an exact
 `AETHINP`. Its `AETHALG` is `malvar-he-cutler-f64-v1`; its image axes are width,

@@ -353,10 +353,18 @@ digest. It also rechecks decoded source dimensions before creating output. The
 older direct constructor remains the numerical oracle boundary; production
 orchestration must use the plan-bound path.
 
+For a color-camera production path, registration must consume calibrated linear
+RGB rather than resample the raw CFA mosaic as ordinary scalar pixels. The
+artifact-bound constructor therefore looks up geometry by the reviewed
+`FrameId` and requires the input FITS header's `AETHFID` to match it before an
+output writer exists. The artifact's own fingerprint remains `AETHINP` in the
+registered output, preserving both immediate and logical identity. Raw CFA
+inputs remain useful to the phase-neutral diagnostic solver only.
+
 `run_registration_plan` is the all-frame publication boundary. The supplied
-portable identities must match every canonical plan entry exactly once. Each
+portable or embedded reviewed identities must match every canonical plan entry exactly once. Each
 registered image is constructed and checksum-read back inside a private sibling
-directory; all raw sources are fingerprinted again before the first public link
+directory; all pixel sources are fingerprinted again before the first public link
 appears. Final filenames contain only stable frame IDs. Create-new publication
 never overwrites user data, rolls back links made by a failed or cancelled run,
 and synchronizes the destination directory after the complete set is visible.

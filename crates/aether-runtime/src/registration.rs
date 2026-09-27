@@ -44,6 +44,7 @@ pub struct StrictRegistrationRequest {
     header_options: HeaderReadOptions,
     validation_mode: ValidationMode,
     plan_source_dimensions: Option<(usize, usize)>,
+    plan_source_frame_id: Option<FrameId>,
 }
 
 impl StrictRegistrationRequest {
@@ -80,6 +81,7 @@ impl StrictRegistrationRequest {
             header_options: HeaderReadOptions::default(),
             validation_mode: ValidationMode::Strict,
             plan_source_dimensions: None,
+            plan_source_frame_id: None,
         })
     }
 
@@ -120,6 +122,41 @@ impl StrictRegistrationRequest {
             plan.reference_height(),
         )?;
         request.plan_source_dimensions = Some(expected_dimensions);
+        Ok(request)
+    }
+
+    /// Builds a request for a calibrated artifact carrying reviewed identity.
+    ///
+    /// The artifact bytes intentionally differ from the raw reviewed Light, so
+    /// identity is read from the `AETHFID` provenance card instead of being
+    /// re-derived from the immediate input fingerprint. This is the required
+    /// path for registered linear RGB products from color cameras.
+    pub fn from_plan_artifact(
+        source: PipelineSource,
+        reviewed_frame_id: FrameId,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        plan: &RegistrationPlan,
+    ) -> Result<Self, RegistrationPipelineError> {
+        if provenance.plan_sha256() != Some(plan.plan_sha256()) {
+            return Err(RegistrationPipelineError::ProvenancePlanMismatch);
+        }
+        let planned = plan
+            .frames()
+            .iter()
+            .find(|frame| frame.frame_id() == &reviewed_frame_id)
+            .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?;
+        let expected_dimensions = (planned.source_width(), planned.source_height());
+        let mut request = Self::new(
+            source,
+            output,
+            provenance,
+            planned.source_to_reference(),
+            plan.reference_width(),
+            plan.reference_height(),
+        )?;
+        request.plan_source_dimensions = Some(expected_dimensions);
+        request.plan_source_frame_id = Some(reviewed_frame_id);
         Ok(request)
     }
 
@@ -199,7 +236,8 @@ impl StrictRegistrationResult {
 #[derive(Clone, Debug)]
 pub struct RegistrationPlanSource {
     source: PipelineSource,
-    portable_relative_path: String,
+    portable_relative_path: Option<String>,
+    reviewed_frame_id: Option<FrameId>,
 }
 
 impl RegistrationPlanSource {
@@ -208,7 +246,18 @@ impl RegistrationPlanSource {
     pub fn new(source: PipelineSource, portable_relative_path: impl Into<String>) -> Self {
         Self {
             source,
-            portable_relative_path: portable_relative_path.into(),
+            portable_relative_path: Some(portable_relative_path.into()),
+            reviewed_frame_id: None,
+        }
+    }
+
+    /// Associates a derived calibrated artifact with its reviewed raw Light.
+    #[must_use]
+    pub const fn from_reviewed_artifact(source: PipelineSource, frame_id: FrameId) -> Self {
+        Self {
+            source,
+            portable_relative_path: None,
+            reviewed_frame_id: Some(frame_id),
         }
     }
 
@@ -220,13 +269,18 @@ impl RegistrationPlanSource {
 
     /// Portable path used to derive the reviewed [`FrameId`].
     #[must_use]
-    pub fn portable_relative_path(&self) -> &str {
-        &self.portable_relative_path
+    pub fn portable_relative_path(&self) -> Option<&str> {
+        self.portable_relative_path.as_deref()
     }
 
     fn frame_id(&self) -> Result<FrameId, RegistrationPlanExecutionError> {
+        if let Some(frame_id) = &self.reviewed_frame_id {
+            return Ok(frame_id.clone());
+        }
         FrameId::derive(
-            &self.portable_relative_path,
+            self.portable_relative_path
+                .as_deref()
+                .ok_or(RegistrationPlanExecutionError::InvalidSourceIdentity)?,
             self.source.fingerprint().byte_length(),
             self.source.fingerprint().sha256(),
         )
@@ -558,6 +612,8 @@ pub enum RegistrationPipelineError {
     PlanSourceIdentityMismatch,
     /// Decoded source dimensions disagree with the plan entry.
     PlanSourceDimensionsMismatch,
+    /// A derived artifact does not carry the reviewed frame identity in its header.
+    PlanArtifactIdentityMismatch,
     /// Band height must be positive.
     ZeroBandHeight,
     /// The requested reference canvas violates the shared dimension contract.
@@ -593,6 +649,7 @@ impl RegistrationPipelineError {
             Self::ProvenancePlanMismatch => "registration-provenance-plan",
             Self::PlanSourceIdentityMismatch => "registration-plan-source",
             Self::PlanSourceDimensionsMismatch => "registration-plan-dimensions",
+            Self::PlanArtifactIdentityMismatch => "registration-plan-artifact-identity",
             Self::ZeroBandHeight => "registration-band-height",
             Self::OutputDimensions(_) => "registration-output-dimensions",
             Self::Input(_) => "registration-input",
@@ -628,6 +685,8 @@ impl Display for RegistrationPipelineError {
             }
             Self::PlanSourceDimensionsMismatch => formatter
                 .write_str("registration source dimensions disagree with the reviewed plan"),
+            Self::PlanArtifactIdentityMismatch => formatter
+                .write_str("registration artifact is not bound to the reviewed frame identity"),
             Self::ZeroBandHeight => {
                 formatter.write_str("registration band height must be positive")
             }
@@ -674,6 +733,7 @@ impl Error for RegistrationPipelineError {
             | Self::ProvenancePlanMismatch
             | Self::PlanSourceIdentityMismatch
             | Self::PlanSourceDimensionsMismatch
+            | Self::PlanArtifactIdentityMismatch
             | Self::ZeroBandHeight
             | Self::WorkSizeOverflow
             | Self::InvalidStagedOutput => None,
@@ -729,14 +789,28 @@ where
         )
         .and_then(|value| value.with_plan_sha256(request.plan.plan_sha256()))
         .and_then(|value| value.with_source_sha256(source.source.fingerprint().sha256()))
+        .and_then(|value| value.with_frame_id_sha256(frame_id.as_str()))
         .map_err(RegistrationPlanExecutionError::Provenance)?;
-        let pipeline = StrictRegistrationRequest::from_plan(
-            source.source.clone(),
-            &source.portable_relative_path,
-            staged_output.clone(),
-            provenance,
-            &request.plan,
-        )
+        let pipeline = if let Some(reviewed_frame_id) = &source.reviewed_frame_id {
+            StrictRegistrationRequest::from_plan_artifact(
+                source.source.clone(),
+                reviewed_frame_id.clone(),
+                staged_output.clone(),
+                provenance,
+                &request.plan,
+            )
+        } else {
+            StrictRegistrationRequest::from_plan(
+                source.source.clone(),
+                source
+                    .portable_relative_path
+                    .as_deref()
+                    .ok_or(RegistrationPlanExecutionError::InvalidSourceIdentity)?,
+                staged_output.clone(),
+                provenance,
+                &request.plan,
+            )
+        }
         .and_then(|value| value.with_band_height(request.band_height))
         .map(|value| value.with_header_policy(request.header_options, request.validation_mode))
         .map_err(|source| RegistrationPlanExecutionError::FramePipeline {
@@ -1070,6 +1144,11 @@ where
         request.validation_mode,
     )
     .map_err(RegistrationPipelineError::Input)?;
+    if let Some(expected_frame_id) = &request.plan_source_frame_id
+        && reader.report().header().string("AETHFID") != Some(expected_frame_id.as_str())
+    {
+        return Err(RegistrationPipelineError::PlanArtifactIdentityMismatch);
+    }
     let source_dimensions = dimensions_from_axes(input, reader.descriptor().axes())
         .map_err(RegistrationPipelineError::Input)?;
     if let Some(expected) = request.plan_source_dimensions
@@ -1291,7 +1370,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use aether_core::ScientificImage;
-    use aether_fits::write_f64_primary_atomic_new;
+    use aether_fits::{write_f64_primary_atomic_new, write_f64_primary_atomic_new_with_provenance};
     use aether_registration::{PlannedRegistrationFrame, RegistrationPlan, resample_lanczos3};
     use aether_session::fingerprint_reader;
 
@@ -1458,6 +1537,65 @@ mod tests {
     }
 
     #[test]
+    fn registration_plan_accepts_identity_bound_linear_artifacts() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (_, _, image) = source_and_provenance(&directory)?;
+        let first_id = FrameId::new("1".repeat(64))?;
+        let second_id = FrameId::new("2".repeat(64))?;
+        let plan = RegistrationPlan::new(
+            first_id.clone(),
+            11,
+            9,
+            vec![
+                PlannedRegistrationFrame::new(second_id.clone(), 11, 9, AffineTransform::IDENTITY),
+                PlannedRegistrationFrame::new(first_id.clone(), 11, 9, AffineTransform::IDENTITY),
+            ],
+        )?;
+        let mut sources = Vec::new();
+        for (index, frame_id) in [first_id, second_id].into_iter().enumerate() {
+            let path = directory.0.join(format!("linear-{index}.fits"));
+            let provenance =
+                FitsOutputProvenance::new("a".repeat(64), "light-group", "linear-rgb-v1", 1)?
+                    .with_frame_id_sha256(frame_id.as_str())?;
+            write_f64_primary_atomic_new_with_provenance(&path, &image, &provenance)?;
+            let mut file = File::open(&path)?;
+            let fingerprint = fingerprint_reader(&mut file)?;
+            sources.push(RegistrationPlanSource::from_reviewed_artifact(
+                PipelineSource::new(path, fingerprint),
+                frame_id,
+            ));
+        }
+        let output = directory.0.join("registered-artifacts");
+        fs::create_dir(&output)?;
+        let request = RegistrationPlanExecutionRequest::new(
+            plan,
+            sources,
+            output,
+            "a".repeat(64),
+            "light-group",
+        )?;
+
+        let result = run_registration_plan(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        assert_eq!(result.frames().len(), 2);
+        for frame in result.frames() {
+            let reader = PrimaryImageReader::open(
+                File::open(frame.output())?,
+                HeaderReadOptions::default(),
+            )?;
+            assert_eq!(
+                reader.report().header().string("AETHFID"),
+                Some(frame.frame_id().as_str())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn registration_plan_rejects_incomplete_or_preexisting_products_before_work() -> TestResult {
         let directory = TestDirectory::new()?;
         let (request, _) = two_source_registration_request(&directory)?;
@@ -1619,6 +1757,104 @@ mod tests {
             Err(RegistrationPipelineError::PlanSourceDimensionsMismatch)
         ));
         assert!(!output.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn reviewed_artifact_requires_matching_embedded_frame_identity() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (_, _, image) = source_and_provenance(&directory)?;
+        let reviewed_id = FrameId::new("d".repeat(64))?;
+        let reference_id = FrameId::new("e".repeat(64))?;
+        let plan = RegistrationPlan::new(
+            reference_id.clone(),
+            11,
+            9,
+            vec![
+                PlannedRegistrationFrame::new(
+                    reviewed_id.clone(),
+                    11,
+                    9,
+                    AffineTransform::IDENTITY,
+                ),
+                PlannedRegistrationFrame::new(reference_id, 11, 9, AffineTransform::IDENTITY),
+            ],
+        )?;
+        let artifact_path = directory.0.join("linear-rgb.fits");
+        let artifact_provenance =
+            FitsOutputProvenance::new("a".repeat(64), "light-group", "linear-rgb-v1", 1)?
+                .with_frame_id_sha256("f".repeat(64))?;
+        write_f64_primary_atomic_new_with_provenance(&artifact_path, &image, &artifact_provenance)?;
+        let mut file = File::open(&artifact_path)?;
+        let fingerprint = fingerprint_reader(&mut file)?;
+        let artifact = PipelineSource::new(artifact_path, fingerprint.clone());
+        let output = directory.0.join("registered-artifact.fits");
+        let output_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "light-group",
+            LANCZOS3_RESAMPLING_ALGORITHM_ID,
+            1,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_source_sha256(fingerprint.sha256())?;
+        let request = StrictRegistrationRequest::from_plan_artifact(
+            artifact,
+            reviewed_id,
+            output.clone(),
+            output_provenance,
+            &plan,
+        )?;
+
+        assert!(matches!(
+            run_strict_registration_pipeline(
+                &request,
+                &CancellationToken::new(),
+                &MemoryBudget::new(2_000_000)?,
+                |_| {},
+            ),
+            Err(RegistrationPipelineError::PlanArtifactIdentityMismatch)
+        ));
+        assert!(!output.exists());
+
+        let valid_path = directory.0.join("bound-linear-rgb.fits");
+        let valid_provenance =
+            FitsOutputProvenance::new("a".repeat(64), "light-group", "linear-rgb-v1", 1)?
+                .with_frame_id_sha256(
+                    request
+                        .plan_source_frame_id
+                        .as_ref()
+                        .ok_or("missing ID")?
+                        .as_str(),
+                )?;
+        write_f64_primary_atomic_new_with_provenance(&valid_path, &image, &valid_provenance)?;
+        let mut file = File::open(&valid_path)?;
+        let fingerprint = fingerprint_reader(&mut file)?;
+        let valid_output = directory.0.join("registered-bound-artifact.fits");
+        let valid_output_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "light-group",
+            LANCZOS3_RESAMPLING_ALGORITHM_ID,
+            1,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_source_sha256(fingerprint.sha256())?;
+        let valid_request = StrictRegistrationRequest::from_plan_artifact(
+            PipelineSource::new(valid_path, fingerprint),
+            request
+                .plan_source_frame_id
+                .clone()
+                .ok_or("missing reviewed identity")?,
+            valid_output.clone(),
+            valid_output_provenance,
+            &plan,
+        )?;
+        run_strict_registration_pipeline(
+            &valid_request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        assert!(valid_output.is_file());
         Ok(())
     }
 

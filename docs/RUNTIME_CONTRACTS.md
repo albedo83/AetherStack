@@ -108,6 +108,11 @@ It derives the reviewed frame identity from the portable relative path and
 recorded source fingerprint, obtains transform and canvas only from the
 canonical registration plan, requires matching plan SHA-256 in output
 provenance, and verifies decoded source dimensions before staging a FITS file.
+Derived calibrated artifacts use the complementary artifact-bound constructor:
+their immediate bytes cannot recreate the raw review identity, so the runtime
+requires the version-4 `AETHFID` header card to match the selected plan entry.
+This permits calibrated linear RGB registration without ever treating a CFA
+mosaic as an ordinary resampling plane.
 `run_registration_plan` raises this single-frame primitive to the production
 transaction boundary. It requires an exact one-to-one source set for the
 identity-canonical plan, derives deterministic public names from `FrameId`, and
