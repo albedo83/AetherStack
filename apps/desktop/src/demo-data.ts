@@ -74,6 +74,8 @@ export const demoReviewModel: ReviewViewModel = {
       overlayOpacity: 0.65,
       histogramState: "idle",
       histogram: null,
+      pixelInspectionState: "idle",
+      pixelInspection: null,
       settings: {
         estimator: "strict_mean",
         lowFraction: 0.1,

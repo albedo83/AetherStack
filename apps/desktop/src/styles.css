@@ -1218,6 +1218,10 @@ button:active:not(:disabled) {
   display: none;
 }
 
+.registered-stack__preview:has(img:not([hidden])) {
+  cursor: crosshair;
+}
+
 .registered-stack__overlay-control {
   display: grid;
   grid-template-columns: auto minmax(120px, 1fr) 42px;
@@ -1337,6 +1341,85 @@ button:active:not(:disabled) {
 .rejection-histogram__bins small {
   color: var(--text-dim);
   font-size: 9px;
+}
+
+.registered-stack__pixel-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(86px, 120px)) minmax(110px, auto);
+  align-items: end;
+  gap: 8px;
+}
+
+.registered-stack__pixel-controls label {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  min-height: 34px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 800;
+  background: #0b1219;
+  border: 1px solid #35485a;
+  border-radius: 6px;
+}
+
+.registered-stack__pixel-controls label span {
+  text-align: center;
+}
+
+.registered-stack__pixel-controls input {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  color: #e6f0f8;
+  font:
+    700 11px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  background: #111c26;
+  border: 0;
+  border-left: 1px solid #35485a;
+  appearance: textfield;
+}
+
+.registered-stack__pixel-controls input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.registered-stack__pixel-controls .button {
+  min-height: 34px;
+}
+
+.registered-stack__pixel-readout {
+  min-height: 34px;
+  padding: 9px 10px;
+  overflow-wrap: anywhere;
+  color: #aebfce;
+  font:
+    600 9px/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  background: #091017;
+  border: 1px solid #293b4b;
+  border-radius: 6px;
+}
+
+.registered-stack__pixel-readout[data-state="ready"] {
+  color: #dcebf6;
+  border-color: #3d6177;
+}
+
+.registered-stack__pixel-readout[data-state="error"] {
+  color: #efb7b7;
+  border-color: #744747;
 }
 
 .registered-stack__actions .button {

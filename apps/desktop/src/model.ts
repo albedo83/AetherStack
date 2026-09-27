@@ -41,6 +41,14 @@ export interface RejectionHistogram {
   readonly bins: readonly RejectionHistogramBin[];
 }
 
+export interface StackPixelInspection {
+  readonly x: number;
+  readonly y: number;
+  readonly scienceValues: readonly (number | null)[];
+  readonly lowRejectionCounts: readonly (number | null)[] | null;
+  readonly highRejectionCounts: readonly (number | null)[] | null;
+}
+
 export type ReviewState = "undecided" | "accepted" | "rejected";
 
 export type ReviewRejectionReason =
@@ -221,6 +229,8 @@ export interface RegistrationViewModel {
     readonly overlayOpacity: number;
     readonly histogramState: "idle" | "loading" | "ready" | "error";
     readonly histogram: RejectionHistogram | null;
+    readonly pixelInspectionState: "idle" | "loading" | "ready" | "error";
+    readonly pixelInspection: StackPixelInspection | null;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
@@ -282,6 +292,7 @@ export interface ReviewActions {
     product: RegisteredStackProductView,
   ) => void;
   readonly onSetRegisteredStackOverlayOpacity: (opacity: number) => void;
+  readonly onInspectRegisteredStackPixel: (x: number, y: number) => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

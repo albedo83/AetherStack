@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   estimateFitsPreviewTransform,
   inspectRejectionHistogram,
+  inspectStackPixel,
   requestFitsPreview,
 } from "./preview-bridge.ts";
 
@@ -152,5 +153,26 @@ describe("native preview bridge", () => {
     expect(invoke).toHaveBeenCalledWith("inspect_rejection_histogram", {
       request: { path: "/selected/rejection-low.fits" },
     });
+  });
+
+  it("requests exact stack values at one integer coordinate", async () => {
+    const inspection = {
+      x: 12,
+      y: 34,
+      scienceValues: [1, 2, 3],
+      lowRejectionCounts: [0, 1, 0],
+      highRejectionCounts: [2, 0, 1],
+    };
+    vi.mocked(invoke).mockResolvedValue(inspection);
+    const request = {
+      sciencePath: "/results/science.fits",
+      lowRejectionPath: "/results/low.fits",
+      highRejectionPath: "/results/high.fits",
+      x: 12,
+      y: 34,
+    };
+
+    await expect(inspectStackPixel(request)).resolves.toBe(inspection);
+    expect(invoke).toHaveBeenCalledWith("inspect_stack_pixel", { request });
   });
 });

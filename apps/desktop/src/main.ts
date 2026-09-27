@@ -32,6 +32,7 @@ import type {
 import {
   estimateFitsPreviewTransform,
   inspectRejectionHistogram,
+  inspectStackPixel,
   requestFitsPreview,
   type EstimatedDisplayTransform,
   type FitsPreviewRequest,
@@ -128,6 +129,7 @@ let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
 let registeredStackPreviewTicket = 0;
+let stackPixelTicket = 0;
 let registrationPreviewTicket = 0;
 let registrationBlinkTimer: number | null = null;
 let registrationSharedTransform: EstimatedDisplayTransform | null = null;
@@ -175,6 +177,7 @@ const screen = mountReviewScreen(root, model, {
     }
     registeredStackTicket += 1;
     registeredStackPreviewTicket += 1;
+    stackPixelTicket += 1;
     clearRegisteredStackPreviewResources();
     update({
       ...model,
@@ -199,6 +202,9 @@ const screen = mountReviewScreen(root, model, {
         stack: { ...model.registration.stack, overlayOpacity: opacity },
       },
     });
+  },
+  onInspectRegisteredStackPixel(x, y) {
+    void inspectRegisteredStackPixel(x, y);
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -695,6 +701,8 @@ function idleRegisteredStack(
     overlayOpacity: 0.65,
     histogramState: "idle",
     histogram: null,
+    pixelInspectionState: "idle",
+    pixelInspection: null,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -965,6 +973,8 @@ async function executeStack(): Promise<void> {
         overlayOpacity: stack.overlayOpacity,
         histogramState: "idle",
         histogram: null,
+        pixelInspectionState: "idle",
+        pixelInspection: null,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1031,6 +1041,8 @@ async function executeStack(): Promise<void> {
           overlayOpacity: model.registration.stack.overlayOpacity,
           histogramState: "idle",
           histogram: null,
+          pixelInspectionState: "idle",
+          pixelInspection: null,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1200,6 +1212,76 @@ async function loadRegisteredStackHistogram(
   }
 }
 
+async function inspectRegisteredStackPixel(
+  x: number,
+  y: number,
+): Promise<void> {
+  const result = model.registration.stack.result;
+  if (
+    !result ||
+    model.registration.stack.state !== "completed" ||
+    !Number.isInteger(x) ||
+    !Number.isInteger(y) ||
+    x < 0 ||
+    y < 0 ||
+    x >= result.width ||
+    y >= result.height
+  ) {
+    return;
+  }
+  const ticket = ++stackPixelTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...model.registration.stack,
+        pixelInspectionState: "loading",
+        pixelInspection: null,
+      },
+    },
+  });
+  try {
+    const inspection = await inspectStackPixel({
+      sciencePath: result.outputPath,
+      lowRejectionPath: result.lowRejectionMapPath,
+      highRejectionPath: result.highRejectionMapPath,
+      x,
+      y,
+    });
+    if (
+      ticket !== stackPixelTicket ||
+      model.registration.stack.result?.outputPath !== result.outputPath
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          pixelInspectionState: "ready",
+          pixelInspection: inspection,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== stackPixelTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          pixelInspectionState: "error",
+          pixelInspection: null,
+        },
+      },
+    });
+  }
+}
+
 async function requestRegisteredStackProductPreview(
   result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
   product: RegisteredStackProductView,
@@ -1255,6 +1337,7 @@ function selectRegisteredStackProduct(
   if (!result || stack.state !== "completed") return;
   if (!registeredStackProductPath(result, product)) return;
   registeredStackPreviewTicket += 1;
+  stackPixelTicket += 1;
   clearRegisteredStackPreviewResources();
   update({
     ...model,
@@ -1268,6 +1351,8 @@ function selectRegisteredStackProduct(
         sciencePreview: null,
         histogramState: product === "science" ? "idle" : "loading",
         histogram: null,
+        pixelInspectionState: "idle",
+        pixelInspection: null,
       },
     },
   });
@@ -2596,6 +2681,7 @@ function clearRegisteredStackPreviewResources(): void {
 function clearRegistrationPreviewResources(): void {
   registrationPreviewTicket += 1;
   registeredStackPreviewTicket += 1;
+  stackPixelTicket += 1;
   registrationSharedTransform = null;
   registrationPreviewPrefetch.cancel();
   releaseEphemeralRegistrationPreview();

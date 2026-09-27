@@ -986,6 +986,16 @@ safety reasoning. They do not narrate obvious syntax.
     Native malformed-count, bridge, presenter, accessibility, lint, and build
     tests cover the path. Next, add exact coordinate inspection for science and
     both rejection maps.
+69. Add exact coordinate inspection across the integrated science product and
+    both rejection maps. A click is mapped through the contained preview into
+    full-resolution integer coordinates, while accessible X/Y inputs provide
+    the same operation without a pointer. Rust reopens each FITS product, checks
+    matching dimensions and plane counts, reads one sample per plane with
+    checked offsets, preserves missing science values, and accepts only exact
+    non-negative rejection counts. Stale asynchronous results cannot replace a
+    newer selection. Native boundary, plane-order, bridge, presenter,
+    accessibility, lint, and build tests cover the path. Next, define the
+    weighted-integration contract and its versioned quality-weight expression.
 
 ## 11. Stable-release definition
 

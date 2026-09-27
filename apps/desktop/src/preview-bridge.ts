@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { FramePreview, RejectionHistogram } from "./model.ts";
+import type {
+  FramePreview,
+  RejectionHistogram,
+  StackPixelInspection,
+} from "./model.ts";
 
 export type PreviewTransfer =
   | { readonly kind: "linear" }
@@ -69,6 +73,16 @@ export function inspectRejectionHistogram(
   return invoke<RejectionHistogram>("inspect_rejection_histogram", {
     request: { path },
   });
+}
+
+export function inspectStackPixel(request: {
+  readonly sciencePath: string;
+  readonly lowRejectionPath: string | null;
+  readonly highRejectionPath: string | null;
+  readonly x: number;
+  readonly y: number;
+}): Promise<StackPixelInspection> {
+  return invoke<StackPixelInspection>("inspect_stack_pixel", { request });
 }
 
 /**

@@ -221,6 +221,22 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-histogram-bins]",
     ),
+    registeredStackPixelReadout: required<HTMLElement>(
+      root,
+      "[data-registered-stack-pixel-readout]",
+    ),
+    registeredStackPixelX: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-pixel-x]",
+    ),
+    registeredStackPixelY: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-pixel-y]",
+    ),
+    inspectRegisteredStackPixel: required<HTMLButtonElement>(
+      root,
+      '[data-action="inspect-registered-stack-coordinate"]',
+    ),
     registeredStackPreviewPlaceholder: required<HTMLElement>(
       root,
       "[data-registered-stack-preview-placeholder]",
@@ -444,6 +460,54 @@ export function mountReviewScreen(
     const actionElement = target?.closest<HTMLElement>("[data-action]");
     if (!actionElement) return;
     const action = actionElement.dataset.action;
+
+    if (action === "inspect-registered-stack-coordinate") {
+      const x = elements.registeredStackPixelX.valueAsNumber;
+      const y = elements.registeredStackPixelY.valueAsNumber;
+      if (Number.isInteger(x) && Number.isInteger(y)) {
+        actions.onInspectRegisteredStackPixel(x, y);
+      }
+      return;
+    }
+
+    if (action === "inspect-registered-stack-pixel") {
+      const result = model.registration.stack.result;
+      if (!result || model.registration.stack.previewState !== "ready") return;
+      const bounds = actionElement.getBoundingClientRect();
+      const imageAspect = result.width / result.height;
+      const viewportAspect = bounds.width / bounds.height;
+      const displayedWidth =
+        viewportAspect > imageAspect
+          ? bounds.height * imageAspect
+          : bounds.width;
+      const displayedHeight =
+        viewportAspect > imageAspect
+          ? bounds.height
+          : bounds.width / imageAspect;
+      const left = bounds.left + (bounds.width - displayedWidth) / 2;
+      const top = bounds.top + (bounds.height - displayedHeight) / 2;
+      const localX = event.clientX - left;
+      const localY = event.clientY - top;
+      if (
+        localX < 0 ||
+        localY < 0 ||
+        localX >= displayedWidth ||
+        localY >= displayedHeight
+      ) {
+        return;
+      }
+      actions.onInspectRegisteredStackPixel(
+        Math.min(
+          result.width - 1,
+          Math.floor((localX / displayedWidth) * result.width),
+        ),
+        Math.min(
+          result.height - 1,
+          Math.floor((localY / displayedHeight) * result.height),
+        ),
+      );
+      return;
+    }
 
     if (action === "step-number") {
       const stepper = actionElement.closest<HTMLElement>("[data-stepper]");
@@ -1362,6 +1426,10 @@ interface RegistrationElements {
   readonly registeredStackHistogram: HTMLElement;
   readonly registeredStackHistogramSummary: HTMLElement;
   readonly registeredStackHistogramBins: HTMLElement;
+  readonly registeredStackPixelReadout: HTMLElement;
+  readonly registeredStackPixelX: HTMLInputElement;
+  readonly registeredStackPixelY: HTMLInputElement;
+  readonly inspectRegisteredStackPixel: HTMLButtonElement;
   readonly registeredStackPreviewPlaceholder: HTMLElement;
   readonly registeredFrame: HTMLSelectElement;
   readonly registeredPreviewImage: HTMLImageElement;
@@ -1567,6 +1635,7 @@ function renderRegistration(
   elements.registeredStackOverlayValue.textContent =
     elements.registeredStackOverlayValue.value;
   renderRejectionHistogram(elements, registration.stack);
+  renderStackPixelReadout(elements, registration.stack);
   elements.registeredStackPreviewPlaceholder.textContent =
     registration.stack.previewState === "loading"
       ? "Rendering the integrated FITS preview…"
@@ -1741,6 +1810,43 @@ function renderRejectionHistogram(
     remainder.textContent = `+ ${positiveBins.length - visibleBins.length} higher-count bins retained in the exact result`;
     elements.registeredStackHistogramBins.append(remainder);
   }
+}
+
+function renderStackPixelReadout(
+  elements: RegistrationElements,
+  stack: ReviewViewModel["registration"]["stack"],
+): void {
+  const readout = elements.registeredStackPixelReadout;
+  const result = stack.result;
+  const available = result !== null && stack.state === "completed";
+  elements.registeredStackPixelX.disabled = !available;
+  elements.registeredStackPixelY.disabled = !available;
+  elements.inspectRegisteredStackPixel.disabled = !available;
+  elements.registeredStackPixelX.max = result ? String(result.width - 1) : "0";
+  elements.registeredStackPixelY.max = result ? String(result.height - 1) : "0";
+  readout.dataset.state = stack.pixelInspectionState;
+  if (stack.pixelInspectionState === "loading") {
+    readout.textContent = "Reading exact FITS coordinate…";
+    return;
+  }
+  if (stack.pixelInspectionState === "error") {
+    readout.textContent =
+      "Exact pixel inspection failed; products remain valid.";
+    return;
+  }
+  const inspection = stack.pixelInspection;
+  if (!inspection) {
+    readout.textContent = "Click the image to inspect exact FITS values.";
+    return;
+  }
+  elements.registeredStackPixelX.value = String(inspection.x);
+  elements.registeredStackPixelY.value = String(inspection.y);
+  const values = inspection.scienceValues
+    .map((value) => (value === null ? "missing" : value.toPrecision(8)))
+    .join(" / ");
+  const counts = (source: readonly (number | null)[] | null) =>
+    source?.map((value) => value ?? "missing").join(" / ") ?? "not published";
+  readout.textContent = `x ${inspection.x} · y ${inspection.y} · science ${values} · low ${counts(inspection.lowRejectionCounts)} · high ${counts(inspection.highRejectionCounts)}`;
 }
 
 function renderRegisteredResult(
@@ -2754,7 +2860,7 @@ function shellMarkup(): string {
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_low" aria-selected="false" disabled>Low reject</button>
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_high" aria-selected="false" disabled>High reject</button>
                   </div>
-                  <div class="registered-stack__preview">
+                  <div class="registered-stack__preview" data-action="inspect-registered-stack-pixel">
                     <img class="registered-stack__science-layer" data-registered-stack-science-image alt="" hidden />
                     <img class="registered-stack__diagnostic-layer" data-registered-stack-preview-image alt="" hidden />
                     <div data-registered-stack-preview-placeholder>The integrated common crop will appear here after publication</div>
@@ -2771,6 +2877,12 @@ function shellMarkup(): string {
                     </div>
                     <div class="rejection-histogram__bins" data-registered-stack-histogram-bins></div>
                   </section>
+                  <div class="registered-stack__pixel-controls" aria-label="Exact FITS coordinate">
+                    <label><span>X</span><input data-registered-stack-pixel-x type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
+                    <label><span>Y</span><input data-registered-stack-pixel-y type="number" min="0" step="1" value="0" inputmode="numeric" /></label>
+                    <button class="button button--quiet" type="button" data-action="inspect-registered-stack-coordinate">Inspect pixel</button>
+                  </div>
+                  <output class="registered-stack__pixel-readout" data-registered-stack-pixel-readout aria-live="polite">Click the image to inspect exact FITS values.</output>
                   <div class="registered-stack__actions">
                     <button class="button button--primary" type="button" data-action="execute-registered-stack" disabled>Integrate crop</button>
                     <button class="button button--danger" type="button" data-action="cancel-registered-stack" hidden>Cancel</button>

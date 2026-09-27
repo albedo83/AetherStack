@@ -22,6 +22,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUpdateRegisteredStackSettings: vi.fn(),
     onSelectRegisteredStackProduct: vi.fn(),
     onSetRegisteredStackOverlayOpacity: vi.fn(),
+    onInspectRegisteredStackPixel: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -613,6 +614,34 @@ describe("frame review workspace", () => {
       "75 affected samples · 7.500% · maximum 3",
     );
     expect(root.textContent).toContain("60");
+    fireEvent.change(getByRole(root, "spinbutton", { name: "X" }), {
+      target: { value: "12" },
+    });
+    fireEvent.change(getByRole(root, "spinbutton", { name: "Y" }), {
+      target: { value: "34" },
+    });
+    fireEvent.click(getByRole(root, "button", { name: "Inspect pixel" }));
+    expect(actions.onInspectRegisteredStackPixel).toHaveBeenCalledWith(12, 34);
+
+    controller.update({
+      ...ready,
+      registration: {
+        ...ready.registration,
+        stack: {
+          ...ready.registration.stack,
+          pixelInspectionState: "ready",
+          pixelInspection: {
+            x: 12,
+            y: 34,
+            scienceValues: [1024.5, 998.25, 1101.75],
+            lowRejectionCounts: [0, 1, 0],
+            highRejectionCounts: [2, 0, 1],
+          },
+        },
+      },
+    });
+    expect(root.textContent).toContain("x 12 · y 34");
+    expect(root.textContent).toContain("low 0 / 1 / 0");
   });
 
   it("keeps robust integration controls explicit and model-driven", () => {

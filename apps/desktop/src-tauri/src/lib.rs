@@ -162,6 +162,26 @@ struct RejectionHistogramResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StackPixelInspectionRequest {
+    science_path: PathBuf,
+    low_rejection_path: Option<PathBuf>,
+    high_rejection_path: Option<PathBuf>,
+    x: u64,
+    y: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StackPixelInspectionResponse {
+    x: u64,
+    y: u64,
+    science_values: Vec<Option<f64>>,
+    low_rejection_counts: Option<Vec<Option<u32>>>,
+    high_rejection_counts: Option<Vec<Option<u32>>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegistrationDiagnosticRequest {
     source_path: PathBuf,
     reference_path: PathBuf,
@@ -951,6 +971,22 @@ async fn inspect_rejection_histogram(
     })
     .await
     .map_err(|_| preview_worker_error())?
+}
+
+#[tauri::command]
+async fn inspect_stack_pixel(
+    request: StackPixelInspectionRequest,
+) -> Result<StackPixelInspectionResponse, PreviewCommandError> {
+    validate_runtime_source_path(&request.science_path)?;
+    if let Some(path) = &request.low_rejection_path {
+        validate_runtime_source_path(path)?;
+    }
+    if let Some(path) = &request.high_rejection_path {
+        validate_runtime_source_path(path)?;
+    }
+    tauri::async_runtime::spawn_blocking(move || inspect_stack_pixel_sync(&request))
+        .await
+        .map_err(|_| preview_worker_error())?
 }
 
 #[tauri::command]
@@ -1969,6 +2005,129 @@ fn rejection_histogram_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "rejection_histogram_failed",
         "The rejection-count histogram could not be calculated exactly.",
+    )
+}
+
+fn inspect_stack_pixel_sync(
+    request: &StackPixelInspectionRequest,
+) -> Result<StackPixelInspectionResponse, PreviewCommandError> {
+    let science = File::open(&request.science_path).map_err(|_| pixel_inspection_open_error())?;
+    let (width, height, science_values) = read_pixel_planes(science, request.x, request.y, None)?;
+    let science_planes =
+        u64::try_from(science_values.len()).map_err(|_| pixel_inspection_read_error())?;
+    let low_rejection_counts = request
+        .low_rejection_path
+        .as_ref()
+        .map(|path| {
+            let file = File::open(path).map_err(|_| pixel_inspection_open_error())?;
+            let (_, _, values) = read_pixel_planes(
+                file,
+                request.x,
+                request.y,
+                Some((width, height, science_planes)),
+            )?;
+            rejection_counts(values)
+        })
+        .transpose()?;
+    let high_rejection_counts = request
+        .high_rejection_path
+        .as_ref()
+        .map(|path| {
+            let file = File::open(path).map_err(|_| pixel_inspection_open_error())?;
+            let (_, _, values) = read_pixel_planes(
+                file,
+                request.x,
+                request.y,
+                Some((width, height, science_planes)),
+            )?;
+            rejection_counts(values)
+        })
+        .transpose()?;
+    Ok(StackPixelInspectionResponse {
+        x: request.x,
+        y: request.y,
+        science_values,
+        low_rejection_counts,
+        high_rejection_counts,
+    })
+}
+
+fn read_pixel_planes<R: Read + Seek>(
+    input: R,
+    x: u64,
+    y: u64,
+    expected_shape: Option<(u64, u64, u64)>,
+) -> Result<(u64, u64, Vec<Option<f64>>), PreviewCommandError> {
+    let mut reader = PrimaryImageReader::open(input, HeaderReadOptions::default())
+        .map_err(|_| pixel_inspection_read_error())?;
+    let axes = reader.descriptor().axes();
+    if !(2..=3).contains(&axes.len()) {
+        return Err(pixel_inspection_read_error());
+    }
+    let (width, height) = (axes[0], axes[1]);
+    let plane_count = axes.get(2).copied().unwrap_or(1);
+    if expected_shape.is_some_and(|expected| expected != (width, height, plane_count))
+        || x >= width
+        || y >= height
+    {
+        return Err(PreviewCommandError::new(
+            "stack_pixel_coordinate_invalid",
+            "The requested stack coordinate is outside one or more products.",
+        ));
+    }
+    let plane_size = width
+        .checked_mul(height)
+        .ok_or_else(pixel_inspection_read_error)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(usize::try_from(plane_count).map_err(|_| pixel_inspection_read_error())?)
+        .map_err(|_| pixel_inspection_read_error())?;
+    let pixel_offset = y
+        .checked_mul(width)
+        .and_then(|row| row.checked_add(x))
+        .ok_or_else(pixel_inspection_read_error)?;
+    for plane in 0..plane_count {
+        let start = plane
+            .checked_mul(plane_size)
+            .and_then(|offset| offset.checked_add(pixel_offset))
+            .ok_or_else(pixel_inspection_read_error)?;
+        let mut value = [0.0];
+        let mut status = [SampleStatus::Valid];
+        reader
+            .read_physical_samples(start, &mut value, &mut status)
+            .map_err(|_| pixel_inspection_read_error())?;
+        output.push((status[0] == SampleStatus::Valid && value[0].is_finite()).then_some(value[0]));
+    }
+    Ok((width, height, output))
+}
+
+fn rejection_counts(values: Vec<Option<f64>>) -> Result<Vec<Option<u32>>, PreviewCommandError> {
+    values
+        .into_iter()
+        .map(|value| match value {
+            None => Ok(None),
+            Some(value) if value >= 0.0 && value.fract() == 0.0 && value <= f64::from(u32::MAX) => {
+                Ok(Some(value as u32))
+            }
+            Some(_) => Err(PreviewCommandError::new(
+                "stack_pixel_rejection_invalid",
+                "A rejection-map pixel is not an exact non-negative count.",
+            )),
+        })
+        .collect()
+}
+
+fn pixel_inspection_open_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "stack_pixel_open_failed",
+        "One stack product could not be opened for exact pixel inspection.",
+    )
+}
+
+fn pixel_inspection_read_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "stack_pixel_read_failed",
+        "One stack product could not provide the requested exact pixel.",
     )
 }
 
@@ -4243,6 +4402,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_frame_quality,
             inspect_fits_statistics,
             inspect_rejection_histogram,
+            inspect_stack_pixel,
             preview_master_plan,
             preview_registration_plan,
             render_fits_preview,
@@ -4764,6 +4924,43 @@ mod tests {
         };
 
         assert_eq!(error.code, "rejection_histogram_sample_invalid");
+        Ok(())
+    }
+
+    #[test]
+    fn exact_pixel_inspection_preserves_plane_order_and_counts() -> TestResult {
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(2, 2, 3)?,
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        )?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+
+        let (width, height, values) = read_pixel_planes(Cursor::new(bytes), 1, 0, None)?;
+
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(values, vec![Some(2.0), Some(6.0), Some(10.0)]);
+        assert_eq!(
+            rejection_counts(vec![Some(0.0), Some(2.0), None])?,
+            vec![Some(0), Some(2), None]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_pixel_inspection_rejects_out_of_bounds_coordinates() -> TestResult {
+        let Err(error) = read_pixel_planes(Cursor::new(fits_bytes()?), 4, 0, None) else {
+            return Err("out-of-bounds stack coordinate was accepted".into());
+        };
+
+        assert_eq!(error.code, "stack_pixel_coordinate_invalid");
+        let Err(error) = read_pixel_planes(Cursor::new(fits_bytes()?), 0, 0, Some((4, 2, 3)))
+        else {
+            return Err("a mismatched rejection-map plane count was accepted".into());
+        };
+        assert_eq!(error.code, "stack_pixel_coordinate_invalid");
         Ok(())
     }
 
