@@ -285,13 +285,7 @@ function installImportedSession(session: ImportedSession): void {
     roleOrder.find((role) => roles.find((item) => item.role === role)?.count) ??
     "light";
   const frames = reviewFramesForRole(session, activeRole);
-  const registrationFrames = session.frames
-    .filter((frame) => frame.role === "light")
-    .map((frame) => ({
-      id: frame.id,
-      label: frame.label,
-      sourcePath: frame.path,
-    }));
+  const registrationFrames = registrationFramesForSession(session);
   const issueCount =
     session.classificationConflicts +
     session.recoverableFailures.length +
@@ -368,6 +362,22 @@ function installImportedSession(session: ImportedSession): void {
   });
   void loadSelectedPreview();
   void refreshMasterPlan();
+}
+
+function registrationFramesForSession(
+  session: ImportedSession,
+): ReviewViewModel["registration"]["frames"] {
+  return session.frames
+    .filter(
+      (frame) =>
+        frame.role === "light" &&
+        decisionCache.get(frame.id)?.state !== "rejected",
+    )
+    .map((frame) => ({
+      id: frame.id,
+      label: frame.label,
+      sourcePath: frame.path,
+    }));
 }
 
 function selectWorkspace(workspace: WorkspaceView): void {
@@ -1874,7 +1884,12 @@ async function setDecision(
   state: Exclude<ReviewState, "undecided">,
   reason: ReviewRejectionReason | null,
 ): Promise<void> {
-  if (!importedSession || model.decisionPending) return;
+  if (
+    !importedSession ||
+    model.decisionPending ||
+    isActiveExecutionState(model.registration.execution.state)
+  )
+    return;
   if (state === "accepted") {
     await runDecisionTransaction(() =>
       applyReviewDecision(frameId, { kind: "accept" }),
@@ -1888,14 +1903,25 @@ async function setDecision(
 }
 
 async function clearDecision(frameId: string): Promise<void> {
-  if (!importedSession || model.decisionPending) return;
+  if (
+    !importedSession ||
+    model.decisionPending ||
+    isActiveExecutionState(model.registration.execution.state)
+  )
+    return;
   await runDecisionTransaction(() =>
     applyReviewDecision(frameId, { kind: "clear" }),
   );
 }
 
 async function undoDecision(): Promise<void> {
-  if (!importedSession || model.decisionPending || !model.canUndo) return;
+  if (
+    !importedSession ||
+    model.decisionPending ||
+    !model.canUndo ||
+    isActiveExecutionState(model.registration.execution.state)
+  )
+    return;
   await runDecisionTransaction(undoReviewDecision);
 }
 
@@ -1933,6 +1959,18 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
       rejectionReason: change.rejectionReason,
     });
   }
+  const registrationFrames = importedSession
+    ? registrationFramesForSession(importedSession)
+    : model.registration.frames;
+  const registrationMembershipChanged =
+    registrationFrames.length !== model.registration.frames.length ||
+    registrationFrames.some(
+      (frame, index) => frame.id !== model.registration.frames[index]?.id,
+    );
+  if (registrationMembershipChanged) {
+    registrationTicket += 1;
+    registrationExecutionTicket += 1;
+  }
   update({
     ...model,
     canUndo: result.canUndo,
@@ -1941,5 +1979,25 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
       const decision = decisionCache.get(frame.id);
       return decision ? { ...frame, ...decision } : frame;
     }),
+    registration: registrationMembershipChanged
+      ? {
+          ...model.registration,
+          state: "idle",
+          frames: registrationFrames,
+          referenceFrameId: registrationFrames[0]?.id ?? null,
+          sourceFrameId: registrationFrames[1]?.id ?? null,
+          diagnostic: null,
+          solutions: [],
+          planState: "idle",
+          plan: null,
+          execution: idleRegistrationExecution(
+            "Review membership changed · rebuild the registration plan",
+          ),
+          message:
+            registrationFrames.length >= 2
+              ? "Rejected Lights excluded · rebuild native geometry"
+              : "At least two non-rejected Lights are required",
+        }
+      : model.registration,
   });
 }

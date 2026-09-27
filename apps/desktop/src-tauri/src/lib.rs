@@ -875,18 +875,22 @@ async fn diagnose_fits_registration(
 async fn preview_registration_plan(
     request: RegistrationPlanPreviewRequest,
     session_state: tauri::State<'_, DesktopSessionState>,
+    review_state: tauri::State<'_, DesktopReviewState>,
 ) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
     let session = lock_session_state(&session_state)?
         .clone()
         .ok_or_else(session_state_missing_error)?;
-    tauri::async_runtime::spawn_blocking(move || preview_registration_plan_sync(&session, request))
-        .await
-        .map_err(|_| {
-            PreviewCommandError::new(
-                "registration_plan_interrupted",
-                "The registration-plan worker stopped before producing a result.",
-            )
-        })?
+    let eligible_ids = reviewed_registration_frame_ids(&review_state, &session)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_registration_plan_for_ids_sync(&session, request, &eligible_ids)
+    })
+    .await
+    .map_err(|_| {
+        PreviewCommandError::new(
+            "registration_plan_interrupted",
+            "The registration-plan worker stopped before producing a result.",
+        )
+    })?
 }
 
 #[tauri::command]
@@ -894,6 +898,7 @@ async fn execute_registration_plan(
     request: RegistrationPlanExecutionCommandRequest,
     on_progress: tauri::ipc::Channel<RegistrationExecutionProgress>,
     session_state: tauri::State<'_, DesktopSessionState>,
+    review_state: tauri::State<'_, DesktopReviewState>,
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
 ) -> Result<RegistrationPlanExecutionResponse, PreviewCommandError> {
     if !request.output_directory.is_absolute()
@@ -907,12 +912,19 @@ async fn execute_registration_plan(
     let session = lock_session_state(&session_state)?
         .clone()
         .ok_or_else(session_state_missing_error)?;
+    let eligible_ids = reviewed_registration_frame_ids(&review_state, &session)?;
     let cancellation = begin_calibration_execution(&execution_state)?;
     let worker_cancellation = cancellation.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
-        execute_registration_plan_sync(&session, request, &worker_cancellation, |event| {
-            let _ignored = on_progress.send(event);
-        })
+        execute_registration_plan_for_ids_sync(
+            &session,
+            request,
+            &eligible_ids,
+            &worker_cancellation,
+            |event| {
+                let _ignored = on_progress.send(event);
+            },
+        )
     })
     .await;
     finish_calibration_execution(&execution_state)?;
@@ -938,19 +950,53 @@ struct RegistrationNativeSource {
     height: usize,
 }
 
+#[cfg(test)]
 fn preview_registration_plan_sync(
     session: &ImportedNativeSession,
     request: RegistrationPlanPreviewRequest,
 ) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
-    let plan = build_registration_plan_sync(session, &request)?;
+    let eligible_ids = registration_native_sources(session)?
+        .into_keys()
+        .collect::<BTreeSet<_>>();
+    preview_registration_plan_for_ids_sync(session, request, &eligible_ids)
+}
+
+fn preview_registration_plan_for_ids_sync(
+    session: &ImportedNativeSession,
+    request: RegistrationPlanPreviewRequest,
+    eligible_ids: &BTreeSet<FrameId>,
+) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
+    let plan = build_registration_plan_for_ids_sync(session, &request, eligible_ids)?;
     registration_plan_response(&plan)
 }
 
+#[cfg(test)]
 fn build_registration_plan_sync(
     session: &ImportedNativeSession,
     request: &RegistrationPlanPreviewRequest,
 ) -> Result<RegistrationPlan, PreviewCommandError> {
-    let sources = registration_native_sources(session)?;
+    let eligible_ids = registration_native_sources(session)?
+        .into_keys()
+        .collect::<BTreeSet<_>>();
+    build_registration_plan_for_ids_sync(session, request, &eligible_ids)
+}
+
+fn build_registration_plan_for_ids_sync(
+    session: &ImportedNativeSession,
+    request: &RegistrationPlanPreviewRequest,
+    eligible_ids: &BTreeSet<FrameId>,
+) -> Result<RegistrationPlan, PreviewCommandError> {
+    let mut sources = registration_native_sources(session)?;
+    if !eligible_ids
+        .iter()
+        .all(|frame_id| sources.contains_key(frame_id))
+    {
+        return Err(registration_plan_input_error());
+    }
+    sources.retain(|frame_id, _| eligible_ids.contains(frame_id));
+    if sources.len() < 2 {
+        return Err(registration_plan_input_error());
+    }
     let reference_id = FrameId::new(request.reference_frame_id.clone())
         .map_err(|_| registration_plan_input_error())?;
     let reference = sources
@@ -1050,9 +1096,26 @@ fn registration_plan_response(
     })
 }
 
+#[cfg(test)]
 fn execute_registration_plan_sync<F>(
     session: &ImportedNativeSession,
     request: RegistrationPlanExecutionCommandRequest,
+    cancellation: &CancellationToken,
+    progress: F,
+) -> Result<RegistrationPlanExecutionResponse, PreviewCommandError>
+where
+    F: FnMut(RegistrationExecutionProgress),
+{
+    let eligible_ids = registration_native_sources(session)?
+        .into_keys()
+        .collect::<BTreeSet<_>>();
+    execute_registration_plan_for_ids_sync(session, request, &eligible_ids, cancellation, progress)
+}
+
+fn execute_registration_plan_for_ids_sync<F>(
+    session: &ImportedNativeSession,
+    request: RegistrationPlanExecutionCommandRequest,
+    eligible_ids: &BTreeSet<FrameId>,
     cancellation: &CancellationToken,
     mut progress: F,
 ) -> Result<RegistrationPlanExecutionResponse, PreviewCommandError>
@@ -1071,7 +1134,7 @@ where
             "The registration output directory cannot be represented as Unicode.",
         )
     })?;
-    let plan = build_registration_plan_sync(session, &request.planning)?;
+    let plan = build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?;
     if plan.plan_sha256() != request.expected_plan_sha256 {
         return Err(PreviewCommandError::new(
             "registration_plan_stale",
@@ -1223,6 +1286,28 @@ fn registration_native_sources(
         return Err(registration_plan_input_error());
     }
     Ok(sources)
+}
+
+fn reviewed_registration_frame_ids(
+    review_state: &DesktopReviewState,
+    session: &ImportedNativeSession,
+) -> Result<BTreeSet<FrameId>, PreviewCommandError> {
+    let sources = registration_native_sources(session)?;
+    let state = lock_review_state(review_state)?;
+    let book = state.as_ref().ok_or_else(review_state_missing_error)?;
+    let mut eligible = BTreeSet::new();
+    for frame_id in sources.keys() {
+        let review = book
+            .state(frame_id)
+            .ok_or_else(registration_plan_input_error)?;
+        if review != ReviewState::Rejected {
+            eligible.insert(frame_id.clone());
+        }
+    }
+    if eligible.len() < 2 {
+        return Err(registration_plan_input_error());
+    }
+    Ok(eligible)
 }
 
 const fn registration_plan_input_error() -> PreviewCommandError {
@@ -4139,6 +4224,47 @@ mod tests {
             .ok_or("an incomplete or duplicate Light identity set was accepted")?;
             assert_eq!(error.code, "registration_plan_input_invalid");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_review_rejection_removes_a_light_from_registration_membership() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = registration_planning_session(directory.path())?;
+        let sources = registration_native_sources(&session)?;
+        let review_state = DesktopReviewState::default();
+        let frames = sources
+            .keys()
+            .enumerate()
+            .map(|(index, frame_id)| {
+                FrameSpec::new(
+                    frame_id.clone(),
+                    format!("light-{index}.fits"),
+                    FrameMetrics::default(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        *lock_review_state(&review_state)? = Some(ReviewBook::new(frames, MAX_UNDO_DEPTH)?);
+        assert_eq!(
+            reviewed_registration_frame_ids(&review_state, &session)?.len(),
+            2
+        );
+        let rejected = sources.keys().next().ok_or("Light missing")?.clone();
+
+        apply_review_decision_sync(
+            &review_state,
+            ReviewDecisionRequest {
+                frame_id: rejected.as_str().to_owned(),
+                action: ReviewDecisionAction::Reject {
+                    reason: ReviewRejectionReasonWire::Blur,
+                },
+            },
+        )?;
+
+        let error = reviewed_registration_frame_ids(&review_state, &session)
+            .err()
+            .ok_or("registration remained eligible with only one non-rejected Light")?;
+        assert_eq!(error.code, "registration_plan_input_invalid");
         Ok(())
     }
 

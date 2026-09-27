@@ -54,6 +54,10 @@ pixels are enabled only when every sealed identity has a calibrated artifact.
 The execution panel shows destination, frame-and-band progress, cancellation,
 peak memory, and the final complete product count. A shared native execution
 slot prevents calibration and registration memory budgets from multiplying.
+Rejecting a Light in Review removes it from the Registration plan immediately;
+accepting or clearing it adds it back. Any membership change visibly clears the
+old transforms and digest, because rejected frames are excluded by the native
+Review book rather than by a cosmetic table filter.
 
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch

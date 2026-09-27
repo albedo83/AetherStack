@@ -866,6 +866,15 @@ safety reasoning. They do not narrate obvious syntax.
     a shifted synthetic FITS plan end to end and prove a stale digest publishes
     nothing. Next, bind manual Review acceptance to eligible plan membership and
     add a registered-frame Blink result view.
+56. Bind registration membership to the native Review book. Explicitly rejected
+    Lights are excluded; accepted and undecided Lights remain eligible so review
+    is opt-out rather than silently destructive. Preview and execution snapshot
+    this Rust-owned set, require at least two eligible identities, and compare
+    the browser's identity list against it exactly. A decision that changes
+    membership invalidates pending diagnostics, sealed geometry, execution
+    evidence, and artifact readiness in the presenter. Native tests prove that
+    rejecting one of a two-Light set makes registration fail closed. Next, add
+    a registered-frame Blink result view and crop-aware stack integration.
 
 ## 11. Stable-release definition
 

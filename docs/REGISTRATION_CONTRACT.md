@@ -343,6 +343,13 @@ complete rollback-safe publication transaction under one bounded memory budget.
 The UI streams frame-and-band progress and offers cooperative cancellation; it
 never presents a partially published set.
 
+Registration membership comes from the native Review book, not a frontend
+filter. An explicit rejection excludes a Light; accepted and undecided Lights
+remain eligible. This opt-out rule avoids silently discarding unreviewed data
+while ensuring a rejected Blink frame cannot re-enter processing. A membership
+change invalidates prior pair evidence and the sealed digest. Fewer than two
+non-rejected Lights is an explicit planning failure.
+
 The geometry core also provides `registration-plan-v1`, the immutable boundary
 for that future orchestration. It requires at least two unique reviewed frame
 identities, canonicalizes discovery order by identity, requires the declared
