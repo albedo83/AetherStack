@@ -225,6 +225,8 @@ describe("frame review workspace", () => {
       sourceFrameId: frames[1]?.id ?? null,
       message: "Geometry accepted · exact full-resolution plan is available",
       solutions: [],
+      planState: "idle" as const,
+      plan: null,
       diagnostic: {
         schemaVersion: 2,
         profileId: "registration-v1",
@@ -293,6 +295,23 @@ describe("frame review workspace", () => {
             diagnostic: registration.diagnostic,
           },
         ],
+        planState: "ready" as const,
+        plan: {
+          schemaVersion: 1,
+          planSha256: "f".repeat(64),
+          referenceFrameId: frames[0]?.id ?? "",
+          referenceWidth: 4144,
+          referenceHeight: 2822,
+          coveredPixels: 11_650_000,
+          autocrop: { x: 3, y: 6, width: 4135, height: 2813 },
+          frames: frames.map((frame, index) => ({
+            frameId: frame.id,
+            sourceWidth: 4144,
+            sourceHeight: 2822,
+            transformCoefficientsSourcePixels: [1, 0, 0, 1, 0, 0] as const,
+            reference: index === 0,
+          })),
+        },
       },
     };
     const { root, actions } = fixture(ready);
@@ -302,11 +321,13 @@ describe("frame review workspace", () => {
         name: "Solve geometry before moving pixels",
       }),
     ).not.toBeNull();
-    expect(root.textContent).toContain("4137 × 2815 px · origin 2, 5");
+    expect(root.textContent).toContain("4135 × 2813 px · origin 3, 6");
+    expect(root.textContent).toContain("canonical all-frame crop");
     expect(root.textContent).toContain("302");
     expect(root.textContent).toContain("0.240");
     expect(root.textContent).toContain("lanczos3-common-footprint-v1");
-    expect(root.textContent).toContain("1 / 1 transforms accepted");
+    expect(root.textContent).toContain("2 frames sealed");
+    expect(root.textContent).toContain(`SHA-256 ${"f".repeat(64)}`);
     expect(root.textContent).toContain("Reference");
     expect(root.textContent).toContain("Accepted");
     fireEvent.click(getByRole(root, "button", { name: "Analyze geometry" }));

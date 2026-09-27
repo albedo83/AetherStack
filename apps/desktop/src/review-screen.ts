@@ -111,6 +111,10 @@ export function mountReviewScreen(
       root,
       "[data-registration-plan-frames]",
     ),
+    registrationPlanDigest: required<HTMLElement>(
+      root,
+      "[data-registration-plan-digest]",
+    ),
     calibrationStatus: required<HTMLElement>(root, "[data-calibration-status]"),
     calibrationProducts: required<HTMLElement>(
       root,
@@ -1093,6 +1097,7 @@ interface RegistrationElements {
   readonly registrationRejections: HTMLElement;
   readonly registrationPlanProgress: HTMLElement;
   readonly registrationPlanFrames: HTMLOListElement;
+  readonly registrationPlanDigest: HTMLElement;
 }
 
 function renderRegistration(
@@ -1119,7 +1124,8 @@ function renderRegistration(
   const source = registration.frames.find(
     (frame) => frame.id === registration.sourceFrameId,
   );
-  const running = registration.state === "running";
+  const running =
+    registration.state === "running" || registration.planState === "building";
   const pairReady =
     !!reference?.sourcePath &&
     !!source?.sourcePath &&
@@ -1139,10 +1145,18 @@ function renderRegistration(
   const acceptedSourceIds = new Set(
     registration.solutions.map((solution) => solution.sourceFrameId),
   );
-  elements.registrationPlanProgress.textContent = `${acceptedSourceIds.size} / ${requiredSolutions} transforms accepted`;
+  elements.registrationPlanProgress.textContent =
+    registration.planState === "building"
+      ? "Native verification…"
+      : registration.planState === "ready"
+        ? `${registration.plan?.frames.length ?? 0} frames sealed`
+        : `${acceptedSourceIds.size} / ${requiredSolutions} transforms accepted`;
   elements.registrationPlanProgress.dataset.ready = String(
-    requiredSolutions > 0 && acceptedSourceIds.size === requiredSolutions,
+    registration.planState === "ready",
   );
+  elements.registrationPlanDigest.textContent = registration.plan
+    ? `SHA-256 ${registration.plan.planSha256}`
+    : "The final digest appears after native reconstruction";
   elements.registrationPlanFrames.replaceChildren(
     ...registration.frames.map((frame) => {
       const item = document.createElement("li");
@@ -1171,15 +1185,16 @@ function renderRegistration(
   );
 
   const diagnostic = registration.diagnostic;
-  const plan = diagnostic?.acceptedPlan ?? null;
+  const pairPlan = diagnostic?.acceptedPlan ?? null;
   elements.registrationRms.textContent = diagnostic
     ? (diagnostic.consensus.rmsResidualDetectionPixels * 2).toFixed(3)
     : "—";
   elements.registrationInliers.textContent = diagnostic
     ? diagnostic.consensus.inlierFeaturePairs.toLocaleString("en-US")
     : "—";
-  const coverage = plan
-    ? (100 * plan.coveredPixels) / (plan.referenceWidth * plan.referenceHeight)
+  const coverage = pairPlan
+    ? (100 * pairPlan.coveredPixels) /
+      (pairPlan.referenceWidth * pairPlan.referenceHeight)
     : null;
   elements.registrationCoverage.textContent =
     coverage === null ? "—" : coverage.toFixed(2);
@@ -1199,26 +1214,34 @@ function renderRegistration(
       ? "Unique winner"
       : diagnostic.confidence.winnerSupportMargin.toFixed(3)
     : "—";
-  elements.registrationMatrix.textContent = plan
-    ? `[${plan.transformCoefficientsSourcePixels.map((value) => value.toPrecision(10)).join(", ")}]\n${plan.footprintAlgorithmId}`
+  elements.registrationMatrix.textContent = pairPlan
+    ? `[${pairPlan.transformCoefficientsSourcePixels.map((value) => value.toPrecision(10)).join(", ")}]\n${pairPlan.footprintAlgorithmId}`
     : "Awaiting an accepted solution";
 
-  const crop = plan?.autocrop ?? null;
+  const canonicalPlan = registration.plan;
+  const crop = canonicalPlan?.autocrop ?? pairPlan?.autocrop ?? null;
+  const cropWidth = canonicalPlan?.referenceWidth ?? pairPlan?.referenceWidth;
+  const cropHeight =
+    canonicalPlan?.referenceHeight ?? pairPlan?.referenceHeight;
+  const cropCoverage = canonicalPlan
+    ? (100 * canonicalPlan.coveredPixels) /
+      (canonicalPlan.referenceWidth * canonicalPlan.referenceHeight)
+    : coverage;
   const sensorStage = elements.registrationCrop.parentElement;
-  if (crop && plan) {
-    const left = (100 * crop.x) / plan.referenceWidth;
-    const top = (100 * crop.y) / plan.referenceHeight;
-    const width = (100 * crop.width) / plan.referenceWidth;
-    const height = (100 * crop.height) / plan.referenceHeight;
+  if (crop && cropWidth && cropHeight) {
+    const left = (100 * crop.x) / cropWidth;
+    const top = (100 * crop.y) / cropHeight;
+    const width = (100 * crop.width) / cropWidth;
+    const height = (100 * crop.height) / cropHeight;
     elements.registrationCrop.style.left = `${left}%`;
     elements.registrationCrop.style.top = `${top}%`;
     elements.registrationCrop.style.width = `${width}%`;
     elements.registrationCrop.style.height = `${height}%`;
     elements.registrationCrop.hidden = false;
-    elements.registrationCropText.textContent = `${crop.width} × ${crop.height} px · origin ${crop.x}, ${crop.y} · ${coverage?.toFixed(2)}% retained`;
+    elements.registrationCropText.textContent = `${crop.width} × ${crop.height} px · origin ${crop.x}, ${crop.y} · ${cropCoverage?.toFixed(2)}% retained${canonicalPlan ? " · canonical all-frame crop" : ""}`;
     sensorStage?.setAttribute(
       "aria-label",
-      `Common crop ${crop.width} by ${crop.height} pixels at ${crop.x}, ${crop.y}; ${coverage?.toFixed(2)} percent retained`,
+      `Common crop ${crop.width} by ${crop.height} pixels at ${crop.x}, ${crop.y}; ${cropCoverage?.toFixed(2)} percent retained`,
     );
   } else {
     elements.registrationCrop.removeAttribute("style");
@@ -2009,6 +2032,7 @@ function shellMarkup(): string {
                   <strong data-registration-plan-progress data-ready="false">0 / 0 transforms accepted</strong>
                 </div>
                 <ol data-registration-plan-frames aria-label="Registration plan frame status"></ol>
+                <code class="registration-plan__digest" data-registration-plan-digest>The final digest appears after native reconstruction</code>
               </section>
               <div class="registration-signal" aria-hidden="true">
                 <span></span><span></span><span></span><span></span><span></span>

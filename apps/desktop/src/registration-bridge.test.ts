@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { diagnoseFitsRegistration } from "./registration-bridge.ts";
+import {
+  diagnoseFitsRegistration,
+  previewRegistrationPlan,
+} from "./registration-bridge.ts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -28,6 +31,24 @@ describe("native registration bridge", () => {
       request: {
         sourcePath: "/session/light-02.fits",
         referencePath: "/session/light-01.fits",
+      },
+    });
+  });
+
+  it("submits only reviewed identities for native plan reconstruction", async () => {
+    const plan = { schemaVersion: 1, planSha256: "a".repeat(64) };
+    vi.mocked(invoke).mockResolvedValue(plan);
+
+    await expect(
+      previewRegistrationPlan({
+        referenceFrameId: "1".repeat(64),
+        sourceFrameIds: ["2".repeat(64), "3".repeat(64)],
+      }),
+    ).resolves.toBe(plan);
+    expect(invoke).toHaveBeenCalledWith("preview_registration_plan", {
+      request: {
+        referenceFrameId: "1".repeat(64),
+        sourceFrameIds: ["2".repeat(64), "3".repeat(64)],
       },
     });
   });

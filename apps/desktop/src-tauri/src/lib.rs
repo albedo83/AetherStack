@@ -4,6 +4,7 @@
 //! deliberately limited to the operating-system window and typed IPC adapters,
 //! preventing the web presenter from becoming a second processing engine.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
@@ -31,6 +32,7 @@ use aether_quality::{
     measure_frame_quality, prepare_cfa_cell_mean,
 };
 use aether_register::{RegistrationDiagnostic, diagnose_paths};
+use aether_registration::{AffineTransform, PlannedRegistrationFrame, RegistrationPlan};
 use aether_review::{
     DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics, FrameSpec,
     MAX_UNDO_DEPTH, ManualDecision, ManualRejectionReason, MissingPlacement, ReviewBook,
@@ -117,6 +119,45 @@ struct FitsStatisticsRequest {
 struct RegistrationDiagnosticRequest {
     source_path: PathBuf,
     reference_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistrationPlanPreviewRequest {
+    reference_frame_id: String,
+    source_frame_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistrationPlanPreviewResponse {
+    schema_version: u32,
+    plan_sha256: String,
+    reference_frame_id: String,
+    reference_width: usize,
+    reference_height: usize,
+    covered_pixels: usize,
+    autocrop: RegistrationCropResponse,
+    frames: Vec<RegistrationPlannedFrameResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistrationPlannedFrameResponse {
+    frame_id: String,
+    source_width: usize,
+    source_height: usize,
+    transform_coefficients_source_pixels: [f64; 6],
+    reference: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistrationCropResponse {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -771,6 +812,211 @@ async fn diagnose_fits_registration(
             "The registration diagnostic worker stopped before producing a result.",
         )
     })?
+}
+
+#[tauri::command]
+async fn preview_registration_plan(
+    request: RegistrationPlanPreviewRequest,
+    session_state: tauri::State<'_, DesktopSessionState>,
+) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    tauri::async_runtime::spawn_blocking(move || preview_registration_plan_sync(&session, request))
+        .await
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "registration_plan_interrupted",
+                "The registration-plan worker stopped before producing a result.",
+            )
+        })?
+}
+
+#[derive(Debug)]
+struct RegistrationNativeSource {
+    path: PathBuf,
+    width: usize,
+    height: usize,
+}
+
+fn preview_registration_plan_sync(
+    session: &ImportedNativeSession,
+    request: RegistrationPlanPreviewRequest,
+) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
+    let sources = registration_native_sources(session)?;
+    let reference_id =
+        FrameId::new(request.reference_frame_id).map_err(|_| registration_plan_input_error())?;
+    let reference = sources
+        .get(&reference_id)
+        .ok_or_else(registration_plan_input_error)?;
+    let requested_count = request.source_frame_ids.len();
+    let requested_ids = request
+        .source_frame_ids
+        .into_iter()
+        .map(|value| FrameId::new(value).map_err(|_| registration_plan_input_error()))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let expected_ids = sources
+        .keys()
+        .filter(|frame_id| *frame_id != &reference_id)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if requested_ids.len() != requested_count || requested_ids != expected_ids {
+        return Err(registration_plan_input_error());
+    }
+
+    let mut planned = Vec::new();
+    planned
+        .try_reserve_exact(sources.len())
+        .map_err(|_| registration_plan_allocation_error())?;
+    planned.push(PlannedRegistrationFrame::new(
+        reference_id.clone(),
+        reference.width,
+        reference.height,
+        AffineTransform::IDENTITY,
+    ));
+    for frame_id in requested_ids {
+        let source = sources
+            .get(&frame_id)
+            .ok_or_else(registration_plan_input_error)?;
+        let diagnostic = diagnose_paths(&source.path, &reference.path)
+            .map_err(|_| registration_plan_diagnostic_error())?;
+        let accepted = diagnostic
+            .accepted_plan()
+            .ok_or_else(registration_plan_rejected_error)?;
+        if accepted.reference_width() != reference.width
+            || accepted.reference_height() != reference.height
+        {
+            return Err(registration_plan_diagnostic_error());
+        }
+        let [m00, m01, m10, m11, tx, ty] = accepted.source_to_reference_coefficients();
+        let transform = AffineTransform::new(m00, m01, m10, m11, tx, ty)
+            .map_err(|_| registration_plan_diagnostic_error())?;
+        planned.push(PlannedRegistrationFrame::new(
+            frame_id,
+            source.width,
+            source.height,
+            transform,
+        ));
+    }
+    let plan = RegistrationPlan::new(
+        reference_id.clone(),
+        reference.width,
+        reference.height,
+        planned,
+    )
+    .map_err(|_| registration_plan_geometry_error())?;
+    let crop = plan
+        .common_footprint()
+        .crop()
+        .ok_or_else(registration_plan_geometry_error)?;
+    let frames = plan
+        .frames()
+        .iter()
+        .map(|frame| RegistrationPlannedFrameResponse {
+            frame_id: frame.frame_id().as_str().to_owned(),
+            source_width: frame.source_width(),
+            source_height: frame.source_height(),
+            transform_coefficients_source_pixels: frame.source_to_reference().coefficients(),
+            reference: frame.frame_id() == plan.reference_frame_id(),
+        })
+        .collect();
+    Ok(RegistrationPlanPreviewResponse {
+        schema_version: 1,
+        plan_sha256: plan.plan_sha256().to_owned(),
+        reference_frame_id: reference_id.as_str().to_owned(),
+        reference_width: plan.reference_width(),
+        reference_height: plan.reference_height(),
+        covered_pixels: plan.common_footprint().covered_pixels(),
+        autocrop: RegistrationCropResponse {
+            x: crop.x(),
+            y: crop.y(),
+            width: crop.width(),
+            height: crop.height(),
+        },
+        frames,
+    })
+}
+
+fn registration_native_sources(
+    session: &ImportedNativeSession,
+) -> Result<BTreeMap<FrameId, RegistrationNativeSource>, PreviewCommandError> {
+    let files = session
+        .manifest
+        .files()
+        .iter()
+        .map(|file| (file.relative_path(), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut sources = BTreeMap::new();
+    for group in session
+        .manifest
+        .groups()
+        .iter()
+        .filter(|group| group.key().frame_type() == &FrameType::Light)
+    {
+        for relative_path in group.files() {
+            let file = files
+                .get(relative_path.as_str())
+                .ok_or_else(registration_plan_input_error)?;
+            let [width, height] = file.axes() else {
+                return Err(registration_plan_input_error());
+            };
+            let width = usize::try_from(*width).map_err(|_| registration_plan_input_error())?;
+            let height = usize::try_from(*height).map_err(|_| registration_plan_input_error())?;
+            let frame_id = FrameId::derive(
+                file.relative_path(),
+                file.fingerprint().byte_length(),
+                file.fingerprint().sha256(),
+            )
+            .map_err(|_| registration_plan_input_error())?;
+            let source = RegistrationNativeSource {
+                path: session.root.join(file.relative_path()),
+                width,
+                height,
+            };
+            if sources.insert(frame_id, source).is_some() {
+                return Err(registration_plan_input_error());
+            }
+        }
+    }
+    if sources.len() < 2 {
+        return Err(registration_plan_input_error());
+    }
+    Ok(sources)
+}
+
+const fn registration_plan_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_plan_input_invalid",
+        "The submitted frame identities do not match the imported Light set.",
+    )
+}
+
+const fn registration_plan_allocation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_plan_allocation_failed",
+        "The registration plan could not reserve its bounded evidence buffer.",
+    )
+}
+
+const fn registration_plan_diagnostic_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_plan_diagnostic_failed",
+        "A Light pair could not reproduce its native geometric diagnostic.",
+    )
+}
+
+const fn registration_plan_rejected_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_plan_pair_rejected",
+        "At least one Light pair no longer passes the native confidence gate.",
+    )
+}
+
+const fn registration_plan_geometry_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_plan_geometry_invalid",
+        "The accepted transforms do not form a valid common registration plan.",
+    )
 }
 
 fn validate_runtime_source_path(path: &Path) -> Result<(), PreviewCommandError> {
@@ -3029,6 +3275,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_frame_quality,
             inspect_fits_statistics,
             preview_master_plan,
+            preview_registration_plan,
             render_fits_preview,
             sort_review_frames,
             undo_review_decision
@@ -3221,6 +3468,104 @@ mod tests {
         })
     }
 
+    fn registration_planning_file(
+        root: &Path,
+        relative_path: &str,
+        translation: (f64, f64),
+    ) -> TestResult<ManifestFile> {
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 256;
+        const STARS: [(f64, f64); 24] = [
+            (20.0, 20.0),
+            (50.0, 25.0),
+            (83.0, 18.0),
+            (125.0, 29.0),
+            (170.0, 22.0),
+            (215.0, 35.0),
+            (30.0, 65.0),
+            (72.0, 78.0),
+            (110.0, 60.0),
+            (152.0, 82.0),
+            (205.0, 69.0),
+            (18.0, 115.0),
+            (58.0, 128.0),
+            (98.0, 110.0),
+            (142.0, 132.0),
+            (190.0, 118.0),
+            (225.0, 145.0),
+            (35.0, 175.0),
+            (80.0, 160.0),
+            (120.0, 190.0),
+            (165.0, 170.0),
+            (210.0, 205.0),
+            (65.0, 220.0),
+            (145.0, 225.0),
+        ];
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(WIDTH * HEIGHT)?;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let mut sample = 1_000.0 + f64::from(((x + 3 * y) % 5) as u8) - 2.0;
+                for (index, (star_x, star_y)) in STARS.iter().copied().enumerate() {
+                    let dx = x as f64 - (star_x + translation.0);
+                    let dy = y as f64 - (star_y + translation.1);
+                    let amplitude = 500.0 + index as f64 * 17.0;
+                    sample += amplitude * (-(dx * dx + dy * dy) / (2.0 * 3.5 * 3.5)).exp();
+                }
+                pixels.push(sample);
+            }
+        }
+        let image = ScientificImage::from_pixels(Dimensions::new(WIDTH, HEIGHT, 1)?, pixels)?;
+        let mut output = File::create(&path)?;
+        write_f64_primary(&mut output, &image)?;
+        drop(output);
+        let mut source = File::open(path)?;
+        let fingerprint = fingerprint_reader(&mut source)?;
+        let metadata = planning_metadata(FrameType::Light);
+        let classification = classify_frame(Path::new(relative_path), &metadata);
+        Ok(ManifestFile::from_analysis(
+            relative_path,
+            fingerprint,
+            vec![WIDTH as u64, HEIGHT as u64],
+            metadata,
+            Vec::new(),
+            classification,
+            ClassificationPolicy::RequireAgreement,
+        )?)
+    }
+
+    fn registration_planning_session(root: &Path) -> TestResult<ImportedNativeSession> {
+        let reference = registration_planning_file(root, "LIGHTS/reference.fits", (0.0, 0.0))?;
+        let source = registration_planning_file(root, "LIGHTS/source.fits", (4.0, 6.0))?;
+        let key = StrictGroupingKey::from_metadata(
+            FrameType::Light,
+            reference.metadata(),
+            reference.axes(),
+        )?;
+        let group = ManifestGroup::new(
+            "light-uvir",
+            key,
+            vec![
+                reference.relative_path().to_owned(),
+                source.relative_path().to_owned(),
+            ],
+            Vec::new(),
+            None,
+        )?;
+        Ok(ImportedNativeSession {
+            root: root.to_owned(),
+            manifest: Arc::new(SessionManifest::new(
+                ClassificationPolicy::RequireAgreement,
+                vec![reference, source],
+                vec![group],
+            )?),
+        })
+    }
+
     fn master_execution_request(
         session: &ImportedNativeSession,
         output_directory: PathBuf,
@@ -3381,6 +3726,71 @@ mod tests {
             .ok_or("relative source paths must be rejected")?;
 
         assert_eq!(error.code, "fits_path_not_absolute");
+        Ok(())
+    }
+
+    #[test]
+    fn seals_registration_geometry_reconstructed_from_the_imported_lights() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = registration_planning_session(directory.path())?;
+        let sources = registration_native_sources(&session)?;
+        let mut frame_ids = sources.keys();
+        let reference = frame_ids.next().ok_or("reference Light missing")?.clone();
+        let source = frame_ids.next().ok_or("source Light missing")?.clone();
+        let accepted = diagnose_paths(&sources[&source].path, &sources[&reference].path)?;
+        if accepted.accepted_plan().is_none() {
+            return Err("synthetic registration evidence did not pass confidence".into());
+        }
+
+        let plan = preview_registration_plan_sync(
+            &session,
+            RegistrationPlanPreviewRequest {
+                reference_frame_id: reference.as_str().to_owned(),
+                source_frame_ids: vec![source.as_str().to_owned()],
+            },
+        )?;
+
+        assert_eq!(plan.schema_version, 1);
+        assert_eq!(plan.reference_frame_id, reference.as_str());
+        assert_eq!(plan.reference_width, 256);
+        assert_eq!(plan.reference_height, 256);
+        assert_eq!(plan.frames.len(), 2);
+        assert_eq!(
+            plan.frames.iter().filter(|frame| frame.reference).count(),
+            1
+        );
+        assert_eq!(plan.plan_sha256.len(), 64);
+        assert!(plan.covered_pixels > 0);
+        assert!(plan.autocrop.width > 0);
+        assert!(plan.autocrop.height > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_registration_requests_that_do_not_name_each_light_once() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = registration_planning_session(directory.path())?;
+        let sources = registration_native_sources(&session)?;
+        let mut frame_ids = sources.keys();
+        let reference = frame_ids.next().ok_or("reference Light missing")?.clone();
+        let source = frame_ids.next().ok_or("source Light missing")?.clone();
+
+        for source_frame_ids in [
+            Vec::new(),
+            vec![source.as_str().to_owned(), source.as_str().to_owned()],
+            vec![reference.as_str().to_owned()],
+        ] {
+            let error = preview_registration_plan_sync(
+                &session,
+                RegistrationPlanPreviewRequest {
+                    reference_frame_id: reference.as_str().to_owned(),
+                    source_frame_ids,
+                },
+            )
+            .err()
+            .ok_or("an incomplete or duplicate Light identity set was accepted")?;
+            assert_eq!(error.code, "registration_plan_input_invalid");
+        }
         Ok(())
     }
 

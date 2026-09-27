@@ -45,9 +45,12 @@ paths. Reference and source remain explicit, pair changes invalidate stale
 evidence, and asynchronous results commit only if both selected identities are
 still current. An accepted solution shows source-pixel residuals, inlier count,
 coverage, rotation, scale, reflection evidence, exact affine coefficients, and
-an accessible text plus graphical common-crop preview. The current desktop
-surface is diagnostic-only and never implies that registered pixels were
-published.
+an accessible text plus graphical common-crop preview. After all pairs pass,
+the presenter sends only stable identities: Rust resolves the immutable
+manifest, reruns every diagnostic and confidence gate, builds the canonical
+all-frame geometry, and returns a visible sealed digest and common crop. The
+desktop never treats frontend matrices as scientific evidence. Registered
+pixels are not yet published, and the surface says so explicitly.
 
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch

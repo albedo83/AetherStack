@@ -75,11 +75,51 @@ export interface RegistrationDiagnostic {
   readonly acceptedPlan: AcceptedRegistrationPlan | null;
 }
 
+export interface RegistrationPlanPreviewRequest {
+  readonly referenceFrameId: string;
+  readonly sourceFrameIds: readonly string[];
+}
+
+export interface RegistrationPlannedFrame {
+  readonly frameId: string;
+  readonly sourceWidth: number;
+  readonly sourceHeight: number;
+  readonly transformCoefficientsSourcePixels: readonly [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  readonly reference: boolean;
+}
+
+export interface RegistrationPlanPreview {
+  readonly schemaVersion: number;
+  readonly planSha256: string;
+  readonly referenceFrameId: string;
+  readonly referenceWidth: number;
+  readonly referenceHeight: number;
+  readonly coveredPixels: number;
+  readonly autocrop: RegistrationCrop;
+  readonly frames: readonly RegistrationPlannedFrame[];
+}
+
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */
 export function diagnoseFitsRegistration(
   request: RegistrationDiagnosticRequest,
 ): Promise<RegistrationDiagnostic> {
   return invoke<RegistrationDiagnostic>("diagnose_fits_registration", {
+    request,
+  });
+}
+
+/** Rebuilds every pair natively and returns the canonical immutable plan. */
+export function previewRegistrationPlan(
+  request: RegistrationPlanPreviewRequest,
+): Promise<RegistrationPlanPreview> {
+  return invoke<RegistrationPlanPreview>("preview_registration_plan", {
     request,
   });
 }

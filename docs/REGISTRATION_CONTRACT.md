@@ -330,9 +330,14 @@ Production registration still requires:
   equivalent ToupTek 585C validation.
 
 The desktop Registration laboratory exposes the native pair diagnostic,
-confidence evidence, accepted source-pixel transform, and exact autocrop. It is
-diagnostic-only at the UI boundary: the runtime can execute a complete plan,
-but the desktop does not yet assemble and submit that plan.
+confidence evidence, accepted source-pixel transform, and exact autocrop. Once
+all non-reference Lights pass, it submits only the selected stable identities
+to Rust. The native plan-preview command resolves the complete Light set from
+the immutable imported manifest, reruns every pair diagnostic and confidence
+gate, constructs `registration-plan-v1`, and returns its digest and all-frame
+crop. It never accepts transforms, dimensions, coverage, or crop values from
+the web presenter. The UI remains execution-safe: it seals and reviews the
+plan, but does not yet publish registered pixels.
 
 The geometry core also provides `registration-plan-v1`, the immutable boundary
 for that future orchestration. It requires at least two unique reviewed frame

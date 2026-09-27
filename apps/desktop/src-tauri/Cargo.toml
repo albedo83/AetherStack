@@ -23,6 +23,7 @@ aether-metadata = { path = "../../../crates/aether-metadata" }
 aether-preview = { path = "../../../crates/aether-preview" }
 aether-quality = { path = "../../../crates/aether-quality" }
 aether-register = { path = "../../../crates/aether-register" }
+aether-registration = { path = "../../../crates/aether-registration" }
 aether-review = { path = "../../../crates/aether-review" }
 aether-runtime = { path = "../../../crates/aether-runtime" }
 aether-session = { path = "../../../crates/aether-session" }

@@ -165,6 +165,7 @@ dependencies = [
  "aether-preview",
  "aether-quality",
  "aether-register",
+ "aether-registration",
  "aether-review",
  "aether-runtime",
  "aether-session",

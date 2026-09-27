@@ -45,7 +45,10 @@ import {
   inspectRgbFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
-import { diagnoseFitsRegistration } from "./registration-bridge.ts";
+import {
+  diagnoseFitsRegistration,
+  previewRegistrationPlan,
+} from "./registration-bridge.ts";
 import { reconcileRegistrationSolutions } from "./registration-plan.ts";
 import { runSerialBatch } from "./quality-batch.ts";
 import {
@@ -312,6 +315,8 @@ function installImportedSession(session: ImportedSession): void {
       sourceFrameId: registrationFrames[1]?.id ?? null,
       diagnostic: null,
       solutions: [],
+      planState: "idle",
+      plan: null,
       message:
         registrationFrames.length >= 2
           ? "Choose a Light pair, then run the native geometric solver"
@@ -369,6 +374,8 @@ function selectRegistrationFrame(
         role === "source" ? frameId : model.registration.sourceFrameId,
       diagnostic: null,
       solutions: role === "reference" ? [] : model.registration.solutions,
+      planState: role === "reference" ? "idle" : model.registration.planState,
+      plan: role === "reference" ? null : model.registration.plan,
       message: "Pair changed · run the native geometric solver",
     },
   });
@@ -399,6 +406,8 @@ async function analyzeRegistration(): Promise<void> {
       ...model.registration,
       state: "running",
       diagnostic: null,
+      planState: "idle",
+      plan: null,
       message: "Detecting stars and testing deterministic geometry…",
     },
   });
@@ -437,6 +446,8 @@ async function analyzeRegistration(): Promise<void> {
         state: accepted ? "accepted" : "rejected",
         diagnostic,
         solutions,
+        planState: "idle",
+        plan: null,
         message: accepted
           ? nextPending
             ? `Geometry accepted · ${solutions.length}/${model.registration.frames.length - 1} transforms reviewed`
@@ -444,6 +455,9 @@ async function analyzeRegistration(): Promise<void> {
           : "Geometry rejected by the confidence gate",
       },
     });
+    if (!nextPending) {
+      void rebuildRegistrationPlan(referenceId, solutions);
+    }
   } catch {
     if (ticket !== registrationTicket) return;
     update({
@@ -453,6 +467,68 @@ async function analyzeRegistration(): Promise<void> {
         state: "error",
         diagnostic: null,
         message: "Registration diagnostic failed · inspect native diagnostics",
+      },
+    });
+  }
+}
+
+async function rebuildRegistrationPlan(
+  referenceFrameId: string,
+  solutions: ReviewViewModel["registration"]["solutions"],
+): Promise<void> {
+  const required = model.registration.frames.filter(
+    (frame) => frame.id !== referenceFrameId,
+  );
+  if (
+    required.length === 0 ||
+    required.some(
+      (frame) =>
+        !solutions.some((solution) => solution.sourceFrameId === frame.id),
+    )
+  ) {
+    return;
+  }
+  const ticket = ++registrationTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      planState: "building",
+      plan: null,
+      message:
+        "Rebuilding every accepted pair in Rust and sealing the canonical plan…",
+    },
+  });
+  try {
+    const plan = await previewRegistrationPlan({
+      referenceFrameId,
+      sourceFrameIds: required.map((frame) => frame.id),
+    });
+    if (
+      ticket !== registrationTicket ||
+      model.registration.referenceFrameId !== referenceFrameId
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        planState: "ready",
+        plan,
+        message: `Canonical plan sealed · ${plan.frames.length} frames · digest ${plan.planSha256.slice(0, 12)}…`,
+      },
+    });
+  } catch {
+    if (ticket !== registrationTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        planState: "error",
+        plan: null,
+        message:
+          "Native plan reconstruction failed · pair evidence was not trusted",
       },
     });
   }

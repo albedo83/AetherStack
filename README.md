@@ -81,7 +81,9 @@ optimized CPU and GPU paths must match.
   workspace, an instrument-inspired Calibration laboratory, and a dedicated
   Registration laboratory that selects an explicit Light pair, runs the native
   solver, exposes confidence metrics and the accepted full-resolution affine
-  matrix, and previews the analytical common crop without writing pixels;
+  matrix, previews the analytical common crop, then asks Rust to re-resolve the
+  complete imported Light set, rerun every confidence gate, and seal the
+  canonical multi-frame plan digest without trusting frontend geometry;
   separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,

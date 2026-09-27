@@ -8,7 +8,10 @@ import type {
   MasterPlanPreview,
   MasterPlanSettings,
 } from "./calibration-bridge.ts";
-import type { RegistrationDiagnostic } from "./registration-bridge.ts";
+import type {
+  RegistrationDiagnostic,
+  RegistrationPlanPreview,
+} from "./registration-bridge.ts";
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
 
@@ -157,6 +160,8 @@ export interface RegistrationViewModel {
   readonly sourceFrameId: string | null;
   readonly diagnostic: RegistrationDiagnostic | null;
   readonly solutions: readonly AcceptedRegistrationSolution[];
+  readonly planState: "idle" | "building" | "ready" | "error";
+  readonly plan: RegistrationPlanPreview | null;
   readonly message: string;
 }
 

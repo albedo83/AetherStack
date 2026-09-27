@@ -841,6 +841,18 @@ safety reasoning. They do not narrate obvious syntax.
     reject substitution before publication and execute a complete artifact-
     backed plan. Next, assemble and submit the native plan from the desktop's
     complete accepted evidence and exact RGB artifact set.
+54. Seal the desktop registration plan in Rust. Once every pair diagnostic is
+    accepted, the web presenter submits only the selected stable Light
+    identities. The native command resolves those identities against the
+    immutable imported manifest, requires the complete Light set exactly once,
+    reruns every raw-CFA diagnostic and confidence gate, and constructs the
+    canonical all-frame plan without accepting frontend matrices or dimensions.
+    The Registration laboratory shows the returned SHA-256 and exact common
+    crop as native sealed evidence. Synthetic shifted-star tests exercise the
+    complete FITS-to-plan path; malformed, incomplete, duplicate, and
+    confidence-rejected requests fail closed. Next, bind that reviewed digest
+    to the calibrated RGB artifact set and execute the existing all-or-nothing
+    runtime transaction from the desktop.
 
 ## 11. Stable-release definition
 

@@ -53,6 +53,8 @@ export const demoReviewModel: ReviewViewModel = {
     sourceFrameId: frameId("b"),
     diagnostic: null,
     solutions: [],
+    planState: "idle",
+    plan: null,
     message: "Import a session to solve a Light frame pair",
   },
   calibration: {

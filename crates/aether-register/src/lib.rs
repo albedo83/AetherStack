@@ -64,6 +64,12 @@ impl RegistrationDiagnostic {
     pub const fn accepted(&self) -> bool {
         self.confidence.accepted
     }
+
+    /// Exact full-resolution geometry available only after confidence acceptance.
+    #[must_use]
+    pub const fn accepted_plan(&self) -> Option<&RegistrationPlanSummary> {
+        self.accepted_plan.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -135,15 +141,36 @@ struct ConfidenceSummary {
     rejections: Vec<&'static str>,
 }
 
+/// Confidence-accepted full-resolution geometry for one source/reference pair.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RegistrationPlanSummary {
+pub struct RegistrationPlanSummary {
     footprint_algorithm_id: &'static str,
     transform_coefficients_source_pixels: [f64; 6],
     reference_width: usize,
     reference_height: usize,
     covered_pixels: usize,
     autocrop: Option<CropSummary>,
+}
+
+impl RegistrationPlanSummary {
+    /// Accepted source-pixel affine transform into reference coordinates.
+    #[must_use]
+    pub const fn source_to_reference_coefficients(&self) -> [f64; 6] {
+        self.transform_coefficients_source_pixels
+    }
+
+    /// Width of the reference canvas in physical source pixels.
+    #[must_use]
+    pub const fn reference_width(&self) -> usize {
+        self.reference_width
+    }
+
+    /// Height of the reference canvas in physical source pixels.
+    #[must_use]
+    pub const fn reference_height(&self) -> usize {
+        self.reference_height
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

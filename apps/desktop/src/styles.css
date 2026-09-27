@@ -595,6 +595,17 @@ button:active:not(:disabled) {
   color: #ff8e9b;
 }
 
+.registration-plan__digest {
+  display: block;
+  padding: 9px 12px;
+  overflow: hidden;
+  color: #75879b;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-top: 1px solid #273342;
+}
+
 .registration-signal {
   display: flex;
   align-items: end;
