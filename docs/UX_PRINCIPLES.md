@@ -188,3 +188,11 @@ decision.
 Visual polish is necessary, but the final authority is the plan: what data is
 used, what operation will run, why each automatic choice was made, and how the
 result can be reproduced.
+
+Registration treats a successful pair solve as evidence, not as completion.
+The plan review lists the fixed reference and every other Light with explicit
+pending, accepted, or rejected text alongside its visual state. A counter names
+the accepted and required transform totals. Selecting another source preserves
+unrelated evidence, while replacing the reference invalidates all transforms
+because their coordinate system has changed. Pixel execution remains absent
+until the complete reviewed plan can be bound to calibrated linear products.

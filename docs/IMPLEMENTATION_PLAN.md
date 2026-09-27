@@ -823,6 +823,15 @@ safety reasoning. They do not narrate obvious syntax.
     frame-indexed progress cover the complete run. Next, bind the desktop's
     accepted diagnostics into this multi-frame plan and expose an explicit
     review-before-run surface without weakening the confidence gate.
+52. Make multi-frame registration progress explicit in the desktop. The dark
+    Registration laboratory now retains each accepted source-to-reference
+    diagnostic by stable frame identity, shows the reference and every pending,
+    accepted, or rejected Light in one accessible plan list, and declares
+    readiness only when all non-reference transforms are accepted. Changing the
+    reference invalidates the collected evidence; changing only the source does
+    not discard unrelated accepted transforms. Next, construct the immutable
+    native plan from this complete evidence while preserving the required CFA
+    diagnostic to calibrated-linear-RGB execution boundary.
 
 ## 11. Stable-release definition
 

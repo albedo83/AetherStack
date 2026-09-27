@@ -144,13 +144,19 @@ export interface RegistrationFrameOption {
   readonly sourcePath: string | null;
 }
 
-/** UI state for one diagnostic-only geometric registration comparison. */
+export interface AcceptedRegistrationSolution {
+  readonly sourceFrameId: string;
+  readonly diagnostic: RegistrationDiagnostic;
+}
+
+/** UI state for reviewed pair evidence that will form one multi-Light plan. */
 export interface RegistrationViewModel {
   readonly state: "idle" | "running" | "accepted" | "rejected" | "error";
   readonly frames: readonly RegistrationFrameOption[];
   readonly referenceFrameId: string | null;
   readonly sourceFrameId: string | null;
   readonly diagnostic: RegistrationDiagnostic | null;
+  readonly solutions: readonly AcceptedRegistrationSolution[];
   readonly message: string;
 }
 

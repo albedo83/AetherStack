@@ -103,6 +103,14 @@ export function mountReviewScreen(
       root,
       "[data-registration-rejections]",
     ),
+    registrationPlanProgress: required<HTMLElement>(
+      root,
+      "[data-registration-plan-progress]",
+    ),
+    registrationPlanFrames: required<HTMLOListElement>(
+      root,
+      "[data-registration-plan-frames]",
+    ),
     calibrationStatus: required<HTMLElement>(root, "[data-calibration-status]"),
     calibrationProducts: required<HTMLElement>(
       root,
@@ -1083,6 +1091,8 @@ interface RegistrationElements {
   readonly registrationCrop: HTMLElement;
   readonly registrationMatrix: HTMLElement;
   readonly registrationRejections: HTMLElement;
+  readonly registrationPlanProgress: HTMLElement;
+  readonly registrationPlanFrames: HTMLOListElement;
 }
 
 function renderRegistration(
@@ -1124,6 +1134,41 @@ function renderRegistration(
     : "Analyze geometry";
   elements.registrationStatus.dataset.state = registration.state;
   elements.registrationStatus.textContent = registration.message;
+
+  const requiredSolutions = Math.max(0, registration.frames.length - 1);
+  const acceptedSourceIds = new Set(
+    registration.solutions.map((solution) => solution.sourceFrameId),
+  );
+  elements.registrationPlanProgress.textContent = `${acceptedSourceIds.size} / ${requiredSolutions} transforms accepted`;
+  elements.registrationPlanProgress.dataset.ready = String(
+    requiredSolutions > 0 && acceptedSourceIds.size === requiredSolutions,
+  );
+  elements.registrationPlanFrames.replaceChildren(
+    ...registration.frames.map((frame) => {
+      const item = document.createElement("li");
+      const isReference = frame.id === registration.referenceFrameId;
+      const isCurrent = frame.id === registration.sourceFrameId;
+      const rejectedCurrent =
+        isCurrent &&
+        registration.state === "rejected" &&
+        !acceptedSourceIds.has(frame.id);
+      const state = isReference
+        ? "reference"
+        : acceptedSourceIds.has(frame.id)
+          ? "accepted"
+          : rejectedCurrent
+            ? "rejected"
+            : "pending";
+      item.dataset.state = state;
+      if (isCurrent) item.dataset.current = "true";
+      const label = document.createElement("span");
+      label.textContent = frame.label;
+      const status = document.createElement("strong");
+      status.textContent = humanize(state);
+      item.append(label, status);
+      return item;
+    }),
+  );
 
   const diagnostic = registration.diagnostic;
   const plan = diagnostic?.acceptedPlan ?? null;
@@ -1955,6 +2000,16 @@ function shellMarkup(): string {
                 <select data-registration-source></select>
               </label>
               <p class="control-note">The solver detects on the CFA-safe luminance plane, then lifts the accepted transform back to exact source-pixel coordinates.</p>
+              <section class="registration-plan" aria-labelledby="registration-plan-heading">
+                <div class="registration-plan__heading">
+                  <div>
+                    <p class="eyebrow">Multi-frame plan</p>
+                    <h4 id="registration-plan-heading">Transform review</h4>
+                  </div>
+                  <strong data-registration-plan-progress data-ready="false">0 / 0 transforms accepted</strong>
+                </div>
+                <ol data-registration-plan-frames aria-label="Registration plan frame status"></ol>
+              </section>
               <div class="registration-signal" aria-hidden="true">
                 <span></span><span></span><span></span><span></span><span></span>
               </div>

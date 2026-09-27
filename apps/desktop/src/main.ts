@@ -46,6 +46,7 @@ import {
   type FrameQualityResult,
 } from "./quality-bridge.ts";
 import { diagnoseFitsRegistration } from "./registration-bridge.ts";
+import { reconcileRegistrationSolutions } from "./registration-plan.ts";
 import { runSerialBatch } from "./quality-batch.ts";
 import {
   applyReviewDecision,
@@ -310,6 +311,7 @@ function installImportedSession(session: ImportedSession): void {
       referenceFrameId: registrationFrames[0]?.id ?? null,
       sourceFrameId: registrationFrames[1]?.id ?? null,
       diagnostic: null,
+      solutions: [],
       message:
         registrationFrames.length >= 2
           ? "Choose a Light pair, then run the native geometric solver"
@@ -366,6 +368,7 @@ function selectRegistrationFrame(
       sourceFrameId:
         role === "source" ? frameId : model.registration.sourceFrameId,
       diagnostic: null,
+      solutions: role === "reference" ? [] : model.registration.solutions,
       message: "Pair changed · run the native geometric solver",
     },
   });
@@ -412,14 +415,32 @@ async function analyzeRegistration(): Promise<void> {
       return;
     }
     const accepted = diagnostic.confidence.accepted;
+    const solutions = reconcileRegistrationSolutions(
+      model.registration.frames,
+      referenceId,
+      sourceId,
+      model.registration.solutions,
+      diagnostic,
+    );
+    const nextPending = accepted
+      ? model.registration.frames.find(
+          (frame) =>
+            frame.id !== referenceId &&
+            frame.id !== sourceId &&
+            !solutions.some((solution) => solution.sourceFrameId === frame.id),
+        )
+      : null;
     update({
       ...model,
       registration: {
         ...model.registration,
         state: accepted ? "accepted" : "rejected",
         diagnostic,
+        solutions,
         message: accepted
-          ? "Geometry accepted · exact full-resolution plan is available"
+          ? nextPending
+            ? `Geometry accepted · ${solutions.length}/${model.registration.frames.length - 1} transforms reviewed`
+            : "All source transforms accepted · multi-frame plan is ready for final review"
           : "Geometry rejected by the confidence gate",
       },
     });

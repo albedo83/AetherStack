@@ -52,6 +52,7 @@ export const demoReviewModel: ReviewViewModel = {
     referenceFrameId: frameId("a"),
     sourceFrameId: frameId("b"),
     diagnostic: null,
+    solutions: [],
     message: "Import a session to solve a Light frame pair",
   },
   calibration: {

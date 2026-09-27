@@ -224,6 +224,7 @@ describe("frame review workspace", () => {
       referenceFrameId: frames[0]?.id ?? null,
       sourceFrameId: frames[1]?.id ?? null,
       message: "Geometry accepted · exact full-resolution plan is available",
+      solutions: [],
       diagnostic: {
         schemaVersion: 2,
         profileId: "registration-v1",
@@ -284,7 +285,15 @@ describe("frame review workspace", () => {
       ...demoReviewModel,
       activeWorkspace: "registration" as const,
       reviewSessionReady: true,
-      registration,
+      registration: {
+        ...registration,
+        solutions: [
+          {
+            sourceFrameId: frames[1]?.id ?? "",
+            diagnostic: registration.diagnostic,
+          },
+        ],
+      },
     };
     const { root, actions } = fixture(ready);
 
@@ -297,6 +306,9 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("302");
     expect(root.textContent).toContain("0.240");
     expect(root.textContent).toContain("lanczos3-common-footprint-v1");
+    expect(root.textContent).toContain("1 / 1 transforms accepted");
+    expect(root.textContent).toContain("Reference");
+    expect(root.textContent).toContain("Accepted");
     fireEvent.click(getByRole(root, "button", { name: "Analyze geometry" }));
     expect(actions.onAnalyzeRegistration).toHaveBeenCalledOnce();
   });
