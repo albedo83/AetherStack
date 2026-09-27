@@ -62,6 +62,15 @@ export const demoReviewModel: ReviewViewModel = {
       result: null,
       message: "Calibrate the reviewed Lights to unlock registration",
     },
+    resultReview: {
+      frames: [],
+      selectedFrameId: null,
+      state: "idle",
+      preview: null,
+      playing: false,
+      message: "Registered pixels will appear here after atomic publication",
+      sharedStretchLabel: "Registered stretch · awaiting pixels",
+    },
     message: "Import a session to solve a Light frame pair",
   },
   calibration: {

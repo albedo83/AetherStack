@@ -139,6 +139,34 @@ export function mountReviewScreen(
       root,
       "[data-registration-execution-output]",
     ),
+    registeredFrame: required<HTMLSelectElement>(
+      root,
+      "[data-registered-frame]",
+    ),
+    registeredPreviewImage: required<HTMLImageElement>(
+      root,
+      "[data-registered-preview-image]",
+    ),
+    registeredPreviewPlaceholder: required<HTMLElement>(
+      root,
+      "[data-registered-preview-placeholder]",
+    ),
+    registeredPreviewMessage: required<HTMLElement>(
+      root,
+      "[data-registered-preview-message]",
+    ),
+    registeredPreviewPosition: required<HTMLElement>(
+      root,
+      "[data-registered-preview-position]",
+    ),
+    registeredPreviewStretch: required<HTMLElement>(
+      root,
+      "[data-registered-preview-stretch]",
+    ),
+    registeredPreviewPlay: required<HTMLButtonElement>(
+      root,
+      '[data-action="toggle-registered-play"]',
+    ),
     calibrationStatus: required<HTMLElement>(root, "[data-calibration-status]"),
     calibrationProducts: required<HTMLElement>(
       root,
@@ -358,6 +386,18 @@ export function mountReviewScreen(
       actions.onCancelRegistration();
       return;
     }
+    if (action === "toggle-registered-play") {
+      actions.onSetRegisteredPlaying(!model.registration.resultReview.playing);
+      return;
+    }
+    if (action === "previous-registered") {
+      actions.onStepRegisteredFrame("backward");
+      return;
+    }
+    if (action === "next-registered") {
+      actions.onStepRegisteredFrame("forward");
+      return;
+    }
     if (action === "execute-master-plan") {
       actions.onExecuteMasterPlan();
       return;
@@ -499,6 +539,10 @@ export function mountReviewScreen(
     }
     if (target === elements.registrationSource) {
       actions.onSelectRegistrationSource(elements.registrationSource.value);
+      return;
+    }
+    if (target === elements.registeredFrame) {
+      actions.onSelectRegisteredFrame(elements.registeredFrame.value);
       return;
     }
     if (target === elements.lightOutputMode) {
@@ -1140,6 +1184,13 @@ interface RegistrationElements {
   readonly registrationExecutionMessage: HTMLElement;
   readonly registrationExecutionProgress: HTMLProgressElement;
   readonly registrationExecutionOutput: HTMLElement;
+  readonly registeredFrame: HTMLSelectElement;
+  readonly registeredPreviewImage: HTMLImageElement;
+  readonly registeredPreviewPlaceholder: HTMLElement;
+  readonly registeredPreviewMessage: HTMLElement;
+  readonly registeredPreviewPosition: HTMLElement;
+  readonly registeredPreviewStretch: HTMLElement;
+  readonly registeredPreviewPlay: HTMLButtonElement;
 }
 
 function renderRegistration(
@@ -1239,6 +1290,7 @@ function renderRegistration(
     elements.registrationExecutionProgress.max = 1;
   }
   elements.registrationExecutionProgress.hidden = !executionBusy;
+  renderRegisteredResult(elements, registration.resultReview);
   elements.registrationPlanFrames.replaceChildren(
     ...registration.frames.map((frame) => {
       const item = document.createElement("li");
@@ -1346,6 +1398,63 @@ function renderRegistration(
       list.append(item);
     }
     elements.registrationRejections.replaceChildren(heading, list);
+  }
+}
+
+function renderRegisteredResult(
+  elements: RegistrationElements,
+  review: ReviewViewModel["registration"]["resultReview"],
+): void {
+  elements.registeredFrame.replaceChildren(
+    ...review.frames.map((frame) => {
+      const option = document.createElement("option");
+      option.value = frame.id;
+      option.textContent = frame.label;
+      return option;
+    }),
+  );
+  elements.registeredFrame.value = review.selectedFrameId ?? "";
+  elements.registeredFrame.disabled = review.frames.length === 0;
+  const selectedIndex = review.frames.findIndex(
+    (frame) => frame.id === review.selectedFrameId,
+  );
+  const expectedPreviewId =
+    selectedIndex >= 0 && review.preview
+      ? review.preview.frameId.endsWith(`:registered:${review.selectedFrameId}`)
+      : false;
+  const previewReady = review.state === "ready" && expectedPreviewId;
+  elements.registeredPreviewImage.hidden = !previewReady;
+  if (previewReady && review.preview) {
+    elements.registeredPreviewImage.src = review.preview.url;
+    elements.registeredPreviewImage.alt = `Registered preview of ${review.frames[selectedIndex]?.label ?? "Light frame"}`;
+  } else {
+    elements.registeredPreviewImage.removeAttribute("src");
+    elements.registeredPreviewImage.alt = "";
+  }
+  elements.registeredPreviewPlaceholder.hidden = previewReady;
+  elements.registeredPreviewMessage.textContent = review.message;
+  elements.registeredPreviewPosition.textContent =
+    selectedIndex >= 0
+      ? `${selectedIndex + 1} / ${review.frames.length}`
+      : `0 / ${review.frames.length}`;
+  elements.registeredPreviewStretch.textContent = review.sharedStretchLabel;
+  elements.registeredPreviewPlay.disabled = review.frames.length < 2;
+  elements.registeredPreviewPlay.setAttribute(
+    "aria-pressed",
+    String(review.playing),
+  );
+  elements.registeredPreviewPlay.setAttribute(
+    "aria-label",
+    review.playing ? "Pause registered Blink" : "Start registered Blink",
+  );
+  elements.registeredPreviewPlay.textContent = review.playing ? "Ⅱ" : "▶";
+  for (const button of [
+    elements.registeredPreviewPlay.previousElementSibling,
+    elements.registeredPreviewPlay.nextElementSibling,
+  ]) {
+    if (button instanceof HTMLButtonElement) {
+      button.disabled = review.frames.length < 2;
+    }
   }
 }
 
@@ -2175,6 +2284,35 @@ function shellMarkup(): string {
                 </div>
               </section>
               <div class="registration-rejections" data-registration-rejections hidden></div>
+              <section class="registered-review" aria-labelledby="registered-review-heading">
+                <div class="registered-review__heading">
+                  <div>
+                    <p class="eyebrow">Published pixel inspection</p>
+                    <h4 id="registered-review-heading">Registered Blink</h4>
+                  </div>
+                  <span class="viewer-chip viewer-chip--lock" data-registered-preview-stretch>Registered stretch · awaiting pixels</span>
+                </div>
+                <div class="registered-review__toolbar">
+                  <label>
+                    <span class="sr-only">Registered frame</span>
+                    <select data-registered-frame aria-label="Registered frame" disabled></select>
+                  </label>
+                  <span data-registered-preview-position>0 / 0</span>
+                </div>
+                <div class="registered-review__viewport" aria-live="polite">
+                  <img data-registered-preview-image alt="" hidden />
+                  <div class="registered-review__placeholder" data-registered-preview-placeholder>
+                    <span class="preview-placeholder__aperture" aria-hidden="true"></span>
+                    <strong>Atomic result viewer</strong>
+                    <span data-registered-preview-message>Registered pixels will appear here after atomic publication</span>
+                  </div>
+                </div>
+                <div class="registered-review__transport" aria-label="Registered Blink playback">
+                  <button class="transport-button" type="button" data-action="previous-registered" aria-label="Previous registered frame" disabled>‹</button>
+                  <button class="transport-button transport-button--play" type="button" data-action="toggle-registered-play" aria-label="Start registered Blink" aria-pressed="false" disabled>▶</button>
+                  <button class="transport-button" type="button" data-action="next-registered" aria-label="Next registered frame" disabled>›</button>
+                </div>
+              </section>
             </section>
           </div>
         </section>

@@ -350,6 +350,14 @@ while ensuring a rejected Blink frame cannot re-enter processing. A membership
 change invalidates prior pair evidence and the sealed digest. Fewer than two
 non-rejected Lights is an explicit planning failure.
 
+After complete publication, result review is bound to the same reviewed frame
+identities. Partial, duplicate, or foreign registered sets are not displayable
+as a successful transaction. Blink previews are rendered from the published
+FITS artifacts by the bounded native renderer. A single estimated display
+transform is locked across the sequence, adjacent frames may be prefetched
+within a separate bounded cache, and the sealed plan digest forms part of every
+preview identity so pixels from an older plan cannot appear as current output.
+
 The geometry core also provides `registration-plan-v1`, the immutable boundary
 for that future orchestration. It requires at least two unique reviewed frame
 identities, canonicalizes discovery order by identity, requires the declared

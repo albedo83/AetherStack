@@ -149,6 +149,24 @@ export interface RegistrationFrameOption {
   readonly sourcePath: string | null;
 }
 
+/** One published registered artifact available for result Blink review. */
+export interface RegisteredReviewFrame {
+  readonly id: string;
+  readonly label: string;
+  readonly outputPath: string;
+  readonly previewContent: ReviewFrame["previewContent"];
+}
+
+export interface RegistrationResultReview {
+  readonly frames: readonly RegisteredReviewFrame[];
+  readonly selectedFrameId: string | null;
+  readonly state: "idle" | "loading" | "ready" | "error";
+  readonly preview: FramePreview | null;
+  readonly playing: boolean;
+  readonly message: string;
+  readonly sharedStretchLabel: string;
+}
+
 export interface AcceptedRegistrationSolution {
   readonly sourceFrameId: string;
   readonly diagnostic: RegistrationDiagnostic;
@@ -171,6 +189,7 @@ export interface RegistrationViewModel {
     readonly result: RegistrationExecutionResult | null;
     readonly message: string;
   };
+  readonly resultReview: RegistrationResultReview;
   readonly message: string;
 }
 
@@ -219,6 +238,9 @@ export interface ReviewActions {
   readonly onAnalyzeRegistration: () => void;
   readonly onExecuteRegistration: () => void;
   readonly onCancelRegistration: () => void;
+  readonly onSelectRegisteredFrame: (frameId: string) => void;
+  readonly onSetRegisteredPlaying: (playing: boolean) => void;
+  readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;
   readonly onUpdateCalibrationSettings: (settings: MasterPlanSettings) => void;
   readonly onUpdateLightOutputMode: (
     mode: LightExecutionSettings["outputMode"],

@@ -58,6 +58,10 @@ Rejecting a Light in Review removes it from the Registration plan immediately;
 accepting or clearing it adds it back. Any membership change visibly clears the
 old transforms and digest, because rejected frames are excluded by the native
 Review book rather than by a cosmetic table filter.
+Once the complete registered set is published, the same workspace reveals a
+dedicated result Blink viewer. It uses one locked stretch for fair comparison,
+shows the reviewed source label and sequence position, supports keyboard-readable
+previous, play/pause, and next controls, and never presents a partial output set.
 
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch

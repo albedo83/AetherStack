@@ -17,6 +17,9 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onAnalyzeRegistration: vi.fn(),
     onExecuteRegistration: vi.fn(),
     onCancelRegistration: vi.fn(),
+    onSelectRegisteredFrame: vi.fn(),
+    onSetRegisteredPlaying: vi.fn(),
+    onStepRegisteredFrame: vi.fn(),
     onUpdateCalibrationSettings: vi.fn(),
     onUpdateLightOutputMode: vi.fn(),
     onRefreshMasterPlan: vi.fn(),
@@ -230,6 +233,7 @@ describe("frame review workspace", () => {
       planState: "idle" as const,
       plan: null,
       execution: demoReviewModel.registration.execution,
+      resultReview: demoReviewModel.registration.resultReview,
       diagnostic: {
         schemaVersion: 2,
         profileId: "registration-v1",
@@ -409,6 +413,81 @@ describe("frame review workspace", () => {
     expect(actions.onSelectRegistrationSource).toHaveBeenCalledWith(
       demoReviewModel.registration.frames[0]?.id,
     );
+  });
+
+  it("presents published registered pixels as an accessible Blink sequence", () => {
+    const frameA = demoReviewModel.registration.frames[0]!;
+    const frameB = demoReviewModel.registration.frames[1]!;
+    const planSha256 = "9".repeat(64);
+    const ready = {
+      ...demoReviewModel,
+      activeWorkspace: "registration" as const,
+      registration: {
+        ...demoReviewModel.registration,
+        execution: {
+          ...demoReviewModel.registration.execution,
+          state: "completed" as const,
+          outputDirectory: "/registered",
+          result: {
+            planSha256,
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 4_096,
+            frames: [],
+          },
+        },
+        resultReview: {
+          frames: [
+            {
+              id: frameA.id,
+              label: frameA.label,
+              outputPath: "/registered/a.fits",
+              previewContent: { kind: "rgb" as const },
+            },
+            {
+              id: frameB.id,
+              label: frameB.label,
+              outputPath: "/registered/b.fits",
+              previewContent: { kind: "rgb" as const },
+            },
+          ],
+          selectedFrameId: frameA.id,
+          state: "ready" as const,
+          preview: {
+            frameId: `${planSha256}:registered:${frameA.id}`,
+            url: "blob:registered-a",
+          },
+          playing: false,
+          message: "Published registered pixels · shared stretch locked",
+          sharedStretchLabel: "Registered stretch · locked",
+        },
+      },
+    };
+    const { root, actions } = fixture(ready);
+
+    expect(
+      getByRole(root, "heading", { name: "Registered Blink" }),
+    ).not.toBeNull();
+    expect(
+      getByRole<HTMLImageElement>(root, "img", {
+        name: `Registered preview of ${frameA.label}`,
+      }).src,
+    ).toContain("blob:registered-a");
+    expect(root.textContent).toContain("Registered stretch · locked");
+    fireEvent.click(
+      getByRole(root, "button", { name: "Next registered frame" }),
+    );
+    expect(actions.onStepRegisteredFrame).toHaveBeenCalledWith("forward");
+    fireEvent.click(
+      getByRole(root, "button", { name: "Start registered Blink" }),
+    );
+    expect(actions.onSetRegisteredPlaying).toHaveBeenCalledWith(true);
+    fireEvent.change(
+      getByRole<HTMLSelectElement>(root, "combobox", {
+        name: "Registered frame",
+      }),
+      { target: { value: frameB.id } },
+    );
+    expect(actions.onSelectRegisteredFrame).toHaveBeenCalledWith(frameB.id);
   });
 
   it("keeps ambiguous Light associations visibly blocked", () => {

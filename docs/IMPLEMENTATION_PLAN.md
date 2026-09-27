@@ -875,6 +875,16 @@ safety reasoning. They do not narrate obvious syntax.
     evidence, and artifact readiness in the presenter. Native tests prove that
     rejecting one of a two-Light set makes registration fail closed. Next, add
     a registered-frame Blink result view and crop-aware stack integration.
+57. Add a registered-frame Blink result viewer backed by the existing bounded
+    native FITS renderer. The presenter binds the complete published set back to
+    reviewed identities and rejects partial, duplicate, or foreign results. One
+    native stretch is estimated from the first registered artifact and locked
+    across manual or timed playback; preview identities include the sealed plan
+    digest, the browser cache is bounded by entries and encoded bytes, adjacent
+    frames are prefetched, and every object URL is revoked on invalidation.
+    Presenter and binding tests cover exact pixel interpretation, stale preview
+    suppression, accessible controls, and fail-closed set reconciliation. Next,
+    add crop-aware registered-frame integration.
 
 ## 11. Stable-release definition
 

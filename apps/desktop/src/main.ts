@@ -54,6 +54,7 @@ import {
   type RegistrationExecutionProgress,
 } from "./registration-bridge.ts";
 import { reconcileRegistrationSolutions } from "./registration-plan.ts";
+import { bindRegisteredReviewFrames } from "./registered-review.ts";
 import { runSerialBatch } from "./quality-batch.ts";
 import {
   applyReviewDecision,
@@ -118,6 +119,16 @@ let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
+let registrationPreviewTicket = 0;
+let registrationBlinkTimer: number | null = null;
+let registrationSharedTransform: EstimatedDisplayTransform | null = null;
+const registrationPreviewCache = new BoundedPreviewCache(
+  maximumCachedPreviews,
+  maximumCachedPreviewBytes,
+);
+const registrationPreviewPrefetch =
+  new PreviewPrefetchCoordinator<PreviewResource>();
+let ephemeralRegistrationPreview: PreviewResource | null = null;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -137,6 +148,15 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelRegistration() {
     void cancelRegistration();
+  },
+  onSelectRegisteredFrame(frameId) {
+    selectRegisteredFrame(frameId);
+  },
+  onSetRegisteredPlaying(playing) {
+    setRegisteredPlaying(playing);
+  },
+  onStepRegisteredFrame(direction) {
+    stepRegisteredFrame(direction);
   },
   onUpdateCalibrationSettings(settings) {
     updateCalibrationSettings(settings);
@@ -273,7 +293,7 @@ function installImportedSession(session: ImportedSession): void {
   lightExecutionTicket += 1;
   registrationExecutionTicket += 1;
   registrationTicket += 1;
-  registrationExecutionTicket += 1;
+  clearRegistrationPreviewResources();
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -333,6 +353,7 @@ function installImportedSession(session: ImportedSession): void {
         result: null,
         message: "Export calibrated Lights to unlock registration",
       },
+      resultReview: idleRegistrationResultReview(),
       message:
         registrationFrames.length >= 2
           ? "Choose a Light pair, then run the native geometric solver"
@@ -383,6 +404,7 @@ function registrationFramesForSession(
 function selectWorkspace(workspace: WorkspaceView): void {
   if (workspace === model.activeWorkspace) return;
   if (workspace !== "frames") setPlaying(false);
+  if (workspace !== "registration") setRegisteredPlaying(false);
   update({ ...model, activeWorkspace: workspace });
   if (workspace === "frames" && model.preview === null) {
     void loadSelectedPreview();
@@ -395,6 +417,7 @@ function selectRegistrationFrame(
 ): void {
   if (!model.registration.frames.some((frame) => frame.id === frameId)) return;
   registrationTicket += 1;
+  if (role === "reference") clearRegistrationPreviewResources();
   update({
     ...model,
     registration: {
@@ -412,6 +435,12 @@ function selectRegistrationFrame(
         role === "reference"
           ? idleRegistrationExecution("Reference changed · rebuild the plan")
           : model.registration.execution,
+      resultReview:
+        role === "reference"
+          ? idleRegistrationResultReview(
+              "Reference changed · register a fresh frame set",
+            )
+          : model.registration.resultReview,
       message: "Pair changed · run the native geometric solver",
     },
   });
@@ -434,6 +463,7 @@ async function analyzeRegistration(): Promise<void> {
   }
 
   const ticket = ++registrationTicket;
+  clearRegistrationPreviewResources();
   const referenceId = reference.id;
   const sourceId = source.id;
   update({
@@ -446,6 +476,9 @@ async function analyzeRegistration(): Promise<void> {
       plan: null,
       execution: idleRegistrationExecution(
         "Geometry changed · reseal before registration",
+      ),
+      resultReview: idleRegistrationResultReview(
+        "Geometry changed · register a fresh frame set",
       ),
       message: "Detecting stars and testing deterministic geometry…",
     },
@@ -585,6 +618,20 @@ function idleRegistrationExecution(
   };
 }
 
+function idleRegistrationResultReview(
+  message = "Registered pixels will appear here after atomic publication",
+): ReviewViewModel["registration"]["resultReview"] {
+  return {
+    frames: [],
+    selectedFrameId: null,
+    state: "idle",
+    preview: null,
+    playing: false,
+    message,
+    sharedStretchLabel: "Registered stretch · awaiting pixels",
+  };
+}
+
 async function executeRegistration(): Promise<void> {
   const plan = model.registration.plan;
   const calibration = model.calibration.lightExecution.result;
@@ -636,6 +683,7 @@ async function executeRegistration(): Promise<void> {
     return;
   }
   const ticket = ++registrationExecutionTicket;
+  clearRegistrationPreviewResources();
   update({
     ...model,
     registration: {
@@ -647,6 +695,9 @@ async function executeRegistration(): Promise<void> {
         result: null,
         message: "Preparing the atomic registered-frame transaction…",
       },
+      resultReview: idleRegistrationResultReview(
+        "Registration is publishing the complete sealed frame set…",
+      ),
     },
   });
   const onProgress = (progress: RegistrationExecutionProgress): void => {
@@ -687,6 +738,11 @@ async function executeRegistration(): Promise<void> {
       onProgress,
     );
     if (ticket !== registrationExecutionTicket) return;
+    const registeredFrames = bindRegisteredReviewFrames(
+      model.registration.frames,
+      calibration.calibratedFrames,
+      result.frames,
+    );
     update({
       ...model,
       registration: {
@@ -698,8 +754,25 @@ async function executeRegistration(): Promise<void> {
           result,
           message: `${result.frames.length} registered frames published atomically · peak ${formatMemory(result.peakReservedBytes)}`,
         },
+        resultReview: registeredFrames
+          ? {
+              frames: registeredFrames,
+              selectedFrameId: registeredFrames[0]?.id ?? null,
+              state: "loading",
+              preview: null,
+              playing: false,
+              message: "Resolving one shared display stretch…",
+              sharedStretchLabel: "Registered stretch · resolving",
+            }
+          : {
+              ...idleRegistrationResultReview(),
+              state: "error",
+              message:
+                "Published frame identities could not be bound for result review",
+            },
       },
     });
+    if (registeredFrames) void loadSelectedRegisteredPreview();
   } catch (error) {
     if (ticket !== registrationExecutionTicket) return;
     const cancelled =
@@ -751,6 +824,178 @@ async function cancelRegistration(): Promise<void> {
   }
 }
 
+function selectRegisteredFrame(frameId: string): void {
+  const review = model.registration.resultReview;
+  if (!review.frames.some((frame) => frame.id === frameId)) return;
+  registrationPreviewTicket += 1;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      resultReview: {
+        ...review,
+        selectedFrameId: frameId,
+        state: "loading",
+        preview: null,
+        message: "Rendering registered pixels with the locked stretch…",
+      },
+    },
+  });
+  void loadSelectedRegisteredPreview();
+}
+
+function setRegisteredPlaying(playing: boolean): void {
+  stopRegistrationBlinkTimer();
+  const review = model.registration.resultReview;
+  const enabled = playing && review.frames.length > 1;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      resultReview: { ...review, playing: enabled },
+    },
+  });
+  if (enabled) {
+    registrationBlinkTimer = window.setInterval(
+      () => stepRegisteredFrame("forward"),
+      900,
+    );
+  }
+}
+
+function stepRegisteredFrame(direction: "backward" | "forward"): void {
+  const review = model.registration.resultReview;
+  const current = review.frames.findIndex(
+    (frame) => frame.id === review.selectedFrameId,
+  );
+  if (current < 0 || review.frames.length < 2) return;
+  const offset = direction === "forward" ? 1 : -1;
+  const next = (current + offset + review.frames.length) % review.frames.length;
+  const frame = review.frames[next];
+  if (frame) selectRegisteredFrame(frame.id);
+}
+
+async function loadSelectedRegisteredPreview(): Promise<void> {
+  const review = model.registration.resultReview;
+  const frame = review.frames.find(
+    (candidate) => candidate.id === review.selectedFrameId,
+  );
+  const planDigest = model.registration.execution.result?.planSha256;
+  if (!frame || !planDigest) return;
+
+  const ticket = ++registrationPreviewTicket;
+  try {
+    let transform = registrationSharedTransform;
+    if (!transform) {
+      transform = await estimateFitsPreviewTransform({
+        path: frame.outputPath,
+        content: frame.previewContent,
+        ...previewBounds,
+      });
+      if (ticket !== registrationPreviewTicket) return;
+      registrationSharedTransform = transform;
+    }
+    const request = registeredPreviewRequest(frame, planDigest, transform);
+    const cacheKey = previewCacheKey(request, transform.algorithmId);
+    let cached = registrationPreviewCache.get(cacheKey);
+    const pending = registrationPreviewPrefetch.pending(cacheKey);
+    if (!cached && pending) {
+      await pending;
+      if (ticket !== registrationPreviewTicket) return;
+      cached = registrationPreviewCache.get(cacheKey);
+    }
+    if (!cached) {
+      const resource = await requestFitsPreview(request);
+      if (ticket !== registrationPreviewTicket) {
+        resource.revoke();
+        return;
+      }
+      releaseEphemeralRegistrationPreview();
+      if (!registrationPreviewCache.put(cacheKey, resource)) {
+        ephemeralRegistrationPreview = resource;
+      }
+      cached = resource;
+    } else {
+      releaseEphemeralRegistrationPreview();
+    }
+    if (ticket !== registrationPreviewTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        resultReview: {
+          ...model.registration.resultReview,
+          state: "ready",
+          preview: cached.preview,
+          message: "Published registered pixels · shared stretch locked",
+          sharedStretchLabel: "Registered stretch · locked",
+        },
+      },
+    });
+    scheduleRegisteredPreviewPrefetch(transform, planDigest);
+  } catch {
+    if (ticket !== registrationPreviewTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        resultReview: {
+          ...model.registration.resultReview,
+          state: "error",
+          preview: null,
+          message: "Registered FITS preview could not be rendered",
+          sharedStretchLabel: "Registered stretch · unavailable",
+        },
+      },
+    });
+  }
+}
+
+function registeredPreviewRequest(
+  frame: ReviewViewModel["registration"]["resultReview"]["frames"][number],
+  planDigest: string,
+  transform: EstimatedDisplayTransform,
+): FitsPreviewRequest {
+  return {
+    frameId: `${planDigest}:registered:${frame.id}`,
+    path: frame.outputPath,
+    content: frame.previewContent,
+    ...previewBounds,
+    blackPoint: transform.blackPoint,
+    whitePoint: transform.whitePoint,
+    midtone: transform.midtone,
+    transfer: { kind: "midtones" },
+  };
+}
+
+function scheduleRegisteredPreviewPrefetch(
+  transform: EstimatedDisplayTransform,
+  planDigest: string,
+): void {
+  const review = model.registration.resultReview;
+  const selected = review.frames.findIndex(
+    (frame) => frame.id === review.selectedFrameId,
+  );
+  if (selected < 0 || review.frames.length < 2) return;
+  const candidates = [1, -1]
+    .map((offset) =>
+      review.frames.at(
+        (selected + offset + review.frames.length) % review.frames.length,
+      ),
+    )
+    .filter((frame) => frame !== undefined);
+  for (const frame of candidates) {
+    const request = registeredPreviewRequest(frame, planDigest, transform);
+    const cacheKey = previewCacheKey(request, transform.algorithmId);
+    if (registrationPreviewCache.has(cacheKey)) continue;
+    void registrationPreviewPrefetch.schedule(
+      cacheKey,
+      () => requestFitsPreview(request),
+      (resource) => registrationPreviewCache.put(cacheKey, resource),
+    );
+  }
+}
+
 function updateCalibrationSettings(settings: MasterPlanSettings): void {
   if (
     model.calibration.execution.state === "running" ||
@@ -761,12 +1006,16 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
   ) {
     return;
   }
+  clearRegistrationPreviewResources();
   update({
     ...model,
     registration: {
       ...model.registration,
       execution: idleRegistrationExecution(
         "Calibration changed · export fresh Light artifacts",
+      ),
+      resultReview: idleRegistrationResultReview(
+        "Calibration changed · register a fresh frame set",
       ),
     },
     calibration: {
@@ -972,6 +1221,7 @@ async function executeLights(): Promise<void> {
     return;
   }
   const ticket = ++lightExecutionTicket;
+  clearRegistrationPreviewResources();
   const outputMode = model.calibration.lightSettings.outputMode;
   const leavingCalibratedView = model.lightFrameView === "calibrated";
   const rawFrames = leavingCalibratedView
@@ -994,6 +1244,9 @@ async function executeLights(): Promise<void> {
       ...model.registration,
       execution: idleRegistrationExecution(
         "Light calibration is running · wait for the complete artifact set",
+      ),
+      resultReview: idleRegistrationResultReview(
+        "Light calibration is running · registered review reset",
       ),
     },
     lightFrameView: leavingCalibratedView ? "raw" : model.lightFrameView,
@@ -1834,6 +2087,25 @@ function stopBlinkTimer(): void {
   if (model.playing) model = { ...model, playing: false };
 }
 
+function stopRegistrationBlinkTimer(): void {
+  if (registrationBlinkTimer !== null) {
+    window.clearInterval(registrationBlinkTimer);
+    registrationBlinkTimer = null;
+  }
+  if (model.registration.resultReview.playing) {
+    model = {
+      ...model,
+      registration: {
+        ...model.registration,
+        resultReview: {
+          ...model.registration.resultReview,
+          playing: false,
+        },
+      },
+    };
+  }
+}
+
 function releaseEphemeralPreview(): void {
   ephemeralPreviewResource?.revoke();
   ephemeralPreviewResource = null;
@@ -1843,6 +2115,20 @@ function clearPreviewResources(): void {
   previewPrefetch.cancel();
   releaseEphemeralPreview();
   previewCache.clear();
+}
+
+function releaseEphemeralRegistrationPreview(): void {
+  ephemeralRegistrationPreview?.revoke();
+  ephemeralRegistrationPreview = null;
+}
+
+function clearRegistrationPreviewResources(): void {
+  registrationPreviewTicket += 1;
+  registrationSharedTransform = null;
+  registrationPreviewPrefetch.cancel();
+  releaseEphemeralRegistrationPreview();
+  registrationPreviewCache.clear();
+  stopRegistrationBlinkTimer();
 }
 
 function disposeRuntimeResources(): void {
@@ -1872,6 +2158,7 @@ function disposeRuntimeResources(): void {
   }
   stopBlinkTimer();
   clearPreviewResources();
+  clearRegistrationPreviewResources();
 }
 
 function update(next: ReviewViewModel): void {
@@ -1970,6 +2257,7 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
   if (registrationMembershipChanged) {
     registrationTicket += 1;
     registrationExecutionTicket += 1;
+    clearRegistrationPreviewResources();
   }
   update({
     ...model,
@@ -1992,6 +2280,9 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
           plan: null,
           execution: idleRegistrationExecution(
             "Review membership changed · rebuild the registration plan",
+          ),
+          resultReview: idleRegistrationResultReview(
+            "Review membership changed · register a fresh frame set",
           ),
           message:
             registrationFrames.length >= 2
