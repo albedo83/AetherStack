@@ -10,6 +10,7 @@ mod features;
 mod footprint;
 mod geometry;
 mod matching;
+mod plan;
 mod reference;
 mod resampling;
 mod triangles;
@@ -43,6 +44,10 @@ pub use matching::{
     DescriptorMatchHypothesis, DescriptorMatchParameters, DescriptorMatchStatistics, FeaturePair,
     MAX_DESCRIPTOR_COMPARISONS, MAX_MATCH_CANDIDATES_PER_DESCRIPTOR, MAX_MATCH_HYPOTHESES,
     ReflectionPolicy, match_triangle_descriptors,
+};
+pub use plan::{
+    PlannedRegistrationFrame, REGISTRATION_PLAN_ALGORITHM_ID, RegistrationPlan,
+    RegistrationPlanError,
 };
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,

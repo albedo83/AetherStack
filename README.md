@@ -127,7 +127,8 @@ optimized CPU and GPU paths must match.
   complete-image oracle and wired to bounded checksum-verified atomic FITS
   publication, plus an exact common-support scan that derives the largest
   deterministic autocrop without letting isolated sensor defects shrink the
-  geometric field;
+  geometric field, and an immutable identity-canonical multi-Light plan that
+  requires one exact identity reference and a non-empty all-frame crop;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

@@ -796,6 +796,14 @@ safety reasoning. They do not narrate obvious syntax.
     immutable multi-frame registration plan that chooses or pins one reference,
     aggregates every accepted transform, and executes the existing atomic FITS
     transaction per reviewed Light.
+49. Fix the immutable multi-Light geometry boundary. `registration-plan-v1`
+    binds unique reviewed frame identities, one exact identity reference,
+    accepted source-to-reference transforms, canonical identity order, and the
+    single exact all-frame Lanczos crop. It refuses undersized sets, duplicates,
+    a missing or inconsistent reference, bounded footprint failures, allocation
+    failure, and empty common support before any output work begins. Next, bind
+    confidence-gated pair diagnostics to this plan and assign its atomic runtime
+    outputs without re-deriving geometry.
 
 ## 11. Stable-release definition
 

@@ -333,3 +333,11 @@ The desktop Registration laboratory exposes the native pair diagnostic,
 confidence evidence, accepted source-pixel transform, and exact autocrop. It is
 diagnostic-only: registered FITS publication exists in the runtime API but is
 not yet orchestrated as a complete multi-frame desktop plan.
+
+The geometry core also provides `registration-plan-v1`, the immutable boundary
+for that future orchestration. It requires at least two unique reviewed frame
+identities, canonicalizes discovery order by identity, requires the declared
+reference to match the output canvas with the exact identity transform, and
+derives one all-frame Lanczos-3 footprint. Duplicate identities, a missing or
+geometrically inconsistent reference, bounded-work failures, allocation
+failure, and an empty common rectangle are explicit plan errors.
