@@ -138,7 +138,9 @@ optimized CPU and GPU paths must match.
   runtime can derive geometry only from this plan and rejects stale digest,
   portable identity, fingerprint, or decoded-dimension evidence, then stages,
   revalidates, and rollback-safely publishes the entire registered frame set as
-  one transaction;
+  one transaction, then a plan-bound registered-stack executor verifies every
+  artifact identity, plan card, checksum, canvas, and plane count before
+  streaming only the sealed common crop into one atomic binary64 product;
 - a strict, versioned `f64` Malvar-He-Cutler demosaicing oracle for RGGB, BGGR,
   GRBG, and GBRG mosaics, with exact measured samples, explicit reflected-edge
   behavior, unclipped linear output, conservative defect-mask propagation, and

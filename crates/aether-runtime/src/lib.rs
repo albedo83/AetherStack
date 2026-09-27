@@ -10,6 +10,7 @@ mod master_plan;
 mod memory;
 mod pipeline;
 mod progress;
+mod registered_stack;
 mod registration;
 
 pub use cancellation::{CancellationToken, Cancelled};
@@ -40,6 +41,10 @@ pub use pipeline::{
 pub use progress::{
     MAX_PROGRESS_CODE_BYTES, MAX_STAGE_ID_BYTES, ProgressEvent, ProgressEventError,
     ProgressSequence, ProgressState, StageId, StageIdError,
+};
+pub use registered_stack::{
+    REGISTERED_CROP_MEAN_ALGORITHM_ID, RegisteredStackError, RegisteredStackRequest,
+    RegisteredStackResult, RegisteredStackSource, run_registered_stack,
 };
 pub use registration::{
     RegisteredFrameExecutionResult, RegistrationPipelineError, RegistrationPlanExecutionError,

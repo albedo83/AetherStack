@@ -358,6 +358,12 @@ transform is locked across the sequence, adjacent frames may be prefetched
 within a separate bounded cache, and the sealed plan digest forms part of every
 preview identity so pixels from an older plan cannot appear as current output.
 
+The registered set can then feed only a stack transaction bound to that same
+plan digest. Native execution checks each registered artifact identity, plan
+card, checksum, reference-canvas dimensions, and plane count before reading the
+sealed common crop. It revalidates all fingerprints after the bounded band
+integration and publishes one cropped product atomically.
+
 The geometry core also provides `registration-plan-v1`, the immutable boundary
 for that future orchestration. It requires at least two unique reviewed frame
 identities, canonicalizes discovery order by identity, requires the declared

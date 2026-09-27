@@ -895,6 +895,17 @@ safety reasoning. They do not narrate obvious syntax.
     bit identity between the full-frame region and the established entry point.
     Next, stream registered FITS bands through this primitive and atomically
     publish a plan-bound integrated product.
+59. Add the plan-bound registered stack runtime. It requires the exact canonical
+    frame identity set and output provenance bound to the sealed registration
+    digest. Every registered input must carry matching `AETHFID` and `AETHPLN`
+    cards, pass full checksum verification, use the reference canvas, and agree
+    on mono or planar-RGB shape. The executor reads only common-crop FITS bands,
+    applies the stable compensated mean, accounts for its complete logical
+    working set, re-fingerprints every source after calculation, validates the
+    private output and publishes one create-new FITS atomically. Tests cover the
+    exact cropped RGB mean, progress, memory refusal, cancellation between
+    bands, late source mutation, stale plan binding, and no-output rollback.
+    Next, expose this transaction through the desktop execution panel.
 
 ## 11. Stable-release definition
 

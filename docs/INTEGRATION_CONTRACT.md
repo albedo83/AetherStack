@@ -49,3 +49,21 @@ regions are also explicit failures. No partial result is returned. Tests prove
 that a full-frame region is bit-identical to `integrate_mean`, that multi-plane
 crop coordinates preserve planar order, and that excluded-sample accounting is
 unchanged inside a crop.
+
+## Registered stack execution
+
+`run_registered_stack` is the bounded FITS-to-FITS orchestration for a sealed
+registration plan. The source list must contain each planned frame exactly once
+and is canonicalized by reviewed identity. Each registered artifact must carry
+that identity in `AETHFID`, the exact plan digest in `AETHPLN`, fully verified
+FITS checksums, reference-canvas dimensions, and the same plane count.
+
+The executor reads one common-crop band from every source in canonical order,
+integrates it with the strict estimator, and streams the cropped result into a
+private binary64 FITS. Its memory reservation covers all decoded source bands,
+the integrated image and support map, decode status, vector storage, and writer
+buffer. Band height affects I/O and peak memory only, never numerical order.
+After private checksum readback, every source is fingerprinted again before the
+create-new publication. Cancellation, insufficient memory, source mutation,
+stale plan evidence, checksum failure, or an existing destination leaves no
+new public product.
