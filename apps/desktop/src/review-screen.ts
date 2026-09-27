@@ -48,6 +48,61 @@ export function mountReviewScreen(
       root,
       "[data-calibration-workspace]",
     ),
+    registrationWorkspace: required<HTMLElement>(
+      root,
+      "[data-registration-workspace]",
+    ),
+    registrationReference: required<HTMLSelectElement>(
+      root,
+      "[data-registration-reference]",
+    ),
+    registrationSource: required<HTMLSelectElement>(
+      root,
+      "[data-registration-source]",
+    ),
+    analyzeRegistration: required<HTMLButtonElement>(
+      root,
+      '[data-action="analyze-registration"]',
+    ),
+    registrationStatus: required<HTMLElement>(
+      root,
+      "[data-registration-status]",
+    ),
+    registrationRms: required<HTMLElement>(root, "[data-registration-rms]"),
+    registrationInliers: required<HTMLElement>(
+      root,
+      "[data-registration-inliers]",
+    ),
+    registrationCoverage: required<HTMLElement>(
+      root,
+      "[data-registration-coverage]",
+    ),
+    registrationRotation: required<HTMLElement>(
+      root,
+      "[data-registration-rotation]",
+    ),
+    registrationScale: required<HTMLElement>(root, "[data-registration-scale]"),
+    registrationReflection: required<HTMLElement>(
+      root,
+      "[data-registration-reflection]",
+    ),
+    registrationSupport: required<HTMLElement>(
+      root,
+      "[data-registration-support]",
+    ),
+    registrationCropText: required<HTMLElement>(
+      root,
+      "[data-registration-crop-text]",
+    ),
+    registrationCrop: required<HTMLElement>(root, "[data-registration-crop]"),
+    registrationMatrix: required<HTMLElement>(
+      root,
+      "[data-registration-matrix]",
+    ),
+    registrationRejections: required<HTMLElement>(
+      root,
+      "[data-registration-rejections]",
+    ),
     calibrationStatus: required<HTMLElement>(root, "[data-calibration-status]"),
     calibrationProducts: required<HTMLElement>(
       root,
@@ -242,13 +297,21 @@ export function mountReviewScreen(
 
     if (action === "select-workspace") {
       const workspace = actionElement.dataset.workspace;
-      if (workspace === "frames" || workspace === "calibration") {
+      if (
+        workspace === "frames" ||
+        workspace === "calibration" ||
+        workspace === "registration"
+      ) {
         actions.onSelectWorkspace(workspace);
       }
       return;
     }
     if (action === "refresh-master-plan") {
       actions.onRefreshMasterPlan();
+      return;
+    }
+    if (action === "analyze-registration") {
+      actions.onAnalyzeRegistration();
       return;
     }
     if (action === "execute-master-plan") {
@@ -384,6 +447,16 @@ export function mountReviewScreen(
 
   const onChange = (event: Event): void => {
     const target = event.target;
+    if (target === elements.registrationReference) {
+      actions.onSelectRegistrationReference(
+        elements.registrationReference.value,
+      );
+      return;
+    }
+    if (target === elements.registrationSource) {
+      actions.onSelectRegistrationSource(elements.registrationSource.value);
+      return;
+    }
     if (target === elements.lightOutputMode) {
       const mode = elements.lightOutputMode.value;
       if (mode === "calibrated_frames" || mode === "integrated") {
@@ -523,15 +596,18 @@ export function mountReviewScreen(
       model.calibration.execution.state === "cancelling";
     const decisionBusy = model.decisionPending || importing || masterBusy;
     const decisionsAvailable = reviewCommandsAvailable(model);
-    const framesActive = model.activeWorkspace === "frames";
-    elements.framesWorkspace.hidden = !framesActive;
-    elements.calibrationWorkspace.hidden = framesActive;
+    elements.framesWorkspace.hidden = model.activeWorkspace !== "frames";
+    elements.calibrationWorkspace.hidden =
+      model.activeWorkspace !== "calibration";
+    elements.registrationWorkspace.hidden =
+      model.activeWorkspace !== "registration";
     for (const item of elements.workspaceNavigation) {
       const selected = item.dataset.workspace === model.activeWorkspace;
       item.toggleAttribute("aria-current", selected);
       item.classList.toggle("nav-item--active", selected);
     }
     renderCalibration(elements, model);
+    renderRegistration(elements, model);
     elements.importSession.disabled = importing || masterBusy;
     elements.importSession.textContent = importing
       ? "Scanning FITS…"
@@ -989,6 +1065,138 @@ interface CalibrationElements {
   readonly lightExecutionProgress: HTMLProgressElement;
   readonly lightExecutionOutput: HTMLElement;
   readonly lightExecutionHeading: HTMLElement;
+}
+
+interface RegistrationElements {
+  readonly registrationReference: HTMLSelectElement;
+  readonly registrationSource: HTMLSelectElement;
+  readonly analyzeRegistration: HTMLButtonElement;
+  readonly registrationStatus: HTMLElement;
+  readonly registrationRms: HTMLElement;
+  readonly registrationInliers: HTMLElement;
+  readonly registrationCoverage: HTMLElement;
+  readonly registrationRotation: HTMLElement;
+  readonly registrationScale: HTMLElement;
+  readonly registrationReflection: HTMLElement;
+  readonly registrationSupport: HTMLElement;
+  readonly registrationCropText: HTMLElement;
+  readonly registrationCrop: HTMLElement;
+  readonly registrationMatrix: HTMLElement;
+  readonly registrationRejections: HTMLElement;
+}
+
+function renderRegistration(
+  elements: RegistrationElements,
+  model: ReviewViewModel,
+): void {
+  const registration = model.registration;
+  const options = registration.frames.map((frame) => {
+    const option = document.createElement("option");
+    option.value = frame.id;
+    option.textContent = frame.label;
+    return option;
+  });
+  elements.registrationReference.replaceChildren(
+    ...options.map((option) => option.cloneNode(true)),
+  );
+  elements.registrationSource.replaceChildren(...options);
+  elements.registrationReference.value = registration.referenceFrameId ?? "";
+  elements.registrationSource.value = registration.sourceFrameId ?? "";
+
+  const reference = registration.frames.find(
+    (frame) => frame.id === registration.referenceFrameId,
+  );
+  const source = registration.frames.find(
+    (frame) => frame.id === registration.sourceFrameId,
+  );
+  const running = registration.state === "running";
+  const pairReady =
+    !!reference?.sourcePath &&
+    !!source?.sourcePath &&
+    reference.id !== source.id;
+  elements.registrationReference.disabled =
+    running || registration.frames.length === 0;
+  elements.registrationSource.disabled =
+    running || registration.frames.length === 0;
+  elements.analyzeRegistration.disabled = running || !pairReady;
+  elements.analyzeRegistration.textContent = running
+    ? "Solving geometry…"
+    : "Analyze geometry";
+  elements.registrationStatus.dataset.state = registration.state;
+  elements.registrationStatus.textContent = registration.message;
+
+  const diagnostic = registration.diagnostic;
+  const plan = diagnostic?.acceptedPlan ?? null;
+  elements.registrationRms.textContent = diagnostic
+    ? (diagnostic.consensus.rmsResidualDetectionPixels * 2).toFixed(3)
+    : "—";
+  elements.registrationInliers.textContent = diagnostic
+    ? diagnostic.consensus.inlierFeaturePairs.toLocaleString("en-US")
+    : "—";
+  const coverage = plan
+    ? (100 * plan.coveredPixels) / (plan.referenceWidth * plan.referenceHeight)
+    : null;
+  elements.registrationCoverage.textContent =
+    coverage === null ? "—" : coverage.toFixed(2);
+  elements.registrationRotation.textContent = diagnostic
+    ? ((diagnostic.consensus.rotationRadians * 180) / Math.PI).toFixed(4)
+    : "—";
+  elements.registrationScale.textContent = diagnostic
+    ? diagnostic.consensus.scale.toFixed(8)
+    : "—";
+  elements.registrationReflection.textContent = diagnostic
+    ? diagnostic.consensus.reflected
+      ? "Detected"
+      : "No"
+    : "—";
+  elements.registrationSupport.textContent = diagnostic
+    ? diagnostic.confidence.winnerSupportMargin === null
+      ? "Unique winner"
+      : diagnostic.confidence.winnerSupportMargin.toFixed(3)
+    : "—";
+  elements.registrationMatrix.textContent = plan
+    ? `[${plan.transformCoefficientsSourcePixels.map((value) => value.toPrecision(10)).join(", ")}]\n${plan.footprintAlgorithmId}`
+    : "Awaiting an accepted solution";
+
+  const crop = plan?.autocrop ?? null;
+  const sensorStage = elements.registrationCrop.parentElement;
+  if (crop && plan) {
+    const left = (100 * crop.x) / plan.referenceWidth;
+    const top = (100 * crop.y) / plan.referenceHeight;
+    const width = (100 * crop.width) / plan.referenceWidth;
+    const height = (100 * crop.height) / plan.referenceHeight;
+    elements.registrationCrop.style.left = `${left}%`;
+    elements.registrationCrop.style.top = `${top}%`;
+    elements.registrationCrop.style.width = `${width}%`;
+    elements.registrationCrop.style.height = `${height}%`;
+    elements.registrationCrop.hidden = false;
+    elements.registrationCropText.textContent = `${crop.width} × ${crop.height} px · origin ${crop.x}, ${crop.y} · ${coverage?.toFixed(2)}% retained`;
+    sensorStage?.setAttribute(
+      "aria-label",
+      `Common crop ${crop.width} by ${crop.height} pixels at ${crop.x}, ${crop.y}; ${coverage?.toFixed(2)} percent retained`,
+    );
+  } else {
+    elements.registrationCrop.removeAttribute("style");
+    elements.registrationCrop.hidden = true;
+    elements.registrationCropText.textContent = "No accepted footprint yet";
+    sensorStage?.setAttribute("aria-label", "No accepted common footprint yet");
+  }
+
+  const rejections = diagnostic?.confidence.rejections ?? [];
+  elements.registrationRejections.hidden = rejections.length === 0;
+  if (rejections.length === 0) {
+    elements.registrationRejections.replaceChildren();
+  } else {
+    const heading = document.createElement("strong");
+    heading.textContent = "Confidence gate rejected this solution";
+    const list = document.createElement("ul");
+    for (const rejection of rejections) {
+      const item = document.createElement("li");
+      item.textContent = humanize(rejection);
+      list.append(item);
+    }
+    elements.registrationRejections.replaceChildren(heading, list);
+  }
 }
 
 function calibrationSettings(
@@ -1584,7 +1792,7 @@ function shellMarkup(): string {
         <nav class="primary-nav" aria-label="Workflow">
           ${navigationItem("frames", "Frames", "▦", true)}
           ${navigationItem("calibration", "Calibration", "◫", true)}
-          ${navigationItem("pipeline", "Pipeline", "⌁", false)}
+          ${navigationItem("registration", "Registration", "⌖", true)}
           ${navigationItem("run", "Run", "▷", false)}
           ${navigationItem("results", "Results", "◉", false)}
         </nav>
@@ -1712,6 +1920,81 @@ function shellMarkup(): string {
                   <button class="button button--success" type="button" data-action="accept" data-decision-action aria-keyshortcuts="A" title="Accept selected frame (A)">Accept</button>
                 </div>
               </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="registration-workspace" aria-labelledby="registration-heading" data-registration-workspace hidden>
+          <div class="workspace-heading registration-heading">
+            <div>
+              <p class="eyebrow">Registration laboratory</p>
+              <h2 id="registration-heading">Solve geometry before moving pixels</h2>
+              <p class="workspace-intro">Inspect a deterministic star-field solution, its confidence evidence and the exact common footprint. This diagnostic never writes image pixels.</p>
+            </div>
+            <div class="workspace-heading__actions">
+              <span class="registration-readiness" data-registration-status role="status" aria-live="polite"></span>
+              <button class="button button--primary" type="button" data-action="analyze-registration">Analyze geometry</button>
+            </div>
+          </div>
+
+          <div class="registration-layout">
+            <aside class="registration-console" aria-labelledby="registration-pair-heading">
+              <div class="panel-heading panel-heading--compact">
+                <div>
+                  <p class="eyebrow">Light frame pair</p>
+                  <h3 id="registration-pair-heading">Reference geometry</h3>
+                </div>
+                <span class="hardware-light" aria-hidden="true"></span>
+              </div>
+              <label class="control-field">
+                <span>Reference frame</span>
+                <select data-registration-reference></select>
+              </label>
+              <label class="control-field">
+                <span>Source frame</span>
+                <select data-registration-source></select>
+              </label>
+              <p class="control-note">The solver detects on the CFA-safe luminance plane, then lifts the accepted transform back to exact source-pixel coordinates.</p>
+              <div class="registration-signal" aria-hidden="true">
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+              <details class="advanced-settings registration-evidence">
+                <summary>Exact affine evidence</summary>
+                <code data-registration-matrix>Awaiting an accepted solution</code>
+              </details>
+            </aside>
+
+            <section class="registration-instrument" aria-labelledby="registration-solution-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Confidence-gated solution</p>
+                  <h3 id="registration-solution-heading">Geometric solution</h3>
+                </div>
+                <span class="instrument-label">F64 · Lanczos-3</span>
+              </div>
+              <dl class="registration-metrics" aria-label="Registration quality metrics">
+                ${registrationMetric("RMS residual", "data-registration-rms", "source px")}
+                ${registrationMetric("Inlier pairs", "data-registration-inliers", "matches")}
+                ${registrationMetric("Coverage", "data-registration-coverage", "%")}
+                ${registrationMetric("Rotation", "data-registration-rotation", "°")}
+              </dl>
+              <div class="registration-readouts">
+                <div><span>Scale</span><strong data-registration-scale>—</strong></div>
+                <div><span>Reflection</span><strong data-registration-reflection>—</strong></div>
+                <div><span>Winner support</span><strong data-registration-support>—</strong></div>
+              </div>
+              <section class="footprint-panel" aria-labelledby="footprint-heading">
+                <div>
+                  <p class="eyebrow">Analytical common footprint</p>
+                  <h4 id="footprint-heading">Autocrop preview</h4>
+                  <p data-registration-crop-text>No accepted footprint yet</p>
+                </div>
+                <div class="sensor-stage" role="img" aria-label="No accepted common footprint yet">
+                  <span class="sensor-stage__grid" aria-hidden="true"></span>
+                  <span class="sensor-stage__crop" data-registration-crop aria-hidden="true"></span>
+                </div>
+              </section>
+              <div class="registration-rejections" data-registration-rejections hidden></div>
             </section>
           </div>
         </section>
@@ -1890,6 +2173,14 @@ function sortableHeading(
 
 function metric(label: string, attribute: string, unit: string): string {
   return `<div><dt>${label}</dt><dd><span ${attribute}>—</span>${unit ? ` <small>${unit}</small>` : ""}</dd></div>`;
+}
+
+function registrationMetric(
+  label: string,
+  attribute: string,
+  unit: string,
+): string {
+  return `<div><dt>${label}</dt><dd><strong ${attribute}>—</strong><small>${unit}</small></dd></div>`;
 }
 
 function statistic(label: string, attribute: string): string {

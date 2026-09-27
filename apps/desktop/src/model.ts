@@ -8,10 +8,11 @@ import type {
   MasterPlanPreview,
   MasterPlanSettings,
 } from "./calibration-bridge.ts";
+import type { RegistrationDiagnostic } from "./registration-bridge.ts";
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
 
-export type WorkspaceView = "frames" | "calibration";
+export type WorkspaceView = "frames" | "calibration" | "registration";
 
 export type LightFrameView = "raw" | "calibrated";
 
@@ -134,6 +135,23 @@ export interface ReviewViewModel {
   readonly viewerScale: "fit" | "actual";
   readonly statisticsPanel: StatisticsPanel;
   readonly calibration: CalibrationViewModel;
+  readonly registration: RegistrationViewModel;
+}
+
+export interface RegistrationFrameOption {
+  readonly id: string;
+  readonly label: string;
+  readonly sourcePath: string | null;
+}
+
+/** UI state for one diagnostic-only geometric registration comparison. */
+export interface RegistrationViewModel {
+  readonly state: "idle" | "running" | "accepted" | "rejected" | "error";
+  readonly frames: readonly RegistrationFrameOption[];
+  readonly referenceFrameId: string | null;
+  readonly sourceFrameId: string | null;
+  readonly diagnostic: RegistrationDiagnostic | null;
+  readonly message: string;
 }
 
 export interface CalibrationViewModel {
@@ -176,6 +194,9 @@ export type SortDirection = "ascending" | "descending";
 
 export interface ReviewActions {
   readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
+  readonly onSelectRegistrationReference: (frameId: string) => void;
+  readonly onSelectRegistrationSource: (frameId: string) => void;
+  readonly onAnalyzeRegistration: () => void;
   readonly onUpdateCalibrationSettings: (settings: MasterPlanSettings) => void;
   readonly onUpdateLightOutputMode: (
     mode: LightExecutionSettings["outputMode"],

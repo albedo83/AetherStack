@@ -20,13 +20,14 @@ use aether_quality::{
     prepare_cfa_cell_mean,
 };
 use aether_registration::{
-    DESCRIPTOR_MATCH_ALGORITHM_ID, DescriptorMatchParameters, FEATURE_CATALOG_ALGORITHM_ID,
-    FeatureCatalog, FeatureSelectionParameters, REGISTRATION_CONFIDENCE_ALGORITHM_ID,
-    ReflectionPolicy, RegistrationConfidenceParameters, RegistrationConfidenceRejection,
+    AffineTransform, COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID, DESCRIPTOR_MATCH_ALGORITHM_ID,
+    DescriptorMatchParameters, FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog,
+    FeatureSelectionParameters, REGISTRATION_CONFIDENCE_ALGORITHM_ID, ReflectionPolicy,
+    RegistrationConfidenceParameters, RegistrationConfidenceRejection, RegistrationFootprint,
     SIMILARITY_CONSENSUS_ALGORITHM_ID, SimilarityConsensusParameters,
     TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptorParameters, assess_registration_confidence,
-    build_feature_catalog, build_triangle_descriptors, estimate_similarity_consensus,
-    match_triangle_descriptors,
+    build_feature_catalog, build_triangle_descriptors, derive_common_lanczos3_footprint,
+    estimate_similarity_consensus, match_triangle_descriptors,
 };
 use aether_review::FrameId;
 use aether_session::fingerprint_reader;
@@ -43,6 +44,7 @@ pub const MAX_DIAGNOSTIC_SOURCE_SAMPLES: usize = 100_000_000;
 
 /// Complete path-free report emitted for one source/reference comparison.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegistrationDiagnostic {
     schema_version: u32,
     profile_id: &'static str,
@@ -53,6 +55,7 @@ pub struct RegistrationDiagnostic {
     matching: MatchingSummary,
     consensus: ConsensusSummary,
     confidence: ConfidenceSummary,
+    accepted_plan: Option<RegistrationPlanSummary>,
 }
 
 impl RegistrationDiagnostic {
@@ -64,6 +67,7 @@ impl RegistrationDiagnostic {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AlgorithmSummary {
     detection_plane: &'static str,
     background: &'static str,
@@ -77,6 +81,7 @@ struct AlgorithmSummary {
 
 /// Aggregate measurements for one input. No source path or FITS metadata is retained.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSummary {
     content_sha256: String,
     source_width: usize,
@@ -94,6 +99,7 @@ pub struct FrameSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct MatchingSummary {
     source_descriptors: usize,
     reference_descriptors: usize,
@@ -105,6 +111,7 @@ struct MatchingSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ConsensusSummary {
     transform_coefficients: [f64; 6],
     scale: f64,
@@ -118,6 +125,7 @@ struct ConsensusSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ConfidenceSummary {
     accepted: bool,
     inlier_ratio: f64,
@@ -125,6 +133,26 @@ struct ConfidenceSummary {
     source_axis_span_fraction: [f64; 2],
     reference_axis_span_fraction: [f64; 2],
     rejections: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistrationPlanSummary {
+    footprint_algorithm_id: &'static str,
+    transform_coefficients_source_pixels: [f64; 6],
+    reference_width: usize,
+    reference_height: usize,
+    covered_pixels: usize,
+    autocrop: Option<CropSummary>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CropSummary {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
 }
 
 /// Failure from a named, path-free diagnostic stage.
@@ -281,9 +309,47 @@ where
         .copied()
         .map(rejection_name)
         .collect();
+    let source_to_reference_pixels = lift_cell_mean_transform(consensus.transform())?;
+    let accepted_plan = if confidence.accepted() {
+        let frames = [
+            RegistrationFootprint::new(
+                source.summary.source_width,
+                source.summary.source_height,
+                source_to_reference_pixels,
+            )
+            .map_err(|error| RegistrationDiagnosticError::new("common footprint", error))?,
+            RegistrationFootprint::new(
+                reference.summary.source_width,
+                reference.summary.source_height,
+                AffineTransform::IDENTITY,
+            )
+            .map_err(|error| RegistrationDiagnosticError::new("common footprint", error))?,
+        ];
+        let footprint = derive_common_lanczos3_footprint(
+            reference.summary.source_width,
+            reference.summary.source_height,
+            &frames,
+        )
+        .map_err(|error| RegistrationDiagnosticError::new("common footprint", error))?;
+        Some(RegistrationPlanSummary {
+            footprint_algorithm_id: COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID,
+            transform_coefficients_source_pixels: source_to_reference_pixels.coefficients(),
+            reference_width: footprint.reference_width(),
+            reference_height: footprint.reference_height(),
+            covered_pixels: footprint.covered_pixels(),
+            autocrop: footprint.crop().map(|crop| CropSummary {
+                x: crop.x(),
+                y: crop.y(),
+                width: crop.width(),
+                height: crop.height(),
+            }),
+        })
+    } else {
+        None
+    };
 
     Ok(RegistrationDiagnostic {
-        schema_version: 1,
+        schema_version: 2,
         profile_id: PRECISION_DIAGNOSTIC_PROFILE_ID,
         diagnostic_only: true,
         algorithms: AlgorithmSummary {
@@ -334,7 +400,19 @@ where
             ],
             rejections,
         },
+        accepted_plan,
     })
+}
+
+fn lift_cell_mean_transform(
+    detection_transform: AffineTransform,
+) -> Result<AffineTransform, RegistrationDiagnosticError> {
+    let [m00, m01, m10, m11, tx, ty] = detection_transform.coefficients();
+    let cell_center = 0.5;
+    let source_tx = (2.0 * tx) + cell_center - cell_center * (m00 + m01);
+    let source_ty = (2.0 * ty) + cell_center - cell_center * (m10 + m11);
+    AffineTransform::new(m00, m01, m10, m11, source_tx, source_ty)
+        .map_err(|error| RegistrationDiagnosticError::new("source-pixel transform", error))
 }
 
 fn prepare_frame<R: Read + Seek>(
@@ -485,6 +563,8 @@ const fn rejection_name(rejection: RegistrationConfidenceRejection) -> &'static 
 mod tests {
     use std::io::Cursor;
 
+    use aether_registration::ImagePoint;
+
     use super::*;
 
     fn image_fits(width: usize, height: usize) -> Vec<u8> {
@@ -567,5 +647,52 @@ mod tests {
             return;
         };
         assert!(error.to_string().contains("complete 2x2 cells"));
+    }
+
+    #[test]
+    fn cell_mean_transform_is_lifted_about_physical_cell_centers() -> Result<(), Box<dyn Error>> {
+        let detection = AffineTransform::new(0.0, -1.0, 1.0, 0.0, 10.0, 20.0)?;
+        let lifted = lift_cell_mean_transform(detection)?;
+        let source_pixel = ImagePoint::new(8.5, 12.5)?;
+        let source_detection = ImagePoint::new(
+            (source_pixel.x() - 0.5) * 0.5,
+            (source_pixel.y() - 0.5) * 0.5,
+        )?;
+        let mapped_detection = detection.apply(source_detection)?;
+        let expected = ImagePoint::new(
+            mapped_detection.x() * 2.0 + 0.5,
+            mapped_detection.y() * 2.0 + 0.5,
+        )?;
+
+        assert_eq!(lifted.apply(source_pixel)?, expected);
+        assert_eq!(
+            lift_cell_mean_transform(AffineTransform::IDENTITY)?,
+            AffineTransform::IDENTITY
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn accepted_plan_serializes_with_desktop_safe_field_names() -> Result<(), Box<dyn Error>> {
+        let plan = RegistrationPlanSummary {
+            footprint_algorithm_id: COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID,
+            transform_coefficients_source_pixels: [1.0, 0.0, 0.0, 1.0, -0.5, 0.25],
+            reference_width: 4_144,
+            reference_height: 2_822,
+            covered_pixels: 11_000_000,
+            autocrop: Some(CropSummary {
+                x: 2,
+                y: 5,
+                width: 4_137,
+                height: 2_815,
+            }),
+        };
+
+        let json = serde_json::to_value(plan)?;
+        assert!(json.get("footprintAlgorithmId").is_some());
+        assert!(json.get("transformCoefficientsSourcePixels").is_some());
+        assert!(json.get("referenceWidth").is_some());
+        assert!(json.get("footprint_algorithm_id").is_none());
+        Ok(())
     }
 }

@@ -45,6 +45,7 @@ import {
   inspectRgbFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
+import { diagnoseFitsRegistration } from "./registration-bridge.ts";
 import { runSerialBatch } from "./quality-batch.ts";
 import {
   applyReviewDecision,
@@ -107,10 +108,20 @@ let blinkTimer: number | null = null;
 let masterPlanTicket = 0;
 let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
+let registrationTicket = 0;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
     selectWorkspace(workspace);
+  },
+  onSelectRegistrationReference(frameId) {
+    selectRegistrationFrame("reference", frameId);
+  },
+  onSelectRegistrationSource(frameId) {
+    selectRegistrationFrame("source", frameId);
+  },
+  onAnalyzeRegistration() {
+    void analyzeRegistration();
   },
   onUpdateCalibrationSettings(settings) {
     updateCalibrationSettings(settings);
@@ -243,6 +254,7 @@ function installImportedSession(session: ImportedSession): void {
   decisionCache.clear();
   masterPlanTicket += 1;
   masterExecutionTicket += 1;
+  registrationTicket += 1;
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -254,6 +266,13 @@ function installImportedSession(session: ImportedSession): void {
     roleOrder.find((role) => roles.find((item) => item.role === role)?.count) ??
     "light";
   const frames = reviewFramesForRole(session, activeRole);
+  const registrationFrames = session.frames
+    .filter((frame) => frame.role === "light")
+    .map((frame) => ({
+      id: frame.id,
+      label: frame.label,
+      sourcePath: frame.path,
+    }));
   const issueCount =
     session.classificationConflicts +
     session.recoverableFailures.length +
@@ -285,6 +304,17 @@ function installImportedSession(session: ImportedSession): void {
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
+    registration: {
+      state: "idle",
+      frames: registrationFrames,
+      referenceFrameId: registrationFrames[0]?.id ?? null,
+      sourceFrameId: registrationFrames[1]?.id ?? null,
+      diagnostic: null,
+      message:
+        registrationFrames.length >= 2
+          ? "Choose a Light pair, then run the native geometric solver"
+          : "At least two Light frames are required for registration",
+    },
     calibration: {
       ...model.calibration,
       state: "loading",
@@ -317,6 +347,93 @@ function selectWorkspace(workspace: WorkspaceView): void {
   update({ ...model, activeWorkspace: workspace });
   if (workspace === "frames" && model.preview === null) {
     void loadSelectedPreview();
+  }
+}
+
+function selectRegistrationFrame(
+  role: "reference" | "source",
+  frameId: string,
+): void {
+  if (!model.registration.frames.some((frame) => frame.id === frameId)) return;
+  registrationTicket += 1;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      state: "idle",
+      referenceFrameId:
+        role === "reference" ? frameId : model.registration.referenceFrameId,
+      sourceFrameId:
+        role === "source" ? frameId : model.registration.sourceFrameId,
+      diagnostic: null,
+      message: "Pair changed · run the native geometric solver",
+    },
+  });
+}
+
+async function analyzeRegistration(): Promise<void> {
+  const reference = model.registration.frames.find(
+    (frame) => frame.id === model.registration.referenceFrameId,
+  );
+  const source = model.registration.frames.find(
+    (frame) => frame.id === model.registration.sourceFrameId,
+  );
+  if (
+    !reference?.sourcePath ||
+    !source?.sourcePath ||
+    reference.id === source.id ||
+    model.registration.state === "running"
+  ) {
+    return;
+  }
+
+  const ticket = ++registrationTicket;
+  const referenceId = reference.id;
+  const sourceId = source.id;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      state: "running",
+      diagnostic: null,
+      message: "Detecting stars and testing deterministic geometry…",
+    },
+  });
+  try {
+    const diagnostic = await diagnoseFitsRegistration({
+      sourcePath: source.sourcePath,
+      referencePath: reference.sourcePath,
+    });
+    if (
+      ticket !== registrationTicket ||
+      model.registration.referenceFrameId !== referenceId ||
+      model.registration.sourceFrameId !== sourceId
+    ) {
+      return;
+    }
+    const accepted = diagnostic.confidence.accepted;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        state: accepted ? "accepted" : "rejected",
+        diagnostic,
+        message: accepted
+          ? "Geometry accepted · exact full-resolution plan is available"
+          : "Geometry rejected by the confidence gate",
+      },
+    });
+  } catch {
+    if (ticket !== registrationTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        state: "error",
+        diagnostic: null,
+        message: "Registration diagnostic failed · inspect native diagnostics",
+      },
+    });
   }
 }
 

@@ -785,6 +785,17 @@ safety reasoning. They do not narrate obvious syntax.
     or failure leaves no destination. Tests require byte-identical output across
     band heights and bitwise equality with the full-image multi-plane oracle.
     Next, expose accepted transforms and common-crop preview in the desktop plan.
+48. Expose accepted registration geometry without overstating execution. The
+    versioned diagnostic now lifts the CFA detection-plane similarity into exact
+    source-pixel coordinates and derives the common Lanczos-3 footprint only
+    after the confidence gate passes. A typed Tauri command and desktop
+    Registration laboratory select explicit Light identities, reject stale
+    asynchronous results, show residual/support evidence and affine
+    coefficients, and render the autocrop both graphically and as accessible
+    dimensions. The surface remains explicitly diagnostic-only. Next, build the
+    immutable multi-frame registration plan that chooses or pins one reference,
+    aggregates every accepted transform, and executes the existing atomic FITS
+    transaction per reviewed Light.
 
 ## 11. Stable-release definition
 

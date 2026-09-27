@@ -30,6 +30,30 @@ export const demoReviewModel: ReviewViewModel = {
     statistics: null,
     message: null,
   },
+  registration: {
+    state: "idle",
+    frames: [
+      {
+        id: frameId("a"),
+        label: "light_0001.fits",
+        sourcePath: null,
+      },
+      {
+        id: frameId("b"),
+        label: "light_0002.fits",
+        sourcePath: null,
+      },
+      {
+        id: frameId("c"),
+        label: "light_0003.fits",
+        sourcePath: null,
+      },
+    ],
+    referenceFrameId: frameId("a"),
+    sourceFrameId: frameId("b"),
+    diagnostic: null,
+    message: "Import a session to solve a Light frame pair",
+  },
   calibration: {
     state: "ready",
     settings: {

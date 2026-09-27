@@ -17,8 +17,8 @@ The primary workflow has five workspaces:
 
 1. **Frames** — import, classify, group, and resolve evidence conflicts;
 2. **Calibration** — build or select masters and inspect their associations;
-3. **Pipeline** — configure quality measurement, selection, registration,
-   normalization, integration, drizzle, and outputs;
+3. **Registration** — inspect frame-pair geometry, confidence evidence, exact
+   affine coefficients, and the analytical common crop before moving pixels;
 4. **Run** — review the immutable plan, resource estimate, progress, and
    recoverable checkpoints;
 5. **Results** — inspect products, support/rejection maps, metrics, provenance,
@@ -39,6 +39,15 @@ in a single native worker: the output location, live product/stage progress,
 cancellation state, peak reserved memory, and completed products remain visible.
 Changing the imported session or planning tolerances invalidates the prior run
 state instead of presenting stale evidence.
+
+The Registration workspace accepts only imported Light identities with native
+paths. Reference and source remain explicit, pair changes invalidate stale
+evidence, and asynchronous results commit only if both selected identities are
+still current. An accepted solution shows source-pixel residuals, inlier count,
+coverage, rotation, scale, reflection evidence, exact affine coefficients, and
+an accessible text plus graphical common-crop preview. The current desktop
+surface is diagnostic-only and never implies that registered pixels were
+published.
 
 Lights also provide a Review view with a synchronized metric table and image
 viewer. Blink keeps zoom, pan, orientation, channel mapping, and display stretch

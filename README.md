@@ -78,7 +78,11 @@ optimized CPU and GPU paths must match.
   transport, and a bounded desktop artifact cache keyed by identity and
   transform with generation-cancelled adjacent prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
-  workspace and an instrument-inspired Calibration laboratory, separate
+  workspace, an instrument-inspired Calibration laboratory, and a dedicated
+  Registration laboratory that selects an explicit Light pair, runs the native
+  solver, exposes confidence metrics and the accepted full-resolution affine
+  matrix, and previews the analytical common crop without writing pixels;
+  separate
   acquisition roles and master products, inspectable flat-pedestal evidence,
   a native Light-to-Dark-and-Flat association matrix, diagnostic metrics,
   explicit manual decisions, a single bounded native calibration slot,
@@ -235,9 +239,11 @@ cargo run --release -p aether-register -- source.fits reference.fits
 cargo run --release -p aether-register -- --compact source.fits reference.fits
 ```
 
-The current profile is deliberately marked `diagnostic_only`. Passing its
-confidence gate proves that the measured similarity is strongly supported; it
-does not yet resample or publish a registered image.
+The CLI report is deliberately marked `diagnostic_only`: invoking this command
+never writes an image. An accepted report now includes the full-resolution
+source-to-reference transform and analytical common crop. The separate runtime
+transaction API can consume an accepted transform to publish a bounded,
+checksum-verified registered FITS atomically.
 
 Full acquisition data must never be committed. Test cases must use small,
 redistributable synthetic fixtures with no private paths, coordinates, object

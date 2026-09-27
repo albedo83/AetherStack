@@ -12,6 +12,9 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
   document.body.append(root);
   const actions: ReviewActions = {
     onSelectWorkspace: vi.fn(),
+    onSelectRegistrationReference: vi.fn(),
+    onSelectRegistrationSource: vi.fn(),
+    onAnalyzeRegistration: vi.fn(),
     onUpdateCalibrationSettings: vi.fn(),
     onUpdateLightOutputMode: vi.fn(),
     onRefreshMasterPlan: vi.fn(),
@@ -207,6 +210,117 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("light-uvir-2s-g120-o30");
     expect(root.textContent).toContain("dark-2s-g120-o30");
     expect(root.textContent).toContain("1 Light group ready");
+  });
+
+  it("presents an accepted registration plan with exact common crop evidence", () => {
+    const frames = demoReviewModel.frames.slice(0, 2).map((frame, index) => ({
+      id: frame.id,
+      label: frame.label,
+      sourcePath: `/session/light-${index}.fits`,
+    }));
+    const registration = {
+      state: "accepted" as const,
+      frames,
+      referenceFrameId: frames[0]?.id ?? null,
+      sourceFrameId: frames[1]?.id ?? null,
+      message: "Geometry accepted · exact full-resolution plan is available",
+      diagnostic: {
+        schemaVersion: 2,
+        profileId: "registration-v1",
+        diagnosticOnly: true,
+        source: {
+          contentSha256: "a".repeat(64),
+          sourceWidth: 4144,
+          sourceHeight: 2822,
+          detectedStars: 842,
+          medianFwhmSourcePixels: 3.2,
+          medianEccentricity: 0.4,
+          registrationFeatures: 320,
+        },
+        reference: {
+          contentSha256: "b".repeat(64),
+          sourceWidth: 4144,
+          sourceHeight: 2822,
+          detectedStars: 861,
+          medianFwhmSourcePixels: 3.1,
+          medianEccentricity: 0.39,
+          registrationFeatures: 330,
+        },
+        matching: {
+          retainedHypotheses: 120,
+          geometricCandidates: 8,
+          truncated: false,
+        },
+        consensus: {
+          scale: 0.9999898,
+          rotationRadians: 0.00046228,
+          reflected: false,
+          inlierHypotheses: 91,
+          inlierFeaturePairs: 302,
+          rmsResidualDetectionPixels: 0.12,
+          maximumResidualDetectionPixels: 0.4,
+        },
+        confidence: {
+          accepted: true,
+          inlierRatio: 0.91,
+          winnerSupportMargin: 0.72,
+          sourceAxisSpanFraction: [0.8, 0.7] as const,
+          referenceAxisSpanFraction: [0.81, 0.71] as const,
+          rejections: [],
+        },
+        acceptedPlan: {
+          footprintAlgorithmId: "lanczos3-common-footprint-v1",
+          transformCoefficientsSourcePixels: [
+            0.9999898, -0.00046228, 0.00046228, 0.9999898, -0.92, 0.19,
+          ] as const,
+          referenceWidth: 4144,
+          referenceHeight: 2822,
+          coveredPixels: 11_659_258,
+          autocrop: { x: 2, y: 5, width: 4137, height: 2815 },
+        },
+      },
+    };
+    const ready = {
+      ...demoReviewModel,
+      activeWorkspace: "registration" as const,
+      reviewSessionReady: true,
+      registration,
+    };
+    const { root, actions } = fixture(ready);
+
+    expect(
+      getByRole(root, "heading", {
+        name: "Solve geometry before moving pixels",
+      }),
+    ).not.toBeNull();
+    expect(root.textContent).toContain("4137 × 2815 px · origin 2, 5");
+    expect(root.textContent).toContain("302");
+    expect(root.textContent).toContain("0.240");
+    expect(root.textContent).toContain("lanczos3-common-footprint-v1");
+    fireEvent.click(getByRole(root, "button", { name: "Analyze geometry" }));
+    expect(actions.onAnalyzeRegistration).toHaveBeenCalledOnce();
+  });
+
+  it("keeps registration disabled until two distinct native Light paths exist", () => {
+    const { root, actions } = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+    });
+
+    expect(
+      getByRole(root, "button", { name: "Analyze geometry" }).hasAttribute(
+        "disabled",
+      ),
+    ).toBe(true);
+    const source = getByRole<HTMLSelectElement>(root, "combobox", {
+      name: "Source frame",
+    });
+    fireEvent.change(source, {
+      target: { value: demoReviewModel.registration.frames[0]?.id },
+    });
+    expect(actions.onSelectRegistrationSource).toHaveBeenCalledWith(
+      demoReviewModel.registration.frames[0]?.id,
+    );
   });
 
   it("keeps ambiguous Light associations visibly blocked", () => {
@@ -487,7 +601,10 @@ describe("frame review workspace", () => {
     expect(target).toBeDefined();
     if (!target) return;
 
-    fireEvent.click(getByText(root, target.label));
+    const frameTable = getByRole(root, "table", {
+      name: "Lights review metrics",
+    });
+    fireEvent.click(getByText(frameTable, target.label));
     expect(actions.onSelectFrame).toHaveBeenCalledWith(target.id);
 
     controller.update({ ...reviewReady, selectedFrameId: target.id });
@@ -859,5 +976,18 @@ describe("frame review workspace", () => {
       },
     });
     expect(calibrationReport.violations).toEqual([]);
+    calibration.controller.destroy();
+    calibration.root.remove();
+
+    const registration = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+    });
+    const registrationReport = await axe.run(registration.root, {
+      rules: {
+        "color-contrast": { enabled: false },
+      },
+    });
+    expect(registrationReport.violations).toEqual([]);
   });
 });

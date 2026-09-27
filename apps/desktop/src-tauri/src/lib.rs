@@ -30,6 +30,7 @@ use aether_quality::{
     RgbLuminanceChannel, STAR_MEASUREMENT_ALGORITHM_ID, StarMeasurementParameters,
     measure_frame_quality, prepare_cfa_cell_mean,
 };
+use aether_register::{RegistrationDiagnostic, diagnose_paths};
 use aether_review::{
     DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics, FrameSpec,
     MAX_UNDO_DEPTH, ManualDecision, ManualRejectionReason, MissingPlacement, ReviewBook,
@@ -109,6 +110,13 @@ struct EstimatedDisplayTransform {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FitsStatisticsRequest {
     path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistrationDiagnosticRequest {
+    source_path: PathBuf,
+    reference_path: PathBuf,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -740,6 +748,29 @@ async fn inspect_frame_quality(
                 "The frame-quality worker stopped before producing a result.",
             )
         })?
+}
+
+#[tauri::command]
+async fn diagnose_fits_registration(
+    request: RegistrationDiagnosticRequest,
+) -> Result<RegistrationDiagnostic, PreviewCommandError> {
+    validate_runtime_source_path(&request.source_path)?;
+    validate_runtime_source_path(&request.reference_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        diagnose_paths(&request.source_path, &request.reference_path).map_err(|_| {
+            PreviewCommandError::new(
+                "registration_diagnostic_failed",
+                "The selected FITS pair could not produce a registration diagnostic.",
+            )
+        })
+    })
+    .await
+    .map_err(|_| {
+        PreviewCommandError::new(
+            "registration_diagnostic_interrupted",
+            "The registration diagnostic worker stopped before producing a result.",
+        )
+    })?
 }
 
 fn validate_runtime_source_path(path: &Path) -> Result<(), PreviewCommandError> {
@@ -2990,6 +3021,7 @@ pub fn run() -> Result<(), tauri::Error> {
             apply_review_decision,
             cancel_light_plan,
             cancel_master_plan,
+            diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_light_plan,
             execute_master_plan,

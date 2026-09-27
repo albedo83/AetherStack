@@ -322,13 +322,14 @@ Production registration still requires:
   similarity model;
 - confidence thresholds validated on broader sparse and crowded real data;
 - justified distortion models with bounded control-point counts;
-- bounded banded Lanczos execution with oracle differential tests, plus a
-  separately identified cubic option if real comparisons justify it;
-- desktop preview and explicit user override of the computed common footprint;
+- explicit user override of the computed common footprint with provenance;
+- a separately identified cubic option if real comparisons justify it;
 - synthetic sub-pixel ground truth for shifts, scale, rotation, mirroring,
   distortion, crowding, partial overlap, hot pixels, and outliers;
 - inspected ASI294MC Pro comparison against an independent implementation and
   equivalent ToupTek 585C validation.
 
-Until those gates pass, reference selection and affine residuals are foundation
-APIs and diagnostics, not evidence of a complete registration pipeline.
+The desktop Registration laboratory exposes the native pair diagnostic,
+confidence evidence, accepted source-pixel transform, and exact autocrop. It is
+diagnostic-only: registered FITS publication exists in the runtime API but is
+not yet orchestrated as a complete multi-frame desktop plan.
