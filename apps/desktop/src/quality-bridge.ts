@@ -23,6 +23,7 @@ export interface FrameQualityResult {
   readonly rawCandidates: number;
   readonly suppressedCandidates: number;
   readonly rejectedMeasurements: number;
+  readonly signalToNoise: number | null;
   readonly fwhmPixels: number | null;
   readonly eccentricity: number | null;
 }

@@ -39,12 +39,17 @@ metrics with declared units and tested validity domains:
 - detected and usable star counts;
 - median stellar FWHM and eccentricity with dispersion/support;
 - saturation and clipped-area fractions;
-- a signal-to-noise proxy and documented signal weight;
+- median background-referenced stellar SNR and a documented signal weight;
 - registration residuals and common-footprint coverage when available.
 
 No composite score exists until its expression, normalization, missing-value
 policy, and direction are visible. The default table keeps the individual
 metrics available beside any weight.
+
+The strict quality estimator now reports median background-referenced SNR over
+the same unsaturated stellar population used for aggregate FWHM and
+eccentricity. Missing stellar support remains `None`; it is never displayed as
+zero or admitted to the positive-only weight expression.
 
 The strict backend implements global median/MAD background clipping and
 local-maximum stellar moments for a prepared monochrome detection plane. The

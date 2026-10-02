@@ -222,6 +222,7 @@ pub struct FrameQuality {
     suppressed_candidates: usize,
     rejected_measurements: usize,
     saturated_stars: usize,
+    median_background_snr: Option<f64>,
     median_fwhm_major_pixels: Option<f64>,
     median_eccentricity: Option<f64>,
     stars: Vec<StarMeasurement>,
@@ -268,6 +269,12 @@ impl FrameQuality {
     #[must_use]
     pub const fn saturated_stars(&self) -> usize {
         self.saturated_stars
+    }
+
+    /// Median background-referenced stellar SNR over unsaturated measurements.
+    #[must_use]
+    pub const fn median_background_snr(&self) -> Option<f64> {
+        self.median_background_snr
     }
 
     /// Median major-axis FWHM over unsaturated measured stars.
@@ -560,26 +567,39 @@ pub fn measure_frame_quality(
 
     let saturated_stars = stars.iter().filter(|star| star.saturated).count();
     let unsaturated_count = stars.len() - saturated_stars;
-    let (median_fwhm_major_pixels, median_eccentricity) = if unsaturated_count == 0 {
-        (None, None)
-    } else {
-        let mut values = try_f64_vec(unsaturated_count)?;
-        values.extend(
-            stars
-                .iter()
-                .filter(|star| !star.saturated)
-                .map(|star| star.fwhm_major_pixels),
-        );
-        let fwhm = exact_median(&mut values);
-        values.clear();
-        values.extend(
-            stars
-                .iter()
-                .filter(|star| !star.saturated)
-                .map(|star| star.eccentricity),
-        );
-        (Some(fwhm), Some(exact_median(&mut values)))
-    };
+    let (median_background_snr, median_fwhm_major_pixels, median_eccentricity) =
+        if unsaturated_count == 0 {
+            (None, None, None)
+        } else {
+            let mut values = try_f64_vec(unsaturated_count)?;
+            values.extend(
+                stars
+                    .iter()
+                    .filter(|star| !star.saturated)
+                    .map(|star| star.background_snr),
+            );
+            let signal_to_noise = exact_median(&mut values);
+            values.clear();
+            values.extend(
+                stars
+                    .iter()
+                    .filter(|star| !star.saturated)
+                    .map(|star| star.fwhm_major_pixels),
+            );
+            let fwhm = exact_median(&mut values);
+            values.clear();
+            values.extend(
+                stars
+                    .iter()
+                    .filter(|star| !star.saturated)
+                    .map(|star| star.eccentricity),
+            );
+            (
+                Some(signal_to_noise),
+                Some(fwhm),
+                Some(exact_median(&mut values)),
+            )
+        };
 
     Ok(FrameQuality {
         background,
@@ -589,6 +609,7 @@ pub fn measure_frame_quality(
         suppressed_candidates,
         rejected_measurements,
         saturated_stars,
+        median_background_snr,
         median_fwhm_major_pixels,
         median_eccentricity,
         stars,
@@ -1042,6 +1063,10 @@ mod tests {
             Some(measured.fwhm_major_pixels())
         );
         assert_eq!(quality.median_eccentricity(), Some(measured.eccentricity()));
+        assert_eq!(
+            quality.median_background_snr(),
+            Some(measured.background_snr())
+        );
         Ok(())
     }
 
@@ -1106,6 +1131,7 @@ mod tests {
         assert_eq!(quality.saturated_stars(), 1);
         assert_eq!(quality.median_fwhm_major_pixels(), None);
         assert_eq!(quality.median_eccentricity(), None);
+        assert_eq!(quality.median_background_snr(), None);
         Ok(())
     }
 

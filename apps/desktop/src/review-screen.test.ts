@@ -1272,6 +1272,7 @@ describe("frame review workspace", () => {
             qualityMessage: "Ready for phase-neutral CFA diagnostics",
             qualityProfileId: null,
             metrics: {
+              signalToNoise: null,
               fwhmPixels: null,
               eccentricity: null,
               detectedStars: null,
@@ -1304,6 +1305,7 @@ describe("frame review workspace", () => {
                 "812 measured stars · raw CFA · RGGB · cfa-cell-mean-v1 + local-max-moments-v1 · saturation unclassified · diagnostic only",
               qualityProfileId: "desktop-diagnostic-quality-v1",
               metrics: {
+                signalToNoise: 34.8,
                 fwhmPixels: 3.42,
                 eccentricity: 0.41,
                 detectedStars: 817,
@@ -1318,6 +1320,8 @@ describe("frame review workspace", () => {
     expect(measure.textContent).toBe("Quality measured");
     expect(measure.hasAttribute("disabled")).toBe(true);
     expect(root.textContent).toContain("QUALITY · DIAGNOSTIC");
+    expect(root.textContent).toContain("Stellar SNR");
+    expect(root.textContent).toContain("34.8");
     expect(root.textContent).toContain("3.42");
     expect(root.textContent).toContain("817");
   });

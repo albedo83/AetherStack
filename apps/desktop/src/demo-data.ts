@@ -273,6 +273,7 @@ export const demoReviewModel: ReviewViewModel = {
       state: "accepted",
       rejectionReason: null,
       metrics: {
+        signalToNoise: 38.6,
         fwhmPixels: 3.21,
         eccentricity: 0.39,
         detectedStars: 842,
@@ -295,6 +296,7 @@ export const demoReviewModel: ReviewViewModel = {
       state: "undecided",
       rejectionReason: null,
       metrics: {
+        signalToNoise: 35.9,
         fwhmPixels: 3.38,
         eccentricity: 0.42,
         detectedStars: 817,
@@ -317,6 +319,7 @@ export const demoReviewModel: ReviewViewModel = {
       state: "rejected",
       rejectionReason: "trailing",
       metrics: {
+        signalToNoise: 18.2,
         fwhmPixels: 5.84,
         eccentricity: 0.71,
         detectedStars: 503,
@@ -339,6 +342,7 @@ export const demoReviewModel: ReviewViewModel = {
       state: "undecided",
       rejectionReason: null,
       metrics: {
+        signalToNoise: 33.7,
         fwhmPixels: 3.46,
         eccentricity: 0.44,
         detectedStars: 791,
@@ -361,6 +365,7 @@ export const demoReviewModel: ReviewViewModel = {
       state: "undecided",
       rejectionReason: null,
       metrics: {
+        signalToNoise: null,
         fwhmPixels: null,
         eccentricity: null,
         detectedStars: null,

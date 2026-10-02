@@ -97,6 +97,7 @@ impl FrameId {
 pub struct FrameMetrics {
     background: Option<f64>,
     noise: Option<f64>,
+    signal_to_noise: Option<f64>,
     detected_stars: Option<usize>,
     usable_stars: Option<usize>,
     fwhm_major_pixels: Option<f64>,
@@ -134,11 +135,27 @@ impl FrameMetrics {
         Ok(Self {
             background,
             noise,
+            signal_to_noise: None,
             detected_stars,
             usable_stars,
             fwhm_major_pixels,
             eccentricity,
         })
+    }
+
+    /// Adds the positive stellar SNR statistic used by quality weighting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReviewError::InvalidMetric`] for zero, negative, or non-finite
+    /// values. `None` preserves explicit missing evidence.
+    pub fn with_signal_to_noise(
+        mut self,
+        signal_to_noise: Option<f64>,
+    ) -> Result<Self, ReviewError> {
+        validate_optional_finite("signal_to_noise", signal_to_noise, |value| value > 0.0)?;
+        self.signal_to_noise = signal_to_noise;
+        Ok(self)
     }
 
     /// Robust background location.
@@ -151,6 +168,12 @@ impl FrameMetrics {
     #[must_use]
     pub const fn noise(self) -> Option<f64> {
         self.noise
+    }
+
+    /// Median background-referenced stellar signal-to-noise ratio.
+    #[must_use]
+    pub const fn signal_to_noise(self) -> Option<f64> {
+        self.signal_to_noise
     }
 
     /// Local maxima found before measurement filtering.
@@ -1230,6 +1253,19 @@ mod tests {
                 field: "usable_stars"
             })
         ));
+        assert!(matches!(
+            FrameMetrics::default().with_signal_to_noise(Some(0.0)),
+            Err(ReviewError::InvalidMetric {
+                field: "signal_to_noise"
+            })
+        ));
+        assert_eq!(
+            FrameMetrics::default()
+                .with_signal_to_noise(Some(12.5))?
+                .signal_to_noise()
+                .map(f64::to_bits),
+            Some(12.5_f64.to_bits())
+        );
         assert_eq!(
             FrameSpec::new(id('a')?, "bad\nlabel", FrameMetrics::default()),
             Err(ReviewError::InvalidLabel)

@@ -406,6 +406,7 @@ struct FrameQualityResponse {
     raw_candidates: usize,
     suppressed_candidates: usize,
     rejected_measurements: usize,
+    signal_to_noise: Option<f64>,
     fwhm_pixels: Option<f64>,
     eccentricity: Option<f64>,
 }
@@ -480,6 +481,7 @@ struct ReviewSortRequest {
 struct ReviewSortFrame {
     id: String,
     label: String,
+    signal_to_noise: Option<f64>,
     fwhm_pixels: Option<f64>,
     eccentricity: Option<f64>,
     detected_stars: Option<usize>,
@@ -2293,6 +2295,7 @@ fn inspect_frame_quality_sync(
         raw_candidates: quality.raw_candidates(),
         suppressed_candidates: quality.suppressed_candidates(),
         rejected_measurements: quality.rejected_measurements(),
+        signal_to_noise: quality.median_background_snr(),
         fwhm_pixels: quality
             .median_fwhm_major_pixels()
             .map(|value| value * source_pixel_scale),
@@ -3916,6 +3919,7 @@ fn sort_review_frames_sync(request: ReviewSortRequest) -> Result<Vec<String>, Pr
             frame.fwhm_pixels,
             frame.eccentricity,
         )
+        .and_then(|metrics| metrics.with_signal_to_noise(frame.signal_to_noise))
         .map_err(|_| review_sort_input_error())?;
         frames
             .push(FrameSpec::new(id, frame.label, metrics).map_err(|_| review_sort_input_error())?);
@@ -5831,6 +5835,7 @@ mod tests {
         assert!(quality.noise > 0.0);
         assert_eq!(quality.detected_stars, 1);
         assert_eq!(quality.usable_stars, 1);
+        assert!(quality.signal_to_noise.is_some_and(|value| value > 0.0));
         assert!(quality.fwhm_pixels.is_some_and(|value| value > 10.0));
         assert!(quality.eccentricity.is_some_and(|value| value < 0.2));
         Ok(())
@@ -5858,6 +5863,7 @@ mod tests {
         assert_eq!(quality.source_pixel_scale.to_bits(), 1.0_f64.to_bits());
         assert!(quality.detected_stars > 0);
         assert_eq!(quality.usable_stars, quality.detected_stars);
+        assert!(quality.signal_to_noise.is_some_and(|value| value > 0.0));
         assert!(quality.fwhm_pixels.is_some_and(|value| value > 0.0));
         Ok(())
     }
@@ -5867,6 +5873,7 @@ mod tests {
         let frame = |digit: char, label: &str, fwhm_pixels: Option<f64>| ReviewSortFrame {
             id: digit.to_string().repeat(64),
             label: label.to_owned(),
+            signal_to_noise: None,
             fwhm_pixels,
             eccentricity: None,
             detected_stars: None,

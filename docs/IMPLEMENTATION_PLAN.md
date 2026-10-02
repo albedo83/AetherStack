@@ -1019,6 +1019,15 @@ safety reasoning. They do not narrate obvious syntax.
     streamed checksum publication, and exact weighted-pixel tests cover the
     path. Next, carry measured per-frame SNR into the review model and expose
     the complete weight evidence in the UI.
+72. Carry the weighting signal statistic through quality measurement and frame
+    review. Rust now reports the exact median background-referenced SNR over
+    unsaturated measured stars, validates it as positive optional review data,
+    and preserves it across native sort requests. The desktop model and selected
+    frame metric strip expose “Stellar SNR” beside FWHM and eccentricity, with
+    explicit missing state. Native estimator, review validation, bridge,
+    presenter, frontend, lint, and production-build tests cover the path. Next,
+    add the advanced weighted-estimator choice with a preflight weight table and
+    reference selection before enabling execution.
 
 ## 11. Stable-release definition
 

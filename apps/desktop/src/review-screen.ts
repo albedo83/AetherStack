@@ -401,6 +401,7 @@ export function mountReviewScreen(
     qualityBadge: required<HTMLElement>(root, "[data-quality-badge]"),
     cfaBadge: required<HTMLElement>(root, "[data-cfa-badge]"),
     state: required<HTMLElement>(root, "[data-review-state]"),
+    signalToNoise: required<HTMLElement>(root, "[data-metric-signal-to-noise]"),
     fwhm: required<HTMLElement>(root, "[data-metric-fwhm]"),
     eccentricity: required<HTMLElement>(root, "[data-metric-eccentricity]"),
     stars: required<HTMLElement>(root, "[data-metric-stars]"),
@@ -1264,6 +1265,7 @@ function renderRows(
 function renderSelectedMetrics(
   elements: {
     state: HTMLElement;
+    signalToNoise: HTMLElement;
     fwhm: HTMLElement;
     eccentricity: HTMLElement;
     stars: HTMLElement;
@@ -1274,6 +1276,10 @@ function renderSelectedMetrics(
 ): void {
   elements.state.dataset.state = frame?.state ?? "undecided";
   elements.state.textContent = frame ? stateLabel(frame.state) : "No selection";
+  elements.signalToNoise.textContent = formatMetric(
+    frame?.metrics.signalToNoise ?? null,
+    1,
+  );
   elements.fwhm.textContent = formatMetric(
     frame?.metrics.fwhmPixels ?? null,
     2,
@@ -2651,6 +2657,7 @@ function shellMarkup(): string {
                   <span class="viewer-chip viewer-chip--lock" data-stretch-label></span>
                 </div>
                 <dl class="metric-strip" aria-label="Selected frame metrics">
+                  ${metric("Stellar SNR", "data-metric-signal-to-noise", "")}
                   ${metric("FWHM", "data-metric-fwhm", "px")}
                   ${metric("Eccentricity", "data-metric-eccentricity", "")}
                   ${metric("Stars", "data-metric-stars", "")}

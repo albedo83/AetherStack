@@ -2119,6 +2119,7 @@ function calibratedReviewFrames(
 
 function emptyQualityMetrics(): ReviewFrame["metrics"] {
   return {
+    signalToNoise: null,
     fwhmPixels: null,
     eccentricity: null,
     detectedStars: null,
@@ -2129,6 +2130,7 @@ function emptyQualityMetrics(): ReviewFrame["metrics"] {
 
 function qualityMetrics(result: FrameQualityResult): ReviewFrame["metrics"] {
   return {
+    signalToNoise: result.signalToNoise,
     fwhmPixels: result.fwhmPixels,
     eccentricity: result.eccentricity,
     detectedStars: result.detectedStars,

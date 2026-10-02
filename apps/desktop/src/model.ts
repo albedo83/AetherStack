@@ -68,6 +68,7 @@ export type QualityState =
   "unavailable" | "idle" | "loading" | "ready" | "error";
 
 export interface FrameMetrics {
+  readonly signalToNoise: MetricValue;
   readonly fwhmPixels: MetricValue;
   readonly eccentricity: MetricValue;
   readonly detectedStars: number | null;

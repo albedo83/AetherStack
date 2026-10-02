@@ -53,6 +53,7 @@ export function sortReviewFrames(
       frames: frames.map((frame) => ({
         id: frame.id,
         label: frame.label,
+        signalToNoise: frame.metrics.signalToNoise,
         fwhmPixels: frame.metrics.fwhmPixels,
         eccentricity: frame.metrics.eccentricity,
         detectedStars: frame.metrics.detectedStars,
