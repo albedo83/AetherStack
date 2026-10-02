@@ -162,6 +162,18 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-output]",
     ),
+    registeredStackReport: required<HTMLElement>(
+      root,
+      "[data-registered-stack-report]",
+    ),
+    registeredStackReportPath: required<HTMLElement>(
+      root,
+      "[data-registered-stack-report-path]",
+    ),
+    registeredStackReportDigest: required<HTMLElement>(
+      root,
+      "[data-registered-stack-report-digest]",
+    ),
     registeredStackEstimator: required<HTMLSelectElement>(
       root,
       "[data-registered-stack-estimator]",
@@ -1447,6 +1459,9 @@ interface RegistrationElements {
   readonly registeredStackMessage: HTMLElement;
   readonly registeredStackProgress: HTMLProgressElement;
   readonly registeredStackOutput: HTMLElement;
+  readonly registeredStackReport: HTMLElement;
+  readonly registeredStackReportPath: HTMLElement;
+  readonly registeredStackReportDigest: HTMLElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
   readonly registeredStackHighFraction: HTMLInputElement;
@@ -1612,6 +1627,16 @@ function renderRegistration(
       ? "Registered identity set verified"
       : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
+  const integrationReport = registration.stack.result;
+  elements.registeredStackReport.hidden = integrationReport === null;
+  elements.registeredStackReportPath.textContent =
+    integrationReport?.reportPath ?? "";
+  elements.registeredStackReportPath.title =
+    integrationReport?.reportPath ?? "";
+  elements.registeredStackReportDigest.textContent =
+    integrationReport?.reportSha256 ?? "";
+  elements.registeredStackReportDigest.title =
+    integrationReport?.reportSha256 ?? "";
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
@@ -3030,6 +3055,11 @@ function shellMarkup(): string {
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
+                  <div class="integration-report" data-registered-stack-report hidden>
+                    <span>Integration report</span>
+                    <code data-registered-stack-report-path></code>
+                    <code data-registered-stack-report-digest></code>
+                  </div>
                   <div class="registered-stack__product-tabs" role="tablist" aria-label="Integrated product view">
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="science" aria-selected="true">Science</button>
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_low" aria-selected="false" disabled>Low reject</button>

@@ -198,6 +198,8 @@ export interface RegisteredStackResult {
   readonly lowRejectionMapPath: string | null;
   readonly highRejectionMapPath: string | null;
   readonly rejectionMapSamplesWritten: number | null;
+  readonly reportPath: string;
+  readonly reportSha256: string;
 }
 
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */

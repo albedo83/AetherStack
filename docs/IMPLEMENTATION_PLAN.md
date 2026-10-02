@@ -1071,6 +1071,18 @@ safety reasoning. They do not narrate obvious syntax.
     execution fail. Presenter coverage proves both visibility and stale-state
     invalidation. Next, export the sealed plan, settings, weights, execution
     counters, and output provenance as a deterministic integration report.
+77. Publish a deterministic integration report beside every successful stack.
+    The native adapter records the sealed plan and manifest digests, exact
+    integration settings, bounded-memory counters, registered source identities
+    and fingerprints, optional canonical weights, output dimensions, FITS byte
+    accounting, `DATASUM`, and `CHECKSUM` evidence. The report excludes clocks
+    and absolute paths, carries a SHA-256 over its canonical payload, uses
+    create-new synchronized publication, never overwrites an existing report,
+    and rolls back newly produced FITS files if report publication fails. The
+    result UI exposes both report path and digest. Native strict, weighted,
+    rejection-map, no-overwrite, presenter, lint, and build tests cover the
+    path. Next, add a report inspector with schema validation and human-readable
+    provenance summaries.
 
 ## 11. Stable-release definition
 

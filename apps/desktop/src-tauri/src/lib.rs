@@ -7,17 +7,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, FitsOutputProvenance,
-    HeaderReadOptions, ImageRegion, PrimaryImageReader, SampleStatus, StoredSampleFormat,
-    primary_image_statistics,
+    FitsWriteSummary, HeaderReadOptions, ImageRegion, PrimaryImageReader, SampleStatus,
+    StoredSampleFormat, primary_image_statistics,
 };
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
@@ -61,6 +62,7 @@ use aether_session::{
     generate_manifest_from_directory,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::ipc::Response;
 
 const MAX_DESKTOP_PREVIEW_PIXELS: usize = 2 * 1_024 * 1_024;
@@ -69,6 +71,8 @@ const REJECTION_HISTOGRAM_ALGORITHM_ID: &str = "rejection-count-histogram-v1";
 const MAX_REJECTION_HISTOGRAM_BINS: usize = 4_096;
 const MAX_DESKTOP_QUALITY_SOURCE_PIXELS: u64 = 64 * 1_024 * 1_024;
 const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
+const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
+static REGISTERED_STACK_REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -296,7 +300,7 @@ struct RegisteredStackCommandRequest {
     integration: RegisteredStackIntegrationSettings,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RegisteredStackEstimatorInput {
     StrictMean,
@@ -340,7 +344,7 @@ struct RegisteredWeightPreflightEntry {
     weight: f64,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegisteredStackIntegrationSettings {
     estimator: RegisteredStackEstimatorInput,
@@ -378,6 +382,71 @@ struct RegisteredStackResponse {
     low_rejection_map_path: Option<String>,
     high_rejection_map_path: Option<String>,
     rejection_map_samples_written: Option<u64>,
+    report_path: String,
+    report_sha256: String,
+}
+
+/// Stable machine-readable evidence emitted beside every integrated product.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReport {
+    algorithm_id: &'static str,
+    plan_sha256: String,
+    manifest_sha256: String,
+    integration: RegisteredStackIntegrationSettings,
+    band_height: usize,
+    memory_limit_bytes: usize,
+    peak_reserved_bytes: usize,
+    dimensions: RegisteredStackReportDimensions,
+    sources: Vec<RegisteredStackReportSource>,
+    weights: Option<RegisteredStackReportWeights>,
+    products: Vec<RegisteredStackReportProduct>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportDimensions {
+    width: usize,
+    height: usize,
+    planes: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportSource {
+    frame_id: String,
+    file_name: String,
+    byte_length: u64,
+    sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportWeights {
+    algorithm_id: &'static str,
+    parameters_sha256: String,
+    reference_frame_id: String,
+    entries: Vec<RegisteredWeightPreflightEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportProduct {
+    role: &'static str,
+    file_name: String,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    data_sum: Option<u32>,
+    checksum: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportEnvelope {
+    schema_version: u32,
+    report_sha256: String,
+    report: RegisteredStackReport,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -1526,6 +1595,8 @@ where
     if request.band_height == 0 || !request.output_path.is_absolute() {
         return Err(registered_stack_configuration_error());
     }
+    let report_path = registered_stack_report_path(&request.output_path)?;
+    require_absent_registered_report(&report_path)?;
     let integration = request.integration;
     if matches!(
         integration.estimator,
@@ -1578,24 +1649,42 @@ where
         return Err(registered_stack_artifact_set_error());
     }
 
-    let weight_set = if matches!(
+    let (weight_set, weight_report) = if matches!(
         integration.estimator,
         RegisteredStackEstimatorInput::WeightedMean
     ) {
         let reference_frame_id = request
             .quality_reference_frame_id
             .ok_or_else(registered_stack_configuration_error)?;
-        let (_, weights) = validated_registered_weight_set(
+        let (reference_frame_id, weights) = validated_registered_weight_set(
             &expected_ids,
             reference_frame_id,
             request.quality_evidence,
         )?;
-        Some(weights)
+        let entries = expected_ids
+            .iter()
+            .map(|frame_id| {
+                let weight = weights
+                    .weight_for(frame_id)
+                    .ok_or_else(registered_stack_configuration_error)?;
+                Ok(RegisteredWeightPreflightEntry {
+                    frame_id: frame_id.as_str().to_owned(),
+                    weight: weight.get(),
+                })
+            })
+            .collect::<Result<Vec<_>, PreviewCommandError>>()?;
+        let report = RegisteredStackReportWeights {
+            algorithm_id: BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+            parameters_sha256: weights.sha256().to_owned(),
+            reference_frame_id: reference_frame_id.as_str().to_owned(),
+            entries,
+        };
+        (Some(weights), Some(report))
     } else {
         if !request.quality_evidence.is_empty() || request.quality_reference_frame_id.is_some() {
             return Err(registered_stack_configuration_error());
         }
-        None
+        (None, None)
     };
 
     let memory_limit = usize::try_from(request.memory_limit_bytes)
@@ -1603,7 +1692,11 @@ where
     let memory =
         MemoryBudget::new(memory_limit).map_err(|_| registered_stack_configuration_error())?;
     let mut sources = Vec::new();
+    let mut report_sources = Vec::new();
     sources
+        .try_reserve_exact(by_id.len())
+        .map_err(|_| registered_stack_allocation_error())?;
+    report_sources
         .try_reserve_exact(by_id.len())
         .map_err(|_| registered_stack_allocation_error())?;
     for frame in plan.frames() {
@@ -1613,6 +1706,17 @@ where
         let mut input = File::open(&path).map_err(|_| registered_stack_artifact_error())?;
         let fingerprint =
             fingerprint_reader(&mut input).map_err(|_| registered_stack_artifact_error())?;
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(registered_stack_artifact_error)?
+            .to_owned();
+        report_sources.push(RegisteredStackReportSource {
+            frame_id: frame.frame_id().as_str().to_owned(),
+            file_name,
+            byte_length: fingerprint.byte_length(),
+            sha256: fingerprint.sha256().to_owned(),
+        });
         sources.push(RegisteredStackSource::new(
             frame.frame_id().clone(),
             PipelineSource::new(path, fingerprint),
@@ -1672,7 +1776,7 @@ where
         .and_then(|value| value.with_plan_sha256(execution.plan().plan_sha256()))
         .map_err(|_| registered_stack_configuration_error())?;
         let high_provenance = FitsOutputProvenance::new(
-            manifest_sha256,
+            manifest_sha256.clone(),
             "registered-rejection-high",
             PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
             source_count,
@@ -1699,7 +1803,7 @@ where
         });
     })
     .map_err(registered_stack_error)?;
-    let output_path = output_path.to_str().map(str::to_owned).ok_or_else(|| {
+    let output_path_string = output_path.to_str().map(str::to_owned).ok_or_else(|| {
         PreviewCommandError::new(
             "registered_stack_output_path_not_unicode",
             "The integrated output path cannot be represented as Unicode.",
@@ -1716,9 +1820,58 @@ where
         .as_ref()
         .map(|(_, path)| unicode_registered_output_path(path))
         .transpose()?;
+    let mut products = vec![registered_stack_report_product(
+        "science",
+        &output_path,
+        summary,
+    )?];
+    if let (Some((low_path, high_path)), Some(map_summary)) =
+        (rejection_paths.as_ref(), rejection_map_summary)
+    {
+        products.push(registered_stack_report_product(
+            "rejection_low",
+            low_path,
+            map_summary.low(),
+        )?);
+        products.push(registered_stack_report_product(
+            "rejection_high",
+            high_path,
+            map_summary.high(),
+        )?);
+    }
+    let report = RegisteredStackReport {
+        algorithm_id: REGISTERED_STACK_REPORT_ALGORITHM_ID,
+        plan_sha256: request.expected_plan_sha256.clone(),
+        manifest_sha256,
+        integration,
+        band_height: request.band_height,
+        memory_limit_bytes: memory.limit(),
+        peak_reserved_bytes: result.peak_reserved_bytes(),
+        dimensions: RegisteredStackReportDimensions {
+            width: dimensions.width(),
+            height: dimensions.height(),
+            planes: dimensions.planes(),
+        },
+        sources: report_sources,
+        weights: weight_report,
+        products,
+    };
+    let (report_sha256, report_bytes) = encode_registered_stack_report(report)?;
+    if publish_registered_stack_report(&report_path, &report_bytes).is_err() {
+        let mut published = vec![output_path.as_path()];
+        if let Some((low_path, high_path)) = rejection_paths.as_ref() {
+            published.push(low_path.as_path());
+            published.push(high_path.as_path());
+        }
+        for path in published {
+            let _ignored = fs::remove_file(path);
+        }
+        return Err(registered_stack_report_publication_error());
+    }
+    let report_path = unicode_registered_output_path(&report_path)?;
     Ok(RegisteredStackResponse {
         plan_sha256: request.expected_plan_sha256,
-        output_path,
+        output_path: output_path_string,
         width: dimensions.width(),
         height: dimensions.height(),
         planes: dimensions.planes(),
@@ -1737,6 +1890,8 @@ where
             );
             value.low().samples_written()
         }),
+        report_path,
+        report_sha256,
     })
 }
 
@@ -1846,6 +2001,130 @@ fn rejection_map_paths(output: &Path) -> Result<(PathBuf, PathBuf), PreviewComma
         parent.join(name)
     };
     Ok((named("-rejection-low"), named("-rejection-high")))
+}
+
+fn registered_stack_report_path(output: &Path) -> Result<PathBuf, PreviewCommandError> {
+    let parent = output
+        .parent()
+        .ok_or_else(registered_stack_configuration_error)?;
+    let stem = output
+        .file_stem()
+        .ok_or_else(registered_stack_configuration_error)?;
+    let mut name = stem.to_os_string();
+    name.push("-integration-report.json");
+    Ok(parent.join(name))
+}
+
+fn require_absent_registered_report(path: &Path) -> Result<(), PreviewCommandError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(PreviewCommandError::new(
+            "registered_stack_report_exists",
+            "The integration report destination already exists and was not modified.",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(registered_stack_report_publication_error()),
+    }
+}
+
+fn registered_stack_report_product(
+    role: &'static str,
+    path: &Path,
+    summary: FitsWriteSummary,
+) -> Result<RegisteredStackReportProduct, PreviewCommandError> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(registered_stack_configuration_error)?
+        .to_owned();
+    let checksum = summary
+        .encoded_checksum()
+        .map(|bytes| bytes.into_iter().map(char::from).collect());
+    Ok(RegisteredStackReportProduct {
+        role,
+        file_name,
+        samples_written: summary.samples_written(),
+        substituted_samples: summary.substituted_samples(),
+        bytes_written: summary.bytes_written(),
+        data_sum: summary.data_checksum(),
+        checksum,
+    })
+}
+
+fn encode_registered_stack_report(
+    report: RegisteredStackReport,
+) -> Result<(String, Vec<u8>), PreviewCommandError> {
+    let canonical = serde_json::to_vec(&report).map_err(|_| registered_stack_report_error())?;
+    let report_sha256 = lowercase_hex(&Sha256::digest(&canonical));
+    let envelope = RegisteredStackReportEnvelope {
+        schema_version: 1,
+        report_sha256: report_sha256.clone(),
+        report,
+    };
+    let mut encoded =
+        serde_json::to_vec_pretty(&envelope).map_err(|_| registered_stack_report_error())?;
+    encoded.push(b'\n');
+    Ok((report_sha256, encoded))
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+fn publish_registered_stack_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "report path has no parent",
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "report path has no file name",
+        )
+    })?;
+    let mut last_error = None;
+    for _ in 0..128 {
+        let sequence = REGISTERED_STACK_REPORT_TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temporary_name = file_name.to_os_string();
+        temporary_name.push(format!(".aetherstack-{sequence}.tmp"));
+        let temporary_path = parent.join(temporary_name);
+        let mut temporary = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_error = Some(error);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let mut published = false;
+        let staged = (|| {
+            temporary.write_all(bytes)?;
+            temporary.sync_all()?;
+            fs::hard_link(&temporary_path, path)?;
+            published = true;
+            fs::remove_file(&temporary_path)?;
+            File::open(parent)?.sync_all()
+        })();
+        if staged.is_err() {
+            let _ignored = fs::remove_file(&temporary_path);
+            if published {
+                let _ignored = fs::remove_file(path);
+            }
+        }
+        return staged;
+    }
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("report staging namespace exhausted")))
 }
 
 fn unicode_registered_output_path(path: &Path) -> Result<String, PreviewCommandError> {
@@ -2047,6 +2326,20 @@ const fn registered_stack_allocation_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "registered_stack_allocation_failed",
         "The registered stack could not reserve bounded transaction bookkeeping.",
+    )
+}
+
+const fn registered_stack_report_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_report_invalid",
+        "The deterministic integration report could not be encoded.",
+    )
+}
+
+const fn registered_stack_report_publication_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_report_publication_failed",
+        "The integration report could not be published; stack products were rolled back.",
     )
 }
 
@@ -5421,6 +5714,25 @@ mod tests {
         assert!(result.high_rejection_map_path.is_none());
         assert!(result.rejection_map_samples_written.is_none());
         assert!(stack_path.is_file());
+        let report_path = directory
+            .path()
+            .join("integrated-common-crop-integration-report.json");
+        assert_eq!(result.report_path, report_path.to_string_lossy());
+        assert_eq!(result.report_sha256.len(), 64);
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(&report_path)?)?;
+        assert_eq!(report["schemaVersion"], 1);
+        assert_eq!(report["reportSha256"], result.report_sha256);
+        assert_eq!(
+            report["report"]["algorithmId"],
+            REGISTERED_STACK_REPORT_ALGORITHM_ID
+        );
+        assert_eq!(report["report"]["planSha256"], expected_plan_sha256);
+        assert_eq!(report["report"]["integration"]["estimator"], "strict_mean");
+        assert_eq!(report["report"]["products"][0]["role"], "science");
+        assert_eq!(
+            report["report"]["sources"].as_array().map(Vec::len),
+            Some(2)
+        );
         assert_eq!(progress.first().map(|event| event.state), Some("started"));
         assert_eq!(progress.last().map(|event| event.state), Some("completed"));
         Ok(())
@@ -5527,7 +5839,8 @@ mod tests {
                 eccentricity: 0.25 + index as f64 * 0.01,
             })
             .collect();
-        let quality_reference_frame_id = Some(planning.reference_frame_id.clone());
+        let report_reference_frame_id = planning.reference_frame_id.clone();
+        let quality_reference_frame_id = Some(report_reference_frame_id.clone());
         let weight_preflight = preview_registered_weights_sync(RegisteredWeightPreflightRequest {
             expected_plan_sha256: expected_plan_sha256.clone(),
             frame_ids: registered
@@ -5575,6 +5888,19 @@ mod tests {
         let bytes = fs::read(&stack_path)?;
         let header = String::from_utf8_lossy(&bytes[..bytes.len().min(2_880)]);
         assert!(header.contains(&weight_preflight.parameters_sha256));
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(
+            directory
+                .path()
+                .join("weighted-stack-integration-report.json"),
+        )?)?;
+        assert_eq!(
+            report["report"]["weights"]["parametersSha256"],
+            weight_preflight.parameters_sha256
+        );
+        assert_eq!(
+            report["report"]["weights"]["referenceFrameId"],
+            report_reference_frame_id
+        );
         Ok(())
     }
 
@@ -5611,6 +5937,17 @@ mod tests {
         assert_eq!(response.weights[0].frame_id, first);
         assert!((response.weights[0].weight - 0.0625).abs() < 1.0e-14);
         assert_eq!(response.weights[1].weight.to_bits(), 1.0_f64.to_bits());
+        Ok(())
+    }
+
+    #[test]
+    fn integration_report_publication_never_overwrites_an_existing_file() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let report_path = directory.path().join("stack-integration-report.json");
+        fs::write(&report_path, b"existing evidence\n")?;
+
+        assert!(publish_registered_stack_report(&report_path, b"replacement\n").is_err());
+        assert_eq!(fs::read(&report_path)?, b"existing evidence\n");
         Ok(())
     }
 

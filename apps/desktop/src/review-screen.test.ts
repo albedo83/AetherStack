@@ -488,6 +488,8 @@ describe("frame review workspace", () => {
             lowRejectionMapPath: "/results/integrated-rejection-low.fits",
             highRejectionMapPath: "/results/integrated-rejection-high.fits",
             rejectionMapSamplesWritten: 34_798_080,
+            reportPath: "/results/integrated-integration-report.json",
+            reportSha256: "d".repeat(64),
           },
           previewState: "ready" as const,
           preview: {
@@ -539,6 +541,8 @@ describe("frame review workspace", () => {
         name: "Integrated registered common-crop preview",
       }).src,
     ).toContain("blob:registered-stack");
+    expect(root.textContent).toContain("Integration report");
+    expect(root.textContent).toContain("d".repeat(64));
     fireEvent.click(
       getByRole(root, "button", { name: "Next registered frame" }),
     );
