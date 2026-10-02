@@ -202,6 +202,17 @@ export interface RegisteredStackResult {
   readonly reportSha256: string;
 }
 
+export interface RegisteredStackReportInspection {
+  readonly schemaVersion: number;
+  readonly reportSha256: string;
+  readonly planSha256: string;
+  readonly manifestSha256: string;
+  readonly estimator: RegisteredStackIntegrationSettings["estimator"];
+  readonly sourceCount: number;
+  readonly productCount: number;
+  readonly weighted: boolean;
+}
+
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */
 export function diagnoseFitsRegistration(
   request: RegistrationDiagnosticRequest,
@@ -321,6 +332,16 @@ export function previewRegisteredWeights(
       qualityEvidence,
     },
   });
+}
+
+/** Validates a native integration report before presenting its provenance. */
+export function inspectRegisteredStackReport(
+  path: string,
+): Promise<RegisteredStackReportInspection> {
+  return invoke<RegisteredStackReportInspection>(
+    "inspect_registered_stack_report",
+    { request: { path } },
+  );
 }
 
 /** Requests cooperative cancellation of the active common-crop integration. */

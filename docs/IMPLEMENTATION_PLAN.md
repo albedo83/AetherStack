@@ -1083,6 +1083,15 @@ safety reasoning. They do not narrate obvious syntax.
     rejection-map, no-overwrite, presenter, lint, and build tests cover the
     path. Next, add a report inspector with schema validation and human-readable
     provenance summaries.
+78. Add strict native integration-report inspection. The bounded reader accepts
+    only absolute paths and a four-megabyte maximum document, rejects unknown
+    fields, unsupported schema or algorithm identifiers, malformed digests,
+    duplicate source/product identities, incoherent weighted evidence, missing
+    science products, and invalid FITS checksum summaries. It recomputes the
+    canonical payload SHA-256 before returning a compact provenance summary.
+    Native tamper-detection and bridge-contract tests cover the entry point.
+    Next, connect this validator to a reopenable report inspector in the result
+    workspace with human-readable source, estimator, memory, and checksum views.
 
 ## 11. Stable-release definition
 

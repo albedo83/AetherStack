@@ -8,6 +8,7 @@ import {
   diagnoseFitsRegistration,
   executeRegistrationPlan,
   executeRegisteredStack,
+  inspectRegisteredStackReport,
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
@@ -236,6 +237,31 @@ describe("native registration bridge", () => {
         frameIds: ["1".repeat(64)],
         referenceFrameId: "1".repeat(64),
         qualityEvidence: evidence,
+      },
+    });
+  });
+
+  it("asks Rust to validate an integration report before inspection", async () => {
+    const result = {
+      schemaVersion: 1,
+      reportSha256: "b".repeat(64),
+      planSha256: "a".repeat(64),
+      manifestSha256: "c".repeat(64),
+      estimator: "weighted_mean",
+      sourceCount: 12,
+      productCount: 1,
+      weighted: true,
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+
+    await expect(
+      inspectRegisteredStackReport(
+        "/results/integrated-integration-report.json",
+      ),
+    ).resolves.toBe(result);
+    expect(invoke).toHaveBeenLastCalledWith("inspect_registered_stack_report", {
+      request: {
+        path: "/results/integrated-integration-report.json",
       },
     });
   });
