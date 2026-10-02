@@ -55,6 +55,7 @@ import {
   diagnoseFitsRegistration,
   executeRegistrationPlan,
   executeRegisteredStack,
+  previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
   selectRegisteredStackOutput,
@@ -958,11 +959,88 @@ async function executeStack(): Promise<void> {
   ) {
     return;
   }
+  let nativeWeightDigest: string | null = null;
+  let nativeWeightTicket: number | null = null;
+  if (settings.estimator === "weighted_mean") {
+    const referenceFrameId = weightPreflight.referenceFrameId;
+    if (!referenceFrameId) return;
+    const preflightTicket = ++registeredStackTicket;
+    nativeWeightTicket = preflightTicket;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          state: "idle",
+          message: "Recomputing canonical weight evidence in Rust…",
+        },
+      },
+    });
+    try {
+      const nativePreflight = await previewRegisteredWeights(
+        plan.planSha256,
+        plan.frames.map((frame) => frame.frameId),
+        referenceFrameId,
+        weightPreflight.evidence,
+      );
+      const expectedIds = new Set(plan.frames.map((frame) => frame.frameId));
+      const returnedIds = new Set(
+        nativePreflight.weights.map((weight) => weight.frameId),
+      );
+      if (
+        preflightTicket !== registeredStackTicket ||
+        model.registration.plan?.planSha256 !== plan.planSha256
+      ) {
+        return;
+      }
+      if (
+        nativePreflight.planSha256 !== plan.planSha256 ||
+        nativePreflight.referenceFrameId !== referenceFrameId ||
+        nativePreflight.parametersSha256.length !== 64 ||
+        returnedIds.size !== expectedIds.size ||
+        [...expectedIds].some((frameId) => !returnedIds.has(frameId))
+      ) {
+        throw new Error(
+          "Native weight evidence does not match the reviewed plan",
+        );
+      }
+      nativeWeightDigest = nativePreflight.parametersSha256;
+      update({
+        ...model,
+        registration: {
+          ...model.registration,
+          stack: {
+            ...model.registration.stack,
+            state: "idle",
+            message: `Native weights sealed · SHA-256 ${nativeWeightDigest}`,
+          },
+        },
+      });
+    } catch {
+      if (preflightTicket !== registeredStackTicket) return;
+      update({
+        ...model,
+        registration: {
+          ...model.registration,
+          stack: {
+            ...model.registration.stack,
+            state: "error",
+            message:
+              "Native weight preflight failed · integration was not started",
+          },
+        },
+      });
+      return;
+    }
+  }
   const outputPath = await selectRegisteredStackOutput();
   if (
     !outputPath ||
     model.registration.plan?.planSha256 !== plan.planSha256 ||
-    model.registration.execution.result?.planSha256 !== plan.planSha256
+    model.registration.execution.result?.planSha256 !== plan.planSha256 ||
+    (nativeWeightTicket !== null &&
+      nativeWeightTicket !== registeredStackTicket)
   ) {
     return;
   }
@@ -1060,7 +1138,7 @@ async function executeStack(): Promise<void> {
           pixelInspectionState: "idle",
           pixelInspection: null,
           settings,
-          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator} · peak ${formatMemory(result.peakReservedBytes)}`,
+          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
       },
     });

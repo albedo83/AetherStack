@@ -160,8 +160,9 @@ optimized CPU and GPU paths must match.
   expert UI while strict mean remains the default, with linked native previews
   for science, low-tail, and high-tail products, plus fail-closed balanced-PSF
   weighted integration whose calibrated-Light SNR, FWHM, and eccentricity
-  evidence is previewed in the UI, recomputed in Rust, identity-bound, and
-  sealed into FITS provenance;
+  evidence is previewed in the UI, recomputed in Rust before execution,
+  identity-bound, displayed with its canonical digest, and sealed unchanged
+  into FITS provenance;
 - a tested strict CPU vertical slice that reads FITS tiles, applies dark/flat
   calibration, integrates in stable order, streams scan-line bands without a
   full final-image allocation, calculates exact three-pass output statistics,

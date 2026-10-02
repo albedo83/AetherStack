@@ -41,8 +41,8 @@ use aether_review::{
     SortSpec, TransferFunction,
 };
 use aether_runtime::{
-    CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
-    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
+    BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, LightPlanExecutionError,
+    LightPlanExecutionRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
     QualityWeightMetrics, RegisteredFrameQuality, RegisteredRejectionMapOutput,
     RegisteredStackError, RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackSource,
@@ -311,6 +311,33 @@ struct RegisteredFrameQualityInput {
     signal_to_noise: f64,
     fwhm_pixels: f64,
     eccentricity: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegisteredWeightPreflightRequest {
+    expected_plan_sha256: String,
+    frame_ids: Vec<String>,
+    reference_frame_id: String,
+    quality_evidence: Vec<RegisteredFrameQualityInput>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredWeightPreflightResponse {
+    schema_version: u32,
+    plan_sha256: String,
+    algorithm_id: &'static str,
+    parameters_sha256: String,
+    reference_frame_id: String,
+    weights: Vec<RegisteredWeightPreflightEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredWeightPreflightEntry {
+    frame_id: String,
+    weight: f64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -1066,6 +1093,13 @@ async fn preview_registration_plan(
 }
 
 #[tauri::command]
+fn preview_registered_weights(
+    request: RegisteredWeightPreflightRequest,
+) -> Result<RegisteredWeightPreflightResponse, PreviewCommandError> {
+    preview_registered_weights_sync(request)
+}
+
+#[tauri::command]
 async fn execute_registration_plan(
     request: RegistrationPlanExecutionCommandRequest,
     on_progress: tauri::ipc::Channel<RegistrationExecutionProgress>,
@@ -1548,43 +1582,15 @@ where
         integration.estimator,
         RegisteredStackEstimatorInput::WeightedMean
     ) {
-        if request.quality_evidence.len() != expected_ids.len() {
-            return Err(registered_stack_configuration_error());
-        }
-        let mut quality_by_id = BTreeMap::new();
-        for evidence in request.quality_evidence {
-            let frame_id = FrameId::new(evidence.frame_id)
-                .map_err(|_| registered_stack_configuration_error())?;
-            let metrics = QualityWeightMetrics::new(
-                evidence.signal_to_noise,
-                evidence.fwhm_pixels,
-                evidence.eccentricity,
-            )
-            .map_err(|_| registered_stack_configuration_error())?;
-            if quality_by_id.insert(frame_id, metrics).is_some() {
-                return Err(registered_stack_configuration_error());
-            }
-        }
-        if quality_by_id.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
-            return Err(registered_stack_configuration_error());
-        }
         let reference_frame_id = request
             .quality_reference_frame_id
-            .map(FrameId::new)
-            .transpose()
-            .map_err(|_| registered_stack_configuration_error())?
             .ok_or_else(registered_stack_configuration_error)?;
-        let reference = *quality_by_id
-            .get(&reference_frame_id)
-            .ok_or_else(registered_stack_configuration_error)?;
-        let entries = quality_by_id
-            .into_iter()
-            .map(|(frame_id, metrics)| RegisteredFrameQuality::new(frame_id, metrics))
-            .collect();
-        Some(
-            RegisteredWeightSet::from_balanced_psf_metrics(reference, entries)
-                .map_err(registered_stack_error)?,
-        )
+        let (_, weights) = validated_registered_weight_set(
+            &expected_ids,
+            reference_frame_id,
+            request.quality_evidence,
+        )?;
+        Some(weights)
     } else {
         if !request.quality_evidence.is_empty() || request.quality_reference_frame_id.is_some() {
             return Err(registered_stack_configuration_error());
@@ -1732,6 +1738,94 @@ where
             value.low().samples_written()
         }),
     })
+}
+
+fn preview_registered_weights_sync(
+    request: RegisteredWeightPreflightRequest,
+) -> Result<RegisteredWeightPreflightResponse, PreviewCommandError> {
+    if !is_lower_sha256(&request.expected_plan_sha256) {
+        return Err(registered_stack_configuration_error());
+    }
+    let requested_count = request.frame_ids.len();
+    let expected_ids = request
+        .frame_ids
+        .into_iter()
+        .map(|value| FrameId::new(value).map_err(|_| registered_stack_configuration_error()))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if expected_ids.len() != requested_count || expected_ids.is_empty() {
+        return Err(registered_stack_configuration_error());
+    }
+    let (reference_frame_id, weight_set) = validated_registered_weight_set(
+        &expected_ids,
+        request.reference_frame_id,
+        request.quality_evidence,
+    )?;
+    let weights = expected_ids
+        .iter()
+        .map(|frame_id| {
+            let weight = weight_set
+                .weight_for(frame_id)
+                .ok_or_else(registered_stack_configuration_error)?;
+            Ok(RegisteredWeightPreflightEntry {
+                frame_id: frame_id.as_str().to_owned(),
+                weight: weight.get(),
+            })
+        })
+        .collect::<Result<Vec<_>, PreviewCommandError>>()?;
+    Ok(RegisteredWeightPreflightResponse {
+        schema_version: 1,
+        plan_sha256: request.expected_plan_sha256,
+        algorithm_id: BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+        parameters_sha256: weight_set.sha256().to_owned(),
+        reference_frame_id: reference_frame_id.as_str().to_owned(),
+        weights,
+    })
+}
+
+fn validated_registered_weight_set(
+    expected_ids: &BTreeSet<FrameId>,
+    reference_frame_id: String,
+    quality_evidence: Vec<RegisteredFrameQualityInput>,
+) -> Result<(FrameId, RegisteredWeightSet), PreviewCommandError> {
+    if quality_evidence.len() != expected_ids.len() {
+        return Err(registered_stack_configuration_error());
+    }
+    let mut quality_by_id = BTreeMap::new();
+    for evidence in quality_evidence {
+        let frame_id =
+            FrameId::new(evidence.frame_id).map_err(|_| registered_stack_configuration_error())?;
+        let metrics = QualityWeightMetrics::new(
+            evidence.signal_to_noise,
+            evidence.fwhm_pixels,
+            evidence.eccentricity,
+        )
+        .map_err(|_| registered_stack_configuration_error())?;
+        if quality_by_id.insert(frame_id, metrics).is_some() {
+            return Err(registered_stack_configuration_error());
+        }
+    }
+    if quality_by_id.keys().cloned().collect::<BTreeSet<_>>() != *expected_ids {
+        return Err(registered_stack_configuration_error());
+    }
+    let reference_frame_id =
+        FrameId::new(reference_frame_id).map_err(|_| registered_stack_configuration_error())?;
+    let reference = *quality_by_id
+        .get(&reference_frame_id)
+        .ok_or_else(registered_stack_configuration_error)?;
+    let entries = quality_by_id
+        .into_iter()
+        .map(|(frame_id, metrics)| RegisteredFrameQuality::new(frame_id, metrics))
+        .collect();
+    let weight_set = RegisteredWeightSet::from_balanced_psf_metrics(reference, entries)
+        .map_err(registered_stack_error)?;
+    Ok((reference_frame_id, weight_set))
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn rejection_map_paths(output: &Path) -> Result<(PathBuf, PathBuf), PreviewCommandError> {
@@ -4492,6 +4586,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_stack_pixel,
             preview_master_plan,
             preview_registration_plan,
+            preview_registered_weights,
             render_fits_preview,
             sort_review_frames,
             undo_review_decision
@@ -5421,7 +5516,7 @@ mod tests {
             &CancellationToken::new(),
             |_| {},
         )?;
-        let quality_evidence = registered
+        let quality_evidence: Vec<RegisteredFrameQualityInput> = registered
             .frames
             .iter()
             .enumerate()
@@ -5433,6 +5528,16 @@ mod tests {
             })
             .collect();
         let quality_reference_frame_id = Some(planning.reference_frame_id.clone());
+        let weight_preflight = preview_registered_weights_sync(RegisteredWeightPreflightRequest {
+            expected_plan_sha256: expected_plan_sha256.clone(),
+            frame_ids: registered
+                .frames
+                .iter()
+                .map(|frame| frame.frame_id.clone())
+                .collect(),
+            reference_frame_id: planning.reference_frame_id.clone(),
+            quality_evidence: quality_evidence.clone(),
+        })?;
 
         let result = execute_registered_stack_sync(
             &session,
@@ -5469,7 +5574,64 @@ mod tests {
         assert!(stack_path.is_file());
         let bytes = fs::read(&stack_path)?;
         let header = String::from_utf8_lossy(&bytes[..bytes.len().min(2_880)]);
-        assert!(header.contains("AETHPAR "));
+        assert!(header.contains(&weight_preflight.parameters_sha256));
+        Ok(())
+    }
+
+    #[test]
+    fn previews_canonical_registered_weights_before_execution() -> TestResult {
+        let first = "1".repeat(64);
+        let second = "2".repeat(64);
+        let response = preview_registered_weights_sync(RegisteredWeightPreflightRequest {
+            expected_plan_sha256: "a".repeat(64),
+            frame_ids: vec![second.clone(), first.clone()],
+            reference_frame_id: second.clone(),
+            quality_evidence: vec![
+                RegisteredFrameQualityInput {
+                    frame_id: first.clone(),
+                    signal_to_noise: 10.0,
+                    fwhm_pixels: 2.0,
+                    eccentricity: 0.0,
+                },
+                RegisteredFrameQualityInput {
+                    frame_id: second.clone(),
+                    signal_to_noise: 20.0,
+                    fwhm_pixels: 1.0,
+                    eccentricity: 0.0,
+                },
+            ],
+        })?;
+
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.plan_sha256, "a".repeat(64));
+        assert_eq!(response.algorithm_id, BALANCED_PSF_WEIGHT_ALGORITHM_ID);
+        assert_eq!(response.parameters_sha256.len(), 64);
+        assert_eq!(response.reference_frame_id, second);
+        assert_eq!(response.weights.len(), 2);
+        assert_eq!(response.weights[0].frame_id, first);
+        assert!((response.weights[0].weight - 0.0625).abs() < 1.0e-14);
+        assert_eq!(response.weights[1].weight.to_bits(), 1.0_f64.to_bits());
+        Ok(())
+    }
+
+    #[test]
+    fn registered_weight_preview_rejects_duplicate_or_foreign_identity() -> TestResult {
+        let first = "1".repeat(64);
+        let error = preview_registered_weights_sync(RegisteredWeightPreflightRequest {
+            expected_plan_sha256: "a".repeat(64),
+            frame_ids: vec![first.clone(), first.clone()],
+            reference_frame_id: first.clone(),
+            quality_evidence: vec![RegisteredFrameQualityInput {
+                frame_id: first,
+                signal_to_noise: 10.0,
+                fwhm_pixels: 2.0,
+                eccentricity: 0.0,
+            }],
+        })
+        .err()
+        .ok_or("duplicate registered weight identity was accepted")?;
+
+        assert_eq!(error.code, "registered_stack_configuration_invalid");
         Ok(())
     }
 

@@ -8,6 +8,7 @@ import {
   diagnoseFitsRegistration,
   executeRegistrationPlan,
   executeRegisteredStack,
+  previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
   selectRegisteredStackOutput,
@@ -200,5 +201,42 @@ describe("native registration bridge", () => {
     });
     await expect(cancelRegisteredStack()).resolves.toBe(true);
     expect(invoke).toHaveBeenLastCalledWith("cancel_registered_stack");
+  });
+
+  it("requests canonical native weight evidence before execution", async () => {
+    const result = {
+      schemaVersion: 1,
+      planSha256: "a".repeat(64),
+      algorithmId: "balanced-psf-weight-v1",
+      parametersSha256: "b".repeat(64),
+      referenceFrameId: "1".repeat(64),
+      weights: [{ frameId: "1".repeat(64), weight: 1 }],
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+    const evidence = [
+      {
+        frameId: "1".repeat(64),
+        signalToNoise: 20,
+        fwhmPixels: 2.5,
+        eccentricity: 0.4,
+      },
+    ];
+
+    await expect(
+      previewRegisteredWeights(
+        "a".repeat(64),
+        ["1".repeat(64)],
+        "1".repeat(64),
+        evidence,
+      ),
+    ).resolves.toBe(result);
+    expect(invoke).toHaveBeenLastCalledWith("preview_registered_weights", {
+      request: {
+        expectedPlanSha256: "a".repeat(64),
+        frameIds: ["1".repeat(64)],
+        referenceFrameId: "1".repeat(64),
+        qualityEvidence: evidence,
+      },
+    });
   });
 });

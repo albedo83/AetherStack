@@ -132,6 +132,18 @@ export interface RegisteredStackExecutionSettings extends RegistrationExecutionS
   readonly integration: RegisteredStackIntegrationSettings;
 }
 
+export interface RegisteredWeightPreflight {
+  readonly schemaVersion: number;
+  readonly planSha256: string;
+  readonly algorithmId: string;
+  readonly parametersSha256: string;
+  readonly referenceFrameId: string;
+  readonly weights: readonly {
+    readonly frameId: string;
+    readonly weight: number;
+  }[];
+}
+
 export interface RegistrationExecutionProgress {
   readonly frameIndex: number;
   readonly frameCount: number;
@@ -289,6 +301,23 @@ export function executeRegisteredStack(
       integration,
     },
     onProgress: progress,
+  });
+}
+
+/** Recomputes and seals the exact native weight evidence before execution. */
+export function previewRegisteredWeights(
+  expectedPlanSha256: string,
+  frameIds: readonly string[],
+  referenceFrameId: string,
+  qualityEvidence: readonly QualityWeightEvidence[],
+): Promise<RegisteredWeightPreflight> {
+  return invoke<RegisteredWeightPreflight>("preview_registered_weights", {
+    request: {
+      expectedPlanSha256,
+      frameIds,
+      referenceFrameId,
+      qualityEvidence,
+    },
   });
 }
 

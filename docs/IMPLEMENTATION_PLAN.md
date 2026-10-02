@@ -1052,6 +1052,16 @@ safety reasoning. They do not narrate obvious syntax.
     build tests cover the path. Next, expose a native pre-execution digest and
     effective-weight summary so the confirmation surface can be archived before
     a long integration run.
+75. Recompute and expose canonical weight evidence before starting a long run.
+    A dedicated native preflight validates the lower-case plan digest, unique
+    planned identities, complete quality evidence, and the selected reference,
+    then returns sorted effective weights plus the exact `AETHPAR` digest. The
+    desktop rejects stale or incoherent responses, displays the sealed digest
+    before opening the destination chooser, and invalidates it if settings or
+    the registration plan change while the chooser is open. Execution uses the
+    same Rust validator, and an end-to-end test proves that the preview digest
+    is the digest written into the output FITS header. Next, persist the native
+    preflight result in the view model and add an exportable integration report.
 
 ## 11. Stable-release definition
 
