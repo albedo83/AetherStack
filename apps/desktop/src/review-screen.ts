@@ -194,6 +194,18 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-weight-status]",
     ),
+    registeredStackWeightSeal: required<HTMLElement>(
+      root,
+      "[data-registered-stack-weight-seal]",
+    ),
+    registeredStackWeightAlgorithm: required<HTMLElement>(
+      root,
+      "[data-registered-stack-weight-algorithm]",
+    ),
+    registeredStackWeightDigest: required<HTMLElement>(
+      root,
+      "[data-registered-stack-weight-digest]",
+    ),
     registeredStackWeightReference: required<HTMLSelectElement>(
       root,
       "[data-registered-stack-weight-reference]",
@@ -1443,6 +1455,9 @@ interface RegistrationElements {
   readonly registeredStackEstimatorLabel: HTMLElement;
   readonly registeredStackWeightPreflight: HTMLElement;
   readonly registeredStackWeightStatus: HTMLElement;
+  readonly registeredStackWeightSeal: HTMLElement;
+  readonly registeredStackWeightAlgorithm: HTMLElement;
+  readonly registeredStackWeightDigest: HTMLElement;
   readonly registeredStackWeightReference: HTMLSelectElement;
   readonly registeredStackWeightRows: HTMLTableSectionElement;
   readonly registeredStackProducts: readonly HTMLButtonElement[];
@@ -1651,6 +1666,29 @@ function renderRegistration(
   elements.registeredStackWeightStatus.textContent = weightPreflight.ready
     ? `${weightPreflight.rows.length} / ${weightPreflight.rows.length} frames ready · native recomputation required`
     : `${weightPreflight.evidence.length} / ${weightPreflight.rows.length} frames have valid metrics`;
+  const nativeWeightSeal = registration.stack.weightPreflight;
+  const currentWeightSeal =
+    weightedEstimator &&
+    weightPreflight.ready &&
+    nativeWeightSeal !== null &&
+    nativeWeightSeal.planSha256 === registration.plan?.planSha256 &&
+    nativeWeightSeal.referenceFrameId === weightPreflight.referenceFrameId &&
+    nativeWeightSeal.weights.length === weightPreflight.rows.length &&
+    weightPreflight.rows.every((row) =>
+      nativeWeightSeal.weights.some((weight) => weight.frameId === row.frameId),
+    )
+      ? nativeWeightSeal
+      : null;
+  elements.registeredStackWeightSeal.hidden = currentWeightSeal === null;
+  elements.registeredStackWeightAlgorithm.textContent =
+    currentWeightSeal?.algorithmId ?? "";
+  elements.registeredStackWeightDigest.textContent =
+    currentWeightSeal?.parametersSha256 ?? "";
+  elements.registeredStackWeightDigest.title =
+    currentWeightSeal?.parametersSha256 ?? "";
+  if (currentWeightSeal) {
+    elements.registeredStackWeightStatus.textContent = `${currentWeightSeal.weights.length} / ${weightPreflight.rows.length} frames sealed natively`;
+  }
   elements.registeredStackWeightRows.replaceChildren(
     ...weightPreflight.rows.map((row) => {
       const tableRow = document.createElement("tr");
@@ -2976,6 +3014,11 @@ function shellMarkup(): string {
                         <span>Weight reference</span>
                         <select class="instrument-select" data-registered-stack-weight-reference aria-label="Weight reference"></select>
                       </label>
+                      <div class="weight-preflight__seal" data-registered-stack-weight-seal hidden>
+                        <span>Rust evidence seal</span>
+                        <strong data-registered-stack-weight-algorithm></strong>
+                        <code data-registered-stack-weight-digest></code>
+                      </div>
                       <div class="weight-preflight__table-wrap">
                         <table>
                           <thead><tr><th scope="col">Frame</th><th scope="col">SNR</th><th scope="col">FWHM</th><th scope="col">Ecc.</th><th scope="col">Relative weight</th></tr></thead>

@@ -705,6 +705,7 @@ function idleRegisteredStack(
     histogram: null,
     pixelInspectionState: "idle",
     pixelInspection: null,
+    weightPreflight: null,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -973,6 +974,7 @@ async function executeStack(): Promise<void> {
         stack: {
           ...model.registration.stack,
           state: "idle",
+          weightPreflight: null,
           message: "Recomputing canonical weight evidence in Rust…",
         },
       },
@@ -1013,6 +1015,7 @@ async function executeStack(): Promise<void> {
           stack: {
             ...model.registration.stack,
             state: "idle",
+            weightPreflight: nativePreflight,
             message: `Native weights sealed · SHA-256 ${nativeWeightDigest}`,
           },
         },
@@ -1026,6 +1029,7 @@ async function executeStack(): Promise<void> {
           stack: {
             ...model.registration.stack,
             state: "error",
+            weightPreflight: null,
             message:
               "Native weight preflight failed · integration was not started",
           },
@@ -1063,6 +1067,7 @@ async function executeStack(): Promise<void> {
         histogram: null,
         pixelInspectionState: "idle",
         pixelInspection: null,
+        weightPreflight: model.registration.stack.weightPreflight,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1137,6 +1142,7 @@ async function executeStack(): Promise<void> {
           histogram: null,
           pixelInspectionState: "idle",
           pixelInspection: null,
+          weightPreflight: model.registration.stack.weightPreflight,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1154,6 +1160,7 @@ async function executeStack(): Promise<void> {
           ...model.registration.stack,
           state: cancelled ? "idle" : "error",
           result: null,
+          weightPreflight: null,
           message: cancelled
             ? "Integration cancelled · no partial stack published"
             : "Integration failed safely · no existing output was modified",

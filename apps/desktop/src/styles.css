@@ -1197,6 +1197,46 @@ button:active:not(:disabled) {
   text-transform: none;
 }
 
+.weight-preflight__seal {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  padding: 9px 12px 10px;
+  background:
+    radial-gradient(circle at 12px 50%, #54d3a633 0 3px, transparent 4px),
+    linear-gradient(180deg, #13251f, #0b1714);
+  border-bottom: 1px solid #2d594b;
+  box-shadow: inset 0 1px #a7ffe51a;
+}
+
+.weight-preflight__seal[hidden] {
+  display: none;
+}
+
+.weight-preflight__seal > span {
+  align-self: center;
+  padding-left: 12px;
+  color: #76d9b5;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.weight-preflight__seal strong {
+  color: #bee9d9;
+  font-size: 9px;
+  text-align: right;
+}
+
+.weight-preflight__seal code {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+  color: #89ad9f;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .weight-preflight table {
   width: 100%;
   border-collapse: collapse;

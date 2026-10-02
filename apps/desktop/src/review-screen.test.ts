@@ -768,6 +768,17 @@ describe("frame review workspace", () => {
         },
         stack: {
           ...demoReviewModel.registration.stack,
+          weightPreflight: {
+            schemaVersion: 1,
+            planSha256,
+            algorithmId: "balanced-psf-weight-v1",
+            parametersSha256: "a".repeat(64),
+            referenceFrameId: frameA.id,
+            weights: [
+              { frameId: frameA.id, weight: 1 },
+              { frameId: frameB.id, weight: 0.8125 },
+            ],
+          },
           settings: {
             ...demoReviewModel.registration.stack.settings,
             estimator: "weighted_mean",
@@ -781,7 +792,9 @@ describe("frame review workspace", () => {
     const table = getByRole(root, "table");
     expect(table.textContent).toContain(`${frameA.label} · reference`);
     expect(table.textContent).toContain(frameB.label);
-    expect(root.textContent).toContain("2 / 2 frames ready");
+    expect(root.textContent).toContain("2 / 2 frames sealed natively");
+    expect(root.textContent).toContain("balanced-psf-weight-v1");
+    expect(root.textContent).toContain("a".repeat(64));
     expect(
       getByRole<HTMLButtonElement>(root, "button", { name: "Integrate crop" })
         .disabled,
@@ -799,6 +812,7 @@ describe("frame review workspace", () => {
 
     controller.update({ ...weighted, lightFrameView: "raw" });
     expect(root.textContent).toContain("0 / 2 frames have valid metrics");
+    expect(root.textContent).not.toContain("balanced-psf-weight-v1");
     expect(
       getByRole<HTMLButtonElement>(root, "button", { name: "Integrate crop" })
         .disabled,

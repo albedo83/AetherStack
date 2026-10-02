@@ -1062,6 +1062,15 @@ safety reasoning. They do not narrate obvious syntax.
     same Rust validator, and an end-to-end test proves that the preview digest
     is the digest written into the output FITS header. Next, persist the native
     preflight result in the view model and add an exportable integration report.
+76. Persist the native weight seal as structured review state. The weighted
+    integration surface now shows the Rust algorithm identifier and complete
+    SHA-256 evidence digest beside the effective-weight table, and labels the
+    exact number of natively sealed frame identities. The seal is hidden unless
+    its plan digest and selected reference still match the current complete
+    preflight, and state transitions discard it when settings, evidence, or
+    execution fail. Presenter coverage proves both visibility and stale-state
+    invalidation. Next, export the sealed plan, settings, weights, execution
+    counters, and output provenance as a deterministic integration report.
 
 ## 11. Stable-release definition
 

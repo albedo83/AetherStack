@@ -16,6 +16,7 @@ import type {
   RegisteredStackIntegrationSettings,
   RegisteredStackProgress,
   RegisteredStackResult,
+  RegisteredWeightPreflight,
 } from "./registration-bridge.ts";
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
@@ -232,6 +233,8 @@ export interface RegistrationViewModel {
     readonly histogram: RejectionHistogram | null;
     readonly pixelInspectionState: "idle" | "loading" | "ready" | "error";
     readonly pixelInspection: StackPixelInspection | null;
+    /** Last native weight seal, retained only while its plan and settings remain current. */
+    readonly weightPreflight: RegisteredWeightPreflight | null;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
