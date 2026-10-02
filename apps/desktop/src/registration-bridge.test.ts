@@ -148,11 +148,13 @@ describe("native registration bridge", () => {
         "a".repeat(64),
         artifacts,
         [],
+        null,
         {
           bandHeight: 128,
           memoryLimitBytes: 1_073_741_824,
           integration: {
             estimator: "percentile_clipped",
+            weightReferenceFrameId: null,
             lowFraction: 0.1,
             highFraction: 0.1,
             minimumRetainedSamples: 3,
@@ -168,6 +170,7 @@ describe("native registration bridge", () => {
         expectedPlanSha256: "a".repeat(64),
         artifacts,
         qualityEvidence: [],
+        qualityReferenceFrameId: null,
         outputPath: "/results/integrated.fits",
         bandHeight: 128,
         memoryLimitBytes: 1_073_741_824,

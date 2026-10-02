@@ -78,6 +78,7 @@ export const demoReviewModel: ReviewViewModel = {
       pixelInspection: null,
       settings: {
         estimator: "strict_mean",
+        weightReferenceFrameId: null,
         lowFraction: 0.1,
         highFraction: 0.1,
         minimumRetainedSamples: 3,

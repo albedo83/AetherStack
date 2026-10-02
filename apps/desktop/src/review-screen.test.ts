@@ -654,6 +654,7 @@ describe("frame review workspace", () => {
           ...demoReviewModel.registration.stack,
           settings: {
             estimator: "percentile_clipped",
+            weightReferenceFrameId: null,
             lowFraction: 0.12,
             highFraction: 0.08,
             minimumRetainedSamples: 5,
@@ -678,6 +679,7 @@ describe("frame review workspace", () => {
 
     expect(actions.onUpdateRegisteredStackSettings).toHaveBeenCalledWith({
       estimator: "percentile_clipped",
+      weightReferenceFrameId: null,
       lowFraction: 0.12,
       highFraction: 0.08,
       minimumRetainedSamples: 5,
@@ -689,6 +691,7 @@ describe("frame review workspace", () => {
     );
     expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
       estimator: "percentile_clipped",
+      weightReferenceFrameId: null,
       lowFraction: 0.13,
       highFraction: 0.08,
       minimumRetainedSamples: 5,
@@ -772,7 +775,7 @@ describe("frame review workspace", () => {
         },
       },
     };
-    const { root, controller } = fixture(weighted);
+    const { root, actions, controller } = fixture(weighted);
     fireEvent.click(getByText(root, "Advanced integration"));
 
     const table = getByRole(root, "table");
@@ -783,6 +786,16 @@ describe("frame review workspace", () => {
       getByRole<HTMLButtonElement>(root, "button", { name: "Integrate crop" })
         .disabled,
     ).toBe(false);
+    fireEvent.change(
+      getByRole<HTMLSelectElement>(root, "combobox", {
+        name: "Weight reference",
+      }),
+      { target: { value: frameB.id } },
+    );
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenCalledWith({
+      ...weighted.registration.stack.settings,
+      weightReferenceFrameId: frameB.id,
+    });
 
     controller.update({ ...weighted, lightFrameView: "raw" });
     expect(root.textContent).toContain("0 / 2 frames have valid metrics");

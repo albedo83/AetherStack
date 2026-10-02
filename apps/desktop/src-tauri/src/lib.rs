@@ -288,6 +288,8 @@ struct RegisteredStackCommandRequest {
     artifacts: Vec<RegistrationArtifactInput>,
     #[serde(default)]
     quality_evidence: Vec<RegisteredFrameQualityInput>,
+    #[serde(default)]
+    quality_reference_frame_id: Option<String>,
     output_path: PathBuf,
     band_height: usize,
     memory_limit_bytes: u64,
@@ -1566,8 +1568,14 @@ where
         if quality_by_id.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
             return Err(registered_stack_configuration_error());
         }
+        let reference_frame_id = request
+            .quality_reference_frame_id
+            .map(FrameId::new)
+            .transpose()
+            .map_err(|_| registered_stack_configuration_error())?
+            .ok_or_else(registered_stack_configuration_error)?;
         let reference = *quality_by_id
-            .get(plan.reference_frame_id())
+            .get(&reference_frame_id)
             .ok_or_else(registered_stack_configuration_error)?;
         let entries = quality_by_id
             .into_iter()
@@ -1578,7 +1586,7 @@ where
                 .map_err(registered_stack_error)?,
         )
     } else {
-        if !request.quality_evidence.is_empty() {
+        if !request.quality_evidence.is_empty() || request.quality_reference_frame_id.is_some() {
             return Err(registered_stack_configuration_error());
         }
         None
@@ -5286,6 +5294,7 @@ mod tests {
                 expected_plan_sha256: expected_plan_sha256.clone(),
                 artifacts,
                 quality_evidence: Vec::new(),
+                quality_reference_frame_id: None,
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
@@ -5356,6 +5365,7 @@ mod tests {
                     })
                     .collect(),
                 quality_evidence: Vec::new(),
+                quality_reference_frame_id: None,
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
@@ -5422,6 +5432,7 @@ mod tests {
                 eccentricity: 0.25 + index as f64 * 0.01,
             })
             .collect();
+        let quality_reference_frame_id = Some(planning.reference_frame_id.clone());
 
         let result = execute_registered_stack_sync(
             &session,
@@ -5437,6 +5448,7 @@ mod tests {
                     })
                     .collect(),
                 quality_evidence,
+                quality_reference_frame_id,
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
@@ -5479,6 +5491,7 @@ mod tests {
             &CancellationToken::new(),
             |_| {},
         )?;
+        let quality_reference_frame_id = Some(planning.reference_frame_id.clone());
 
         let error = execute_registered_stack_sync(
             &session,
@@ -5494,6 +5507,7 @@ mod tests {
                     })
                     .collect(),
                 quality_evidence: Vec::new(),
+                quality_reference_frame_id,
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
@@ -5552,6 +5566,7 @@ mod tests {
                     })
                     .collect(),
                 quality_evidence: Vec::new(),
+                quality_reference_frame_id: None,
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,

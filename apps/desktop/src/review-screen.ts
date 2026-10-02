@@ -194,6 +194,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-weight-status]",
     ),
+    registeredStackWeightReference: required<HTMLSelectElement>(
+      root,
+      "[data-registered-stack-weight-reference]",
+    ),
     registeredStackWeightRows: required<HTMLTableSectionElement>(
       root,
       "[data-registered-stack-weight-rows]",
@@ -749,7 +753,8 @@ export function mountReviewScreen(
       target === elements.registeredStackLowFraction ||
       target === elements.registeredStackHighFraction ||
       target === elements.registeredStackMinimumRetained ||
-      target === elements.registeredStackRejectionMaps
+      target === elements.registeredStackRejectionMaps ||
+      target === elements.registeredStackWeightReference
     ) {
       const settings = registeredStackSettings(elements);
       if (settings) actions.onUpdateRegisteredStackSettings(settings);
@@ -1438,6 +1443,7 @@ interface RegistrationElements {
   readonly registeredStackEstimatorLabel: HTMLElement;
   readonly registeredStackWeightPreflight: HTMLElement;
   readonly registeredStackWeightStatus: HTMLElement;
+  readonly registeredStackWeightReference: HTMLSelectElement;
   readonly registeredStackWeightRows: HTMLTableSectionElement;
   readonly registeredStackProducts: readonly HTMLButtonElement[];
   readonly registeredStackPreviewImage: HTMLImageElement;
@@ -1572,6 +1578,7 @@ function renderRegistration(
     model.activeRole === "light" && model.lightFrameView === "calibrated"
       ? model.frames
       : [],
+    stackSettings.weightReferenceFrameId,
   );
   const weightedEstimator = stackSettings.estimator === "weighted_mean";
   elements.executeRegisteredStack.disabled =
@@ -1619,6 +1626,28 @@ function renderRegistration(
   elements.registeredStackWeightPreflight.dataset.ready = String(
     weightPreflight.ready,
   );
+  const automaticReference = document.createElement("option");
+  automaticReference.value = "";
+  const recommended = weightPreflight.rows.find(
+    (row) => row.frameId === weightPreflight.recommendedReferenceFrameId,
+  );
+  automaticReference.textContent = recommended
+    ? `Auto · ${recommended.label}`
+    : "Auto · awaiting complete metrics";
+  elements.registeredStackWeightReference.replaceChildren(
+    automaticReference,
+    ...weightPreflight.rows.map((row) => {
+      const option = document.createElement("option");
+      option.value = row.frameId;
+      option.textContent = row.label;
+      option.disabled = row.evidence === null;
+      return option;
+    }),
+  );
+  elements.registeredStackWeightReference.value =
+    stackSettings.weightReferenceFrameId ?? "";
+  elements.registeredStackWeightReference.disabled =
+    stackBusy || weightPreflight.rows.length === 0;
   elements.registeredStackWeightStatus.textContent = weightPreflight.ready
     ? `${weightPreflight.rows.length} / ${weightPreflight.rows.length} frames ready · native recomputation required`
     : `${weightPreflight.evidence.length} / ${weightPreflight.rows.length} frames have valid metrics`;
@@ -1979,6 +2008,7 @@ function registeredStackSettings(
     | "registeredStackHighFraction"
     | "registeredStackMinimumRetained"
     | "registeredStackRejectionMaps"
+    | "registeredStackWeightReference"
   >,
 ): RegisteredStackIntegrationSettings | null {
   const estimator = elements.registeredStackEstimator.value;
@@ -2009,6 +2039,8 @@ function registeredStackSettings(
   }
   return {
     estimator,
+    weightReferenceFrameId:
+      elements.registeredStackWeightReference.value || null,
     lowFraction,
     highFraction,
     minimumRetainedSamples,
@@ -2936,10 +2968,14 @@ function shellMarkup(): string {
                       <div class="weight-preflight__heading">
                         <div>
                           <strong id="weight-preflight-title">Weight evidence</strong>
-                          <small>Registration reference anchors unit weight</small>
+                          <small>Auto selects the strongest balanced quality score</small>
                         </div>
                         <span data-registered-stack-weight-status aria-live="polite">Metrics required</span>
                       </div>
+                      <label class="weight-preflight__reference">
+                        <span>Weight reference</span>
+                        <select class="instrument-select" data-registered-stack-weight-reference aria-label="Weight reference"></select>
+                      </label>
                       <div class="weight-preflight__table-wrap">
                         <table>
                           <thead><tr><th scope="col">Frame</th><th scope="col">SNR</th><th scope="col">FWHM</th><th scope="col">Ecc.</th><th scope="col">Relative weight</th></tr></thead>

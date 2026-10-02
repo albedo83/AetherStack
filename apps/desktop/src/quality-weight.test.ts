@@ -76,9 +76,24 @@ describe("quality-weight preflight", () => {
     ]);
 
     expect(result.ready).toBe(true);
+    expect(result.referenceFrameId).toBe(id("b"));
+    expect(result.recommendedReferenceFrameId).toBe(id("b"));
+    expect(result.rows[0]?.relativeWeight).toBeCloseTo(1 / 16, 14);
+    expect(result.rows[1]?.relativeWeight).toBe(1);
+    expect(result.evidence).toHaveLength(2);
+  });
+
+  it("honors an explicit valid expert reference", () => {
+    const result = buildQualityWeightPreflight(
+      plan(),
+      [frame("a", 10, 2, 0), frame("b", 20, 1, 0)],
+      id("a"),
+    );
+
+    expect(result.ready).toBe(true);
+    expect(result.referenceFrameId).toBe(id("a"));
     expect(result.rows[0]?.relativeWeight).toBe(1);
     expect(result.rows[1]?.relativeWeight).toBeCloseTo(16, 14);
-    expect(result.evidence).toHaveLength(2);
   });
 
   it("blocks a set with missing or invalid scientific evidence", () => {

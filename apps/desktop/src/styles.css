@@ -1177,6 +1177,26 @@ button:active:not(:disabled) {
   overflow: auto;
 }
 
+.weight-preflight__reference {
+  display: grid;
+  grid-template-columns: auto minmax(190px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  color: #8fa9bf;
+  border-bottom: 1px solid #243545;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.weight-preflight__reference select {
+  min-height: 34px;
+  font-size: 10px;
+  text-transform: none;
+}
+
 .weight-preflight table {
   width: 100%;
   border-collapse: collapse;

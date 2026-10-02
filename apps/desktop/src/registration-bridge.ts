@@ -121,6 +121,7 @@ export interface RegistrationExecutionSettings {
 
 export interface RegisteredStackIntegrationSettings {
   readonly estimator: "strict_mean" | "weighted_mean" | "percentile_clipped";
+  readonly weightReferenceFrameId: string | null;
   readonly lowFraction: number;
   readonly highFraction: number;
   readonly minimumRetainedSamples: number;
@@ -262,19 +263,30 @@ export function executeRegisteredStack(
   expectedPlanSha256: string,
   artifacts: readonly RegistrationArtifactInput[],
   qualityEvidence: readonly QualityWeightEvidence[],
+  qualityReferenceFrameId: string | null,
   settings: RegisteredStackExecutionSettings,
   onProgress: (progress: RegisteredStackProgress) => void,
 ): Promise<RegisteredStackResult> {
   const progress = new Channel<RegisteredStackProgress>();
   progress.onmessage = onProgress;
+  const integration = {
+    estimator: settings.integration.estimator,
+    lowFraction: settings.integration.lowFraction,
+    highFraction: settings.integration.highFraction,
+    minimumRetainedSamples: settings.integration.minimumRetainedSamples,
+    generateRejectionMaps: settings.integration.generateRejectionMaps,
+  };
   return invoke<RegisteredStackResult>("execute_registered_stack", {
     request: {
       planning,
       expectedPlanSha256,
       artifacts,
       qualityEvidence,
+      qualityReferenceFrameId,
       outputPath,
-      ...settings,
+      bandHeight: settings.bandHeight,
+      memoryLimitBytes: settings.memoryLimitBytes,
+      integration,
     },
     onProgress: progress,
   });

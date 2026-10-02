@@ -712,6 +712,7 @@ function idleRegisteredStack(
 function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
   return {
     estimator: "strict_mean",
+    weightReferenceFrameId: null,
     lowFraction: 0.1,
     highFraction: 0.1,
     minimumRetainedSamples: 3,
@@ -941,6 +942,7 @@ async function executeStack(): Promise<void> {
     model.activeRole === "light" && model.lightFrameView === "calibrated"
       ? model.frames
       : [],
+    settings.weightReferenceFrameId,
   );
   if (
     model.registration.planState !== "ready" ||
@@ -1028,6 +1030,9 @@ async function executeStack(): Promise<void> {
         path: frame.outputPath,
       })),
       settings.estimator === "weighted_mean" ? weightPreflight.evidence : [],
+      settings.estimator === "weighted_mean"
+        ? weightPreflight.referenceFrameId
+        : null,
       {
         bandHeight: 128,
         memoryLimitBytes: model.calibration.lightSettings.memoryLimitBytes,

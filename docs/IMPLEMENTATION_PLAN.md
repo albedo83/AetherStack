@@ -1029,8 +1029,8 @@ safety reasoning. They do not narrate obvious syntax.
     add the advanced weighted-estimator choice with a preflight weight table and
     reference selection before enabling execution.
 73. Expose balanced PSF weighting as a fail-closed advanced integration mode.
-    The desktop uses the sealed registration reference as the explicit unit
-    weight, previews SNR, FWHM, eccentricity, and relative weight for every
+    The desktop uses one explicit planned-frame reference as the unit weight,
+    previews SNR, FWHM, eccentricity, and relative weight for every
     planned identity, and disables execution unless all metrics come from the
     calibrated-Light review set. The browser preview is explanatory only: the
     native adapter validates the complete identity set, reconstructs every
@@ -1040,6 +1040,18 @@ safety reasoning. They do not narrate obvious syntax.
     bridge, formula, presenter, accessibility, lint, formatting, and production
     build tests cover the path. Next, add automatic reference recommendation
     and explicit expert override without weakening the sealed evidence chain.
+74. Add deterministic weight-reference recommendation and expert override.
+    Automatic mode selects the planned calibrated Light with the greatest
+    balanced signal-resolution-roundness score, breaking exact ties by stable
+    frame identity, so the displayed reference has unit weight and all other
+    preview weights are at most one. Experts may select any planned frame with
+    complete metrics. The selected identity travels separately from the metric
+    array; Rust validates that it belongs to the exact sealed set, derives the
+    canonical weights from that reference, and rejects reference data on every
+    non-weighted request. Formula, presenter, bridge, native adapter, lint, and
+    build tests cover the path. Next, expose a native pre-execution digest and
+    effective-weight summary so the confirmation surface can be archived before
+    a long integration run.
 
 ## 11. Stable-release definition
 

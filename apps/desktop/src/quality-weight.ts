@@ -21,6 +21,7 @@ export interface QualityWeightPreviewRow {
 export interface QualityWeightPreflight {
   readonly ready: boolean;
   readonly referenceFrameId: string | null;
+  readonly recommendedReferenceFrameId: string | null;
   readonly rows: readonly QualityWeightPreviewRow[];
   readonly evidence: readonly QualityWeightEvidence[];
 }
@@ -34,12 +35,45 @@ export interface QualityWeightPreflight {
 export function buildQualityWeightPreflight(
   plan: RegistrationPlanPreview | null,
   frames: readonly ReviewFrame[],
+  selectedReferenceFrameId: string | null = null,
 ): QualityWeightPreflight {
   if (!plan) {
-    return { ready: false, referenceFrameId: null, rows: [], evidence: [] };
+    return {
+      ready: false,
+      referenceFrameId: null,
+      recommendedReferenceFrameId: null,
+      rows: [],
+      evidence: [],
+    };
   }
   const byId = new Map(frames.map((frame) => [frame.id, frame]));
-  const referenceFrame = byId.get(plan.referenceFrameId);
+  const validEvidence = new Map<string, QualityWeightEvidence>();
+  for (const planned of plan.frames) {
+    const frame = byId.get(planned.frameId);
+    const current = frame ? validatedEvidence(frame.id, frame.metrics) : null;
+    if (current) validEvidence.set(current.frameId, current);
+  }
+  const recommendedReferenceFrameId =
+    [...validEvidence.values()].sort(
+      (left, right) =>
+        qualityScore(right) - qualityScore(left) ||
+        (left.frameId < right.frameId
+          ? -1
+          : left.frameId > right.frameId
+            ? 1
+            : 0),
+    )[0]?.frameId ?? null;
+  const selectedReferenceIsPlanned = plan.frames.some(
+    (frame) => frame.frameId === selectedReferenceFrameId,
+  );
+  const referenceFrameId = selectedReferenceFrameId
+    ? selectedReferenceIsPlanned
+      ? selectedReferenceFrameId
+      : null
+    : recommendedReferenceFrameId;
+  const referenceFrame = referenceFrameId
+    ? byId.get(referenceFrameId)
+    : undefined;
   const referenceEvidence = referenceFrame
     ? validatedEvidence(referenceFrame.id, referenceFrame.metrics)
     : null;
@@ -58,7 +92,7 @@ export function buildQualityWeightPreflight(
     return {
       frameId: planned.frameId,
       label: frame?.label ?? shortFrameId(planned.frameId),
-      reference: planned.frameId === plan.referenceFrameId,
+      reference: planned.frameId === referenceFrameId,
       evidence: current,
       relativeWeight:
         current && referenceEvidence
@@ -69,10 +103,19 @@ export function buildQualityWeightPreflight(
   });
   return {
     ready: rows.length > 0 && rows.every((row) => row.issue === null),
-    referenceFrameId: plan.referenceFrameId,
+    referenceFrameId,
+    recommendedReferenceFrameId,
     rows,
     evidence,
   };
+}
+
+function qualityScore(metrics: QualityWeightEvidence): number {
+  return (
+    2 * Math.log(metrics.signalToNoise) -
+    2 * Math.log(metrics.fwhmPixels) +
+    Math.log(1 - metrics.eccentricity ** 2)
+  );
 }
 
 /** Mirrors the documented algorithm for inspection only. */
