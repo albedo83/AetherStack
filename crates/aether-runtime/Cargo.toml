@@ -21,6 +21,7 @@ aether-registration = { path = "../aether-registration" }
 aether-review = { path = "../aether-review" }
 aether-session = { path = "../aether-session" }
 serde.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

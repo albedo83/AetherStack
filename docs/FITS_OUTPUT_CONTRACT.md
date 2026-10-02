@@ -49,7 +49,7 @@ or `-`. The versioned algorithm identifier is limited to 32 ASCII bytes and uses
 only lowercase letters, digits, `.`, `_`, and `-`. Its first byte must be a
 lowercase letter or digit. A product must represent at least one source image.
 
-`write_f64_primary_with_provenance` emits version 4 of these cards before `END`:
+`write_f64_primary_with_provenance` emits version 5 of these cards before `END`:
 
 | Card | Meaning |
 | --- | --- |
@@ -60,6 +60,7 @@ lowercase letter or digit. A product must represent at least one source image.
 | `AETHGRP` | Exact session group identifier |
 | `AETHALG` | Versioned integration algorithm identifier |
 | `AETHSRC` | Number of source images represented by the product |
+| `AETHPAR` | Optional SHA-256 of canonical estimator-parameter bytes |
 | `AETHINP` | Optional exact source SHA-256 for a single-frame product |
 | `AETHFID` | Optional stable reviewed-frame ID for a single-frame product |
 
@@ -69,6 +70,13 @@ master-plan digest. A calibrated integrated Light product stores its canonical
 Light-plan digest; that plan already binds the exact master-plan digest. The
 card therefore binds pixels transitively to every matching policy, tolerance,
 selected master, selected pedestal, and recorded candidate diagnostic.
+
+`AETHPAR` binds exact estimator settings that do not fit in the short
+`AETHALG` identifier. Its canonical byte encoding is owned and versioned by the
+estimator. The registered weighted mean uses it for the weight-expression ID,
+reviewed frame identities, and exact binary64 weights; changing any one of
+those values changes the digest. The balanced-PSF constructor additionally
+binds the exact reference and per-frame SNR, FWHM, and eccentricity evidence.
 
 `AETHINP` is accepted only when `AETHSRC = 1`. It makes a calibrated individual
 frame self-identifying without exposing its local path or acquisition filename.

@@ -11,13 +11,18 @@ use aether_fits::{
     HeaderReadOptions, ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus,
     ValidationMode,
 };
-use aether_integration::{
-    ClippedPixelSupport, IntegrationError, PixelSupport, integrate_mean,
-    integrate_percentile_clipped_mean, materialize_percentile_rejection_map,
+pub use aether_integration::{
+    BALANCED_PSF_WEIGHT_ALGORITHM_ID, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+    PercentileClipParameters, QualityWeightMetrics,
 };
-pub use aether_integration::{PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters};
+use aether_integration::{
+    ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
+    integrate_mean, integrate_percentile_clipped_mean, integrate_weighted_mean,
+    materialize_percentile_rejection_map,
+};
 use aether_registration::RegistrationPlan;
 use aether_review::FrameId;
+use sha2::{Digest, Sha256};
 
 use crate::pipeline::{dimensions_from_axes, open_reader, verify_source};
 use crate::{
@@ -30,6 +35,8 @@ use crate::{
 pub const REGISTERED_CROP_MEAN_ALGORITHM_ID: &str = "registered-crop-mean-v1";
 /// Versioned deterministic percentile-clipped registered stack identity.
 pub const REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-percentile-mean-v1";
+/// Versioned deterministic frame-weighted registered stack identity.
+pub const REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID: &str = "registered-weighted-mean-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -39,6 +46,8 @@ const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
 pub enum RegisteredStackEstimator {
     /// Strict unweighted mean of every usable sample.
     StrictMean,
+    /// Strict weighted mean with a separately bound canonical weight set.
+    WeightedMean,
     /// Sorted low/high percentile rejection followed by the strict mean.
     PercentileClipped(PercentileClipParameters),
 }
@@ -49,8 +58,196 @@ impl RegisteredStackEstimator {
     pub const fn algorithm_id(self) -> &'static str {
         match self {
             Self::StrictMean => REGISTERED_CROP_MEAN_ALGORITHM_ID,
+            Self::WeightedMean => REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
             Self::PercentileClipped(_) => REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
         }
+    }
+}
+
+/// One reviewed frame identity and its validated integration weight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegisteredFrameWeight {
+    frame_id: FrameId,
+    weight: FrameWeight,
+}
+
+impl RegisteredFrameWeight {
+    /// Binds a weight to the reviewed frame that produced its quality metrics.
+    #[must_use]
+    pub const fn new(frame_id: FrameId, weight: FrameWeight) -> Self {
+        Self { frame_id, weight }
+    }
+
+    /// Stable reviewed frame identity.
+    #[must_use]
+    pub const fn frame_id(&self) -> &FrameId {
+        &self.frame_id
+    }
+
+    /// Validated dimensionless weight.
+    #[must_use]
+    pub const fn weight(&self) -> FrameWeight {
+        self.weight
+    }
+}
+
+/// One reviewed frame identity and its validated PSF quality metrics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegisteredFrameQuality {
+    frame_id: FrameId,
+    metrics: QualityWeightMetrics,
+}
+
+impl RegisteredFrameQuality {
+    /// Binds measured PSF quality to the reviewed source identity.
+    #[must_use]
+    pub const fn new(frame_id: FrameId, metrics: QualityWeightMetrics) -> Self {
+        Self { frame_id, metrics }
+    }
+
+    /// Stable reviewed frame identity.
+    #[must_use]
+    pub const fn frame_id(&self) -> &FrameId {
+        &self.frame_id
+    }
+
+    /// Metrics consumed by the versioned weight expression.
+    #[must_use]
+    pub const fn metrics(&self) -> QualityWeightMetrics {
+        self.metrics
+    }
+}
+
+/// Canonical, identity-bound weights and their reproducibility digest.
+#[derive(Clone, Debug)]
+pub struct RegisteredWeightSet {
+    weight_algorithm_id: String,
+    weights: BTreeMap<FrameId, FrameWeight>,
+    sha256: String,
+}
+
+impl RegisteredWeightSet {
+    /// Canonicalizes an explicit set of reviewed-frame weights.
+    ///
+    /// The SHA-256 covers a domain/version marker, the weight-expression
+    /// identifier, sorted frame identities, and exact binary64 weight bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid algorithm identifier, an empty or
+    /// duplicated frame set, excessive cardinality, or allocation failure.
+    pub fn new(
+        weight_algorithm_id: impl Into<String>,
+        entries: Vec<RegisteredFrameWeight>,
+    ) -> Result<Self, RegisteredStackError> {
+        let weight_algorithm_id = weight_algorithm_id.into();
+        if !is_weight_algorithm_id(&weight_algorithm_id) {
+            return Err(RegisteredStackError::InvalidWeightAlgorithmId);
+        }
+        if entries.is_empty() {
+            return Err(RegisteredStackError::WeightSetMismatch);
+        }
+        let mut weights = BTreeMap::new();
+        for entry in entries {
+            if weights.insert(entry.frame_id, entry.weight).is_some() {
+                return Err(RegisteredStackError::WeightSetMismatch);
+            }
+        }
+        let count =
+            u32::try_from(weights.len()).map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"aetherstack-registered-weight-set-v1\0");
+        update_digest_string(&mut hasher, &weight_algorithm_id)?;
+        hasher.update(count.to_be_bytes());
+        for (frame_id, weight) in &weights {
+            update_digest_string(&mut hasher, frame_id.as_str())?;
+            hasher.update(weight.get().to_bits().to_be_bytes());
+        }
+        let sha256 = encode_lower_hex(hasher.finalize().as_slice());
+        Ok(Self {
+            weight_algorithm_id,
+            weights,
+            sha256,
+        })
+    }
+
+    /// Derives identity-bound weights from reviewed PSF measurements.
+    ///
+    /// The parameter digest binds the reference metrics, every source metric,
+    /// every resulting weight, and the expression identifier. This preserves
+    /// the complete numerical evidence used to construct the request.
+    pub fn from_balanced_psf_metrics(
+        reference: QualityWeightMetrics,
+        entries: Vec<RegisteredFrameQuality>,
+    ) -> Result<Self, RegisteredStackError> {
+        if entries.is_empty() {
+            return Err(RegisteredStackError::WeightSetMismatch);
+        }
+        let mut metrics = BTreeMap::new();
+        for entry in entries {
+            if metrics.insert(entry.frame_id, entry.metrics).is_some() {
+                return Err(RegisteredStackError::WeightSetMismatch);
+            }
+        }
+        let weighted_entries = metrics
+            .iter()
+            .map(|(frame_id, frame_metrics)| {
+                RegisteredFrameWeight::new(
+                    frame_id.clone(),
+                    balanced_psf_weight(*frame_metrics, reference),
+                )
+            })
+            .collect();
+        let mut set = Self::new(BALANCED_PSF_WEIGHT_ALGORITHM_ID, weighted_entries)?;
+
+        let count =
+            u32::try_from(metrics.len()).map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"aetherstack-balanced-psf-weight-evidence-v1\0");
+        update_digest_string(&mut hasher, BALANCED_PSF_WEIGHT_ALGORITHM_ID)?;
+        update_quality_metrics(&mut hasher, reference);
+        hasher.update(count.to_be_bytes());
+        for (frame_id, frame_metrics) in metrics {
+            update_digest_string(&mut hasher, frame_id.as_str())?;
+            update_quality_metrics(&mut hasher, frame_metrics);
+            let weight = set
+                .weights
+                .get(&frame_id)
+                .ok_or(RegisteredStackError::WeightSetMismatch)?;
+            hasher.update(weight.get().to_bits().to_be_bytes());
+        }
+        set.sha256 = encode_lower_hex(hasher.finalize().as_slice());
+        Ok(set)
+    }
+
+    /// Versioned expression that produced the stored weights.
+    #[must_use]
+    pub fn weight_algorithm_id(&self) -> &str {
+        &self.weight_algorithm_id
+    }
+
+    /// SHA-256 of the exact canonical weight-set encoding.
+    #[must_use]
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    /// Number of identity-bound weights.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.weights.len()
+    }
+
+    /// Whether no weights are present. Valid constructed sets are never empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.weights.is_empty()
+    }
+
+    /// Returns the exact derived weight for one reviewed frame identity.
+    #[must_use]
+    pub fn weight_for(&self, frame_id: &FrameId) -> Option<FrameWeight> {
+        self.weights.get(frame_id).copied()
     }
 }
 
@@ -92,6 +289,7 @@ pub struct RegisteredStackRequest {
     header_options: HeaderReadOptions,
     validation_mode: ValidationMode,
     estimator: RegisteredStackEstimator,
+    weights: Option<Vec<FrameWeight>>,
     rejection_map: Option<RegisteredRejectionMapOutput>,
 }
 
@@ -159,6 +357,63 @@ impl RegisteredStackRequest {
         provenance: FitsOutputProvenance,
         estimator: RegisteredStackEstimator,
     ) -> Result<Self, RegisteredStackError> {
+        if matches!(estimator, RegisteredStackEstimator::WeightedMean) {
+            return Err(RegisteredStackError::WeightedEstimatorRequiresWeights);
+        }
+        Self::new_canonical(plan, sources, output, provenance, estimator, None)
+    }
+
+    /// Builds a weighted request and binds every weight to a planned frame.
+    ///
+    /// The output provenance must carry the exact weight-set digest in
+    /// `AETHPAR`; this prevents scientifically distinct weights from producing
+    /// indistinguishable output headers.
+    pub fn new_weighted(
+        plan: RegistrationPlan,
+        sources: Vec<RegisteredStackSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        weight_set: RegisteredWeightSet,
+    ) -> Result<Self, RegisteredStackError> {
+        if provenance.parameters_sha256() != Some(weight_set.sha256()) {
+            return Err(RegisteredStackError::WeightProvenanceMismatch);
+        }
+        if weight_set.len() != plan.frames().len() {
+            return Err(RegisteredStackError::WeightSetMismatch);
+        }
+        let mut weights = weight_set.weights;
+        let mut canonical = Vec::new();
+        canonical
+            .try_reserve_exact(plan.frames().len())
+            .map_err(|_| RegisteredStackError::AllocationFailed)?;
+        for frame in plan.frames() {
+            canonical.push(
+                weights
+                    .remove(frame.frame_id())
+                    .ok_or(RegisteredStackError::WeightSetMismatch)?,
+            );
+        }
+        if !weights.is_empty() {
+            return Err(RegisteredStackError::WeightSetMismatch);
+        }
+        Self::new_canonical(
+            plan,
+            sources,
+            output,
+            provenance,
+            RegisteredStackEstimator::WeightedMean,
+            Some(canonical),
+        )
+    }
+
+    fn new_canonical(
+        plan: RegistrationPlan,
+        sources: Vec<RegisteredStackSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        estimator: RegisteredStackEstimator,
+        weights: Option<Vec<FrameWeight>>,
+    ) -> Result<Self, RegisteredStackError> {
         if sources.len() != plan.frames().len() {
             return Err(RegisteredStackError::SourceSetMismatch);
         }
@@ -202,6 +457,7 @@ impl RegisteredStackRequest {
             header_options: HeaderReadOptions::default(),
             validation_mode: ValidationMode::Strict,
             estimator,
+            weights,
             rejection_map: None,
         })
     }
@@ -348,6 +604,14 @@ pub enum RegisteredStackError {
     ProvenanceSourceCountMismatch,
     /// Output provenance is not bound to the exact registration plan.
     ProvenancePlanMismatch,
+    /// Weighted execution must use the identity-binding constructor.
+    WeightedEstimatorRequiresWeights,
+    /// Weight-expression identifier is not canonical.
+    InvalidWeightAlgorithmId,
+    /// Weights are missing, duplicated, or foreign to the sealed plan.
+    WeightSetMismatch,
+    /// Output provenance is not bound to the exact canonical weight set.
+    WeightProvenanceMismatch,
     /// Rejection maps are meaningful only for a rejecting estimator.
     RejectionMapRequiresPercentileEstimator,
     /// Rejection-map provenance is inconsistent with the stack request.
@@ -415,6 +679,10 @@ impl RegisteredStackError {
             Self::ProvenanceAlgorithmMismatch => "registered-stack-provenance-algorithm",
             Self::ProvenanceSourceCountMismatch => "registered-stack-provenance-count",
             Self::ProvenancePlanMismatch => "registered-stack-provenance-plan",
+            Self::WeightedEstimatorRequiresWeights => "registered-stack-weight-constructor",
+            Self::InvalidWeightAlgorithmId => "registered-stack-weight-algorithm",
+            Self::WeightSetMismatch => "registered-stack-weight-set",
+            Self::WeightProvenanceMismatch => "registered-stack-weight-provenance",
             Self::RejectionMapRequiresPercentileEstimator => "registered-stack-map-estimator",
             Self::RejectionMapProvenanceMismatch => "registered-stack-map-provenance",
             Self::DuplicateOutputPath => "registered-stack-output-path",
@@ -454,6 +722,16 @@ impl Display for RegisteredStackError {
             Self::ProvenancePlanMismatch => {
                 formatter.write_str("output provenance does not bind the sealed registration plan")
             }
+            Self::WeightedEstimatorRequiresWeights => formatter
+                .write_str("weighted integration requires an identity-bound frame-weight set"),
+            Self::InvalidWeightAlgorithmId => {
+                formatter.write_str("weight-expression algorithm identifier is not canonical")
+            }
+            Self::WeightSetMismatch => {
+                formatter.write_str("frame-weight set does not match the sealed registration plan")
+            }
+            Self::WeightProvenanceMismatch => formatter
+                .write_str("output provenance does not bind the canonical frame-weight set"),
             Self::RejectionMapRequiresPercentileEstimator => {
                 formatter.write_str("rejection maps require the percentile-clipped estimator")
             }
@@ -723,16 +1001,32 @@ where
                         .map_err(RegisteredStackError::ReadInput)?,
                 );
             }
-            let references = images.iter().collect::<Vec<_>>();
             match request.estimator {
                 RegisteredStackEstimator::StrictMean => {
+                    let references = images.iter().collect::<Vec<_>>();
                     let integrated =
                         integrate_mean(&references).map_err(RegisteredStackError::Integration)?;
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
                 }
+                RegisteredStackEstimator::WeightedMean => {
+                    let weights = request
+                        .weights
+                        .as_ref()
+                        .ok_or(RegisteredStackError::WeightedEstimatorRequiresWeights)?;
+                    let weighted = images
+                        .iter()
+                        .zip(weights.iter().copied())
+                        .collect::<Vec<_>>();
+                    let integrated = integrate_weighted_mean(&weighted)
+                        .map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                }
                 RegisteredStackEstimator::PercentileClipped(parameters) => {
+                    let references = images.iter().collect::<Vec<_>>();
                     let integrated = integrate_percentile_clipped_mean(&references, parameters)
                         .map_err(RegisteredStackError::Integration)?;
                     writer
@@ -952,7 +1246,9 @@ fn planned_band_bytes(
         .checked_mul(source_count)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
     let support_size = match estimator {
-        RegisteredStackEstimator::StrictMean => size_of::<PixelSupport>(),
+        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => {
+            size_of::<PixelSupport>()
+        }
         RegisteredStackEstimator::PercentileClipped(_) => size_of::<ClippedPixelSupport>(),
     };
     let output = image
@@ -965,13 +1261,19 @@ fn planned_band_bytes(
     let decode = samples
         .checked_mul(size_of::<SampleStatus>())
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+    let integration_input_size = match estimator {
+        RegisteredStackEstimator::WeightedMean => {
+            size_of::<(&aether_core::ScientificImage, FrameWeight)>()
+        }
+        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::PercentileClipped(_) => {
+            size_of::<&aether_core::ScientificImage>()
+        }
+    };
     let vector_storage = source_count
-        .checked_mul(
-            size_of::<aether_core::ScientificImage>() + size_of::<&aether_core::ScientificImage>(),
-        )
+        .checked_mul(size_of::<aether_core::ScientificImage>() + integration_input_size)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
     let estimator_scratch = match estimator {
-        RegisteredStackEstimator::StrictMean => 0,
+        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => 0,
         RegisteredStackEstimator::PercentileClipped(_) => source_count
             .checked_mul(size_of::<f64>())
             .ok_or(RegisteredStackError::WorkSizeOverflow)?,
@@ -1013,6 +1315,39 @@ fn validate_staged(
         return Err(RegisteredStackError::InvalidStagedOutput);
     }
     Ok(())
+}
+
+fn is_weight_algorithm_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 32
+        && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn update_digest_string(hasher: &mut Sha256, value: &str) -> Result<(), RegisteredStackError> {
+    let length = u32::try_from(value.len()).map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
+    hasher.update(length.to_be_bytes());
+    hasher.update(value.as_bytes());
+    Ok(())
+}
+
+fn update_quality_metrics(hasher: &mut Sha256, metrics: QualityWeightMetrics) {
+    hasher.update(metrics.signal_to_noise().to_bits().to_be_bytes());
+    hasher.update(metrics.fwhm_pixels().to_bits().to_be_bytes());
+    hasher.update(metrics.eccentricity().to_bits().to_be_bytes());
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1210,6 +1545,41 @@ mod tests {
         Ok((request, low_path, high_path))
     }
 
+    fn weighted_stack_request(
+        directory: &TestDirectory,
+    ) -> Result<(RegisteredStackRequest, String), Box<dyn Error>> {
+        let plan = plan()?;
+        let sources = vec![
+            registered_source(directory, &plan, id('b')?, 8.0)?,
+            registered_source(directory, &plan, id('a')?, 2.0)?,
+        ];
+        let weight_set = RegisteredWeightSet::new(
+            BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+            vec![
+                RegisteredFrameWeight::new(id('b')?, FrameWeight::new(3.0)?),
+                RegisteredFrameWeight::new(id('a')?, FrameWeight::new(1.0)?),
+            ],
+        )?;
+        let digest = weight_set.sha256().to_owned();
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-weighted-stack",
+            REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&digest)?;
+        let request = RegisteredStackRequest::new_weighted(
+            plan,
+            sources,
+            directory.0.join("weighted-stack.fits"),
+            provenance,
+            weight_set,
+        )?
+        .with_band_height(2)?;
+        Ok((request, digest))
+    }
+
     #[test]
     fn integrates_only_the_sealed_crop_and_publishes_checksums() -> TestResult {
         let directory = TestDirectory::new()?;
@@ -1241,6 +1611,163 @@ mod tests {
                 .iter()
                 .all(|value| value.to_bits() == 3.0_f64.to_bits())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn weight_set_digest_is_order_independent_but_identity_and_value_sensitive() -> TestResult {
+        let first = RegisteredFrameWeight::new(id('a')?, FrameWeight::new(1.0)?);
+        let second = RegisteredFrameWeight::new(id('b')?, FrameWeight::new(2.0)?);
+        let forward = RegisteredWeightSet::new(
+            BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+            vec![first.clone(), second.clone()],
+        )?;
+        let reversed = RegisteredWeightSet::new(
+            BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+            vec![second.clone(), first.clone()],
+        )?;
+        let changed = RegisteredWeightSet::new(
+            BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+            vec![
+                first,
+                RegisteredFrameWeight::new(id('b')?, FrameWeight::new(3.0)?),
+            ],
+        )?;
+
+        assert_eq!(forward.sha256(), reversed.sha256());
+        assert_ne!(forward.sha256(), changed.sha256());
+        assert_eq!(forward.sha256().len(), 64);
+        assert_eq!(forward.len(), 2);
+        assert!(!forward.is_empty());
+        assert_eq!(
+            forward.weight_algorithm_id(),
+            BALANCED_PSF_WEIGHT_ALGORITHM_ID
+        );
+        assert!(matches!(
+            RegisteredWeightSet::new(
+                BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+                vec![second.clone(), second]
+            ),
+            Err(RegisteredStackError::WeightSetMismatch)
+        ));
+        assert!(matches!(
+            RegisteredWeightSet::new("Invalid/algorithm", vec![]),
+            Err(RegisteredStackError::InvalidWeightAlgorithmId)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn balanced_metric_evidence_is_canonical_and_binds_the_reference() -> TestResult {
+        let reference = QualityWeightMetrics::new(10.0, 2.0, 0.0)?;
+        let first = RegisteredFrameQuality::new(id('a')?, reference);
+        let second =
+            RegisteredFrameQuality::new(id('b')?, QualityWeightMetrics::new(20.0, 2.0, 0.0)?);
+        let forward = RegisteredWeightSet::from_balanced_psf_metrics(
+            reference,
+            vec![first.clone(), second.clone()],
+        )?;
+        let reversed =
+            RegisteredWeightSet::from_balanced_psf_metrics(reference, vec![second, first])?;
+
+        assert_eq!(forward.sha256(), reversed.sha256());
+        assert_eq!(
+            forward
+                .weights
+                .get(&id('a')?)
+                .map(|weight| weight.get().to_bits()),
+            Some(1.0_f64.to_bits())
+        );
+        assert!(
+            (forward
+                .weights
+                .get(&id('b')?)
+                .ok_or("missing weight")?
+                .get()
+                - 4.0)
+                .abs()
+                < 1.0e-14
+        );
+
+        let scaled_reference = QualityWeightMetrics::new(20.0, 2.0, 0.0)?;
+        let same_final_weights = RegisteredWeightSet::from_balanced_psf_metrics(
+            scaled_reference,
+            vec![
+                RegisteredFrameQuality::new(id('a')?, scaled_reference),
+                RegisteredFrameQuality::new(id('b')?, QualityWeightMetrics::new(40.0, 2.0, 0.0)?),
+            ],
+        )?;
+        assert_eq!(forward.weights, same_final_weights.weights);
+        assert_ne!(forward.sha256(), same_final_weights.sha256());
+        Ok(())
+    }
+
+    #[test]
+    fn executes_identity_bound_weighted_stack_and_publishes_parameter_digest() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, digest) = weighted_stack_request(&directory)?;
+        let memory = MemoryBudget::new(16 * 1_024 * 1_024)?;
+
+        let result = run_registered_stack(&request, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(result.dimensions(), Dimensions::new(10, 9, 3)?);
+        assert!(result.peak_reserved_bytes() <= memory.limit());
+        let file = File::open(request.output())?;
+        let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+        assert!(reader.verify_checksums()?.is_fully_verified());
+        assert_eq!(
+            reader.report().header().string("AETHPAR"),
+            Some(digest.as_str())
+        );
+        let output = reader.read_region_image(ImageRegion::new(0, 0, 0, 10, 9))?;
+        assert!(
+            output
+                .pixels()
+                .iter()
+                .all(|value| value.to_bits() == 6.5_f64.to_bits())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_request_refuses_missing_weights_and_unbound_provenance() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let plan = plan()?;
+        let sources = vec![
+            registered_source(&directory, &plan, id('a')?, 2.0)?,
+            registered_source(&directory, &plan, id('b')?, 8.0)?,
+        ];
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-weighted-stack",
+            REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        assert!(matches!(
+            RegisteredStackRequest::new_with_estimator(
+                plan.clone(),
+                sources.clone(),
+                directory.0.join("missing-weights.fits"),
+                provenance.clone(),
+                RegisteredStackEstimator::WeightedMean,
+            ),
+            Err(RegisteredStackError::WeightedEstimatorRequiresWeights)
+        ));
+        let incomplete = RegisteredWeightSet::new(
+            BALANCED_PSF_WEIGHT_ALGORITHM_ID,
+            vec![RegisteredFrameWeight::new(id('a')?, FrameWeight::new(1.0)?)],
+        )?;
+        assert!(matches!(
+            RegisteredStackRequest::new_weighted(
+                plan,
+                sources,
+                directory.0.join("unbound-weights.fits"),
+                provenance,
+                incomplete,
+            ),
+            Err(RegisteredStackError::WeightProvenanceMismatch)
+        ));
         Ok(())
     }
 

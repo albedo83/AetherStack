@@ -97,7 +97,7 @@ impl QualityWeightMetrics {
         Ok(Self {
             signal_to_noise,
             fwhm_pixels,
-            eccentricity,
+            eccentricity: canonical_zero(eccentricity),
         })
     }
 
@@ -165,17 +165,26 @@ pub fn balanced_psf_weight(
     if metrics == reference {
         return FrameWeight(1.0);
     }
-    let signal_term = 2.0 * (metrics.signal_to_noise.ln() - reference.signal_to_noise.ln());
-    let resolution_term = 2.0 * (reference.fwhm_pixels.ln() - metrics.fwhm_pixels.ln());
+    let signal_term = 2.0 * stable_ln_ratio(metrics.signal_to_noise, reference.signal_to_noise);
+    let resolution_term = 2.0 * stable_ln_ratio(reference.fwhm_pixels, metrics.fwhm_pixels);
     let frame_roundness = 1.0 - metrics.eccentricity * metrics.eccentricity;
     let reference_roundness = 1.0 - reference.eccentricity * reference.eccentricity;
-    let shape_term = frame_roundness.ln() - reference_roundness.ln();
+    let shape_term = stable_ln_ratio(frame_roundness, reference_roundness);
     let logarithmic_weight = signal_term + resolution_term + shape_term;
     let bounded = logarithmic_weight.clamp(f64::MIN_POSITIVE.ln(), f64::MAX.ln());
     // Both exponential bounds are finite and strictly positive. Constructing
     // directly avoids a redundant branch while preserving FrameWeight's type
     // invariant.
     FrameWeight(bounded.exp())
+}
+
+fn stable_ln_ratio(numerator: f64, denominator: f64) -> f64 {
+    let ratio = numerator / denominator;
+    if ratio.is_finite() && ratio > 0.0 {
+        ratio.ln()
+    } else {
+        numerator.ln() - denominator.ln()
+    }
 }
 
 /// Per-pixel accounting for one mean integration.
@@ -1324,6 +1333,12 @@ mod tests {
                 Err(QualityWeightError::InvalidEccentricity)
             );
         }
+        assert_eq!(
+            QualityWeightMetrics::new(10.0, 2.0, -0.0)
+                .map(QualityWeightMetrics::eccentricity)
+                .map(f64::to_bits),
+            Ok(0.0_f64.to_bits())
+        );
     }
 
     #[test]

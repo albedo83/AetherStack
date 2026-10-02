@@ -14,7 +14,7 @@ const INITIAL_CHECKSUM_VALUE: &str = "0000000000000000";
 /// Canonical quiet-NaN payload used for unavailable floating FITS samples.
 pub const CANONICAL_FITS_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 /// Version of the provenance cards emitted by this writer.
-pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 4;
+pub const FITS_OUTPUT_PROVENANCE_VERSION: u32 = 5;
 /// Maximum byte length of a canonical output algorithm identifier.
 pub const MAX_FITS_ALGORITHM_ID_BYTES: usize = 32;
 /// Maximum byte length of a portable session group identifier.
@@ -28,6 +28,7 @@ pub struct FitsOutputProvenance {
     group_id: String,
     algorithm_id: String,
     source_count: u32,
+    parameters_sha256: Option<String>,
     source_sha256: Option<String>,
     frame_id_sha256: Option<String>,
 }
@@ -70,6 +71,7 @@ impl FitsOutputProvenance {
             group_id,
             algorithm_id,
             source_count,
+            parameters_sha256: None,
             source_sha256: None,
             frame_id_sha256: None,
         })
@@ -125,6 +127,29 @@ impl FitsOutputProvenance {
     #[must_use]
     pub const fn source_count(&self) -> u32 {
         self.source_count
+    }
+
+    /// Binds the product to canonical estimator parameters.
+    ///
+    /// This digest covers settings whose exact values are not fully represented
+    /// by the short algorithm identifier, such as a frame-weight table. The
+    /// caller defines and versions the canonical byte encoding.
+    pub fn with_parameters_sha256(
+        mut self,
+        parameters_sha256: impl Into<String>,
+    ) -> Result<Self, FitsProvenanceError> {
+        let parameters_sha256 = parameters_sha256.into();
+        if !is_lower_sha256(&parameters_sha256) {
+            return Err(FitsProvenanceError::InvalidParametersSha256);
+        }
+        self.parameters_sha256 = Some(parameters_sha256);
+        Ok(self)
+    }
+
+    /// SHA-256 of canonical estimator parameters, when applicable.
+    #[must_use]
+    pub fn parameters_sha256(&self) -> Option<&str> {
+        self.parameters_sha256.as_deref()
     }
 
     /// Binds a single-frame product to the SHA-256 of its exact input bytes.
@@ -184,6 +209,8 @@ pub enum FitsProvenanceError {
     InvalidManifestSha256,
     /// Master-plan fingerprint is not 64 lowercase hexadecimal digits.
     InvalidPlanSha256,
+    /// Estimator-parameter fingerprint is not full lowercase SHA-256 hex.
+    InvalidParametersSha256,
     /// Group identifier is empty, oversized, or non-portable.
     InvalidGroupId,
     /// Algorithm identifier is empty, oversized, or non-canonical.
@@ -209,6 +236,8 @@ impl Display for FitsProvenanceError {
             Self::InvalidPlanSha256 => {
                 formatter.write_str("master-plan SHA-256 must be 64 lowercase hexadecimal digits")
             }
+            Self::InvalidParametersSha256 => formatter
+                .write_str("estimator-parameter SHA-256 must be 64 lowercase hexadecimal digits"),
             Self::InvalidGroupId => formatter.write_str("group identifier is not portable"),
             Self::InvalidAlgorithmId => {
                 formatter.write_str("algorithm identifier is not canonical")
@@ -628,9 +657,9 @@ pub fn write_f64_primary<W: Write>(
 ///
 /// In addition to [`write_f64_primary`]'s image contract, this emits `CREATOR`,
 /// `AETHVER`, `AETHMAN`, optional `AETHPLN`, `AETHGRP`, `AETHALG`, `AETHSRC`,
-/// optional immediate-input `AETHINP`, and optional reviewed-frame `AETHFID`
-/// cards. Identifiers are validated by [`FitsOutputProvenance`] before any
-/// output is accepted.
+/// optional estimator-parameter `AETHPAR`, optional immediate-input `AETHINP`,
+/// and optional reviewed-frame `AETHFID` cards. Identifiers are validated by
+/// [`FitsOutputProvenance`] before any output is accepted.
 ///
 /// # Errors
 ///
@@ -744,6 +773,9 @@ fn write_primary_header<W: Write>(
             &provenance.source_count().to_string(),
             &mut header_bytes,
         )?;
+        if let Some(parameters_sha256) = provenance.parameters_sha256() {
+            write_string_card(&mut header, "AETHPAR", parameters_sha256, &mut header_bytes)?;
+        }
         if let Some(source_sha256) = provenance.source_sha256() {
             write_string_card(&mut header, "AETHINP", source_sha256, &mut header_bytes)?;
         }
@@ -1107,6 +1139,7 @@ mod tests {
         assert_eq!(provenance.group_id(), "b".repeat(64));
         assert_eq!(provenance.algorithm_id(), "strict-mean-v1");
         assert_eq!(provenance.source_count(), 3);
+        assert_eq!(provenance.parameters_sha256(), None);
         assert_eq!(provenance.source_sha256(), None);
         assert_eq!(provenance.frame_id_sha256(), None);
 
@@ -1149,7 +1182,19 @@ mod tests {
                 provenance.clone().with_plan_sha256(invalid),
                 Err(FitsProvenanceError::InvalidPlanSha256)
             ));
+            assert!(matches!(
+                provenance.clone().with_parameters_sha256(invalid),
+                Err(FitsProvenanceError::InvalidParametersSha256)
+            ));
         }
+        let parameter_digest = "f".repeat(64);
+        assert_eq!(
+            provenance
+                .clone()
+                .with_parameters_sha256(parameter_digest.clone())?
+                .parameters_sha256(),
+            Some(parameter_digest.as_str())
+        );
         assert!(matches!(
             provenance.clone().with_source_sha256("d".repeat(64)),
             Err(FitsProvenanceError::SourceDigestRequiresSingleSource)
@@ -1198,6 +1243,7 @@ mod tests {
             1,
         )?
         .with_plan_sha256("c".repeat(64))?
+        .with_parameters_sha256("f".repeat(64))?
         .with_source_sha256("d".repeat(64))?
         .with_frame_id_sha256("e".repeat(64))?;
         let mut output = Vec::new();
@@ -1223,6 +1269,7 @@ mod tests {
             header.integer("AETHSRC"),
             Some(i64::from(provenance.source_count()))
         );
+        assert_eq!(header.string("AETHPAR"), provenance.parameters_sha256());
         assert_eq!(header.string("AETHINP"), provenance.source_sha256());
         assert_eq!(header.string("AETHFID"), provenance.frame_id_sha256());
         Ok(())

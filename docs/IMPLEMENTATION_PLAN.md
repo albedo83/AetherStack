@@ -1008,6 +1008,17 @@ safety reasoning. They do not narrate obvious syntax.
     reference metrics are provenance, and any formula change requires a new
     identifier. Next, bind reviewed frame metrics and weights into the bounded
     registered-stack runtime and write them into product provenance.
+71. Execute identity-bound weighted means through the bounded registered-stack
+    runtime. A canonical weight set hashes its expression identifier, sorted
+    reviewed frame identities, and exact binary64 weights; construction rejects
+    missing, duplicated, or foreign identities. The balanced-PSF constructor
+    also hashes the exact reference and per-frame quality metrics before
+    deriving weights. FITS provenance version 5 adds the optional `AETHPAR`
+    digest, and weighted execution requires it to match before any output
+    begins. Canonical source/weight ordering, per-band memory accounting,
+    streamed checksum publication, and exact weighted-pixel tests cover the
+    path. Next, carry measured per-frame SNR into the review model and expose
+    the complete weight evidence in the UI.
 
 ## 11. Stable-release definition
 

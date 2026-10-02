@@ -2,9 +2,8 @@
 
 `integrate_mean` is the first reference image integrator. It accepts one or more
 equal-sized scientific images and calculates an unweighted arithmetic mean for
-each planar sample position. Weighting, statistical rejection, normalization,
-and registration are intentionally absent until their independent contracts and
-tests exist.
+each planar sample position. Statistical rejection and frame weighting are
+separate versioned estimators rather than hidden behavior changes.
 
 `integrate_mean_region` applies the same estimator to one non-empty rectangular
 region contained by every input plane. Its output uses the region width and
@@ -49,6 +48,27 @@ regions are also explicit failures. No partial result is returned. Tests prove
 that a full-frame region is bit-identical to `integrate_mean`, that multi-plane
 crop coordinates preserve planar order, and that excluded-sample accounting is
 unchanged inside a crop.
+
+## Frame-weighted mean
+
+`integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`
+per image. A masked or non-finite sample leaves both numerator and denominator,
+so partial support cannot darken a pixel. Values and weights are independently
+scaled before compensated accumulation, which avoids overflow at finite
+binary64 extremes and makes a common positive rescaling of all weights
+numerically invariant. Input order remains the stable manifest order, and the
+same exact accepted, masked, and non-finite support accounting is retained.
+
+`balanced-psf-weight-v1` is the first transparent expression:
+
+`w = (SNR/SNR_ref)^2 × (FWHM_ref/FWHM)^2 × (1-e^2)/(1-e_ref^2)`.
+
+It is evaluated in the logarithmic domain and bounded only at the positive
+finite binary64 limits. Signal-to-noise and FWHM must be positive, eccentricity
+must be in `[0, 1)`, and all three metrics must come from the same versioned
+measurement profile and image scale. The formula is not an undocumented clone
+of another application: its terms, reference, identifier, and exact resulting
+weights are inspectable provenance.
 
 ## Percentile-clipped mean
 
@@ -96,6 +116,18 @@ The runtime exposes the percentile estimator under
 scratch are included in the logical memory reservation. Optional low/high maps
 use the separate `percentile-rejection-map-v1` provenance identity. Their two
 band images and three FITS writer buffers are also included in the reservation.
+
+The runtime exposes the weighted estimator under
+`registered-weighted-mean-v1`. `RegisteredWeightSet` first binds every weight
+to a reviewed frame identity, sorts those identities canonically, and hashes a
+domain marker, the weight-expression identifier, every frame ID, and every
+exact binary64 weight. When the balanced-PSF constructor derives those weights,
+the digest additionally covers the exact reference and per-frame metrics. The
+request accepts the set only if it matches the sealed plan exactly and output
+provenance carries that digest in `AETHPAR`. Weights are then reordered together
+with sources and used independently in every bounded band. A caller cannot
+select this estimator through the generic constructor and accidentally omit
+its weight set.
 
 Science and both companion files are completely written and checksum-verified
 while private. Their destinations must be distinct, their source counts and

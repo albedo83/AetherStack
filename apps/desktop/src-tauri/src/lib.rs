@@ -1890,6 +1890,10 @@ fn registered_stack_error(error: RegisteredStackError) -> PreviewCommandError {
         | RegisteredStackError::ProvenanceAlgorithmMismatch
         | RegisteredStackError::ProvenanceSourceCountMismatch
         | RegisteredStackError::ProvenancePlanMismatch
+        | RegisteredStackError::WeightedEstimatorRequiresWeights
+        | RegisteredStackError::InvalidWeightAlgorithmId
+        | RegisteredStackError::WeightSetMismatch
+        | RegisteredStackError::WeightProvenanceMismatch
         | RegisteredStackError::RejectionMapRequiresPercentileEstimator
         | RegisteredStackError::RejectionMapProvenanceMismatch
         | RegisteredStackError::DuplicateOutputPath => registered_stack_configuration_error(),
