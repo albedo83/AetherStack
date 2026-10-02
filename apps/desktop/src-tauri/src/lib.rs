@@ -44,11 +44,11 @@ use aether_runtime::{
     CancellationToken, LightPlanExecutionError, LightPlanExecutionRequest,
     MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
-    RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
-    RegisteredStackRequest, RegisteredStackSource, RegistrationPlanExecutionError,
-    RegistrationPlanExecutionRequest, RegistrationPlanSource, run_calibrated_light_plan,
-    run_demosaiced_light_plan, run_light_plan, run_master_plan, run_registered_stack,
-    run_registration_plan,
+    QualityWeightMetrics, RegisteredFrameQuality, RegisteredRejectionMapOutput,
+    RegisteredStackError, RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackSource,
+    RegisteredWeightSet, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
+    RegistrationPlanSource, run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
+    run_master_plan, run_registered_stack, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
@@ -286,6 +286,8 @@ struct RegisteredStackCommandRequest {
     planning: RegistrationPlanPreviewRequest,
     expected_plan_sha256: String,
     artifacts: Vec<RegistrationArtifactInput>,
+    #[serde(default)]
+    quality_evidence: Vec<RegisteredFrameQualityInput>,
     output_path: PathBuf,
     band_height: usize,
     memory_limit_bytes: u64,
@@ -296,7 +298,17 @@ struct RegisteredStackCommandRequest {
 #[serde(rename_all = "snake_case")]
 enum RegisteredStackEstimatorInput {
     StrictMean,
+    WeightedMean,
     PercentileClipped,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegisteredFrameQualityInput {
+    frame_id: String,
+    signal_to_noise: f64,
+    fwhm_pixels: f64,
+    eccentricity: f64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -1481,13 +1493,14 @@ where
     let integration = request.integration;
     if matches!(
         integration.estimator,
-        RegisteredStackEstimatorInput::StrictMean
+        RegisteredStackEstimatorInput::StrictMean | RegisteredStackEstimatorInput::WeightedMean
     ) && integration.generate_rejection_maps
     {
         return Err(registered_stack_configuration_error());
     }
     let estimator = match integration.estimator {
         RegisteredStackEstimatorInput::StrictMean => RegisteredStackEstimator::StrictMean,
+        RegisteredStackEstimatorInput::WeightedMean => RegisteredStackEstimator::WeightedMean,
         RegisteredStackEstimatorInput::PercentileClipped => {
             RegisteredStackEstimator::PercentileClipped(
                 PercentileClipParameters::new(
@@ -1529,6 +1542,48 @@ where
         return Err(registered_stack_artifact_set_error());
     }
 
+    let weight_set = if matches!(
+        integration.estimator,
+        RegisteredStackEstimatorInput::WeightedMean
+    ) {
+        if request.quality_evidence.len() != expected_ids.len() {
+            return Err(registered_stack_configuration_error());
+        }
+        let mut quality_by_id = BTreeMap::new();
+        for evidence in request.quality_evidence {
+            let frame_id = FrameId::new(evidence.frame_id)
+                .map_err(|_| registered_stack_configuration_error())?;
+            let metrics = QualityWeightMetrics::new(
+                evidence.signal_to_noise,
+                evidence.fwhm_pixels,
+                evidence.eccentricity,
+            )
+            .map_err(|_| registered_stack_configuration_error())?;
+            if quality_by_id.insert(frame_id, metrics).is_some() {
+                return Err(registered_stack_configuration_error());
+            }
+        }
+        if quality_by_id.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
+            return Err(registered_stack_configuration_error());
+        }
+        let reference = *quality_by_id
+            .get(plan.reference_frame_id())
+            .ok_or_else(registered_stack_configuration_error)?;
+        let entries = quality_by_id
+            .into_iter()
+            .map(|(frame_id, metrics)| RegisteredFrameQuality::new(frame_id, metrics))
+            .collect();
+        Some(
+            RegisteredWeightSet::from_balanced_psf_metrics(reference, entries)
+                .map_err(registered_stack_error)?,
+        )
+    } else {
+        if !request.quality_evidence.is_empty() {
+            return Err(registered_stack_configuration_error());
+        }
+        None
+    };
+
     let memory_limit = usize::try_from(request.memory_limit_bytes)
         .map_err(|_| registered_stack_configuration_error())?;
     let memory =
@@ -1555,7 +1610,7 @@ where
         .manifest
         .canonical_sha256()
         .map_err(|_| registered_stack_artifact_error())?;
-    let provenance = FitsOutputProvenance::new(
+    let mut provenance = FitsOutputProvenance::new(
         manifest_sha256.clone(),
         "registered-stack",
         estimator.algorithm_id(),
@@ -1563,20 +1618,36 @@ where
     )
     .and_then(|value| value.with_plan_sha256(plan.plan_sha256()))
     .map_err(|_| registered_stack_configuration_error())?;
+    if let Some(weights) = weight_set.as_ref() {
+        provenance = provenance
+            .with_parameters_sha256(weights.sha256())
+            .map_err(|_| registered_stack_configuration_error())?;
+    }
     let output_path = request.output_path;
     let rejection_paths = integration
         .generate_rejection_maps
         .then(|| rejection_map_paths(&output_path))
         .transpose()?;
-    let mut execution = RegisteredStackRequest::new_with_estimator(
-        plan,
-        sources,
-        output_path.clone(),
-        provenance,
-        estimator,
-    )
-    .and_then(|value| value.with_band_height(request.band_height))
-    .map_err(registered_stack_error)?;
+    let execution = if let Some(weights) = weight_set {
+        RegisteredStackRequest::new_weighted(
+            plan,
+            sources,
+            output_path.clone(),
+            provenance,
+            weights,
+        )
+    } else {
+        RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            output_path.clone(),
+            provenance,
+            estimator,
+        )
+    };
+    let mut execution = execution
+        .and_then(|value| value.with_band_height(request.band_height))
+        .map_err(registered_stack_error)?;
     if let Some((low_path, high_path)) = rejection_paths.as_ref() {
         let low_provenance = FitsOutputProvenance::new(
             manifest_sha256.clone(),
@@ -4436,6 +4507,7 @@ mod tests {
     use aether_metadata::{Binning, CameraModel, CanonicalMetadata, CanonicalValue, Confidence};
     use aether_runtime::{
         REGISTERED_CROP_MEAN_ALGORITHM_ID, REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+        REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
     };
     use aether_session::{ManifestGroup, StrictGroupingKey, classify_frame, fingerprint_reader};
 
@@ -5213,6 +5285,7 @@ mod tests {
                 planning,
                 expected_plan_sha256: expected_plan_sha256.clone(),
                 artifacts,
+                quality_evidence: Vec::new(),
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
@@ -5282,6 +5355,7 @@ mod tests {
                         path: PathBuf::from(frame.output_path),
                     })
                     .collect(),
+                quality_evidence: Vec::new(),
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
@@ -5315,6 +5389,130 @@ mod tests {
         assert!(stack_path.is_file());
         assert!(low_path.is_file());
         assert!(high_path.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn integrates_with_native_identity_bound_quality_weights() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let registered_root = directory.path().join("registered");
+        let stack_path = directory.path().join("weighted-stack.fits");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let registration_request =
+            registration_execution_request(&session, &artifact_root, registered_root)?;
+        let planning = registration_request.planning.clone();
+        let expected_plan_sha256 = registration_request.expected_plan_sha256.clone();
+        let registered = execute_registration_plan_sync(
+            &session,
+            registration_request,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+        let quality_evidence = registered
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(index, frame)| RegisteredFrameQualityInput {
+                frame_id: frame.frame_id.clone(),
+                signal_to_noise: 20.0 + index as f64,
+                fwhm_pixels: 2.0 + index as f64 * 0.1,
+                eccentricity: 0.25 + index as f64 * 0.01,
+            })
+            .collect();
+
+        let result = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256,
+                artifacts: registered
+                    .frames
+                    .into_iter()
+                    .map(|frame| RegistrationArtifactInput {
+                        frame_id: frame.frame_id,
+                        path: PathBuf::from(frame.output_path),
+                    })
+                    .collect(),
+                quality_evidence,
+                output_path: stack_path.clone(),
+                band_height: 32,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::WeightedMean,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    minimum_retained_samples: 2,
+                    generate_rejection_maps: false,
+                },
+            },
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+
+        assert_eq!(result.estimator, REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID);
+        assert!(result.samples_written > 0);
+        assert!(stack_path.is_file());
+        let bytes = fs::read(&stack_path)?;
+        let header = String::from_utf8_lossy(&bytes[..bytes.len().min(2_880)]);
+        assert!(header.contains("AETHPAR "));
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_stack_rejects_incomplete_quality_evidence() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("linear-rgb");
+        let registered_root = directory.path().join("registered");
+        let stack_path = directory.path().join("invalid-weighted-stack.fits");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let registration_request =
+            registration_execution_request(&session, &artifact_root, registered_root)?;
+        let planning = registration_request.planning.clone();
+        let registered = execute_registration_plan_sync(
+            &session,
+            registration_request,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+
+        let error = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256: registered.plan_sha256.clone(),
+                artifacts: registered
+                    .frames
+                    .into_iter()
+                    .map(|frame| RegistrationArtifactInput {
+                        frame_id: frame.frame_id,
+                        path: PathBuf::from(frame.output_path),
+                    })
+                    .collect(),
+                quality_evidence: Vec::new(),
+                output_path: stack_path.clone(),
+                band_height: 32,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::WeightedMean,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    minimum_retained_samples: 2,
+                    generate_rejection_maps: false,
+                },
+            },
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .err()
+        .ok_or("weighted stack accepted incomplete quality evidence")?;
+
+        assert_eq!(error.code, "registered_stack_configuration_invalid");
+        assert!(!stack_path.exists());
         Ok(())
     }
 
@@ -5353,6 +5551,7 @@ mod tests {
                         path: PathBuf::from(frame.output_path),
                     })
                     .collect(),
+                quality_evidence: Vec::new(),
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,

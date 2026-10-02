@@ -1,6 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
+import type { QualityWeightEvidence } from "./quality-weight.ts";
+
 export interface RegistrationDiagnosticRequest {
   readonly sourcePath: string;
   readonly referencePath: string;
@@ -118,15 +120,14 @@ export interface RegistrationExecutionSettings {
 }
 
 export interface RegisteredStackIntegrationSettings {
-  readonly estimator: "strict_mean" | "percentile_clipped";
+  readonly estimator: "strict_mean" | "weighted_mean" | "percentile_clipped";
   readonly lowFraction: number;
   readonly highFraction: number;
   readonly minimumRetainedSamples: number;
   readonly generateRejectionMaps: boolean;
 }
 
-export interface RegisteredStackExecutionSettings
-  extends RegistrationExecutionSettings {
+export interface RegisteredStackExecutionSettings extends RegistrationExecutionSettings {
   readonly integration: RegisteredStackIntegrationSettings;
 }
 
@@ -260,6 +261,7 @@ export function executeRegisteredStack(
   planning: RegistrationPlanPreviewRequest,
   expectedPlanSha256: string,
   artifacts: readonly RegistrationArtifactInput[],
+  qualityEvidence: readonly QualityWeightEvidence[],
   settings: RegisteredStackExecutionSettings,
   onProgress: (progress: RegisteredStackProgress) => void,
 ): Promise<RegisteredStackResult> {
@@ -270,6 +272,7 @@ export function executeRegisteredStack(
       planning,
       expectedPlanSha256,
       artifacts,
+      qualityEvidence,
       outputPath,
       ...settings,
     },

@@ -5,6 +5,7 @@ import type {
   MasterProductPlan,
 } from "./calibration-bridge.ts";
 import type { RegisteredStackIntegrationSettings } from "./registration-bridge.ts";
+import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import type {
   ReviewActions,
   ReviewFrame,
@@ -184,6 +185,18 @@ export function mountReviewScreen(
     registeredStackEstimatorLabel: required<HTMLElement>(
       root,
       "[data-registered-stack-estimator-label]",
+    ),
+    registeredStackWeightPreflight: required<HTMLElement>(
+      root,
+      "[data-registered-stack-weight-preflight]",
+    ),
+    registeredStackWeightStatus: required<HTMLElement>(
+      root,
+      "[data-registered-stack-weight-status]",
+    ),
+    registeredStackWeightRows: required<HTMLTableSectionElement>(
+      root,
+      "[data-registered-stack-weight-rows]",
     ),
     registeredStackProducts: requiredAll<HTMLButtonElement>(
       root,
@@ -1423,6 +1436,9 @@ interface RegistrationElements {
   readonly registeredStackMinimumRetained: HTMLInputElement;
   readonly registeredStackRejectionMaps: HTMLInputElement;
   readonly registeredStackEstimatorLabel: HTMLElement;
+  readonly registeredStackWeightPreflight: HTMLElement;
+  readonly registeredStackWeightStatus: HTMLElement;
+  readonly registeredStackWeightRows: HTMLTableSectionElement;
   readonly registeredStackProducts: readonly HTMLButtonElement[];
   readonly registeredStackPreviewImage: HTMLImageElement;
   readonly registeredStackScienceImage: HTMLImageElement;
@@ -1550,7 +1566,18 @@ function renderRegistration(
   const registeredSetReady =
     registration.execution.state === "completed" &&
     registration.execution.result?.planSha256 === registration.plan?.planSha256;
-  elements.executeRegisteredStack.disabled = !registeredSetReady || stackBusy;
+  const stackSettings = registration.stack.settings;
+  const weightPreflight = buildQualityWeightPreflight(
+    registration.plan,
+    model.activeRole === "light" && model.lightFrameView === "calibrated"
+      ? model.frames
+      : [],
+  );
+  const weightedEstimator = stackSettings.estimator === "weighted_mean";
+  elements.executeRegisteredStack.disabled =
+    !registeredSetReady ||
+    stackBusy ||
+    (weightedEstimator && !weightPreflight.ready);
   elements.executeRegisteredStack.hidden = stackBusy;
   elements.cancelRegisteredStack.hidden = !stackBusy;
   elements.cancelRegisteredStack.disabled =
@@ -1563,8 +1590,7 @@ function renderRegistration(
       ? "Registered identity set verified"
       : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
-  const stackSettings = registration.stack.settings;
-  const advancedEstimator = stackSettings.estimator === "percentile_clipped";
+  const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
   elements.registeredStackHighFraction.value = String(
@@ -1577,16 +1603,49 @@ function renderRegistration(
     stackSettings.generateRejectionMaps;
   elements.registeredStackEstimator.disabled = stackBusy;
   elements.registeredStackLowFraction.disabled =
-    stackBusy || !advancedEstimator;
+    stackBusy || !rejectionEstimator;
   elements.registeredStackHighFraction.disabled =
-    stackBusy || !advancedEstimator;
+    stackBusy || !rejectionEstimator;
   elements.registeredStackMinimumRetained.disabled =
-    stackBusy || !advancedEstimator;
+    stackBusy || !rejectionEstimator;
   elements.registeredStackRejectionMaps.disabled =
-    stackBusy || !advancedEstimator;
-  elements.registeredStackEstimatorLabel.textContent = advancedEstimator
-    ? "PERCENTILE F64"
-    : "STRICT F64 MEAN";
+    stackBusy || !rejectionEstimator;
+  elements.registeredStackEstimatorLabel.textContent = weightedEstimator
+    ? "BALANCED PSF WEIGHT"
+    : rejectionEstimator
+      ? "PERCENTILE F64"
+      : "STRICT F64 MEAN";
+  elements.registeredStackWeightPreflight.hidden = !weightedEstimator;
+  elements.registeredStackWeightPreflight.dataset.ready = String(
+    weightPreflight.ready,
+  );
+  elements.registeredStackWeightStatus.textContent = weightPreflight.ready
+    ? `${weightPreflight.rows.length} / ${weightPreflight.rows.length} frames ready · native recomputation required`
+    : `${weightPreflight.evidence.length} / ${weightPreflight.rows.length} frames have valid metrics`;
+  elements.registeredStackWeightRows.replaceChildren(
+    ...weightPreflight.rows.map((row) => {
+      const tableRow = document.createElement("tr");
+      if (row.issue) tableRow.dataset.state = "blocked";
+      const name = document.createElement("th");
+      name.scope = "row";
+      name.textContent = row.reference ? `${row.label} · reference` : row.label;
+      const snr = document.createElement("td");
+      snr.textContent = formatWeightMetric(row.evidence?.signalToNoise, 2);
+      const fwhm = document.createElement("td");
+      fwhm.textContent = formatWeightMetric(row.evidence?.fwhmPixels, 3);
+      const eccentricity = document.createElement("td");
+      eccentricity.textContent = formatWeightMetric(
+        row.evidence?.eccentricity,
+        3,
+      );
+      const weight = document.createElement("td");
+      weight.textContent = row.issue
+        ? row.issue
+        : formatRelativeWeight(row.relativeWeight);
+      tableRow.append(name, snr, fwhm, eccentricity, weight);
+      return tableRow;
+    }),
+  );
   for (const button of elements.registeredStackProducts) {
     const product = button.dataset.stackProduct;
     const available =
@@ -1923,7 +1982,11 @@ function registeredStackSettings(
   >,
 ): RegisteredStackIntegrationSettings | null {
   const estimator = elements.registeredStackEstimator.value;
-  if (estimator !== "strict_mean" && estimator !== "percentile_clipped") {
+  if (
+    estimator !== "strict_mean" &&
+    estimator !== "weighted_mean" &&
+    estimator !== "percentile_clipped"
+  ) {
     return null;
   }
   const lowFraction = elements.registeredStackLowFraction.valueAsNumber;
@@ -1953,6 +2016,16 @@ function registeredStackSettings(
       estimator === "percentile_clipped" &&
       elements.registeredStackRejectionMaps.checked,
   };
+}
+
+function formatWeightMetric(value: number | undefined, digits: number): string {
+  return value === undefined ? "—" : value.toFixed(digits);
+}
+
+function formatRelativeWeight(value: number | null): string {
+  if (value === null) return "—";
+  if (value >= 0.001 && value < 10_000) return `${value.toFixed(4)}×`;
+  return `${value.toExponential(3)}×`;
 }
 
 function calibrationSettings(
@@ -2826,6 +2899,7 @@ function shellMarkup(): string {
                         <span>Estimator</span>
                         <select class="instrument-select" data-registered-stack-estimator>
                           <option value="strict_mean">Strict compensated mean</option>
+                          <option value="weighted_mean">Balanced PSF weighting</option>
                           <option value="percentile_clipped">Percentile-clipped mean</option>
                         </select>
                       </label>
@@ -2858,7 +2932,22 @@ function shellMarkup(): string {
                       <input data-registered-stack-rejection-maps type="checkbox" />
                       <span><strong>Publish rejection evidence</strong><small>Create separate low-tail and high-tail FITS maps beside the science product.</small></span>
                     </label>
-                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Percentile clipping is deterministic and records masked, non-finite and rejected samples separately.</p>
+                    <section class="weight-preflight" data-registered-stack-weight-preflight hidden aria-labelledby="weight-preflight-title">
+                      <div class="weight-preflight__heading">
+                        <div>
+                          <strong id="weight-preflight-title">Weight evidence</strong>
+                          <small>Registration reference anchors unit weight</small>
+                        </div>
+                        <span data-registered-stack-weight-status aria-live="polite">Metrics required</span>
+                      </div>
+                      <div class="weight-preflight__table-wrap">
+                        <table>
+                          <thead><tr><th scope="col">Frame</th><th scope="col">SNR</th><th scope="col">FWHM</th><th scope="col">Ecc.</th><th scope="col">Relative weight</th></tr></thead>
+                          <tbody data-registered-stack-weight-rows></tbody>
+                        </table>
+                      </div>
+                    </section>
+                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights and is recomputed natively. Percentile clipping records masked, non-finite and rejected samples separately.</p>
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>

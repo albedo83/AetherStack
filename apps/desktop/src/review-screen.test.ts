@@ -715,6 +715,83 @@ describe("frame review workspace", () => {
     ).toBe(true);
   });
 
+  it("preflights every calibrated Light before enabling weighted integration", () => {
+    const frameA = demoReviewModel.frames[0]!;
+    const frameB = demoReviewModel.frames[1]!;
+    const planSha256 = "8".repeat(64);
+    const weighted: ReviewViewModel = {
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+      activeRole: "light",
+      lightFrameView: "calibrated",
+      frames: [frameA, frameB],
+      registration: {
+        ...demoReviewModel.registration,
+        planState: "ready",
+        plan: {
+          schemaVersion: 1,
+          planSha256,
+          referenceFrameId: frameA.id,
+          referenceWidth: 4144,
+          referenceHeight: 2822,
+          coveredPixels: 11_000_000,
+          autocrop: { x: 0, y: 0, width: 4144, height: 2822 },
+          frames: [
+            {
+              frameId: frameA.id,
+              sourceWidth: 4144,
+              sourceHeight: 2822,
+              transformCoefficientsSourcePixels: [1, 0, 0, 0, 1, 0],
+              reference: true,
+            },
+            {
+              frameId: frameB.id,
+              sourceWidth: 4144,
+              sourceHeight: 2822,
+              transformCoefficientsSourcePixels: [1, 0, 0, 0, 1, 0],
+              reference: false,
+            },
+          ],
+        },
+        execution: {
+          ...demoReviewModel.registration.execution,
+          state: "completed",
+          result: {
+            planSha256,
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 4_096,
+            frames: [],
+          },
+        },
+        stack: {
+          ...demoReviewModel.registration.stack,
+          settings: {
+            ...demoReviewModel.registration.stack.settings,
+            estimator: "weighted_mean",
+          },
+        },
+      },
+    };
+    const { root, controller } = fixture(weighted);
+    fireEvent.click(getByText(root, "Advanced integration"));
+
+    const table = getByRole(root, "table");
+    expect(table.textContent).toContain(`${frameA.label} · reference`);
+    expect(table.textContent).toContain(frameB.label);
+    expect(root.textContent).toContain("2 / 2 frames ready");
+    expect(
+      getByRole<HTMLButtonElement>(root, "button", { name: "Integrate crop" })
+        .disabled,
+    ).toBe(false);
+
+    controller.update({ ...weighted, lightFrameView: "raw" });
+    expect(root.textContent).toContain("0 / 2 frames have valid metrics");
+    expect(
+      getByRole<HTMLButtonElement>(root, "button", { name: "Integrate crop" })
+        .disabled,
+    ).toBe(true);
+  });
+
   it("keeps ambiguous Light associations visibly blocked", () => {
     const lightPlan = demoReviewModel.calibration.plan?.lightPlan;
     if (!lightPlan) throw new Error("demo Light plan is missing");

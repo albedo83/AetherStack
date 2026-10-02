@@ -48,6 +48,7 @@ import {
   inspectRgbFrameQuality,
   type FrameQualityResult,
 } from "./quality-bridge.ts";
+import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import {
   cancelRegisteredStack,
   cancelRegistrationPlan,
@@ -935,6 +936,12 @@ async function executeStack(): Promise<void> {
   const registered = model.registration.execution.result;
   const stack = model.registration.stack;
   const settings = stack.settings;
+  const weightPreflight = buildQualityWeightPreflight(
+    plan,
+    model.activeRole === "light" && model.lightFrameView === "calibrated"
+      ? model.frames
+      : [],
+  );
   if (
     model.registration.planState !== "ready" ||
     !plan ||
@@ -944,7 +951,8 @@ async function executeStack(): Promise<void> {
     stack.state === "cancelling" ||
     isActiveExecutionState(model.registration.execution.state) ||
     isActiveExecutionState(model.calibration.execution.state) ||
-    isActiveExecutionState(model.calibration.lightExecution.state)
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    (settings.estimator === "weighted_mean" && !weightPreflight.ready)
   ) {
     return;
   }
@@ -979,7 +987,9 @@ async function executeStack(): Promise<void> {
         message:
           settings.estimator === "strict_mean"
             ? "Integrating the sealed common crop with strict F64 mean…"
-            : "Integrating with deterministic percentile rejection…",
+            : settings.estimator === "weighted_mean"
+              ? "Integrating with identity-bound balanced PSF weights…"
+              : "Integrating with deterministic percentile rejection…",
       },
     },
   });
@@ -1017,6 +1027,7 @@ async function executeStack(): Promise<void> {
         frameId: frame.frameId,
         path: frame.outputPath,
       })),
+      settings.estimator === "weighted_mean" ? weightPreflight.evidence : [],
       {
         bandHeight: 128,
         memoryLimitBytes: model.calibration.lightSettings.memoryLimitBytes,

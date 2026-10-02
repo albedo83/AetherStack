@@ -1028,6 +1028,18 @@ safety reasoning. They do not narrate obvious syntax.
     presenter, frontend, lint, and production-build tests cover the path. Next,
     add the advanced weighted-estimator choice with a preflight weight table and
     reference selection before enabling execution.
+73. Expose balanced PSF weighting as a fail-closed advanced integration mode.
+    The desktop uses the sealed registration reference as the explicit unit
+    weight, previews SNR, FWHM, eccentricity, and relative weight for every
+    planned identity, and disables execution unless all metrics come from the
+    calibrated-Light review set. The browser preview is explanatory only: the
+    native adapter validates the complete identity set, reconstructs every
+    typed metric, derives the canonical weight set again, and binds its digest
+    to `AETHPAR` before opening an output transaction. Incomplete, duplicated,
+    foreign, or invalid evidence fails before publication. Native end-to-end,
+    bridge, formula, presenter, accessibility, lint, formatting, and production
+    build tests cover the path. Next, add automatic reference recommendation
+    and explicit expert override without weakening the sealed evidence chain.
 
 ## 11. Stable-release definition
 

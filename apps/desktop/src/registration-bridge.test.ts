@@ -147,6 +147,7 @@ describe("native registration bridge", () => {
         planning,
         "a".repeat(64),
         artifacts,
+        [],
         {
           bandHeight: 128,
           memoryLimitBytes: 1_073_741_824,
@@ -166,6 +167,7 @@ describe("native registration bridge", () => {
         planning,
         expectedPlanSha256: "a".repeat(64),
         artifacts,
+        qualityEvidence: [],
         outputPath: "/results/integrated.fits",
         bandHeight: 128,
         memoryLimitBytes: 1_073_741_824,
