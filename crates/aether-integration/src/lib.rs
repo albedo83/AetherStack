@@ -1,9 +1,9 @@
 //! Deterministic strict-reference image integration.
 //!
-//! The strict unweighted mean is the transparent CPU oracle. A separately
-//! versioned percentile-clipped mean adds deterministic low/high rank rejection
-//! with exact per-pixel evidence; weighting and adaptive rejection remain
-//! explicit future algorithms.
+//! The strict unweighted and weighted means are transparent CPU oracles. A
+//! separately versioned percentile-clipped mean adds deterministic low/high
+//! rank rejection with exact per-pixel evidence; adaptive rejection remains an
+//! explicit future algorithm.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -12,6 +12,171 @@ use aether_core::{CompensatedSum, CoreError, Dimensions, PixelFlags, ScientificI
 
 /// Plane-major low/high count map emitted from percentile support evidence.
 pub const PERCENTILE_REJECTION_MAP_ALGORITHM_ID: &str = "percentile-rejection-map-v1";
+
+/// Stable identifier for the strict, frame-weighted arithmetic mean contract.
+pub const WEIGHTED_MEAN_ALGORITHM_ID: &str = "weighted-mean-v1";
+
+/// Stable identifier for the first transparent PSF quality-weight expression.
+pub const BALANCED_PSF_WEIGHT_ALGORITHM_ID: &str = "balanced-psf-weight-v1";
+
+/// A finite, strictly positive frame weight.
+///
+/// Keeping validation in this type makes it impossible to start integration
+/// with a zero, negative, NaN, or infinite weight. Absolute scale has no
+/// scientific meaning: multiplying every frame weight by the same positive
+/// factor leaves the integrated image unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameWeight(f64);
+
+impl FrameWeight {
+    /// Validates one dimensionless frame weight.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameWeightError`] unless `value` is finite and greater than
+    /// zero.
+    pub fn new(value: f64) -> Result<Self, FrameWeightError> {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(FrameWeightError);
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the validated dimensionless value.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// A scalar cannot represent a valid frame weight.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameWeightError;
+
+impl Display for FrameWeightError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("frame weight must be finite and strictly positive")
+    }
+}
+
+impl Error for FrameWeightError {}
+
+/// Validated frame metrics consumed by the balanced PSF weight expression.
+///
+/// Signal-to-noise and FWHM must describe the same estimator and image scale
+/// across the complete stack. Eccentricity follows the conventional
+/// `sqrt(1 - minor_variance / major_variance)` definition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QualityWeightMetrics {
+    signal_to_noise: f64,
+    fwhm_pixels: f64,
+    eccentricity: f64,
+}
+
+impl QualityWeightMetrics {
+    /// Validates one comparable set of PSF quality metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QualityWeightError`] unless signal-to-noise and FWHM are
+    /// finite and positive and eccentricity is finite in `[0, 1)`.
+    pub fn new(
+        signal_to_noise: f64,
+        fwhm_pixels: f64,
+        eccentricity: f64,
+    ) -> Result<Self, QualityWeightError> {
+        if !signal_to_noise.is_finite() || signal_to_noise <= 0.0 {
+            return Err(QualityWeightError::InvalidSignalToNoise);
+        }
+        if !fwhm_pixels.is_finite() || fwhm_pixels <= 0.0 {
+            return Err(QualityWeightError::InvalidFwhm);
+        }
+        if !eccentricity.is_finite() || !(0.0..1.0).contains(&eccentricity) {
+            return Err(QualityWeightError::InvalidEccentricity);
+        }
+        Ok(Self {
+            signal_to_noise,
+            fwhm_pixels,
+            eccentricity,
+        })
+    }
+
+    /// Signal-to-noise statistic from a versioned stellar estimator.
+    #[must_use]
+    pub const fn signal_to_noise(self) -> f64 {
+        self.signal_to_noise
+    }
+
+    /// Representative major-axis FWHM in source pixels.
+    #[must_use]
+    pub const fn fwhm_pixels(self) -> f64 {
+        self.fwhm_pixels
+    }
+
+    /// Representative stellar eccentricity in `[0, 1)`.
+    #[must_use]
+    pub const fn eccentricity(self) -> f64 {
+        self.eccentricity
+    }
+}
+
+/// Invalid input to the versioned quality-weight expression.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QualityWeightError {
+    /// Signal-to-noise was zero, negative, NaN, or infinite.
+    InvalidSignalToNoise,
+    /// FWHM was zero, negative, NaN, or infinite.
+    InvalidFwhm,
+    /// Eccentricity was outside the finite half-open interval `[0, 1)`.
+    InvalidEccentricity,
+}
+
+impl Display for QualityWeightError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidSignalToNoise => {
+                "quality-weight signal-to-noise must be finite and positive"
+            }
+            Self::InvalidFwhm => "quality-weight FWHM must be finite and positive",
+            Self::InvalidEccentricity => "quality-weight eccentricity must be finite and in [0, 1)",
+        })
+    }
+}
+
+impl Error for QualityWeightError {}
+
+/// Calculates the versioned balanced PSF weight relative to a reference frame.
+///
+/// The dimensionless expression is
+///
+/// `w = (SNR/SNR_ref)^2 * (FWHM_ref/FWHM)^2 * (1-e^2)/(1-e_ref^2)`.
+///
+/// It rewards stellar signal, penalizes broad PSFs, and uses the squared
+/// minor-to-major axis ratio as an explicit shape penalty. Evaluation occurs
+/// in the logarithmic domain, then clamps only at the representable positive
+/// `f64` boundaries. A frame identical to the reference has exactly unit
+/// weight. The expression and its identifier are provenance data; changing
+/// either requires a new algorithm identifier.
+#[must_use]
+pub fn balanced_psf_weight(
+    metrics: QualityWeightMetrics,
+    reference: QualityWeightMetrics,
+) -> FrameWeight {
+    if metrics == reference {
+        return FrameWeight(1.0);
+    }
+    let signal_term = 2.0 * (metrics.signal_to_noise.ln() - reference.signal_to_noise.ln());
+    let resolution_term = 2.0 * (reference.fwhm_pixels.ln() - metrics.fwhm_pixels.ln());
+    let frame_roundness = 1.0 - metrics.eccentricity * metrics.eccentricity;
+    let reference_roundness = 1.0 - reference.eccentricity * reference.eccentricity;
+    let shape_term = frame_roundness.ln() - reference_roundness.ln();
+    let logarithmic_weight = signal_term + resolution_term + shape_term;
+    let bounded = logarithmic_weight.clamp(f64::MIN_POSITIVE.ln(), f64::MAX.ln());
+    // Both exponential bounds are finite and strictly positive. Constructing
+    // directly avoids a redundant branch while preserving FrameWeight's type
+    // invariant.
+    FrameWeight(bounded.exp())
+}
 
 /// Per-pixel accounting for one mean integration.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -150,6 +315,33 @@ impl PixelSupport {
 pub struct MeanIntegration {
     image: ScientificImage,
     support: Vec<PixelSupport>,
+}
+
+/// Weighted image and exact per-pixel contribution accounting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeightedMeanIntegration {
+    image: ScientificImage,
+    support: Vec<PixelSupport>,
+}
+
+impl WeightedMeanIntegration {
+    /// Strict frame-weighted mean image.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Support records in the same planar order as the image samples.
+    #[must_use]
+    pub fn support(&self) -> &[PixelSupport] {
+        &self.support
+    }
+
+    /// Consumes the result and returns its image and support map.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, Vec<PixelSupport>) {
+        (self.image, self.support)
+    }
 }
 
 /// Percentile-clipped image and exact per-pixel rejection accounting.
@@ -539,6 +731,141 @@ pub fn integrate_mean_region(
     region: IntegrationRegion,
 ) -> Result<MeanIntegration, IntegrationError> {
     integrate_mean_impl(inputs, region)
+}
+
+/// Integrates equal-sized images with explicit, validated frame weights.
+///
+/// A frame's weight participates only where that frame contributes a clear,
+/// finite sample. Masked and non-finite samples are removed from both the
+/// numerator and denominator, so missing support cannot dim the result. For
+/// every output pixel, values and weights are independently normalized by
+/// their largest magnitudes before stable, compensated accumulation. This
+/// avoids overflow for finite extremes and makes a common rescaling of all
+/// weights numerically invariant.
+///
+/// Input order is part of the algorithm contract. Callers must supply stable
+/// manifest order when bitwise repeatability is required.
+///
+/// # Errors
+///
+/// Returns an error for empty input, excessive input count, mismatched
+/// dimensions, invariant failure, or fallible output allocation. Invalid
+/// scalar weights cannot enter this function because [`FrameWeight`] validates
+/// them at construction.
+pub fn integrate_weighted_mean(
+    inputs: &[(&ScientificImage, FrameWeight)],
+) -> Result<WeightedMeanIntegration, IntegrationError> {
+    let Some((first, _)) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let dimensions = first.dimensions();
+    for (input_index, (input, _)) in inputs.iter().enumerate().skip(1) {
+        let actual = input.dimensions();
+        if actual != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual,
+            });
+        }
+    }
+
+    let mut output =
+        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: dimensions.pixel_count(),
+        })?;
+    support.resize(dimensions.pixel_count(), PixelSupport::default());
+
+    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
+    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut support)
+        .enumerate()
+    {
+        let mut value_scale = 0.0_f64;
+        let mut weight_scale = 0.0_f64;
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+        let mut combined_rejected_flags = PixelFlags::CLEAR;
+
+        for (input_index, (input, weight)) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if !flags.is_clear() {
+                output_support.masked += 1;
+                combined_rejected_flags |= flags;
+            } else if !value.is_finite() {
+                output_support.non_finite += 1;
+            } else {
+                output_support.accepted += 1;
+                value_scale = value_scale.max(value.abs());
+                weight_scale = weight_scale.max(weight.get());
+                minimum = minimum.min(value);
+                maximum = maximum.max(value);
+            }
+        }
+
+        if output_support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: output_support.total(),
+            });
+        }
+        if output_support.accepted == 0 {
+            *output = f64::NAN;
+            let mut flags = combined_rejected_flags | PixelFlags::MISSING;
+            if output_support.non_finite > 0 {
+                flags |= PixelFlags::INVALID;
+            }
+            *output_flags = flags;
+            continue;
+        }
+        if value_scale == 0.0 {
+            *output = 0.0;
+            *output_flags = PixelFlags::CLEAR;
+            continue;
+        }
+
+        // Every accepted weight is finite and positive. Normalization bounds
+        // each term to (0, 1], while u32-bounded support keeps the sum finite.
+        let mut normalized_weight_sum = CompensatedSum::new();
+        for (input_index, (input, weight)) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if flags.is_clear() && value.is_finite() {
+                normalized_weight_sum.add(weight.get() / weight_scale);
+            }
+        }
+        let normalized_weight_sum = normalized_weight_sum.total();
+
+        let mut normalized_mean = CompensatedSum::new();
+        for (input_index, (input, weight)) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if flags.is_clear() && value.is_finite() {
+                let normalized_weight = (weight.get() / weight_scale) / normalized_weight_sum;
+                normalized_mean.add((value / value_scale) * normalized_weight);
+            }
+        }
+        let normalized_mean = normalized_mean
+            .total()
+            .max(minimum / value_scale)
+            .min(maximum / value_scale);
+        *output = canonical_zero(normalized_mean * value_scale);
+        *output_flags = PixelFlags::CLEAR;
+    }
+
+    Ok(WeightedMeanIntegration {
+        image: output,
+        support,
+    })
 }
 
 /// Integrates equal-sized images after deterministic percentile-tail rejection.
@@ -963,6 +1290,178 @@ mod tests {
         let expected = 1.0_f64 / 3.0;
 
         assert!((result.image().pixels()[0] - expected).abs() <= f64::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn frame_weights_reject_every_non_positive_or_non_finite_value() {
+        for invalid in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(FrameWeight::new(invalid), Err(FrameWeightError));
+        }
+        assert_eq!(
+            FrameWeight::new(f64::MIN_POSITIVE).map(FrameWeight::get),
+            Ok(f64::MIN_POSITIVE)
+        );
+        assert_eq!(
+            FrameWeight::new(f64::MAX).map(FrameWeight::get),
+            Ok(f64::MAX)
+        );
+    }
+
+    #[test]
+    fn quality_weight_metrics_fail_closed() {
+        assert_eq!(
+            QualityWeightMetrics::new(0.0, 2.0, 0.2),
+            Err(QualityWeightError::InvalidSignalToNoise)
+        );
+        assert_eq!(
+            QualityWeightMetrics::new(10.0, f64::NAN, 0.2),
+            Err(QualityWeightError::InvalidFwhm)
+        );
+        for eccentricity in [-0.1, 1.0, f64::INFINITY] {
+            assert_eq!(
+                QualityWeightMetrics::new(10.0, 2.0, eccentricity),
+                Err(QualityWeightError::InvalidEccentricity)
+            );
+        }
+    }
+
+    #[test]
+    fn balanced_psf_weight_has_auditable_monotonic_terms() -> TestResult {
+        let reference = QualityWeightMetrics::new(10.0, 2.0, 0.0)?;
+        assert_eq!(
+            balanced_psf_weight(reference, reference).get().to_bits(),
+            1.0_f64.to_bits()
+        );
+
+        let stronger_signal = QualityWeightMetrics::new(20.0, 2.0, 0.0)?;
+        let narrower_psf = QualityWeightMetrics::new(10.0, 1.0, 0.0)?;
+        let elongated_psf = QualityWeightMetrics::new(10.0, 2.0, 0.75_f64.sqrt())?;
+        assert!((balanced_psf_weight(stronger_signal, reference).get() - 4.0).abs() < 1.0e-14);
+        assert!((balanced_psf_weight(narrower_psf, reference).get() - 4.0).abs() < 1.0e-14);
+        assert!((balanced_psf_weight(elongated_psf, reference).get() - 0.25).abs() < 1.0e-14);
+        Ok(())
+    }
+
+    #[test]
+    fn balanced_psf_weight_keeps_extreme_valid_metrics_representable() -> TestResult {
+        let best = QualityWeightMetrics::new(f64::MAX, f64::MIN_POSITIVE, 0.0)?;
+        let worst = QualityWeightMetrics::new(f64::MIN_POSITIVE, f64::MAX, 1.0 - f64::EPSILON)?;
+
+        for weight in [
+            balanced_psf_weight(best, worst),
+            balanced_psf_weight(worst, best),
+        ] {
+            assert!(weight.get().is_finite());
+            assert!(weight.get() > 0.0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_mean_uses_exact_frame_weights_and_support() -> TestResult {
+        let first = image(vec![10.0])?;
+        let second = image(vec![20.0])?;
+        let third = image(vec![40.0])?;
+        let inputs = [
+            (&first, FrameWeight::new(1.0)?),
+            (&second, FrameWeight::new(2.0)?),
+            (&third, FrameWeight::new(1.0)?),
+        ];
+
+        let result = integrate_weighted_mean(&inputs)?;
+
+        assert_eq!(result.image().pixels(), &[22.5]);
+        assert_eq!(
+            result.support(),
+            &[PixelSupport {
+                accepted: 3,
+                masked: 0,
+                non_finite: 0,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_mean_removes_excluded_samples_from_both_sums() -> TestResult {
+        let valid = image(vec![7.0])?;
+        let mut masked = image(vec![1_000.0])?;
+        masked.mask_mut().as_mut_slice()[0] = PixelFlags::SATURATED;
+        let non_finite = image(vec![f64::NAN])?;
+        let inputs = [
+            (&valid, FrameWeight::new(1.0)?),
+            (&masked, FrameWeight::new(f64::MAX)?),
+            (&non_finite, FrameWeight::new(f64::MAX)?),
+        ];
+
+        let result = integrate_weighted_mean(&inputs)?;
+
+        assert_eq!(result.image().pixels(), &[7.0]);
+        assert_eq!(result.support()[0].accepted(), 1);
+        assert_eq!(result.support()[0].masked(), 1);
+        assert_eq!(result.support()[0].non_finite(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_mean_is_invariant_to_common_weight_scale() -> TestResult {
+        let first = image(vec![10.0])?;
+        let second = image(vec![30.0])?;
+        let ordinary = integrate_weighted_mean(&[
+            (&first, FrameWeight::new(1.0)?),
+            (&second, FrameWeight::new(2.0)?),
+        ])?;
+        let extreme = integrate_weighted_mean(&[
+            (&first, FrameWeight::new(f64::MAX / 2.0)?),
+            (&second, FrameWeight::new(f64::MAX)?),
+        ])?;
+
+        assert_eq!(
+            ordinary.image().pixels()[0].to_bits(),
+            extreme.image().pixels()[0].to_bits()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_mean_handles_extreme_values_and_compensated_cancellation() -> TestResult {
+        let maximum_a = image(vec![f64::MAX, 1.0e16])?;
+        let maximum_b = image(vec![f64::MAX, 1.0])?;
+        let maximum_c = image(vec![f64::MAX, -1.0e16])?;
+        let unit = FrameWeight::new(1.0)?;
+
+        let result =
+            integrate_weighted_mean(&[(&maximum_a, unit), (&maximum_b, unit), (&maximum_c, unit)])?;
+
+        assert_eq!(result.image().pixels()[0].to_bits(), f64::MAX.to_bits());
+        assert!((result.image().pixels()[1] - 1.0 / 3.0).abs() <= f64::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_mean_preserves_missing_pixel_evidence_and_dimension_errors() -> TestResult {
+        let mut masked = image(vec![3.0])?;
+        masked.mask_mut().as_mut_slice()[0] = PixelFlags::HOT;
+        let invalid = image(vec![f64::INFINITY])?;
+        let unit = FrameWeight::new(1.0)?;
+        let missing = integrate_weighted_mean(&[(&masked, unit), (&invalid, unit)])?;
+
+        assert!(missing.image().pixels()[0].is_nan());
+        let flags = missing.image().mask().as_slice()[0];
+        assert!(flags.contains(PixelFlags::HOT));
+        assert!(flags.contains(PixelFlags::MISSING));
+        assert!(flags.contains(PixelFlags::INVALID));
+
+        let other = image(vec![1.0, 2.0])?;
+        assert!(matches!(
+            integrate_weighted_mean(&[(&masked, unit), (&other, unit)]),
+            Err(IntegrationError::DimensionMismatch { input_index: 1, .. })
+        ));
+        assert_eq!(
+            integrate_weighted_mean(&[]),
+            Err(IntegrationError::NoInputImages)
+        );
         Ok(())
     }
 

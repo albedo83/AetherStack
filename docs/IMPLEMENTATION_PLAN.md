@@ -996,6 +996,18 @@ safety reasoning. They do not narrate obvious syntax.
     newer selection. Native boundary, plane-order, bridge, presenter,
     accessibility, lint, and build tests cover the path. Next, define the
     weighted-integration contract and its versioned quality-weight expression.
+70. Define the strict weighted-integration oracle and its first transparent
+    quality expression. Frame weights are finite and strictly positive typed
+    values; masked and non-finite samples leave both numerator and denominator;
+    stable manifest order, independent value/weight normalization, compensated
+    `f64` accumulation, exact support accounting, and representable-boundary
+    tests make the numerical contract explicit. `balanced-psf-weight-v1` uses
+    squared relative stellar SNR, squared inverse relative FWHM, and the
+    relative squared minor/major axis ratio, evaluated in the logarithmic
+    domain and bound to finite positive binary64. Algorithm identifiers and the
+    reference metrics are provenance, and any formula change requires a new
+    identifier. Next, bind reviewed frame metrics and weights into the bounded
+    registered-stack runtime and write them into product provenance.
 
 ## 11. Stable-release definition
 
