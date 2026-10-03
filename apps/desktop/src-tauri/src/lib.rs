@@ -524,6 +524,16 @@ struct RegisteredStackSourceVerificationResponse {
     sources: Vec<RegisteredStackSourceVerification>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackSourceVerificationProgress {
+    sequence: u64,
+    state: &'static str,
+    completed_sources: usize,
+    total_sources: usize,
+    current_file_name: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RegisteredStackSourceVerification {
@@ -732,10 +742,11 @@ struct DesktopSessionState {
     session: Mutex<Option<Arc<ImportedNativeSession>>>,
 }
 
-/// Single active calibration slot for bounded execution and cancellation.
+/// Single active native-work slot for bounded execution and cancellation.
 ///
-/// Serializing master and Light work avoids accidental memory-budget
-/// multiplication and makes each visible Cancel control unambiguous.
+/// Serializing master, Light, registration, integration, and evidence work
+/// avoids accidental memory and disk-I/O multiplication and makes each visible
+/// Cancel control unambiguous.
 #[derive(Debug, Default)]
 struct DesktopCalibrationExecutionState {
     cancellation: Mutex<Option<CancellationToken>>,
@@ -1212,14 +1223,36 @@ async fn inspect_registered_stack_report(
 #[tauri::command]
 async fn verify_registered_stack_sources(
     request: RegisteredStackSourceVerificationRequest,
+    on_progress: tauri::ipc::Channel<RegisteredStackSourceVerificationProgress>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
 ) -> Result<RegisteredStackSourceVerificationResponse, PreviewCommandError> {
     validate_runtime_source_path(&request.report_path)?;
     validate_runtime_source_path(&request.source_directory)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        verify_registered_stack_sources_sync(&request.report_path, &request.source_directory)
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        verify_registered_stack_sources_sync(
+            &request.report_path,
+            &request.source_directory,
+            &worker_cancellation,
+            |progress| {
+                let _ignored = on_progress.send(progress);
+            },
+        )
     })
-    .await
-    .map_err(|_| preview_worker_error())?
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| preview_worker_error())?
+}
+
+#[tauri::command]
+fn cancel_registered_stack_source_verification(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(
+        &execution_state,
+        "registered_stack_source_verification_missing",
+    )
 }
 
 #[tauri::command]
@@ -2190,6 +2223,13 @@ fn encode_registered_stack_report(
 fn inspect_registered_stack_report_sync(
     path: &Path,
 ) -> Result<RegisteredStackReportInspectionResponse, PreviewCommandError> {
+    inspect_registered_stack_report_sync_with_products(path, true)
+}
+
+fn inspect_registered_stack_report_sync_with_products(
+    path: &Path,
+    verify_products: bool,
+) -> Result<RegisteredStackReportInspectionResponse, PreviewCommandError> {
     let file = File::open(path).map_err(|_| registered_stack_report_validation_error())?;
     let mut bytes = Vec::new();
     bytes
@@ -2319,22 +2359,27 @@ fn inspect_registered_stack_report_sync(
     let report_parent = path
         .parent()
         .ok_or_else(registered_stack_report_validation_error)?;
-    let products = envelope
-        .report
-        .products
-        .iter()
-        .map(|product| {
-            inspect_registered_stack_product(
-                report_parent,
-                product,
-                &envelope.report,
-                source_ids.len(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let all_products_verified = products
-        .iter()
-        .all(|product| product.status == RegisteredStackReportProductStatus::Verified);
+    let products = if verify_products {
+        envelope
+            .report
+            .products
+            .iter()
+            .map(|product| {
+                inspect_registered_stack_product(
+                    report_parent,
+                    product,
+                    &envelope.report,
+                    source_ids.len(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let all_products_verified = verify_products
+        && products
+            .iter()
+            .all(|product| product.status == RegisteredStackReportProductStatus::Verified);
     let sources = envelope
         .report
         .sources
@@ -2364,25 +2409,66 @@ fn inspect_registered_stack_report_sync(
     })
 }
 
-fn verify_registered_stack_sources_sync(
+fn verify_registered_stack_sources_sync<F>(
     report_path: &Path,
     source_directory: &Path,
-) -> Result<RegisteredStackSourceVerificationResponse, PreviewCommandError> {
+    cancellation: &CancellationToken,
+    mut on_progress: F,
+) -> Result<RegisteredStackSourceVerificationResponse, PreviewCommandError>
+where
+    F: FnMut(RegisteredStackSourceVerificationProgress),
+{
+    cancellation
+        .checkpoint()
+        .map_err(|_| registered_stack_source_verification_cancelled_error())?;
     let directory_metadata = fs::symlink_metadata(source_directory)
         .map_err(|_| registered_stack_source_directory_error())?;
     if !directory_metadata.file_type().is_dir() {
         return Err(registered_stack_source_directory_error());
     }
-    let inspection = inspect_registered_stack_report_sync(report_path)?;
+    let inspection = inspect_registered_stack_report_sync_with_products(report_path, false)?;
+    cancellation
+        .checkpoint()
+        .map_err(|_| registered_stack_source_verification_cancelled_error())?;
+    let total_sources = inspection.sources.len();
+    on_progress(RegisteredStackSourceVerificationProgress {
+        sequence: 0,
+        state: "started",
+        completed_sources: 0,
+        total_sources,
+        current_file_name: None,
+    });
     let source_directory_text = source_directory
         .to_str()
         .ok_or_else(registered_stack_source_directory_error)?
         .to_owned();
-    let sources = inspection
-        .sources
-        .iter()
-        .map(|source| verify_registered_stack_source(source_directory, source))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(total_sources)
+        .map_err(|_| registered_stack_allocation_error())?;
+    for (index, source) in inspection.sources.iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(|_| registered_stack_source_verification_cancelled_error())?;
+        sources.push(verify_registered_stack_source(
+            source_directory,
+            source,
+            cancellation,
+        )?);
+        let completed_sources = index + 1;
+        on_progress(RegisteredStackSourceVerificationProgress {
+            sequence: u64::try_from(completed_sources)
+                .map_err(|_| registered_stack_report_validation_error())?,
+            state: if completed_sources == total_sources {
+                "completed"
+            } else {
+                "running"
+            },
+            completed_sources,
+            total_sources,
+            current_file_name: Some(source.file_name.clone()),
+        });
+    }
     let all_sources_verified = sources
         .iter()
         .all(|source| source.status == RegisteredStackSourceVerificationStatus::Verified);
@@ -2397,6 +2483,7 @@ fn verify_registered_stack_sources_sync(
 fn verify_registered_stack_source(
     source_directory: &Path,
     source: &RegisteredStackReportSourceInspection,
+    cancellation: &CancellationToken,
 ) -> Result<RegisteredStackSourceVerification, PreviewCommandError> {
     let path = source_directory.join(&source.file_name);
     let path_text = path
@@ -2414,9 +2501,10 @@ fn verify_registered_stack_source(
         Ok(metadata) if metadata.len() != source.byte_length => {
             RegisteredStackSourceVerificationStatus::ByteLengthMismatch
         }
-        Ok(_) => match File::open(&path)
-            .and_then(|mut file| fingerprint_reader(&mut file).map_err(std::io::Error::other))
-        {
+        Ok(_) => match File::open(&path).and_then(|file| {
+            let mut reader = CancellationReader::new(file, cancellation);
+            fingerprint_reader(&mut reader).map_err(std::io::Error::other)
+        }) {
             Ok(fingerprint)
                 if fingerprint.byte_length() == source.byte_length
                     && fingerprint.sha256() == source.sha256 =>
@@ -2424,6 +2512,9 @@ fn verify_registered_stack_source(
                 RegisteredStackSourceVerificationStatus::Verified
             }
             Ok(_) => RegisteredStackSourceVerificationStatus::FingerprintMismatch,
+            Err(_) if cancellation.is_cancelled() => {
+                return Err(registered_stack_source_verification_cancelled_error());
+            }
             Err(_) => RegisteredStackSourceVerificationStatus::ReadFailed,
         },
     };
@@ -2434,6 +2525,29 @@ fn verify_registered_stack_source(
         byte_length: source.byte_length,
         status,
     })
+}
+
+struct CancellationReader<'a, R> {
+    inner: R,
+    cancellation: &'a CancellationToken,
+}
+
+impl<'a, R> CancellationReader<'a, R> {
+    const fn new(inner: R, cancellation: &'a CancellationToken) -> Self {
+        Self {
+            inner,
+            cancellation,
+        }
+    }
+}
+
+impl<R: Read> Read for CancellationReader<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.cancellation
+            .checkpoint()
+            .map_err(std::io::Error::other)?;
+        self.inner.read(buffer)
+    }
 }
 
 fn is_safe_report_file_name(file_name: &str) -> bool {
@@ -2841,6 +2955,13 @@ const fn registered_stack_source_directory_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "registered_stack_source_directory_invalid",
         "The selected source directory is unavailable or is not a regular directory.",
+    )
+}
+
+const fn registered_stack_source_verification_cancelled_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_source_verification_cancelled",
+        "Archived source verification was cancelled before all fingerprints were read.",
     )
 }
 
@@ -5367,6 +5488,7 @@ pub fn run() -> Result<(), tauri::Error> {
             cancel_master_plan,
             cancel_registration_plan,
             cancel_registered_stack,
+            cancel_registered_stack_source_verification,
             diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_light_plan,
@@ -6248,11 +6370,28 @@ mod tests {
         assert_eq!(inspection.sources[0].frame_id.len(), 64);
         assert_eq!(inspection.sources[0].sha256.len(), 64);
         assert!(inspection.sources[0].byte_length > 0);
-        let verified_sources =
-            verify_registered_stack_sources_sync(&report_path, &registered_root)?;
+        let mut source_progress = Vec::new();
+        let verified_sources = verify_registered_stack_sources_sync(
+            &report_path,
+            &registered_root,
+            &CancellationToken::new(),
+            |progress| source_progress.push(progress),
+        )?;
         assert!(verified_sources.all_sources_verified);
         assert_eq!(verified_sources.report_sha256, result.report_sha256);
         assert_eq!(verified_sources.sources.len(), 2);
+        assert_eq!(
+            source_progress.first().map(|event| event.state),
+            Some("started")
+        );
+        assert_eq!(
+            source_progress.last().map(|event| event.state),
+            Some("completed")
+        );
+        assert_eq!(
+            source_progress.last().map(|event| event.completed_sources),
+            Some(2)
+        );
         assert!(verified_sources.sources.iter().all(|source| {
             source.status == RegisteredStackSourceVerificationStatus::Verified
                 && source
@@ -6263,7 +6402,12 @@ mod tests {
         let first_source_path = registered_root.join(&inspection.sources[0].file_name);
         let parked_source_path = registered_root.join("parked-source.fits");
         fs::rename(&first_source_path, &parked_source_path)?;
-        let missing_source = verify_registered_stack_sources_sync(&report_path, &registered_root)?;
+        let missing_source = verify_registered_stack_sources_sync(
+            &report_path,
+            &registered_root,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
         assert!(!missing_source.all_sources_verified);
         assert_eq!(
             missing_source.sources[0].status,
@@ -6279,7 +6423,12 @@ mod tests {
         altered_source.seek(SeekFrom::Start(0))?;
         altered_source.write_all(&[source_byte[0] ^ 0x01])?;
         altered_source.flush()?;
-        let changed_source = verify_registered_stack_sources_sync(&report_path, &registered_root)?;
+        let changed_source = verify_registered_stack_sources_sync(
+            &report_path,
+            &registered_root,
+            &CancellationToken::new(),
+            |_| {},
+        )?;
         assert!(!changed_source.all_sources_verified);
         assert_eq!(
             changed_source.sources[0].status,
@@ -6290,8 +6439,27 @@ mod tests {
         altered_source.flush()?;
         drop(altered_source);
         assert!(
-            verify_registered_stack_sources_sync(&report_path, &registered_root)?
-                .all_sources_verified
+            verify_registered_stack_sources_sync(
+                &report_path,
+                &registered_root,
+                &CancellationToken::new(),
+                |_| {},
+            )?
+            .all_sources_verified
+        );
+        let cancelled = CancellationToken::new();
+        assert!(cancelled.cancel());
+        let Err(cancelled_error) = verify_registered_stack_sources_sync(
+            &report_path,
+            &registered_root,
+            &cancelled,
+            |_| {},
+        ) else {
+            return Err("cancelled source verification unexpectedly completed".into());
+        };
+        assert_eq!(
+            cancelled_error.code,
+            "registered_stack_source_verification_cancelled"
         );
         assert!(inspection.all_products_verified);
         assert_eq!(inspection.products.len(), 1);

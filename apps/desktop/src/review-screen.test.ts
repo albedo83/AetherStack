@@ -27,6 +27,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onOpenRegisteredStackReport: vi.fn(),
     onReturnToActiveStack: vi.fn(),
     onVerifyRegisteredStackSources: vi.fn(),
+    onCancelRegisteredStackSourceVerification: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -838,6 +839,35 @@ describe("frame review workspace", () => {
       getByRole(root, "button", { name: "Verify source folder" }),
     );
     expect(actions.onVerifyRegisteredStackSources).toHaveBeenCalledOnce();
+    controller.update({
+      ...external,
+      registration: {
+        ...external.registration,
+        stack: {
+          ...external.registration.stack,
+          sourceVerificationState: "loading",
+          sourceVerificationProgress: {
+            sequence: 4,
+            state: "running",
+            completedSources: 4,
+            totalSources: 18,
+            currentFileName: "m31-registered-004.fits",
+          },
+        },
+      },
+    });
+    expect(root.textContent).toContain(
+      "Hashing archived sources · 4/18 · m31-registered-004.fits",
+    );
+    const sourceProgress = getByRole<HTMLProgressElement>(root, "progressbar", {
+      name: "Archived source verification progress",
+    });
+    expect(sourceProgress.value).toBe(4);
+    expect(sourceProgress.max).toBe(18);
+    fireEvent.click(getByRole(root, "button", { name: "Cancel hashing" }));
+    expect(
+      actions.onCancelRegisteredStackSourceVerification,
+    ).toHaveBeenCalledOnce();
     expect(root.textContent).toContain("f".repeat(64));
     expect(root.textContent).toContain(
       "Published registered artifacts required",

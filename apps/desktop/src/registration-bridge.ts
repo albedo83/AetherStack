@@ -233,6 +233,14 @@ export interface RegisteredStackSourceVerificationResult {
   readonly sources: readonly RegisteredStackSourceVerification[];
 }
 
+export interface RegisteredStackSourceVerificationProgress {
+  readonly sequence: number;
+  readonly state: "started" | "running" | "completed";
+  readonly completedSources: number;
+  readonly totalSources: number;
+  readonly currentFileName: string | null;
+}
+
 export interface RegisteredStackSourceVerification {
   readonly frameId: string;
   readonly fileName: string;
@@ -420,11 +428,19 @@ export function inspectRegisteredStackReport(
 export function verifyRegisteredStackSources(
   reportPath: string,
   sourceDirectory: string,
+  onProgress: (progress: RegisteredStackSourceVerificationProgress) => void,
 ): Promise<RegisteredStackSourceVerificationResult> {
+  const progress = new Channel<RegisteredStackSourceVerificationProgress>();
+  progress.onmessage = onProgress;
   return invoke<RegisteredStackSourceVerificationResult>(
     "verify_registered_stack_sources",
-    { request: { reportPath, sourceDirectory } },
+    { request: { reportPath, sourceDirectory }, onProgress: progress },
   );
+}
+
+/** Requests cooperative cancellation of an archived source verification. */
+export function cancelRegisteredStackSourceVerification(): Promise<boolean> {
+  return invoke<boolean>("cancel_registered_stack_source_verification");
 }
 
 /** Requests cooperative cancellation of the active common-crop integration. */

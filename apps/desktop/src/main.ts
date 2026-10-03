@@ -51,6 +51,7 @@ import {
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import {
   cancelRegisteredStack,
+  cancelRegisteredStackSourceVerification,
   cancelRegistrationPlan,
   diagnoseFitsRegistration,
   executeRegistrationPlan,
@@ -66,6 +67,7 @@ import {
   type RegistrationExecutionProgress,
   type RegisteredStackIntegrationSettings,
   type RegisteredStackProgress,
+  type RegisteredStackSourceVerificationProgress,
 } from "./registration-bridge.ts";
 import { reconcileRegistrationSolutions } from "./registration-plan.ts";
 import { bindRegisteredReviewFrames } from "./registered-review.ts";
@@ -227,6 +229,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onVerifyRegisteredStackSources() {
     void verifyStackReportSources();
+  },
+  onCancelRegisteredStackSourceVerification() {
+    void cancelStackReportSourceVerification();
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -731,6 +736,7 @@ function idleRegisteredStack(
     reportInspectionPath: null,
     sourceVerificationState: "idle",
     sourceVerification: null,
+    sourceVerificationProgress: null,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -1100,6 +1106,7 @@ async function executeStack(): Promise<void> {
         reportInspectionPath: null,
         sourceVerificationState: "idle",
         sourceVerification: null,
+        sourceVerificationProgress: null,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1180,6 +1187,7 @@ async function executeStack(): Promise<void> {
           reportInspectionPath: result.reportPath,
           sourceVerificationState: "idle",
           sourceVerification: null,
+          sourceVerificationProgress: null,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1457,6 +1465,7 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
         reportInspectionPath: path,
         sourceVerificationState: "idle",
         sourceVerification: null,
+        sourceVerificationProgress: null,
         previewState:
           activeResult === null
             ? "idle"
@@ -1514,6 +1523,7 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
           reportInspectionPath: path,
           sourceVerificationState: "idle",
           sourceVerification: null,
+          sourceVerificationProgress: null,
         },
       },
     });
@@ -1560,13 +1570,35 @@ async function verifyStackReportSources(): Promise<void> {
         ...model.registration.stack,
         sourceVerificationState: "loading",
         sourceVerification: null,
+        sourceVerificationProgress: null,
       },
     },
   });
+  const onProgress = (
+    progress: RegisteredStackSourceVerificationProgress,
+  ): void => {
+    if (
+      ticket !== stackSourceVerificationTicket ||
+      model.registration.stack.reportInspectionPath !== reportPath
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          sourceVerificationProgress: progress,
+        },
+      },
+    });
+  };
   try {
     const verification = await verifyRegisteredStackSources(
       reportPath,
       sourceDirectory,
+      onProgress,
     );
     if (
       ticket !== stackSourceVerificationTicket ||
@@ -1592,8 +1624,41 @@ async function verifyStackReportSources(): Promise<void> {
         },
       },
     });
-  } catch {
+  } catch (error) {
     if (ticket !== stackSourceVerificationTicket) return;
+    const cancelled =
+      nativeErrorCode(error) ===
+      "registered_stack_source_verification_cancelled";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          sourceVerificationState: cancelled ? "idle" : "error",
+          sourceVerification: null,
+          sourceVerificationProgress: null,
+        },
+      },
+    });
+  }
+}
+
+async function cancelStackReportSourceVerification(): Promise<void> {
+  if (model.registration.stack.sourceVerificationState !== "loading") return;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...model.registration.stack,
+        sourceVerificationState: "cancelling",
+      },
+    },
+  });
+  try {
+    await cancelRegisteredStackSourceVerification();
+  } catch {
     update({
       ...model,
       registration: {
@@ -1601,7 +1666,7 @@ async function verifyStackReportSources(): Promise<void> {
         stack: {
           ...model.registration.stack,
           sourceVerificationState: "error",
-          sourceVerification: null,
+          sourceVerificationProgress: null,
         },
       },
     });
@@ -1635,6 +1700,7 @@ function returnToActiveStack(): void {
         reportInspectionPath: result?.reportPath ?? null,
         sourceVerificationState: "idle",
         sourceVerification: null,
+        sourceVerificationProgress: null,
       },
     },
   });

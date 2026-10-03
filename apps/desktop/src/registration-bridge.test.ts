@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelRegistrationPlan,
   cancelRegisteredStack,
+  cancelRegisteredStackSourceVerification,
   diagnoseFitsRegistration,
   executeRegistrationPlan,
   executeRegisteredStack,
@@ -328,11 +329,13 @@ describe("native registration bridge", () => {
       sources: [],
     };
     vi.mocked(invoke).mockResolvedValue(result);
+    const onProgress = vi.fn();
 
     await expect(
       verifyRegisteredStackSources(
         "/archive/report.json",
         "/archive/registered",
+        onProgress,
       ),
     ).resolves.toBe(result);
     expect(invoke).toHaveBeenLastCalledWith("verify_registered_stack_sources", {
@@ -340,6 +343,12 @@ describe("native registration bridge", () => {
         reportPath: "/archive/report.json",
         sourceDirectory: "/archive/registered",
       },
+      onProgress: expect.objectContaining({ onmessage: onProgress }),
     });
+    vi.mocked(invoke).mockResolvedValue(true);
+    await expect(cancelRegisteredStackSourceVerification()).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith(
+      "cancel_registered_stack_source_verification",
+    );
   });
 });

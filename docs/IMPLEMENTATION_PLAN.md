@@ -1159,6 +1159,17 @@ safety reasoning. They do not narrate obvious syntax.
     verification from attaching to another archive. Native, bridge, presenter,
     lint, and build tests cover the workflow. Next, add cancellable progress for
     very large source sets and cameras producing multi-gigabyte sessions.
+86. Make archived source verification observable and cancellable. The operation
+    shares the exclusive bounded native-work slot, emits monotone per-source
+    progress, and checks cancellation before every file and every 64 KiB hashing
+    read. Revalidation parses and seals the report again but deliberately skips
+    the already separate product-file checksum pass, avoiding a redundant full
+    read of the integrated FITS. The UI shows current filename and counts, keeps
+    cancellation distinct from failure, and rejects progress from superseded
+    reports. Native cancellation/progress, bridge-channel, presenter, lint, and
+    build tests cover the contract. Next, expose byte-level progress within very
+    large individual source files and estimate remaining I/O without promising
+    unstable wall-clock times.
 
 ## 11. Stable-release definition
 

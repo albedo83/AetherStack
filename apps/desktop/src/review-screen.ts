@@ -198,6 +198,14 @@ export function mountReviewScreen(
       root,
       '[data-action="verify-registered-stack-sources"]',
     ),
+    cancelRegisteredStackSourceVerification: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-registered-stack-source-verification"]',
+    ),
+    registeredStackSourceProgress: required<HTMLProgressElement>(
+      root,
+      "[data-registered-stack-source-progress]",
+    ),
     registeredStackSourceVerification: required<HTMLElement>(
       root,
       "[data-registered-stack-source-verification]",
@@ -554,6 +562,10 @@ export function mountReviewScreen(
     }
     if (action === "verify-registered-stack-sources") {
       actions.onVerifyRegisteredStackSources();
+      return;
+    }
+    if (action === "cancel-registered-stack-source-verification") {
+      actions.onCancelRegisteredStackSourceVerification();
       return;
     }
 
@@ -1521,6 +1533,8 @@ interface RegistrationElements {
   readonly registeredStackReportProducts: HTMLElement;
   readonly registeredStackReportSources: HTMLElement;
   readonly verifyRegisteredStackSources: HTMLButtonElement;
+  readonly cancelRegisteredStackSourceVerification: HTMLButtonElement;
+  readonly registeredStackSourceProgress: HTMLProgressElement;
   readonly registeredStackSourceVerification: HTMLElement;
   readonly returnToActiveStack: HTMLButtonElement;
   readonly openRegisteredStackReport: HTMLButtonElement;
@@ -1742,20 +1756,32 @@ function renderRegistration(
       source,
     ]),
   );
+  const sourceVerificationBusy =
+    registration.stack.sourceVerificationState === "loading" ||
+    registration.stack.sourceVerificationState === "cancelling";
   elements.verifyRegisteredStackSources.disabled =
-    reportInspection === null ||
-    registration.stack.sourceVerificationState === "loading";
-  elements.verifyRegisteredStackSources.textContent =
-    registration.stack.sourceVerificationState === "loading"
-      ? "Hashing sources…"
-      : sourceVerification
-        ? "Verify another folder"
-        : "Verify source folder";
+    reportInspection === null || sourceVerificationBusy;
+  elements.verifyRegisteredStackSources.hidden = sourceVerificationBusy;
+  elements.cancelRegisteredStackSourceVerification.hidden =
+    !sourceVerificationBusy;
+  elements.cancelRegisteredStackSourceVerification.disabled =
+    registration.stack.sourceVerificationState === "cancelling";
+  elements.verifyRegisteredStackSources.textContent = sourceVerification
+    ? "Verify another folder"
+    : "Verify source folder";
+  const sourceProgress = registration.stack.sourceVerificationProgress;
+  elements.registeredStackSourceProgress.hidden = !sourceVerificationBusy;
+  elements.registeredStackSourceProgress.max =
+    sourceProgress?.totalSources ?? 1;
+  elements.registeredStackSourceProgress.value =
+    sourceProgress?.completedSources ?? 0;
   elements.registeredStackSourceVerification.textContent = sourceVerification
     ? `${sourceVerification.allSourcesVerified ? "All source fingerprints verified" : "Source evidence mismatch"} · ${sourceVerification.sourceDirectory}`
-    : registration.stack.sourceVerificationState === "error"
-      ? "Source verification failed safely"
-      : "Choose the directory containing the registered source FITS files";
+    : sourceVerificationBusy
+      ? `${registration.stack.sourceVerificationState === "cancelling" ? "Cancelling after the current 64 KiB block" : "Hashing archived sources"} · ${sourceProgress?.completedSources ?? 0}/${sourceProgress?.totalSources ?? reportInspection?.sourceCount ?? 0}${sourceProgress?.currentFileName ? ` · ${sourceProgress.currentFileName}` : ""}`
+      : registration.stack.sourceVerificationState === "error"
+        ? "Source verification failed safely"
+        : "Choose the directory containing the registered source FITS files";
   elements.registeredStackReportSources.replaceChildren(
     ...(reportInspection?.sources ?? []).map((source) => {
       const verification = verifiedSources.get(source.frameId);
@@ -3304,7 +3330,9 @@ function shellMarkup(): string {
                       <div class="integration-report__source-actions">
                         <output data-registered-stack-source-verification>Choose the directory containing the registered source FITS files</output>
                         <button class="button button--quiet" type="button" data-action="verify-registered-stack-sources">Verify source folder</button>
+                        <button class="button button--quiet" type="button" data-action="cancel-registered-stack-source-verification" hidden>Cancel hashing</button>
                       </div>
+                      <progress data-registered-stack-source-progress aria-label="Archived source verification progress" hidden></progress>
                       <ol data-registered-stack-report-sources aria-label="Sealed source evidence"></ol>
                     </details>
                   </div>
