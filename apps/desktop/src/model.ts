@@ -128,7 +128,8 @@ export interface SessionDiagnostics {
   readonly exportMessage: string;
   readonly inspectionState: "idle" | "inspecting" | "ready" | "error";
   readonly inspectionMessage: string;
-  readonly maintenanceState: "idle" | "inspecting" | "ready" | "error";
+  readonly maintenanceState:
+    "idle" | "inspecting" | "ready" | "applying" | "error";
   readonly maintenanceMessage: string;
   readonly maintenanceEligible: number;
   readonly maintenanceBlocked: number;
@@ -373,6 +374,7 @@ export interface ReviewActions {
   readonly onExportDiagnostics: () => void;
   readonly onInspectDiagnosticsReport: () => void;
   readonly onPreviewQualityCacheMaintenance: () => void;
+  readonly onApplyQualityCacheMaintenance: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
   readonly onSelectLightFrameView: (view: LightFrameView) => void;
   readonly onSelectFrame: (frameId: string) => void;

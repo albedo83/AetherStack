@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use aether_cache::{ArtifactStore, CacheKey};
+use aether_cache::{ArtifactFileFingerprint, ArtifactRemovalState, ArtifactStore, CacheKey};
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, DatasumVerification, FITS_STATISTICS_ALGORITHM_ID,
@@ -1029,6 +1029,20 @@ struct QualityCacheMaintenancePreviewResponse {
     blocked_items: Vec<QualityCacheMaintenanceBlockedItem>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QualityCacheMaintenanceApplyRequest {
+    plan_sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QualityCacheMaintenanceApplyResponse {
+    removed_count: usize,
+    removed_bytes: u64,
+    skipped_count: usize,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct QualityCacheMaintenancePlan<'a> {
@@ -1098,6 +1112,59 @@ fn preview_quality_cache_maintenance_sync(
         items,
         blocked_items,
     })
+}
+
+fn apply_quality_cache_maintenance_sync(
+    cache_root: &Path,
+    session: &ImportedNativeSession,
+    plan_sha256: &str,
+) -> Result<(QualityCacheMaintenanceApplyResponse, BTreeSet<CacheKey>), PreviewCommandError> {
+    if !is_canonical_sha256(plan_sha256) {
+        return Err(quality_cache_maintenance_stale_error());
+    }
+    let preview = preview_quality_cache_maintenance_sync(cache_root, session)?;
+    if preview.plan_sha256 != plan_sha256 || preview.items.is_empty() {
+        return Err(quality_cache_maintenance_stale_error());
+    }
+    let store = ArtifactStore::new(cache_root.to_owned())
+        .map_err(|_| quality_cache_maintenance_apply_error())?;
+    let mut removed_count = 0_usize;
+    let mut removed_bytes = 0_u64;
+    let mut skipped_count = preview.blocked_count;
+    let mut removed_keys = BTreeSet::new();
+    for item in preview.items {
+        let key = CacheKey::from_sha256_hex(item.cache_key)
+            .map_err(|_| quality_cache_maintenance_apply_error())?;
+        let fingerprint = ArtifactFileFingerprint::from_parts(item.file_bytes, item.file_sha256)
+            .map_err(|_| quality_cache_maintenance_apply_error())?;
+        match store
+            .remove_raw_if_matches(&key, &fingerprint, MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES)
+            .map_err(|_| quality_cache_maintenance_apply_error())?
+        {
+            ArtifactRemovalState::Removed => {
+                removed_count = removed_count
+                    .checked_add(1)
+                    .ok_or_else(quality_cache_maintenance_apply_error)?;
+                removed_bytes = removed_bytes
+                    .checked_add(item.file_bytes)
+                    .ok_or_else(quality_cache_maintenance_apply_error)?;
+                removed_keys.insert(key);
+            }
+            ArtifactRemovalState::Missing | ArtifactRemovalState::Changed => {
+                skipped_count = skipped_count
+                    .checked_add(1)
+                    .ok_or_else(quality_cache_maintenance_apply_error)?;
+            }
+        }
+    }
+    Ok((
+        QualityCacheMaintenanceApplyResponse {
+            removed_count,
+            removed_bytes,
+            skipped_count,
+        },
+        removed_keys,
+    ))
 }
 
 #[derive(Clone, Debug)]
@@ -1440,7 +1507,7 @@ struct DesktopCalibrationExecutionState {
     cancellation: Mutex<Option<CancellationToken>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ImportedNativeSession {
     root: PathBuf,
     manifest: Arc<SessionManifest>,
@@ -4403,6 +4470,42 @@ async fn preview_quality_cache_maintenance(
 }
 
 #[tauri::command]
+async fn apply_quality_cache_maintenance(
+    request: QualityCacheMaintenanceApplyRequest,
+    app: tauri::AppHandle,
+    session_state: tauri::State<'_, DesktopSessionState>,
+) -> Result<QualityCacheMaintenanceApplyResponse, PreviewCommandError> {
+    let cache_root = quality_cache_root(&app)?;
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let worker_session = Arc::clone(&session);
+    let (response, removed_keys) = tauri::async_runtime::spawn_blocking(move || {
+        apply_quality_cache_maintenance_sync(&cache_root, &worker_session, &request.plan_sha256)
+    })
+    .await
+    .map_err(|_| {
+        PreviewCommandError::new(
+            "quality_cache_maintenance_apply_interrupted",
+            "The quality-cache removal worker stopped before producing a result.",
+        )
+    })??;
+    if !removed_keys.is_empty() {
+        let mut guard = lock_session_state(&session_state)?;
+        if let Some(current) = guard.as_ref()
+            && Arc::ptr_eq(current, &session)
+        {
+            let mut updated = (**current).clone();
+            updated
+                .quality_cache_rejections
+                .retain(|candidate| !removed_keys.contains(&candidate.key));
+            *guard = Some(Arc::new(updated));
+        }
+    }
+    Ok(response)
+}
+
+#[tauri::command]
 async fn preview_master_plan(
     request: MasterPlanPreviewRequest,
     session_state: tauri::State<'_, DesktopSessionState>,
@@ -5135,6 +5238,20 @@ const fn quality_cache_maintenance_preview_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "quality_cache_maintenance_preview_failed",
         "The rejected quality-cache set could not be inspected safely.",
+    )
+}
+
+const fn quality_cache_maintenance_stale_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "quality_cache_maintenance_plan_stale",
+        "The rejected cache set changed after preview; inspect it again before removal.",
+    )
+}
+
+const fn quality_cache_maintenance_apply_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "quality_cache_maintenance_apply_failed",
+        "The inspected rejected cache artifacts could not be removed safely.",
     )
 }
 
@@ -6730,6 +6847,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(DesktopReviewState::default())
         .manage(DesktopSessionState::default())
         .invoke_handler(tauri::generate_handler![
+            apply_quality_cache_maintenance,
             apply_frame_selection,
             apply_review_decision,
             cancel_light_plan,
@@ -9369,13 +9487,29 @@ mod tests {
         assert_eq!(preview.items.len(), 1);
         assert_eq!(preview.items[0].source, "LIGHTS/a-existing.fits");
         assert_eq!(preview.items[0].cache_key, existing_key.as_str());
-        assert_eq!(preview.total_file_bytes, fs::metadata(existing_path)?.len());
+        assert_eq!(
+            preview.total_file_bytes,
+            fs::metadata(&existing_path)?.len()
+        );
         assert_eq!(preview.blocked_items[0].reason, "cache_artifact_missing");
         assert!(is_canonical_sha256(&preview.items[0].file_sha256));
         assert!(is_canonical_sha256(&preview.plan_sha256));
 
         let repeated = preview_quality_cache_maintenance_sync(directory.path(), &session)?;
         assert_eq!(repeated.plan_sha256, preview.plan_sha256);
+        let (applied, removed_keys) =
+            apply_quality_cache_maintenance_sync(directory.path(), &session, &preview.plan_sha256)?;
+        assert_eq!(applied.removed_count, 1);
+        assert_eq!(applied.removed_bytes, preview.total_file_bytes);
+        assert_eq!(applied.skipped_count, 1);
+        assert_eq!(removed_keys, BTreeSet::from([existing_key]));
+        assert!(!existing_path.exists());
+        let Err(stale) =
+            apply_quality_cache_maintenance_sync(directory.path(), &session, &preview.plan_sha256)
+        else {
+            return Err("a stale cache-removal plan was accepted".into());
+        };
+        assert_eq!(stale.code, "quality_cache_maintenance_plan_stale");
         Ok(())
     }
 

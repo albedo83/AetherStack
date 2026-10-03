@@ -48,6 +48,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onExportDiagnostics: vi.fn(),
     onInspectDiagnosticsReport: vi.fn(),
     onPreviewQualityCacheMaintenance: vi.fn(),
+    onApplyQualityCacheMaintenance: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectLightFrameView: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -343,6 +344,32 @@ describe("frame review workspace", () => {
     expect(dialog.textContent).toContain("1 removable · 4.0 KiB");
     fireEvent.click(getByRole(dialog, "button", { name: "Preview cleanup" }));
     expect(actions.onPreviewQualityCacheMaintenance).toHaveBeenCalledOnce();
+    fireEvent.click(
+      getByRole(dialog, "button", { name: "Remove inspected files" }),
+    );
+    const confirmation = getByRole(root, "dialog", {
+      name: "Remove only the inspected artifacts?",
+    });
+    expect(confirmation.textContent).toContain("1 rejected artifact · 4.0 KiB");
+    expect(confirmation.textContent).toContain(`Plan sha256 ${"a".repeat(64)}`);
+    expect(confirmation.textContent).toContain(
+      "Original FITS files are never targeted",
+    );
+    fireEvent.click(getByRole(confirmation, "button", { name: "Keep files" }));
+    expect(actions.onApplyQualityCacheMaintenance).not.toHaveBeenCalled();
+    fireEvent.click(
+      getByRole(dialog, "button", { name: "Remove inspected files" }),
+    );
+    fireEvent.click(
+      getByRole(
+        getByRole(root, "dialog", {
+          name: "Remove only the inspected artifacts?",
+        }),
+        "button",
+        { name: "Remove inspected files" },
+      ),
+    );
+    expect(actions.onApplyQualityCacheMaintenance).toHaveBeenCalledOnce();
     fireEvent.click(
       getByRole(dialog, "button", { name: "Export redacted JSON" }),
     );

@@ -4065,10 +4065,17 @@ tr[data-state="blocked"] .association-state {
     inset 0 -2px #0008;
 }
 
-.diagnostics-maintenance > div {
+.diagnostics-maintenance > div:not(.diagnostics-maintenance__actions) {
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+
+.diagnostics-maintenance__actions {
+  display: flex;
+  grid-auto-flow: column;
+  gap: 8px;
+  flex: none;
 }
 
 .diagnostics-maintenance strong {
@@ -4092,6 +4099,40 @@ tr[data-state="blocked"] .association-state {
 
 .diagnostics-maintenance p[data-state="error"] {
   color: var(--danger);
+}
+
+.maintenance-confirmation {
+  width: min(520px, 100%);
+}
+
+.maintenance-confirmation > strong,
+.maintenance-confirmation > code {
+  display: block;
+  padding: 10px 12px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: #090e14;
+  border: 1px solid #344052;
+}
+
+.maintenance-confirmation > strong {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.maintenance-confirmation > code {
+  color: var(--text-dim);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.maintenance-confirmation__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .diagnostics-evidence-toolbar {
@@ -4496,6 +4537,15 @@ tr[data-state="blocked"] .association-state {
 
   .diagnostics-maintenance .button {
     width: 100%;
+  }
+
+  .diagnostics-maintenance__actions,
+  .maintenance-confirmation__actions {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostics-maintenance__actions {
+    flex-direction: column;
   }
 
   .diagnostics-export .button {

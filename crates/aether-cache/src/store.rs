@@ -73,6 +73,22 @@ pub struct ArtifactFileFingerprint {
 }
 
 impl ArtifactFileFingerprint {
+    /// Reconstructs a fingerprint received from a previously sealed preview.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty file or a non-canonical lowercase SHA-256 value.
+    pub fn from_parts(
+        file_bytes: u64,
+        sha256: impl Into<String>,
+    ) -> Result<Self, CacheRemovalError> {
+        let sha256 = sha256.into();
+        if file_bytes == 0 || decode_lower_hex(&sha256).is_none() {
+            return Err(CacheRemovalError::InvalidFingerprint);
+        }
+        Ok(Self { file_bytes, sha256 })
+    }
+
     /// Exact size of the complete cache file, including its header.
     #[must_use]
     pub const fn file_bytes(&self) -> u64 {
@@ -308,54 +324,67 @@ impl ArtifactStore {
         maximum_file_bytes: u64,
     ) -> Result<Option<ArtifactFileFingerprint>, CacheFingerprintError> {
         let path = self.artifact_path(key);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(CacheFingerprintError::Inspect(error)),
-        };
-        if !metadata.file_type().is_file() {
-            return Err(CacheFingerprintError::NotRegularFile);
-        }
-        let file_bytes = metadata.len();
-        if file_bytes > maximum_file_bytes {
-            return Err(CacheFingerprintError::TooLarge {
-                actual: file_bytes,
-                maximum: maximum_file_bytes,
-            });
-        }
-        let mut file = File::open(path).map_err(CacheFingerprintError::Open)?;
-        let opened_metadata = file.metadata().map_err(CacheFingerprintError::Inspect)?;
-        if !opened_metadata.file_type().is_file() || opened_metadata.len() != file_bytes {
-            return Err(CacheFingerprintError::ChangedDuringInspection);
-        }
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; COPY_BUFFER_BYTES];
-        let mut observed = 0_u64;
-        loop {
-            let read = match file.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => read,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(CacheFingerprintError::Read(error)),
-            };
-            observed = observed
-                .checked_add(read as u64)
-                .ok_or(CacheFingerprintError::ChangedDuringInspection)?;
-            if observed > maximum_file_bytes {
-                return Err(CacheFingerprintError::TooLarge {
-                    actual: observed,
-                    maximum: maximum_file_bytes,
-                });
+        match fingerprint_raw_path(&path, maximum_file_bytes) {
+            Ok(fingerprint) => Ok(Some(fingerprint)),
+            Err(CacheFingerprintError::Inspect(error))
+                if error.kind() == io::ErrorKind::NotFound =>
+            {
+                Ok(None)
             }
-            hasher.update(&buffer[..read]);
+            Err(error) => Err(error),
         }
-        if observed != file_bytes {
-            return Err(CacheFingerprintError::ChangedDuringInspection);
+    }
+
+    /// Removes one raw artifact only when it still matches an inspected file.
+    ///
+    /// The target is first fingerprinted, then renamed within its shard and
+    /// fingerprinted again before deletion. Changed or missing targets remain
+    /// non-errors and are never deleted. The rename prevents the cache key from
+    /// becoming visible as valid during the final verification window.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed inspection, quarantine, restoration, deletion, or
+    /// durability error. A restoration failure leaves the artifact under its
+    /// private quarantine name and is always reported.
+    pub fn remove_raw_if_matches(
+        &self,
+        key: &CacheKey,
+        expected: &ArtifactFileFingerprint,
+        maximum_file_bytes: u64,
+    ) -> Result<ArtifactRemovalState, CacheRemovalError> {
+        let Some(current) = self
+            .fingerprint_raw(key, maximum_file_bytes)
+            .map_err(CacheRemovalError::Inspect)?
+        else {
+            return Ok(ArtifactRemovalState::Missing);
+        };
+        if &current != expected {
+            return Ok(ArtifactRemovalState::Changed);
         }
-        Ok(Some(ArtifactFileFingerprint {
-            file_bytes,
-            sha256: encode_lower_hex(&hasher.finalize()),
-        }))
+        let target = self.artifact_path(key);
+        let shard = self.shard_path(key);
+        let quarantine = unique_quarantine_path(&shard, key)?;
+        match fs::rename(&target, &quarantine) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(ArtifactRemovalState::Missing);
+            }
+            Err(error) => return Err(CacheRemovalError::Quarantine(error)),
+        }
+        let quarantined = fingerprint_raw_path(&quarantine, maximum_file_bytes)
+            .map_err(CacheRemovalError::Inspect);
+        match quarantined {
+            Ok(fingerprint) if &fingerprint == expected => {
+                fs::remove_file(&quarantine).map_err(CacheRemovalError::Remove)?;
+                sync_directory_after_removal(&shard)?;
+                Ok(ArtifactRemovalState::Removed)
+            }
+            Ok(_) | Err(_) => {
+                restore_quarantine(&quarantine, &target)?;
+                Ok(ArtifactRemovalState::Changed)
+            }
+        }
     }
 
     fn shard_path(&self, key: &CacheKey) -> PathBuf {
@@ -428,6 +457,68 @@ pub enum CacheFingerprintError {
     Read(io::Error),
     /// Artifact identity or length changed while it was inspected.
     ChangedDuringInspection,
+}
+
+/// Outcome of an exact conditional cache removal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtifactRemovalState {
+    /// The exact inspected bytes were removed.
+    Removed,
+    /// The cache key no longer exists.
+    Missing,
+    /// The target no longer matches the inspected bytes.
+    Changed,
+}
+
+/// Failure while conditionally removing an inspected cache artifact.
+#[derive(Debug)]
+pub enum CacheRemovalError {
+    /// Expected length or SHA-256 is not canonical.
+    InvalidFingerprint,
+    /// Current or quarantined bytes could not be fingerprinted safely.
+    Inspect(CacheFingerprintError),
+    /// Target could not be moved to a private name in its shard.
+    Quarantine(io::Error),
+    /// Changed bytes could not be restored to the cache key.
+    Restore(io::Error),
+    /// Verified quarantined bytes could not be removed.
+    Remove(io::Error),
+    /// Shard metadata could not be synchronized after removal.
+    DirectorySync(io::Error),
+}
+
+impl Display for CacheRemovalError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFingerprint => formatter.write_str("cache fingerprint is invalid"),
+            Self::Inspect(error) => {
+                write!(formatter, "cannot verify cache removal target: {error}")
+            }
+            Self::Quarantine(error) => {
+                write!(formatter, "cannot quarantine cache artifact: {error}")
+            }
+            Self::Restore(error) => {
+                write!(formatter, "cannot restore changed cache artifact: {error}")
+            }
+            Self::Remove(error) => write!(formatter, "cannot remove cache artifact: {error}"),
+            Self::DirectorySync(error) => {
+                write!(formatter, "cannot synchronize cache removal: {error}")
+            }
+        }
+    }
+}
+
+impl Error for CacheRemovalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Inspect(error) => Some(error),
+            Self::Quarantine(error)
+            | Self::Restore(error)
+            | Self::Remove(error)
+            | Self::DirectorySync(error) => Some(error),
+            Self::InvalidFingerprint => None,
+        }
+    }
 }
 
 impl Display for CacheFingerprintError {
@@ -682,6 +773,90 @@ fn create_temporary(shard: &Path, key: &CacheKey) -> Result<(PathBuf, File), Cac
     ))
 }
 
+fn unique_quarantine_path(shard: &Path, key: &CacheKey) -> Result<PathBuf, CacheRemovalError> {
+    for _ in 0..MAX_TEMPORARY_NAME_ATTEMPTS {
+        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = shard.join(format!(
+            ".{}.{}-{sequence}.remove",
+            key.as_str(),
+            std::process::id()
+        ));
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(path),
+            Ok(_) => continue,
+            Err(error) => return Err(CacheRemovalError::Quarantine(error)),
+        }
+    }
+    Err(CacheRemovalError::Quarantine(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "cache quarantine name attempts exhausted",
+    )))
+}
+
+fn restore_quarantine(quarantine: &Path, target: &Path) -> Result<(), CacheRemovalError> {
+    match fs::symlink_metadata(target) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(CacheRemovalError::Restore(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "cache key was republished during removal",
+            )));
+        }
+        Err(error) => return Err(CacheRemovalError::Restore(error)),
+    }
+    fs::rename(quarantine, target).map_err(CacheRemovalError::Restore)
+}
+
+fn fingerprint_raw_path(
+    path: &Path,
+    maximum_file_bytes: u64,
+) -> Result<ArtifactFileFingerprint, CacheFingerprintError> {
+    let metadata = fs::symlink_metadata(path).map_err(CacheFingerprintError::Inspect)?;
+    if !metadata.file_type().is_file() {
+        return Err(CacheFingerprintError::NotRegularFile);
+    }
+    let file_bytes = metadata.len();
+    if file_bytes > maximum_file_bytes {
+        return Err(CacheFingerprintError::TooLarge {
+            actual: file_bytes,
+            maximum: maximum_file_bytes,
+        });
+    }
+    let mut file = File::open(path).map_err(CacheFingerprintError::Open)?;
+    let opened_metadata = file.metadata().map_err(CacheFingerprintError::Inspect)?;
+    if !opened_metadata.file_type().is_file() || opened_metadata.len() != file_bytes {
+        return Err(CacheFingerprintError::ChangedDuringInspection);
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; COPY_BUFFER_BYTES];
+    let mut observed = 0_u64;
+    loop {
+        let read = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(CacheFingerprintError::Read(error)),
+        };
+        observed = observed
+            .checked_add(read as u64)
+            .ok_or(CacheFingerprintError::ChangedDuringInspection)?;
+        if observed > maximum_file_bytes {
+            return Err(CacheFingerprintError::TooLarge {
+                actual: observed,
+                maximum: maximum_file_bytes,
+            });
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if observed != file_bytes {
+        return Err(CacheFingerprintError::ChangedDuringInspection);
+    }
+    Ok(ArtifactFileFingerprint {
+        file_bytes,
+        sha256: encode_lower_hex(&hasher.finalize()),
+    })
+}
+
 fn copy_payload<R: Read, W: Write>(
     source: &mut R,
     destination: &mut W,
@@ -815,6 +990,19 @@ fn sync_directory_after_publish(shard: &Path) -> Result<(), CacheWriteError> {
 
 #[cfg(not(unix))]
 fn sync_directory_after_publish(_shard: &Path) -> Result<(), CacheWriteError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory_after_removal(shard: &Path) -> Result<(), CacheRemovalError> {
+    let directory = File::open(shard).map_err(CacheRemovalError::DirectorySync)?;
+    directory
+        .sync_all()
+        .map_err(CacheRemovalError::DirectorySync)
+}
+
+#[cfg(not(unix))]
+fn sync_directory_after_removal(_shard: &Path) -> Result<(), CacheRemovalError> {
     Ok(())
 }
 
@@ -1139,5 +1327,44 @@ mod tests {
             Err(CacheFingerprintError::NotRegularFile)
         ));
         Ok(())
+    }
+
+    #[test]
+    fn conditional_removal_requires_the_exact_previewed_bytes() -> Result<(), Box<dyn Error>> {
+        let (_directory, store) = store()?;
+        let key = key()?;
+        store.publish(&key, &mut Cursor::new(b"payload"))?;
+        let fingerprint = store
+            .fingerprint_raw(&key, 1_024)?
+            .ok_or("fingerprint missing")?;
+        let stale = ArtifactFileFingerprint::from_parts(fingerprint.file_bytes(), "0".repeat(64))?;
+
+        assert_eq!(
+            store.remove_raw_if_matches(&key, &stale, 1_024)?,
+            ArtifactRemovalState::Changed
+        );
+        assert!(store.fingerprint_raw(&key, 1_024)?.is_some());
+        assert_eq!(
+            store.remove_raw_if_matches(&key, &fingerprint, 1_024)?,
+            ArtifactRemovalState::Removed
+        );
+        assert_eq!(store.fingerprint_raw(&key, 1_024)?, None);
+        assert_eq!(
+            store.remove_raw_if_matches(&key, &fingerprint, 1_024)?,
+            ArtifactRemovalState::Missing
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fingerprint_constructor_rejects_unsealed_values() {
+        assert!(matches!(
+            ArtifactFileFingerprint::from_parts(0, "0".repeat(64)),
+            Err(CacheRemovalError::InvalidFingerprint)
+        ));
+        assert!(matches!(
+            ArtifactFileFingerprint::from_parts(1, "A".repeat(64)),
+            Err(CacheRemovalError::InvalidFingerprint)
+        ));
     }
 }

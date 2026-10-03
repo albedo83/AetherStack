@@ -129,6 +129,10 @@ fingerprints the exact native rejection set and shows removable count, bounded
 bytes, blocked count, and a shortened plan seal. The wording states “preview
 only”; no destructive control is shown until a later confirmation design can
 prove that the inspected bytes have not changed.
+Once a non-empty preview is ready, removal is a distinct danger action behind a
+modal confirmation. The confirmation repeats exact count, bytes, the full plan
+seal, and the guarantee that original FITS files are never targeted. Cancel is
+focused first. Confirmation sends only the seal; changed files remain intact.
 
 ## Dark visual system
 

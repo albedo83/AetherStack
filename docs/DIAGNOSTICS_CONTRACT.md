@@ -64,6 +64,12 @@ complete untrusted file, including its header, and seals the ordered candidate
 set together with the current manifest and algorithm identity. Missing,
 non-regular, oversized, unreadable, or changing targets are blocked separately.
 The preview reports exact counts and bytes but grants no deletion capability.
+Applying maintenance requires only that preview's canonical SHA-256; the browser
+cannot submit cache keys or paths. Native code rebuilds the plan, rejects a stale
+seal, fingerprints every file again, moves each exact match to a private name in
+the same shard, verifies the moved bytes, and only then removes it. Missing or
+changed entries are retained and counted. Original FITS sources are outside the
+cache root and cannot be addressed by this operation.
 
 ## Required tests
 
@@ -78,3 +84,6 @@ The preview reports exact counts and bytes but grants no deletion capability.
 - raw cache fingerprints remain available for corrupt bounded files;
 - missing, non-regular, and oversized cache targets remain blocked;
 - the browser requests a preview without supplying paths, keys, or candidates.
+- apply IPC supplies only the canonical plan digest;
+- stale plans and changed bytes never remove a cache artifact;
+- exact removal makes the cache key absent and retains the FITS source.

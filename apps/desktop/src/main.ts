@@ -86,6 +86,7 @@ import {
   type FrameSelectionRule,
 } from "./selection-bridge.ts";
 import {
+  applyQualityCacheMaintenance,
   exportSessionDiagnostics,
   importedSessionDiagnostics,
   importedSessionStatus,
@@ -296,6 +297,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onPreviewQualityCacheMaintenance() {
     void previewCacheMaintenance();
+  },
+  onApplyQualityCacheMaintenance() {
+    void applyCacheMaintenance();
   },
   onSelectRole(role) {
     selectRole(role);
@@ -527,6 +531,50 @@ async function previewCacheMaintenance(): Promise<void> {
         maintenanceEligible: 0,
         maintenanceBlocked: 0,
         maintenanceBytes: 0,
+        maintenancePlanSha256: null,
+      },
+    });
+  }
+}
+
+async function applyCacheMaintenance(): Promise<void> {
+  const planSha256 = model.sessionDiagnostics.maintenancePlanSha256;
+  if (
+    !importedSession ||
+    !planSha256 ||
+    model.sessionDiagnostics.maintenanceState !== "ready"
+  ) {
+    return;
+  }
+  update({
+    ...model,
+    sessionDiagnostics: {
+      ...model.sessionDiagnostics,
+      maintenanceState: "applying",
+      maintenanceMessage: "Revalidating and removing inspected artifacts…",
+    },
+  });
+  try {
+    const result = await applyQualityCacheMaintenance(planSha256);
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        maintenanceState: "idle",
+        maintenanceMessage: `${result.removedCount.toLocaleString("en-US")} removed · ${formatByteCount(result.removedBytes)} · ${result.skippedCount.toLocaleString("en-US")} retained`,
+        maintenanceEligible: 0,
+        maintenanceBlocked: result.skippedCount,
+        maintenanceBytes: 0,
+        maintenancePlanSha256: null,
+      },
+    });
+  } catch {
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        maintenanceState: "error",
+        maintenanceMessage: "Removal refused or interrupted · preview again",
         maintenancePlanSha256: null,
       },
     });
@@ -3658,4 +3706,10 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
         }
       : model.registration,
   });
+}
+
+function formatByteCount(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
 }

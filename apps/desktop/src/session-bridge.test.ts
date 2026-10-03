@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyQualityCacheMaintenance,
   importedSessionDiagnostics,
   importedSessionStatus,
   previewQualityCacheMaintenance,
@@ -108,6 +109,18 @@ describe("native session bridge", () => {
 
     await expect(previewQualityCacheMaintenance()).resolves.toBe(preview);
     expect(invoke).toHaveBeenCalledWith("preview_quality_cache_maintenance");
+  });
+
+  it("applies cache maintenance using only the sealed plan digest", async () => {
+    const result = { removedCount: 1, removedBytes: 4_096, skippedCount: 0 };
+    vi.mocked(invoke).mockResolvedValue(result);
+
+    await expect(applyQualityCacheMaintenance("c".repeat(64))).resolves.toBe(
+      result,
+    );
+    expect(invoke).toHaveBeenCalledWith("apply_quality_cache_maintenance", {
+      request: { planSha256: "c".repeat(64) },
+    });
   });
 
   it("reports normal cache misses without degrading a verified import", () => {

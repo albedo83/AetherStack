@@ -136,6 +136,22 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-maintenance-facts]",
     ),
+    diagnosticsMaintenanceRemove: required<HTMLButtonElement>(
+      root,
+      '[data-action="open-cache-maintenance-confirmation"]',
+    ),
+    cacheMaintenanceDialog: required<HTMLElement>(
+      root,
+      "[data-cache-maintenance-dialog]",
+    ),
+    cacheMaintenanceSummary: required<HTMLElement>(
+      root,
+      "[data-cache-maintenance-summary]",
+    ),
+    cacheMaintenanceSeal: required<HTMLElement>(
+      root,
+      "[data-cache-maintenance-seal]",
+    ),
     framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
     calibrationWorkspace: required<HTMLElement>(
       root,
@@ -1015,6 +1031,31 @@ export function mountReviewScreen(
       actions.onPreviewQualityCacheMaintenance();
       return;
     }
+    if (action === "open-cache-maintenance-confirmation") {
+      if (
+        model.sessionDiagnostics.maintenanceState === "ready" &&
+        model.sessionDiagnostics.maintenanceEligible > 0
+      ) {
+        elements.cacheMaintenanceDialog.hidden = false;
+        queueMicrotask(() => {
+          required<HTMLButtonElement>(
+            elements.cacheMaintenanceDialog,
+            '[data-action="cancel-cache-maintenance"]',
+          ).focus();
+        });
+      }
+      return;
+    }
+    if (action === "cancel-cache-maintenance") {
+      elements.cacheMaintenanceDialog.hidden = true;
+      queueMicrotask(() => elements.diagnosticsMaintenanceRemove.focus());
+      return;
+    }
+    if (action === "confirm-cache-maintenance") {
+      elements.cacheMaintenanceDialog.hidden = true;
+      actions.onApplyQualityCacheMaintenance();
+      return;
+    }
     if (action === "filter-diagnostics-evidence") {
       const filter = actionElement.dataset.diagnosticsFilter;
       if (isDiagnosticsEvidenceFilter(filter)) {
@@ -1211,6 +1252,11 @@ export function mountReviewScreen(
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && !elements.cacheMaintenanceDialog.hidden) {
+      elements.cacheMaintenanceDialog.hidden = true;
+      queueMicrotask(() => elements.diagnosticsMaintenanceRemove.focus());
+      return;
+    }
     if (event.key === "Escape" && !elements.diagnosticsDialog.hidden) {
       elements.diagnosticsDialog.hidden = true;
       queueMicrotask(() => elements.diagnosticsButton.focus());
@@ -1232,6 +1278,7 @@ export function mountReviewScreen(
     const target = event.target instanceof Element ? event.target : null;
     if (
       !elements.rejectDialog.hidden ||
+      !elements.cacheMaintenanceDialog.hidden ||
       !elements.diagnosticsDialog.hidden ||
       !elements.statisticsDialog.hidden ||
       !elements.selectionConfirmation.hidden
@@ -2237,6 +2284,9 @@ function renderSessionDiagnostics(
     diagnosticsMaintenance: HTMLButtonElement;
     diagnosticsMaintenanceStatus: HTMLElement;
     diagnosticsMaintenanceFacts: HTMLElement;
+    diagnosticsMaintenanceRemove: HTMLButtonElement;
+    cacheMaintenanceSummary: HTMLElement;
+    cacheMaintenanceSeal: HTMLElement;
   },
   model: ReviewViewModel,
   filter: DiagnosticsEvidenceFilter,
@@ -2345,7 +2395,8 @@ function renderSessionDiagnostics(
     diagnostics.inspectionMessage;
   elements.diagnosticsMaintenance.disabled =
     diagnostics.qualityEvidenceRejected === 0 ||
-    diagnostics.maintenanceState === "inspecting";
+    diagnostics.maintenanceState === "inspecting" ||
+    diagnostics.maintenanceState === "applying";
   elements.diagnosticsMaintenance.textContent =
     diagnostics.maintenanceState === "inspecting"
       ? "Inspecting…"
@@ -2360,6 +2411,15 @@ function renderSessionDiagnostics(
     diagnostics.maintenanceState === "ready"
       ? `${formatCount(diagnostics.maintenanceEligible)} removable · ${formatByteCount(diagnostics.maintenanceBytes)} · ${formatCount(diagnostics.maintenanceBlocked)} blocked · plan ${diagnostics.maintenancePlanSha256?.slice(0, 12) ?? "unsealed"}…`
       : "";
+  elements.diagnosticsMaintenanceRemove.hidden =
+    diagnostics.maintenanceState !== "ready" ||
+    diagnostics.maintenanceEligible === 0;
+  elements.diagnosticsMaintenanceRemove.disabled =
+    diagnostics.maintenanceState === "applying";
+  elements.cacheMaintenanceSummary.textContent = `${formatCount(diagnostics.maintenanceEligible)} rejected artifact${diagnostics.maintenanceEligible === 1 ? "" : "s"} · ${formatByteCount(diagnostics.maintenanceBytes)}`;
+  elements.cacheMaintenanceSeal.textContent = diagnostics.maintenancePlanSha256
+    ? `Plan sha256 ${diagnostics.maintenancePlanSha256}`
+    : "No sealed maintenance plan";
 }
 
 function diagnosticCategoryLabel(
@@ -4596,7 +4656,10 @@ function shellMarkup(): string {
               <p data-diagnostics-maintenance-status aria-live="polite">Rejected cache artifacts have not been inspected</p>
               <code data-diagnostics-maintenance-facts hidden></code>
             </div>
-            <button class="button button--quiet" type="button" data-action="preview-cache-maintenance" disabled>Preview cleanup</button>
+            <div class="diagnostics-maintenance__actions">
+              <button class="button button--quiet" type="button" data-action="preview-cache-maintenance" disabled>Preview cleanup</button>
+              <button class="button button--danger" type="button" data-action="open-cache-maintenance-confirmation" hidden>Remove inspected files</button>
+            </div>
           </div>
         </section>
         <section class="diagnostics-bank" aria-labelledby="diagnostics-evidence-heading">
@@ -4630,6 +4693,20 @@ function shellMarkup(): string {
             <button class="button button--primary" type="button" data-action="export-diagnostics">Export redacted JSON</button>
           </div>
         </footer>
+      </section>
+    </div>
+
+    <div class="dialog-backdrop" role="presentation" data-cache-maintenance-dialog hidden>
+      <section class="reason-dialog maintenance-confirmation" role="dialog" aria-modal="true" aria-labelledby="cache-maintenance-title" aria-describedby="cache-maintenance-description">
+        <p class="eyebrow">Confirmed cache maintenance</p>
+        <h2 id="cache-maintenance-title">Remove only the inspected artifacts?</h2>
+        <p id="cache-maintenance-description">These rejected cache files are disposable evidence copies. Original FITS files are never targeted, and every cache file is revalidated against the sealed preview before removal.</p>
+        <strong data-cache-maintenance-summary></strong>
+        <code data-cache-maintenance-seal></code>
+        <div class="maintenance-confirmation__actions">
+          <button class="button button--quiet" type="button" data-action="cancel-cache-maintenance">Keep files</button>
+          <button class="button button--danger" type="button" data-action="confirm-cache-maintenance">Remove inspected files</button>
+        </div>
       </section>
     </div>
 

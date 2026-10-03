@@ -84,6 +84,12 @@ export interface QualityCacheMaintenancePreview {
   }[];
 }
 
+export interface QualityCacheMaintenanceResult {
+  readonly removedCount: number;
+  readonly removedBytes: number;
+  readonly skippedCount: number;
+}
+
 const MAX_SESSION_DIAGNOSTIC_ITEMS = 100;
 
 /** Builds a path-safe, DOM-bounded list from native session evidence. */
@@ -230,5 +236,15 @@ export async function selectAndInspectSessionDiagnostics(): Promise<SessionDiagn
 export async function previewQualityCacheMaintenance(): Promise<QualityCacheMaintenancePreview> {
   return invoke<QualityCacheMaintenancePreview>(
     "preview_quality_cache_maintenance",
+  );
+}
+
+/** Applies only the sealed plan; native code revalidates every target. */
+export async function applyQualityCacheMaintenance(
+  planSha256: string,
+): Promise<QualityCacheMaintenanceResult> {
+  return invoke<QualityCacheMaintenanceResult>(
+    "apply_quality_cache_maintenance",
+    { request: { planSha256 } },
   );
 }

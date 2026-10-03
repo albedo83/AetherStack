@@ -1403,6 +1403,17 @@ safety reasoning. They do not narrate obvious syntax.
      Rust, bridge, DOM, and build coverage prove that no deletion capability is
      present. Next, require an explicit confirmation bound to this plan digest
      and revalidate every file immediately before a narrowly scoped removal.
+111. Apply cache maintenance only through a confirmed sealed plan. The browser
+     sends one canonical plan SHA-256 and cannot name keys or paths. Native code
+     rebuilds the preview, rejects stale or empty plans, fingerprints each file
+     again, quarantines each exact match inside its shard, verifies the moved
+     bytes, and only then removes it and synchronizes directory metadata. Missing
+     or changed entries are retained and counted. The danger action appears only
+     for a ready non-empty preview and opens a keyboard-dismissable confirmation
+     that repeats exact count, bytes, full seal, and FITS-source isolation. Tests
+     cover stale seals, exact removal, changed-byte retention, cancellation, and
+     path-free bridge transport. Next, exercise this workflow against a real
+     rejected cache artifact before broadening maintenance beyond quality data.
 
 ## 11. Stable-release definition
 
