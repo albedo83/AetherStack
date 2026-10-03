@@ -55,6 +55,38 @@ export function mountReviewScreen(
 
   const elements = {
     workspaceNavigation: requiredAll<HTMLElement>(root, "[data-workspace]"),
+    diagnosticsButton: required<HTMLButtonElement>(
+      root,
+      '[data-action="open-diagnostics"]',
+    ),
+    diagnosticsDialog: required<HTMLElement>(root, "[data-diagnostics-dialog]"),
+    diagnosticsState: required<HTMLElement>(root, "[data-diagnostics-state]"),
+    diagnosticsFiles: required<HTMLElement>(root, "[data-diagnostics-files]"),
+    diagnosticsFrames: required<HTMLElement>(root, "[data-diagnostics-frames]"),
+    diagnosticsConflicts: required<HTMLElement>(
+      root,
+      "[data-diagnostics-conflicts]",
+    ),
+    diagnosticsFailures: required<HTMLElement>(
+      root,
+      "[data-diagnostics-failures]",
+    ),
+    diagnosticsUnassigned: required<HTMLElement>(
+      root,
+      "[data-diagnostics-unassigned]",
+    ),
+    diagnosticsRestored: required<HTMLElement>(
+      root,
+      "[data-diagnostics-restored]",
+    ),
+    diagnosticsMissing: required<HTMLElement>(
+      root,
+      "[data-diagnostics-missing]",
+    ),
+    diagnosticsRejected: required<HTMLElement>(
+      root,
+      "[data-diagnostics-rejected]",
+    ),
     framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
     calibrationWorkspace: required<HTMLElement>(
       root,
@@ -905,6 +937,21 @@ export function mountReviewScreen(
       actions.onRequestStep("forward");
       return;
     }
+    if (action === "open-diagnostics") {
+      elements.diagnosticsDialog.hidden = false;
+      queueMicrotask(() => {
+        required<HTMLButtonElement>(
+          elements.diagnosticsDialog,
+          '[data-action="close-diagnostics"]',
+        ).focus();
+      });
+      return;
+    }
+    if (action === "close-diagnostics") {
+      elements.diagnosticsDialog.hidden = true;
+      queueMicrotask(() => elements.diagnosticsButton.focus());
+      return;
+    }
     if (action === "viewer-fit") {
       actions.onSetViewerScale("fit");
       return;
@@ -1078,6 +1125,11 @@ export function mountReviewScreen(
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && !elements.diagnosticsDialog.hidden) {
+      elements.diagnosticsDialog.hidden = true;
+      queueMicrotask(() => elements.diagnosticsButton.focus());
+      return;
+    }
     if (event.key === "Escape" && !elements.selectionConfirmation.hidden) {
       closeSelectionConfirmation();
       return;
@@ -1094,6 +1146,7 @@ export function mountReviewScreen(
     const target = event.target instanceof Element ? event.target : null;
     if (
       !elements.rejectDialog.hidden ||
+      !elements.diagnosticsDialog.hidden ||
       !elements.statisticsDialog.hidden ||
       !elements.selectionConfirmation.hidden
     ) {
@@ -1382,6 +1435,7 @@ export function mountReviewScreen(
     elements.qualityBadge.dataset.state = frame?.qualityState ?? "unavailable";
     elements.qualityBadge.textContent = qualityBadgeLabel(frame);
     elements.qualityBadge.title = frame?.qualityMessage ?? "";
+    renderSessionDiagnostics(elements, model);
     renderStatisticsPanel(elements, model);
     elements.stretch.textContent = model.sharedStretchLabel;
     renderSelectedMetrics(elements, frame);
@@ -2066,6 +2120,57 @@ function renderStatisticsPanel(
     statistics.sampleStandardDeviation === null
       ? "Undefined"
       : formatScientificValue(statistics.sampleStandardDeviation);
+}
+
+function renderSessionDiagnostics(
+  elements: {
+    diagnosticsState: HTMLElement;
+    diagnosticsFiles: HTMLElement;
+    diagnosticsFrames: HTMLElement;
+    diagnosticsConflicts: HTMLElement;
+    diagnosticsFailures: HTMLElement;
+    diagnosticsUnassigned: HTMLElement;
+    diagnosticsRestored: HTMLElement;
+    diagnosticsMissing: HTMLElement;
+    diagnosticsRejected: HTMLElement;
+  },
+  model: ReviewViewModel,
+): void {
+  const diagnostics = model.sessionDiagnostics;
+  const attention =
+    diagnostics.classificationConflicts +
+    diagnostics.recoverableFailures +
+    diagnostics.unassignedSources +
+    diagnostics.qualityEvidenceRejected;
+  elements.diagnosticsState.dataset.tone = attention > 0 ? "warning" : "ready";
+  elements.diagnosticsState.textContent =
+    attention > 0
+      ? `${formatCount(attention)} item${attention === 1 ? "" : "s"} require attention`
+      : "All mandatory FITS checks passed";
+  elements.diagnosticsFiles.textContent = formatCount(
+    diagnostics.filesConsidered,
+  );
+  elements.diagnosticsFrames.textContent = formatCount(
+    diagnostics.verifiedFrames,
+  );
+  elements.diagnosticsConflicts.textContent = formatCount(
+    diagnostics.classificationConflicts,
+  );
+  elements.diagnosticsFailures.textContent = formatCount(
+    diagnostics.recoverableFailures,
+  );
+  elements.diagnosticsUnassigned.textContent = formatCount(
+    diagnostics.unassignedSources,
+  );
+  elements.diagnosticsRestored.textContent = formatCount(
+    diagnostics.qualityEvidenceRestored,
+  );
+  elements.diagnosticsMissing.textContent = formatCount(
+    diagnostics.qualityEvidenceMissing,
+  );
+  elements.diagnosticsRejected.textContent = formatCount(
+    diagnostics.qualityEvidenceRejected,
+  );
 }
 
 interface CalibrationElements {
@@ -3704,7 +3809,7 @@ function shellMarkup(): string {
           </div>
           <div class="topbar__actions">
             <span class="health-chip" data-session-status data-tone="ready"><span aria-hidden="true">●</span><span data-session-status-label>Demo ready</span></span>
-            <button class="button button--quiet" type="button" title="Diagnostics workspace is not connected yet" disabled>Diagnostics</button>
+            <button class="button button--quiet" type="button" data-action="open-diagnostics">Diagnostics</button>
             <button class="button button--primary" type="button" data-action="open-selection-panel">Review plan</button>
           </div>
         </header>
@@ -4235,6 +4340,39 @@ function shellMarkup(): string {
           </div>
         </section>
       </main>
+    </div>
+
+    <div class="dialog-backdrop" role="presentation" data-diagnostics-dialog hidden>
+      <section class="statistics-dialog diagnostics-dialog" role="dialog" aria-modal="true" aria-labelledby="diagnostics-title" aria-describedby="diagnostics-description">
+        <div class="statistics-dialog__heading">
+          <div>
+            <p class="eyebrow">Session integrity</p>
+            <h2 id="diagnostics-title">Import diagnostics</h2>
+          </div>
+          <button class="icon-button" type="button" data-action="close-diagnostics" aria-label="Close import diagnostics">×</button>
+        </div>
+        <p id="diagnostics-description">FITS validation and optional quality-cache recovery are reported separately. Missing quality evidence is normal and will be measured from the immutable source when requested.</p>
+        <p class="diagnostics-state" data-diagnostics-state data-tone="ready"></p>
+        <section class="diagnostics-bank" aria-labelledby="diagnostics-import-heading">
+          <div class="diagnostics-bank__heading"><span aria-hidden="true">●</span><h3 id="diagnostics-import-heading">FITS import</h3></div>
+          <dl class="statistics-grid diagnostics-grid">
+            ${statistic("Sources considered", "data-diagnostics-files")}
+            ${statistic("Verified frames", "data-diagnostics-frames")}
+            ${statistic("Classification conflicts", "data-diagnostics-conflicts")}
+            ${statistic("Recoverable failures", "data-diagnostics-failures")}
+            ${statistic("Unassigned sources", "data-diagnostics-unassigned")}
+          </dl>
+        </section>
+        <section class="diagnostics-bank" aria-labelledby="diagnostics-cache-heading">
+          <div class="diagnostics-bank__heading"><span aria-hidden="true">●</span><h3 id="diagnostics-cache-heading">Verified quality cache</h3></div>
+          <dl class="statistics-grid diagnostics-grid">
+            ${statistic("Restored", "data-diagnostics-restored")}
+            ${statistic("Missing", "data-diagnostics-missing")}
+            ${statistic("Rejected", "data-diagnostics-rejected")}
+          </dl>
+          <p class="diagnostics-note">Rejected entries never enter a selection plan. They remain untouched in shared cache storage and quality is recomputed safely.</p>
+        </section>
+      </section>
     </div>
 
     <div class="dialog-backdrop" role="presentation" data-reject-dialog hidden>

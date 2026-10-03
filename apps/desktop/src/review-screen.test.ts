@@ -290,6 +290,38 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("Scanning FITS sources");
   });
 
+  it("presents FITS and quality-cache diagnostics with explicit severity", () => {
+    const { root } = fixture({
+      ...demoReviewModel,
+      sessionDiagnostics: {
+        filesConsidered: 42,
+        verifiedFrames: 40,
+        classificationConflicts: 1,
+        recoverableFailures: 2,
+        unassignedSources: 3,
+        qualityEvidenceRestored: 18,
+        qualityEvidenceMissing: 4,
+        qualityEvidenceRejected: 1,
+      },
+    });
+
+    const trigger = getByRole(root, "button", { name: "Diagnostics" });
+    fireEvent.click(trigger);
+    const dialog = getByRole(root, "dialog", { name: "Import diagnostics" });
+    expect(dialog.textContent).toContain("7 items require attention");
+    expect(dialog.textContent).toContain("Sources considered42");
+    expect(dialog.textContent).toContain("Verified frames40");
+    expect(dialog.textContent).toContain("Restored18");
+    expect(dialog.textContent).toContain("Missing4");
+    expect(dialog.textContent).toContain("Rejected1");
+    expect(dialog.textContent).toContain("never enter a selection plan");
+
+    fireEvent.keyDown(root, { key: "Escape" });
+    expect(
+      root.querySelector<HTMLElement>("[data-diagnostics-dialog]")?.hidden,
+    ).toBe(true);
+  });
+
   it("keeps classification overrides visibly and accessibly explained", () => {
     const first = demoReviewModel.frames[0];
     expect(first).toBeDefined();
@@ -1809,17 +1841,14 @@ describe("frame review workspace", () => {
     ).toBe("actual");
   });
 
-  it("does not expose unfinished controls as working actions", () => {
+  it("does not expose the unfinished clipping control as a working action", () => {
     const { root } = fixture();
 
-    for (const name of [
-      "Diagnostics",
-      "Clipping overlay is not available in this build",
-    ]) {
-      expect(getByRole(root, "button", { name }).hasAttribute("disabled")).toBe(
-        true,
-      );
-    }
+    expect(
+      getByRole(root, "button", {
+        name: "Clipping overlay is not available in this build",
+      }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("keeps manual decisions unavailable before native session import", () => {

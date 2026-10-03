@@ -1343,6 +1343,16 @@ safety reasoning. They do not narrate obvious syntax.
     eligibility boundary; presenter tests bind the exact counts and warning
     policy. Next, provide a deliberate cache-maintenance action that can remove
     only explicitly rejected quality artifacts after user confirmation.
+105. Connect the first real Diagnostics surface. The former disabled control
+    now opens an accessible, keyboard-dismissable dark instrument panel that
+    separates mandatory FITS import accounting from optional quality-cache
+    recovery. It reports considered sources, verified frames, conflicts,
+    recoverable failures, unassigned sources, and every restored, missing, or
+    rejected quality record. Severity uses text and a status lamp, aggregate
+    presentation avoids private paths, and the three-column layout collapses on
+    narrow screens. DOM and production-build checks cover the interaction and
+    data binding. Next, add bounded per-source diagnostic evidence and a
+    redacted report export before any cache-maintenance control.
 
 ## 11. Stable-release definition
 

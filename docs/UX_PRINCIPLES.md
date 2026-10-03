@@ -108,6 +108,13 @@ cache identity, resource estimates, progress codes, rejection/support maps, and
 redacted exportable reports. It never requires reading an uncontrolled log to
 understand a blocked run.
 
+The first connected Diagnostics surface is an accessible modal instrument for
+session import integrity. It separates mandatory FITS accounting from optional
+quality-cache recovery, shows every restored/missing/rejected count, explains
+that a cache miss is normal, and gives rejected evidence a textual warning as
+well as a distinct status lamp. Aggregate presentation avoids disclosing source
+paths. Deeper per-source evidence and redacted report export remain planned.
+
 ## Dark visual system
 
 Dark is the default theme. Surfaces use a restrained neutral hierarchy with one

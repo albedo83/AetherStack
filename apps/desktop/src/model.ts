@@ -113,6 +113,17 @@ export interface SessionStatus {
   readonly label: string;
 }
 
+export interface SessionDiagnostics {
+  readonly filesConsidered: number;
+  readonly verifiedFrames: number;
+  readonly classificationConflicts: number;
+  readonly recoverableFailures: number;
+  readonly unassignedSources: number;
+  readonly qualityEvidenceRestored: number;
+  readonly qualityEvidenceMissing: number;
+  readonly qualityEvidenceRejected: number;
+}
+
 export interface RoleSummary {
   readonly role: FrameRole;
   readonly label: string;
@@ -170,6 +181,7 @@ export interface ReviewViewModel {
   readonly activeWorkspace: WorkspaceView;
   readonly sessionName: string;
   readonly sessionStatus: SessionStatus;
+  readonly sessionDiagnostics: SessionDiagnostics;
   readonly roles: readonly RoleSummary[];
   readonly activeRole: FrameRole;
   /** Pixel stage currently shown for Lights; review identities stay stable. */
