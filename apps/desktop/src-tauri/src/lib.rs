@@ -8,12 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use aether_cache::{ArtifactStore, CacheKey};
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, DatasumVerification, FITS_STATISTICS_ALGORITHM_ID,
@@ -65,6 +66,7 @@ use aether_session::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tauri::Manager;
 use tauri::ipc::Response;
 
 const MAX_DESKTOP_PREVIEW_PIXELS: usize = 2 * 1_024 * 1_024;
@@ -73,6 +75,9 @@ const REJECTION_HISTOGRAM_ALGORITHM_ID: &str = "rejection-count-histogram-v1";
 const MAX_REJECTION_HISTOGRAM_BINS: usize = 4_096;
 const MAX_DESKTOP_QUALITY_SOURCE_PIXELS: u64 = 64 * 1_024 * 1_024;
 const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
+const QUALITY_EVIDENCE_SCHEMA_VERSION: u16 = 1;
+const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
+const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const SOURCE_VERIFICATION_PROGRESS_BYTES: u64 = 8 * 1_024 * 1_024;
@@ -607,14 +612,14 @@ enum BayerPatternWire {
     Gbrg,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FrameQualityResponse {
-    profile_id: &'static str,
-    background_algorithm_id: &'static str,
-    star_algorithm_id: &'static str,
-    detection_plane_algorithm_id: &'static str,
-    interpretation: &'static str,
+    profile_id: String,
+    background_algorithm_id: String,
+    star_algorithm_id: String,
+    detection_plane_algorithm_id: String,
+    interpretation: String,
     source_pixel_scale: f64,
     diagnostic_only: bool,
     background: f64,
@@ -633,6 +638,171 @@ struct FrameQualityResponse {
     signal_to_noise: Option<f64>,
     fwhm_pixels: Option<f64>,
     eccentricity: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredFrameQualityEvidence {
+    schema_version: u16,
+    frame_id: String,
+    source_byte_length: u64,
+    source_sha256: String,
+    response: FrameQualityResponse,
+}
+
+fn quality_evidence_key(
+    frame_id: &FrameId,
+    source_byte_length: u64,
+    source_sha256: &str,
+) -> Result<CacheKey, PreviewCommandError> {
+    if source_byte_length == 0 || !is_canonical_sha256(source_sha256) {
+        return Err(frame_quality_result_error());
+    }
+    let mut descriptor = Vec::new();
+    descriptor
+        .try_reserve_exact(2 + 64 + 8 + 64 + DESKTOP_QUALITY_PROFILE_ID.len() + 96)
+        .map_err(|_| frame_quality_result_error())?;
+    descriptor.extend_from_slice(&QUALITY_EVIDENCE_SCHEMA_VERSION.to_be_bytes());
+    descriptor.extend_from_slice(frame_id.as_str().as_bytes());
+    descriptor.extend_from_slice(&source_byte_length.to_be_bytes());
+    descriptor.extend_from_slice(source_sha256.as_bytes());
+    for identity in [
+        DESKTOP_QUALITY_PROFILE_ID,
+        GLOBAL_BACKGROUND_ALGORITHM_ID,
+        STAR_MEASUREMENT_ALGORITHM_ID,
+    ] {
+        let length = u64::try_from(identity.len()).map_err(|_| frame_quality_result_error())?;
+        descriptor.extend_from_slice(&length.to_be_bytes());
+        descriptor.extend_from_slice(identity.as_bytes());
+    }
+    CacheKey::derive(QUALITY_EVIDENCE_CACHE_DOMAIN, &descriptor)
+        .map_err(|_| frame_quality_result_error())
+}
+
+fn publish_quality_evidence(
+    cache_root: &Path,
+    frame_id: &FrameId,
+    source_byte_length: u64,
+    source_sha256: &str,
+    response: &FrameQualityResponse,
+) -> Result<(), PreviewCommandError> {
+    validate_quality_response(response)?;
+    let key = quality_evidence_key(frame_id, source_byte_length, source_sha256)?;
+    let evidence = StoredFrameQualityEvidence {
+        schema_version: QUALITY_EVIDENCE_SCHEMA_VERSION,
+        frame_id: frame_id.as_str().to_owned(),
+        source_byte_length,
+        source_sha256: source_sha256.to_owned(),
+        response: response.clone(),
+    };
+    let payload = serde_json::to_vec(&evidence).map_err(|_| frame_quality_result_error())?;
+    if u64::try_from(payload.len()).unwrap_or(u64::MAX) > MAX_QUALITY_EVIDENCE_BYTES {
+        return Err(frame_quality_result_error());
+    }
+    let store =
+        ArtifactStore::new(cache_root.to_owned()).map_err(|_| frame_quality_cache_error())?;
+    let mut reader = Cursor::new(payload);
+    store
+        .publish(&key, &mut reader)
+        .map_err(|_| frame_quality_cache_error())?;
+    Ok(())
+}
+
+fn restore_quality_evidence(
+    cache_root: &Path,
+    frame: &ImportedFrame,
+) -> Option<FrameQualityResponse> {
+    let frame_id = FrameId::new(frame.id.clone()).ok()?;
+    let derived = FrameId::derive(
+        &frame.relative_path,
+        frame.source_byte_length,
+        &frame.source_sha256,
+    )
+    .ok()?;
+    if derived != frame_id {
+        return None;
+    }
+    let key =
+        quality_evidence_key(&frame_id, frame.source_byte_length, &frame.source_sha256).ok()?;
+    let store = ArtifactStore::new(cache_root.to_owned()).ok()?;
+    let mut artifact = store.lookup_verified(&key).ok()??;
+    if artifact.payload_bytes() > MAX_QUALITY_EVIDENCE_BYTES {
+        return None;
+    }
+    let capacity = usize::try_from(artifact.payload_bytes()).ok()?;
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(capacity).ok()?;
+    artifact.read_to_end(&mut payload).ok()?;
+    if payload.len() != capacity {
+        return None;
+    }
+    let evidence: StoredFrameQualityEvidence = serde_json::from_slice(&payload).ok()?;
+    if evidence.schema_version != QUALITY_EVIDENCE_SCHEMA_VERSION
+        || evidence.frame_id != frame.id
+        || evidence.source_byte_length != frame.source_byte_length
+        || evidence.source_sha256 != frame.source_sha256
+        || validate_quality_response(&evidence.response).is_err()
+    {
+        return None;
+    }
+    Some(evidence.response)
+}
+
+fn validate_quality_response(
+    response: &FrameQualityResponse,
+) -> Result<FrameMetrics, PreviewCommandError> {
+    let accounted_candidates = response
+        .suppressed_candidates
+        .checked_add(response.rejected_measurements)
+        .and_then(|count| count.checked_add(response.detected_stars));
+    let valid_saturation = match (response.saturation_level, response.saturated_stars) {
+        (None, None) => true,
+        (Some(level), Some(stars)) => {
+            level.is_finite() && level > 0.0 && stars <= response.detected_stars
+        }
+        _ => false,
+    };
+    if response.profile_id != DESKTOP_QUALITY_PROFILE_ID
+        || response.background_algorithm_id != GLOBAL_BACKGROUND_ALGORITHM_ID
+        || response.star_algorithm_id != STAR_MEASUREMENT_ALGORITHM_ID
+        || !response.source_pixel_scale.is_finite()
+        || response.source_pixel_scale <= 0.0
+        || !response.diagnostic_only
+        || response.usable_stars > response.detected_stars
+        || response.retained_background_samples > response.initial_usable_samples
+        || accounted_candidates != Some(response.raw_candidates)
+        || !valid_saturation
+    {
+        return Err(frame_quality_result_error());
+    }
+    let valid_interpretation = match response.interpretation.as_str() {
+        "monochrome" => {
+            response.detection_plane_algorithm_id == "identity-monochrome-v1"
+                && response.source_pixel_scale.to_bits() == 1.0_f64.to_bits()
+        }
+        "raw CFA · RGGB" | "raw CFA · BGGR" | "raw CFA · GRBG" | "raw CFA · GBRG" => {
+            response.detection_plane_algorithm_id == CFA_CELL_MEAN_ALGORITHM_ID
+                && response.source_pixel_scale.to_bits() == 2.0_f64.to_bits()
+        }
+        "calibrated RGB · linear Rec. 709 luminance" => {
+            response.detection_plane_algorithm_id == RGB_LUMINANCE_ALGORITHM_ID
+                && response.source_pixel_scale.to_bits() == 1.0_f64.to_bits()
+        }
+        _ => false,
+    };
+    if !valid_interpretation {
+        return Err(frame_quality_result_error());
+    }
+    FrameMetrics::new(
+        Some(response.background),
+        Some(response.noise),
+        Some(response.detected_stars),
+        Some(response.usable_stars),
+        response.fwhm_pixels,
+        response.eccentricity,
+    )
+    .and_then(|metrics| metrics.with_signal_to_noise(response.signal_to_noise))
+    .map_err(|_| frame_quality_result_error())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -683,6 +853,11 @@ struct ImportedFrame {
     axes: Vec<u64>,
     fits_diagnostic_count: usize,
     classification_conflict: bool,
+    #[serde(skip_serializing)]
+    source_byte_length: u64,
+    #[serde(skip_serializing)]
+    source_sha256: String,
+    quality: Option<FrameQualityResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1338,13 +1513,17 @@ fn cancel_registered_stack_source_verification(
 #[tauri::command]
 async fn inspect_frame_quality(
     request: FrameQualityRequest,
+    app: tauri::AppHandle,
     review_state: tauri::State<'_, DesktopReviewState>,
+    session_state: tauri::State<'_, DesktopSessionState>,
 ) -> Result<FrameQualityResponse, PreviewCommandError> {
     validate_runtime_source_path(&request.path)?;
     let frame_id =
         FrameId::new(request.frame_id.clone()).map_err(|_| frame_quality_identity_error())?;
     ensure_review_frame_exists(&review_state, &frame_id)?;
     let artifact_path = request.path.clone();
+    let source_identity = imported_quality_source(&session_state, &frame_id, &artifact_path)?;
+    let cache_root = quality_cache_root(&app)?;
     let response =
         tauri::async_runtime::spawn_blocking(move || inspect_frame_quality_sync(&request))
             .await
@@ -1354,6 +1533,15 @@ async fn inspect_frame_quality(
                     "The frame-quality worker stopped before producing a result.",
                 )
             })??;
+    if let Some((source_byte_length, source_sha256)) = source_identity {
+        publish_quality_evidence(
+            &cache_root,
+            &frame_id,
+            source_byte_length,
+            &source_sha256,
+            &response,
+        )?;
+    }
     record_frame_quality(&review_state, frame_id, artifact_path, &response)?;
     Ok(response)
 }
@@ -3519,11 +3707,11 @@ fn inspect_frame_quality_sync(
     let background = quality.background();
     let detected_stars = quality.stars().len();
     Ok(FrameQualityResponse {
-        profile_id: DESKTOP_QUALITY_PROFILE_ID,
-        background_algorithm_id: GLOBAL_BACKGROUND_ALGORITHM_ID,
-        star_algorithm_id: STAR_MEASUREMENT_ALGORITHM_ID,
-        detection_plane_algorithm_id,
-        interpretation,
+        profile_id: DESKTOP_QUALITY_PROFILE_ID.to_owned(),
+        background_algorithm_id: GLOBAL_BACKGROUND_ALGORITHM_ID.to_owned(),
+        star_algorithm_id: STAR_MEASUREMENT_ALGORITHM_ID.to_owned(),
+        detection_plane_algorithm_id: detection_plane_algorithm_id.to_owned(),
+        interpretation: interpretation.to_owned(),
         source_pixel_scale,
         diagnostic_only: true,
         background: background.location(),
@@ -3665,6 +3853,7 @@ const fn fits_statistics_configuration_error() -> PreviewCommandError {
 #[tauri::command]
 async fn import_session_directory(
     path: PathBuf,
+    app: tauri::AppHandle,
     review_state: tauri::State<'_, DesktopReviewState>,
     session_state: tauri::State<'_, DesktopSessionState>,
 ) -> Result<ImportedSession, PreviewCommandError> {
@@ -3674,14 +3863,21 @@ async fn import_session_directory(
             "The selected session directory must use an absolute path.",
         ));
     }
-    let imported = tauri::async_runtime::spawn_blocking(move || scan_session_directory_sync(&path))
-        .await
-        .map_err(|_| {
-            PreviewCommandError::new(
-                "session_import_interrupted",
-                "The session import worker stopped before producing a result.",
-            )
-        })??;
+    let cache_root = quality_cache_root(&app)?;
+    let imported = tauri::async_runtime::spawn_blocking(move || {
+        let mut imported = scan_session_directory_sync(&path)?;
+        for frame in &mut imported.presentation.frames {
+            frame.quality = restore_quality_evidence(&cache_root, frame);
+        }
+        Ok::<_, PreviewCommandError>(imported)
+    })
+    .await
+    .map_err(|_| {
+        PreviewCommandError::new(
+            "session_import_interrupted",
+            "The session import worker stopped before producing a result.",
+        )
+    })??;
     install_imported_session(&session_state, &review_state, imported)
 }
 
@@ -3831,13 +4027,35 @@ fn install_imported_session(
     imported: ImportedSessionBundle,
 ) -> Result<ImportedSession, PreviewCommandError> {
     let book = prepare_review_book(&imported.presentation)?;
+    let restored_quality = prepare_restored_quality(&imported.presentation)?;
     let mut native_state = lock_session_state(session_state)?;
     let mut native_review = lock_review_state(review_state)?;
     let mut quality_metrics = lock_review_quality_metrics(review_state)?;
     *native_state = Some(Arc::new(imported.native));
     *native_review = book;
-    quality_metrics.clear();
+    *quality_metrics = restored_quality;
     Ok(imported.presentation)
+}
+
+fn prepare_restored_quality(
+    imported: &ImportedSession,
+) -> Result<NativeQualityMetrics, PreviewCommandError> {
+    let mut restored = BTreeMap::new();
+    for frame in &imported.frames {
+        let Some(response) = &frame.quality else {
+            continue;
+        };
+        let frame_id =
+            FrameId::new(frame.id.clone()).map_err(|_| frame_quality_identity_error())?;
+        let metrics = validate_quality_response(response)?;
+        if restored
+            .insert((frame_id, PathBuf::from(&frame.path)), metrics)
+            .is_some()
+        {
+            return Err(frame_quality_result_error());
+        }
+    }
+    Ok(restored)
 }
 
 fn prepare_review_book(
@@ -4174,6 +4392,33 @@ fn ensure_review_frame_exists(
         .ok_or_else(frame_quality_identity_error)
 }
 
+fn imported_quality_source(
+    state: &DesktopSessionState,
+    frame_id: &FrameId,
+    artifact_path: &Path,
+) -> Result<Option<(u64, String)>, PreviewCommandError> {
+    let native_session = lock_session_state(state)?;
+    let session = native_session
+        .as_ref()
+        .ok_or_else(session_state_missing_error)?;
+    for file in session.manifest.files() {
+        let fingerprint = file.fingerprint();
+        let candidate = FrameId::derive(
+            file.relative_path(),
+            fingerprint.byte_length(),
+            fingerprint.sha256(),
+        )
+        .map_err(|_| frame_quality_identity_error())?;
+        if &candidate != frame_id {
+            continue;
+        }
+        let raw_path = join_portable_path(&session.root, file.relative_path());
+        return Ok((raw_path == artifact_path)
+            .then(|| (fingerprint.byte_length(), fingerprint.sha256().to_owned())));
+    }
+    Err(frame_quality_identity_error())
+}
+
 fn record_frame_quality(
     state: &DesktopReviewState,
     frame_id: FrameId,
@@ -4183,16 +4428,7 @@ fn record_frame_quality(
     // Recheck after the worker completes so an import that replaced the review
     // book cannot receive a stale result from the preceding session.
     ensure_review_frame_exists(state, &frame_id)?;
-    let metrics = FrameMetrics::new(
-        Some(response.background),
-        Some(response.noise),
-        Some(response.detected_stars),
-        Some(response.usable_stars),
-        response.fwhm_pixels,
-        response.eccentricity,
-    )
-    .and_then(|validated| validated.with_signal_to_noise(response.signal_to_noise))
-    .map_err(|_| frame_quality_result_error())?;
+    let metrics = validate_quality_response(response)?;
     lock_review_quality_metrics(state)?.insert((frame_id, artifact_path), metrics);
     Ok(())
 }
@@ -4330,6 +4566,20 @@ const fn frame_quality_result_error() -> PreviewCommandError {
         "frame_quality_result_invalid",
         "The native quality result could not be represented as validated review metrics.",
     )
+}
+
+const fn frame_quality_cache_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_quality_cache_failed",
+        "Validated quality evidence could not be published to the verified cache.",
+    )
+}
+
+fn quality_cache_root(app: &tauri::AppHandle) -> Result<PathBuf, PreviewCommandError> {
+    app.path()
+        .app_cache_dir()
+        .map(|path| path.join("quality-evidence-v1"))
+        .map_err(|_| frame_quality_cache_error())
 }
 
 fn preview_master_plan_sync(
@@ -5623,6 +5873,9 @@ fn imported_frame(
         axes: file.axes().to_vec(),
         fits_diagnostic_count: file.fits_diagnostics().len(),
         classification_conflict: file.classification().has_conflict(),
+        source_byte_length: fingerprint.byte_length(),
+        source_sha256: fingerprint.sha256().to_owned(),
+        quality: None,
     }))
 }
 
@@ -8247,12 +8500,26 @@ mod tests {
         fwhm_pixels: f64,
         usable_stars: usize,
     ) -> TestResult {
-        let response = FrameQualityResponse {
-            profile_id: DESKTOP_QUALITY_PROFILE_ID,
-            background_algorithm_id: GLOBAL_BACKGROUND_ALGORITHM_ID,
-            star_algorithm_id: STAR_MEASUREMENT_ALGORITHM_ID,
-            detection_plane_algorithm_id: CFA_CELL_MEAN_ALGORITHM_ID,
-            interpretation: "raw CFA · RGGB",
+        let response = selection_test_quality_response(fwhm_pixels, usable_stars);
+        record_frame_quality(
+            state,
+            FrameId::new(digit.to_string().repeat(64))?,
+            PathBuf::from(format!("/runtime-only/LIGHTS/{digit}.fits")),
+            &response,
+        )?;
+        Ok(())
+    }
+
+    fn selection_test_quality_response(
+        fwhm_pixels: f64,
+        usable_stars: usize,
+    ) -> FrameQualityResponse {
+        FrameQualityResponse {
+            profile_id: DESKTOP_QUALITY_PROFILE_ID.to_owned(),
+            background_algorithm_id: GLOBAL_BACKGROUND_ALGORITHM_ID.to_owned(),
+            star_algorithm_id: STAR_MEASUREMENT_ALGORITHM_ID.to_owned(),
+            detection_plane_algorithm_id: CFA_CELL_MEAN_ALGORITHM_ID.to_owned(),
+            interpretation: "raw CFA · RGGB".to_owned(),
             source_pixel_scale: 2.0,
             diagnostic_only: true,
             background: 1_000.0,
@@ -8265,20 +8532,13 @@ mod tests {
             usable_stars,
             saturation_level: None,
             saturated_stars: None,
-            raw_candidates: usable_stars + 30,
+            raw_candidates: usable_stars + 50,
             suppressed_candidates: 10,
             rejected_measurements: 20,
             signal_to_noise: Some(30.0),
             fwhm_pixels: Some(fwhm_pixels),
             eccentricity: Some(0.4),
-        };
-        record_frame_quality(
-            state,
-            FrameId::new(digit.to_string().repeat(64))?,
-            PathBuf::from(format!("/runtime-only/LIGHTS/{digit}.fits")),
-            &response,
-        )?;
-        Ok(())
+        }
     }
 
     const fn selection_test_fwhm_rule() -> FrameSelectionRuleWire {
@@ -8305,7 +8565,107 @@ mod tests {
             axes: vec![4, 2],
             fits_diagnostic_count: 0,
             classification_conflict: false,
+            source_byte_length: 1,
+            source_sha256: digit.to_string().repeat(64),
+            quality: None,
         }
+    }
+
+    fn cached_quality_test_frame(digit: char, label: &str) -> TestResult<ImportedFrame> {
+        let mut frame = imported_review_test_frame(digit, label);
+        frame.id = FrameId::derive(
+            &frame.relative_path,
+            frame.source_byte_length,
+            &frame.source_sha256,
+        )?
+        .as_str()
+        .to_owned();
+        Ok(frame)
+    }
+
+    #[test]
+    fn quality_evidence_cache_round_trips_and_rejects_a_changed_source() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let frame = cached_quality_test_frame('a', "first.fits")?;
+        let frame_id = FrameId::new(frame.id.clone())?;
+        let response = selection_test_quality_response(3.25, 720);
+
+        publish_quality_evidence(
+            directory.path(),
+            &frame_id,
+            frame.source_byte_length,
+            &frame.source_sha256,
+            &response,
+        )?;
+        assert_eq!(
+            restore_quality_evidence(directory.path(), &frame),
+            Some(response)
+        );
+
+        let changed = ImportedFrame {
+            source_byte_length: 2,
+            ..cached_quality_test_frame('a', "first.fits")?
+        };
+        assert_eq!(restore_quality_evidence(directory.path(), &changed), None);
+        Ok(())
+    }
+
+    #[test]
+    fn quality_evidence_cache_fails_closed_on_corruption_and_algorithm_drift() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let frame = cached_quality_test_frame('b', "second.fits")?;
+        let frame_id = FrameId::new(frame.id.clone())?;
+        let response = selection_test_quality_response(4.0, 600);
+        publish_quality_evidence(
+            directory.path(),
+            &frame_id,
+            frame.source_byte_length,
+            &frame.source_sha256,
+            &response,
+        )?;
+        let key = quality_evidence_key(&frame_id, frame.source_byte_length, &frame.source_sha256)?;
+        let artifact_path = directory
+            .path()
+            .join(&key.as_str()[..2])
+            .join(format!("{}.artifact", key.as_str()));
+        let mut artifact = OpenOptions::new().write(true).open(artifact_path)?;
+        artifact.seek(SeekFrom::Start(0))?;
+        artifact.write_all(b"X")?;
+        artifact.sync_all()?;
+        assert_eq!(restore_quality_evidence(directory.path(), &frame), None);
+
+        let mut drifted = selection_test_quality_response(4.0, 600);
+        drifted.star_algorithm_id = "future-star-model-v2".to_owned();
+        let Err(error) = validate_quality_response(&drifted) else {
+            return Err("algorithm drift restored persisted quality evidence".into());
+        };
+        assert_eq!(error.code, "frame_quality_result_invalid");
+        Ok(())
+    }
+
+    #[test]
+    fn restored_quality_populates_native_selection_evidence_by_exact_artifact() -> TestResult {
+        let mut frame = imported_review_test_frame('c', "third.fits");
+        frame.quality = Some(selection_test_quality_response(3.5, 640));
+        let expected_path = PathBuf::from(&frame.path);
+        let expected_id = FrameId::new(frame.id.clone())?;
+        let session = ImportedSession {
+            name: "restored quality".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![frame],
+            files_considered: 1,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+        };
+
+        let restored = prepare_restored_quality(&session)?;
+        let metrics = restored
+            .get(&(expected_id, expected_path))
+            .ok_or("restored evidence was not indexed by its exact artifact")?;
+        assert_eq!(metrics.fwhm_major_pixels(), Some(3.5));
+        assert_eq!(metrics.usable_stars(), Some(640));
+        Ok(())
     }
 
     #[test]

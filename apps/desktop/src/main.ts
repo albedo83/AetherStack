@@ -393,6 +393,11 @@ function installImportedSession(session: ImportedSession): void {
   qualityBatchTicket += 1;
   frameSelectionTicket += 1;
   qualityCache.clear();
+  for (const frame of session.frames) {
+    if (frame.quality) {
+      qualityCache.set(frameArtifactKey(frame.id, frame.path), frame.quality);
+    }
+  }
   qualityPending.clear();
   decisionSessionRevision += 1;
   decisionGeneration = 0;

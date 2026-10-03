@@ -1312,6 +1312,18 @@ safety reasoning. They do not narrate obvious syntax.
     views, and DOM tests bind representative scalar evidence to its visible
     equation. Next, persist the validated measurements and their algorithm and
     source identities across application restarts.
+102. Persist raw-source quality evidence in the verified immutable cache. Each
+    bounded, versioned payload binds frame identity, explicit source length and
+    SHA-256, current profile and algorithm identities, complete measurement
+    accounting, and validated metrics. The cache key excludes machine paths but
+    includes source and algorithm identity, so relocation remains valid while a
+    changed FITS or implementation becomes a miss. Import re-derives identity,
+    verifies the cache container and JSON schema, revalidates physical domains
+    and interpretation/scale/algorithm combinations, then installs evidence
+    under the current absolute path in both Rust and the presenter. Tests cover
+    round-trip restoration, changed-source misses, bit corruption, algorithm
+    drift, and exact native artifact indexing. Next, expose restored-versus-new
+    measurement provenance and cache diagnostics in the Review UI.
 
 ## 11. Stable-release definition
 

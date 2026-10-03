@@ -54,6 +54,20 @@ quality result invalidates the previous preview and cancels stale responses.
 The selected-frame evidence instrument expands the same ordered native result
 into metric, measured value or explicit missing state, strict comparator,
 threshold, and pass/fail outcome. It never repeats the threshold calculation.
+
+Raw-source diagnostic quality evidence is restartable. A versioned JSON payload
+records the stable frame identity, explicit source byte length and SHA-256,
+quality profile, detection-plane/background/star algorithm identities, complete
+accounting, and validated metrics. Its immutable cache container independently
+seals payload length and SHA-256. The cache key binds the source identity and
+current algorithm versions but excludes machine paths, allowing a whole session
+directory to move. Import derives the frame identity again, verifies the cache
+container and bounded payload, rejects unknown fields or versions, revalidates
+every metric and algorithm pairing, and indexes restored evidence under the new
+absolute artifact path. Missing, stale, oversized, malformed, or corrupt cache
+entries are treated as absent evidence and can never enter a selection plan.
+Calibrated runtime products are intentionally excluded until their own product
+provenance has an equivalent durable identity.
 Applying a preview requires a dedicated confirmation dialog. Rust rebuilds the
 plan from its retained evidence under the same synchronization boundary and
 requires the canonical digest to match before mutation. It converts proposals

@@ -21,6 +21,7 @@ const source = (id: string, role: ImportedFrame["role"]): ImportedFrame => ({
   axes: [4, 2],
   fitsDiagnosticCount: 0,
   classificationConflict: false,
+  quality: null,
 });
 
 const artifact = (sourceFrameId: string): ExecutedCalibratedLightFrame => ({

@@ -159,6 +159,7 @@ dependencies = [
 name = "aetherstack-desktop"
 version = "0.1.0"
 dependencies = [
+ "aether-cache",
  "aether-calibration",
  "aether-core",
  "aether-fits",

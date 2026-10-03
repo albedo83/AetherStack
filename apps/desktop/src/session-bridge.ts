@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { BayerPattern, FrameRole } from "./model.ts";
+import type { FrameQualityResult } from "./quality-bridge.ts";
 
 export interface ImportedFrame {
   readonly id: string;
@@ -17,6 +18,7 @@ export interface ImportedFrame {
   readonly axes: readonly number[];
   readonly fitsDiagnosticCount: number;
   readonly classificationConflict: boolean;
+  readonly quality: FrameQualityResult | null;
 }
 
 export interface ImportedFailure {
