@@ -1092,6 +1092,15 @@ safety reasoning. They do not narrate obvious syntax.
     Native tamper-detection and bridge-contract tests cover the entry point.
     Next, connect this validator to a reopenable report inspector in the result
     workspace with human-readable source, estimator, memory, and checksum views.
+79. Connect native report verification to the integration result surface. A
+    dedicated action validates the sidecar in Rust, rejects stale responses if
+    another stack replaces the active result, and cross-checks both report and
+    plan digests before trusting the returned summary. The dark instrument card
+    exposes idle, loading, verified, and failed states with a concise source,
+    product, estimator, and schema summary; full paths and digests remain
+    selectable evidence. Presenter, accessibility-contract, frontend, lint,
+    and production-build tests cover the interaction. Next, expand the report
+    inspector into a reopenable result workspace for reports from prior runs.
 
 ## 11. Stable-release definition
 

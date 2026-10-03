@@ -55,6 +55,7 @@ import {
   diagnoseFitsRegistration,
   executeRegistrationPlan,
   executeRegisteredStack,
+  inspectRegisteredStackReport,
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
@@ -132,6 +133,7 @@ let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
 let registeredStackPreviewTicket = 0;
 let stackPixelTicket = 0;
+let stackReportTicket = 0;
 let registrationPreviewTicket = 0;
 let registrationBlinkTimer: number | null = null;
 let registrationSharedTransform: EstimatedDisplayTransform | null = null;
@@ -180,6 +182,7 @@ const screen = mountReviewScreen(root, model, {
     registeredStackTicket += 1;
     registeredStackPreviewTicket += 1;
     stackPixelTicket += 1;
+    stackReportTicket += 1;
     clearRegisteredStackPreviewResources();
     update({
       ...model,
@@ -207,6 +210,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onInspectRegisteredStackPixel(x, y) {
     void inspectRegisteredStackPixel(x, y);
+  },
+  onInspectRegisteredStackReport() {
+    void inspectStackReport();
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -706,6 +712,8 @@ function idleRegisteredStack(
     pixelInspectionState: "idle",
     pixelInspection: null,
     weightPreflight: null,
+    reportInspectionState: "idle",
+    reportInspection: null,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -1049,6 +1057,7 @@ async function executeStack(): Promise<void> {
     return;
   }
   const ticket = ++registeredStackTicket;
+  stackReportTicket += 1;
   update({
     ...model,
     registration: {
@@ -1068,6 +1077,8 @@ async function executeStack(): Promise<void> {
         pixelInspectionState: "idle",
         pixelInspection: null,
         weightPreflight: model.registration.stack.weightPreflight,
+        reportInspectionState: "idle",
+        reportInspection: null,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1143,6 +1154,8 @@ async function executeStack(): Promise<void> {
           pixelInspectionState: "idle",
           pixelInspection: null,
           weightPreflight: model.registration.stack.weightPreflight,
+          reportInspectionState: "idle",
+          reportInspection: null,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1377,6 +1390,62 @@ async function inspectRegisteredStackPixel(
           ...model.registration.stack,
           pixelInspectionState: "error",
           pixelInspection: null,
+        },
+      },
+    });
+  }
+}
+
+async function inspectStackReport(): Promise<void> {
+  const result = model.registration.stack.result;
+  if (!result || model.registration.stack.state !== "completed") return;
+  const ticket = ++stackReportTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...model.registration.stack,
+        reportInspectionState: "loading",
+        reportInspection: null,
+      },
+    },
+  });
+  try {
+    const inspection = await inspectRegisteredStackReport(result.reportPath);
+    if (
+      ticket !== stackReportTicket ||
+      model.registration.stack.result?.reportPath !== result.reportPath
+    ) {
+      return;
+    }
+    if (
+      inspection.reportSha256 !== result.reportSha256 ||
+      inspection.planSha256 !== result.planSha256
+    ) {
+      throw new Error("Validated report does not match the active stack");
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          reportInspectionState: "ready",
+          reportInspection: inspection,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== stackReportTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          reportInspectionState: "error",
+          reportInspection: null,
         },
       },
     });
@@ -2785,6 +2854,7 @@ function clearRegistrationPreviewResources(): void {
   registrationPreviewTicket += 1;
   registeredStackPreviewTicket += 1;
   stackPixelTicket += 1;
+  stackReportTicket += 1;
   registrationSharedTransform = null;
   registrationPreviewPrefetch.cancel();
   releaseEphemeralRegistrationPreview();
@@ -2915,6 +2985,7 @@ function applyDecisionUpdate(result: ReviewDecisionUpdate): void {
     registrationTicket += 1;
     registrationExecutionTicket += 1;
     registeredStackTicket += 1;
+    stackReportTicket += 1;
     clearRegistrationPreviewResources();
   }
   update({

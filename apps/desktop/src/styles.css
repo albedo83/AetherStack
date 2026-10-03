@@ -1296,12 +1296,25 @@ button:active:not(:disabled) {
   display: none;
 }
 
-.integration-report > span {
+.integration-report__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.integration-report__heading > span {
   color: #73cbe5;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.integration-report__heading .button {
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 9px;
 }
 
 .integration-report code {
@@ -1310,6 +1323,24 @@ button:active:not(:disabled) {
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.integration-report output {
+  color: #7896aa;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.integration-report[data-state="ready"] output {
+  color: #75d6b2;
+}
+
+.integration-report[data-state="error"] {
+  border-color: #754b48;
+}
+
+.integration-report[data-state="error"] output {
+  color: #e2a09b;
 }
 
 .registered-stack__product-tabs {

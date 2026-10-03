@@ -77,6 +77,8 @@ export const demoReviewModel: ReviewViewModel = {
       pixelInspectionState: "idle",
       pixelInspection: null,
       weightPreflight: null,
+      reportInspectionState: "idle",
+      reportInspection: null,
       settings: {
         estimator: "strict_mean",
         weightReferenceFrameId: null,

@@ -174,6 +174,14 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-report-digest]",
     ),
+    inspectRegisteredStackReport: required<HTMLButtonElement>(
+      root,
+      '[data-action="inspect-registered-stack-report"]',
+    ),
+    registeredStackReportSummary: required<HTMLElement>(
+      root,
+      "[data-registered-stack-report-summary]",
+    ),
     registeredStackEstimator: required<HTMLSelectElement>(
       root,
       "[data-registered-stack-estimator]",
@@ -502,6 +510,11 @@ export function mountReviewScreen(
     const actionElement = target?.closest<HTMLElement>("[data-action]");
     if (!actionElement) return;
     const action = actionElement.dataset.action;
+
+    if (action === "inspect-registered-stack-report") {
+      actions.onInspectRegisteredStackReport();
+      return;
+    }
 
     if (action === "inspect-registered-stack-coordinate") {
       const x = elements.registeredStackPixelX.valueAsNumber;
@@ -1462,6 +1475,8 @@ interface RegistrationElements {
   readonly registeredStackReport: HTMLElement;
   readonly registeredStackReportPath: HTMLElement;
   readonly registeredStackReportDigest: HTMLElement;
+  readonly inspectRegisteredStackReport: HTMLButtonElement;
+  readonly registeredStackReportSummary: HTMLElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
   readonly registeredStackHighFraction: HTMLInputElement;
@@ -1637,6 +1652,23 @@ function renderRegistration(
     integrationReport?.reportSha256 ?? "";
   elements.registeredStackReportDigest.title =
     integrationReport?.reportSha256 ?? "";
+  const reportInspection = registration.stack.reportInspection;
+  elements.inspectRegisteredStackReport.disabled =
+    integrationReport === null ||
+    registration.stack.reportInspectionState === "loading";
+  elements.inspectRegisteredStackReport.textContent =
+    registration.stack.reportInspectionState === "loading"
+      ? "Verifying…"
+      : reportInspection
+        ? "Verify again"
+        : "Verify report";
+  elements.registeredStackReport.dataset.state =
+    registration.stack.reportInspectionState;
+  elements.registeredStackReportSummary.textContent = reportInspection
+    ? `${reportInspection.sourceCount} sources · ${reportInspection.productCount} products · ${formatEstimatorName(reportInspection.estimator)} · schema ${reportInspection.schemaVersion}`
+    : registration.stack.reportInspectionState === "error"
+      ? "Native verification failed · report evidence is not trusted"
+      : "Verify natively before using this provenance as evidence";
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
@@ -2121,6 +2153,19 @@ function formatRelativeWeight(value: number | null): string {
   if (value === null) return "—";
   if (value >= 0.001 && value < 10_000) return `${value.toFixed(4)}×`;
   return `${value.toExponential(3)}×`;
+}
+
+function formatEstimatorName(
+  estimator: "strict_mean" | "weighted_mean" | "percentile_clipped",
+): string {
+  switch (estimator) {
+    case "strict_mean":
+      return "strict mean";
+    case "weighted_mean":
+      return "balanced PSF weight";
+    case "percentile_clipped":
+      return "percentile clipped";
+  }
 }
 
 function calibrationSettings(
@@ -3056,9 +3101,13 @@ function shellMarkup(): string {
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
                   <div class="integration-report" data-registered-stack-report hidden>
-                    <span>Integration report</span>
+                    <div class="integration-report__heading">
+                      <span>Integration report</span>
+                      <button class="button button--quiet" type="button" data-action="inspect-registered-stack-report">Verify report</button>
+                    </div>
                     <code data-registered-stack-report-path></code>
                     <code data-registered-stack-report-digest></code>
+                    <output data-registered-stack-report-summary aria-live="polite"></output>
                   </div>
                   <div class="registered-stack__product-tabs" role="tablist" aria-label="Integrated product view">
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="science" aria-selected="true">Science</button>

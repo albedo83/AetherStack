@@ -15,6 +15,7 @@ import type {
   RegistrationPlanPreview,
   RegisteredStackIntegrationSettings,
   RegisteredStackProgress,
+  RegisteredStackReportInspection,
   RegisteredStackResult,
   RegisteredWeightPreflight,
 } from "./registration-bridge.ts";
@@ -235,6 +236,8 @@ export interface RegistrationViewModel {
     readonly pixelInspection: StackPixelInspection | null;
     /** Last native weight seal, retained only while its plan and settings remain current. */
     readonly weightPreflight: RegisteredWeightPreflight | null;
+    readonly reportInspectionState: "idle" | "loading" | "ready" | "error";
+    readonly reportInspection: RegisteredStackReportInspection | null;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
@@ -297,6 +300,7 @@ export interface ReviewActions {
   ) => void;
   readonly onSetRegisteredStackOverlayOpacity: (opacity: number) => void;
   readonly onInspectRegisteredStackPixel: (x: number, y: number) => void;
+  readonly onInspectRegisteredStackReport: () => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

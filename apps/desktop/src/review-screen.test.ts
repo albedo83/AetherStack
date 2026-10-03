@@ -23,6 +23,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSelectRegisteredStackProduct: vi.fn(),
     onSetRegisteredStackOverlayOpacity: vi.fn(),
     onInspectRegisteredStackPixel: vi.fn(),
+    onInspectRegisteredStackReport: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -543,6 +544,32 @@ describe("frame review workspace", () => {
     ).toContain("blob:registered-stack");
     expect(root.textContent).toContain("Integration report");
     expect(root.textContent).toContain("d".repeat(64));
+    fireEvent.click(getByRole(root, "button", { name: "Verify report" }));
+    expect(actions.onInspectRegisteredStackReport).toHaveBeenCalledOnce();
+    controller.update({
+      ...ready,
+      registration: {
+        ...ready.registration,
+        stack: {
+          ...ready.registration.stack,
+          reportInspectionState: "ready",
+          reportInspection: {
+            schemaVersion: 1,
+            reportSha256: "d".repeat(64),
+            planSha256,
+            manifestSha256: "e".repeat(64),
+            estimator: "strict_mean",
+            sourceCount: 2,
+            productCount: 3,
+            weighted: false,
+          },
+        },
+      },
+    });
+    expect(root.textContent).toContain(
+      "2 sources · 3 products · strict mean · schema 1",
+    );
+    expect(getByRole(root, "button", { name: "Verify again" })).not.toBeNull();
     fireEvent.click(
       getByRole(root, "button", { name: "Next registered frame" }),
     );
