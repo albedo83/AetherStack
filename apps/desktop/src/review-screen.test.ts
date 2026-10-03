@@ -570,6 +570,14 @@ describe("frame review workspace", () => {
             productCount: 3,
             weighted: false,
             allProductsVerified: true,
+            sources: [
+              {
+                frameId: frameA.id,
+                fileName: "registered-a.fits",
+                byteLength: 278_992_800,
+                sha256: "9".repeat(64),
+              },
+            ],
             products: [
               {
                 role: "science",
@@ -589,6 +597,8 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("all FITS verified");
     expect(root.textContent).toContain("Science · integrated.fits");
     expect(root.textContent).toContain("266.1 MiB · FITS verified");
+    expect(root.textContent).toContain("registered-a.fits · 266.1 MiB");
+    expect(root.textContent).toContain("sha256 999999999999…");
     expect(getByRole(root, "button", { name: "Verify again" })).not.toBeNull();
     fireEvent.click(
       getByRole(root, "button", { name: "Next registered frame" }),
@@ -792,6 +802,14 @@ describe("frame review workspace", () => {
             productCount: 1,
             weighted: true,
             allProductsVerified: false,
+            sources: [
+              {
+                frameId: "c".repeat(64),
+                fileName: "m31-registered-001.fits",
+                byteLength: 278_992_800,
+                sha256: "d".repeat(64),
+              },
+            ],
             products: [
               {
                 role: "science",
@@ -813,6 +831,7 @@ describe("frame review workspace", () => {
     );
     expect(root.textContent).toContain("Science · m31.fits");
     expect(root.textContent).toContain("FITS missing");
+    expect(root.textContent).toContain("m31-registered-001.fits · 266.1 MiB");
     expect(root.textContent).toContain("f".repeat(64));
     expect(root.textContent).toContain(
       "Published registered artifacts required",

@@ -189,6 +189,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-report-products]",
     ),
+    registeredStackReportSources: required<HTMLElement>(
+      root,
+      "[data-registered-stack-report-sources]",
+    ),
     returnToActiveStack: required<HTMLButtonElement>(
       root,
       '[data-action="return-to-active-stack"]',
@@ -1502,6 +1506,7 @@ interface RegistrationElements {
   readonly inspectRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackReportSummary: HTMLElement;
   readonly registeredStackReportProducts: HTMLElement;
+  readonly registeredStackReportSources: HTMLElement;
   readonly returnToActiveStack: HTMLButtonElement;
   readonly openRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackEstimator: HTMLSelectElement;
@@ -1712,6 +1717,18 @@ function renderRegistration(
       const evidence = document.createElement("span");
       evidence.textContent = `${formatByteCount(product.bytesWritten)} · ${formatRegisteredProductStatus(product.status)}`;
       row.append(identity, evidence);
+      return row;
+    }),
+  );
+  elements.registeredStackReportSources.replaceChildren(
+    ...(reportInspection?.sources ?? []).map((source) => {
+      const row = document.createElement("li");
+      const identity = document.createElement("span");
+      identity.textContent = `${source.fileName} · ${formatByteCount(source.byteLength)}`;
+      const seals = document.createElement("code");
+      seals.textContent = `frame ${source.frameId.slice(0, 12)}… · sha256 ${source.sha256.slice(0, 12)}…`;
+      seals.title = `Frame identity: ${source.frameId}\nSource SHA-256: ${source.sha256}`;
+      row.append(identity, seals);
       return row;
     }),
   );
@@ -3223,6 +3240,10 @@ function shellMarkup(): string {
                     <code data-registered-stack-report-digest></code>
                     <output data-registered-stack-report-summary aria-live="polite"></output>
                     <ul class="integration-report__products" data-registered-stack-report-products aria-label="Verified integration products"></ul>
+                    <details class="integration-report__source-browser">
+                      <summary>Source evidence</summary>
+                      <ol data-registered-stack-report-sources aria-label="Sealed source evidence"></ol>
+                    </details>
                   </div>
                   <div class="registered-stack__product-tabs" role="tablist" aria-label="Integrated product view">
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="science" aria-selected="true">Science</button>

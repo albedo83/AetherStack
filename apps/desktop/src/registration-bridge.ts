@@ -215,7 +215,15 @@ export interface RegisteredStackReportInspection {
   readonly productCount: number;
   readonly weighted: boolean;
   readonly allProductsVerified: boolean;
+  readonly sources: readonly RegisteredStackReportSourceInspection[];
   readonly products: readonly RegisteredStackReportProductInspection[];
+}
+
+export interface RegisteredStackReportSourceInspection {
+  readonly frameId: string;
+  readonly fileName: string;
+  readonly byteLength: number;
+  readonly sha256: string;
 }
 
 export interface RegisteredStackReportProductInspection {

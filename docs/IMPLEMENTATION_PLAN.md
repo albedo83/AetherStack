@@ -1141,6 +1141,14 @@ safety reasoning. They do not narrate obvious syntax.
     active science preview without changing any native artifact. Presenter tests
     cover the archived close control. Next, add a browsable source-evidence table
     with fingerprint status and bounded on-demand source revalidation.
+84. Expose path-independent source evidence for archived results. The strict
+    native inspector now returns each validated source filename, byte length,
+    frame identity, and SHA-256 fingerprint. A bounded, collapsible source
+    browser presents compact seals with full values available as selectable
+    evidence; unsafe nested source names are rejected with the report rather
+    than rendered. Native and presenter tests cover the evidence contract. Next,
+    add an explicit source-directory chooser that can rebind and revalidate
+    archived source fingerprints without trusting historical absolute paths.
 
 ## 11. Stable-release definition
 

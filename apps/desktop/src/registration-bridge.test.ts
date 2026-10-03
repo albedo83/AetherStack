@@ -274,6 +274,14 @@ describe("native registration bridge", () => {
       productCount: 1,
       weighted: true,
       allProductsVerified: true,
+      sources: [
+        {
+          frameId: "d".repeat(64),
+          fileName: "registered-0001.fits",
+          byteLength: 33_177_600,
+          sha256: "e".repeat(64),
+        },
+      ],
       products: [
         {
           role: "science",

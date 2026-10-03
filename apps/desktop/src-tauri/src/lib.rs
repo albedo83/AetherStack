@@ -471,7 +471,18 @@ struct RegisteredStackReportInspectionResponse {
     product_count: usize,
     weighted: bool,
     all_products_verified: bool,
+    sources: Vec<RegisteredStackReportSourceInspection>,
     products: Vec<RegisteredStackReportProductInspection>,
+}
+
+/// Path-independent source identity retained by the deterministic report.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportSourceInspection {
+    frame_id: String,
+    file_name: String,
+    byte_length: u64,
+    sha256: String,
 }
 
 /// On-disk verification result for one product named by an integration report.
@@ -2175,7 +2186,7 @@ fn inspect_registered_stack_report_sync(
         .map(|source| {
             if !is_lower_sha256(&source.frame_id)
                 || !is_lower_sha256(&source.sha256)
-                || source.file_name.is_empty()
+                || !is_safe_report_file_name(&source.file_name)
                 || source.byte_length == 0
             {
                 return Err(registered_stack_report_validation_error());
@@ -2265,6 +2276,17 @@ fn inspect_registered_stack_report_sync(
     let all_products_verified = products
         .iter()
         .all(|product| product.status == RegisteredStackReportProductStatus::Verified);
+    let sources = envelope
+        .report
+        .sources
+        .iter()
+        .map(|source| RegisteredStackReportSourceInspection {
+            frame_id: source.frame_id.clone(),
+            file_name: source.file_name.clone(),
+            byte_length: source.byte_length,
+            sha256: source.sha256.clone(),
+        })
+        .collect();
     Ok(RegisteredStackReportInspectionResponse {
         schema_version: envelope.schema_version,
         report_sha256: envelope.report_sha256,
@@ -2278,6 +2300,7 @@ fn inspect_registered_stack_report_sync(
         product_count: product_roles.len(),
         weighted,
         all_products_verified,
+        sources,
         products,
     })
 }
@@ -6082,6 +6105,10 @@ mod tests {
         assert_eq!(inspection.height, result.height);
         assert_eq!(inspection.planes, result.planes);
         assert!(!inspection.weighted);
+        assert_eq!(inspection.sources.len(), 2);
+        assert_eq!(inspection.sources[0].frame_id.len(), 64);
+        assert_eq!(inspection.sources[0].sha256.len(), 64);
+        assert!(inspection.sources[0].byte_length > 0);
         assert!(inspection.all_products_verified);
         assert_eq!(inspection.products.len(), 1);
         assert_eq!(inspection.products[0].role, "science");
