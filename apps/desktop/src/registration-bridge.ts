@@ -226,6 +226,27 @@ export interface RegisteredStackReportSourceInspection {
   readonly sha256: string;
 }
 
+export interface RegisteredStackSourceVerificationResult {
+  readonly reportSha256: string;
+  readonly sourceDirectory: string;
+  readonly allSourcesVerified: boolean;
+  readonly sources: readonly RegisteredStackSourceVerification[];
+}
+
+export interface RegisteredStackSourceVerification {
+  readonly frameId: string;
+  readonly fileName: string;
+  readonly path: string;
+  readonly byteLength: number;
+  readonly status:
+    | "verified"
+    | "missing"
+    | "non_regular"
+    | "byte_length_mismatch"
+    | "read_failed"
+    | "fingerprint_mismatch";
+}
+
 export interface RegisteredStackReportProductInspection {
   readonly role: "science" | "rejection_low" | "rejection_high";
   readonly fileName: string;
@@ -320,6 +341,18 @@ export async function selectRegisteredStackReport(): Promise<string | null> {
   return typeof path === "string" ? path : null;
 }
 
+/** Chooses the directory expected to contain the report's registered sources. */
+export async function selectRegisteredStackSourceDirectory(): Promise<
+  string | null
+> {
+  const path = await open({
+    title: "Locate the registered sources named by this report",
+    multiple: false,
+    directory: true,
+  });
+  return typeof path === "string" ? path : null;
+}
+
 /** Integrates the exact registered set on its sealed common footprint. */
 export function executeRegisteredStack(
   outputPath: string,
@@ -380,6 +413,17 @@ export function inspectRegisteredStackReport(
   return invoke<RegisteredStackReportInspection>(
     "inspect_registered_stack_report",
     { request: { path } },
+  );
+}
+
+/** Recomputes every sealed source fingerprint inside an explicitly chosen directory. */
+export function verifyRegisteredStackSources(
+  reportPath: string,
+  sourceDirectory: string,
+): Promise<RegisteredStackSourceVerificationResult> {
+  return invoke<RegisteredStackSourceVerificationResult>(
+    "verify_registered_stack_sources",
+    { request: { reportPath, sourceDirectory } },
   );
 }
 

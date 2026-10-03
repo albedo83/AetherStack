@@ -17,6 +17,7 @@ import type {
   RegisteredStackProgress,
   RegisteredStackReportInspection,
   RegisteredStackResult,
+  RegisteredStackSourceVerificationResult,
   RegisteredWeightPreflight,
 } from "./registration-bridge.ts";
 
@@ -239,6 +240,8 @@ export interface RegistrationViewModel {
     readonly reportInspectionState: "idle" | "loading" | "ready" | "error";
     readonly reportInspection: RegisteredStackReportInspection | null;
     readonly reportInspectionPath: string | null;
+    readonly sourceVerificationState: "idle" | "loading" | "ready" | "error";
+    readonly sourceVerification: RegisteredStackSourceVerificationResult | null;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
@@ -304,6 +307,7 @@ export interface ReviewActions {
   readonly onInspectRegisteredStackReport: () => void;
   readonly onOpenRegisteredStackReport: () => void;
   readonly onReturnToActiveStack: () => void;
+  readonly onVerifyRegisteredStackSources: () => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

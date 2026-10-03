@@ -80,6 +80,8 @@ export const demoReviewModel: ReviewViewModel = {
       reportInspectionState: "idle",
       reportInspection: null,
       reportInspectionPath: null,
+      sourceVerificationState: "idle",
+      sourceVerification: null,
       settings: {
         estimator: "strict_mean",
         weightReferenceFrameId: null,

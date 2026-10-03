@@ -13,7 +13,9 @@ import {
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
   selectRegisteredStackReport,
+  selectRegisteredStackSourceDirectory,
   selectRegisteredStackOutput,
+  verifyRegisteredStackSources,
   type RegistrationExecutionProgress,
   type RegisteredStackProgress,
 } from "./registration-bridge.ts";
@@ -223,6 +225,18 @@ describe("native registration bridge", () => {
     await expect(selectRegisteredStackReport()).resolves.toBeNull();
   });
 
+  it("selects an explicit source directory for archived evidence", async () => {
+    vi.mocked(open).mockResolvedValue("/archive/registered");
+    await expect(selectRegisteredStackSourceDirectory()).resolves.toBe(
+      "/archive/registered",
+    );
+    expect(open).toHaveBeenCalledWith({
+      title: "Locate the registered sources named by this report",
+      multiple: false,
+      directory: true,
+    });
+  });
+
   it("requests canonical native weight evidence before execution", async () => {
     const result = {
       schemaVersion: 1,
@@ -302,6 +316,29 @@ describe("native registration bridge", () => {
     expect(invoke).toHaveBeenLastCalledWith("inspect_registered_stack_report", {
       request: {
         path: "/results/integrated-integration-report.json",
+      },
+    });
+  });
+
+  it("asks Rust to revalidate archived source fingerprints", async () => {
+    const result = {
+      reportSha256: "b".repeat(64),
+      sourceDirectory: "/archive/registered",
+      allSourcesVerified: true,
+      sources: [],
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+
+    await expect(
+      verifyRegisteredStackSources(
+        "/archive/report.json",
+        "/archive/registered",
+      ),
+    ).resolves.toBe(result);
+    expect(invoke).toHaveBeenLastCalledWith("verify_registered_stack_sources", {
+      request: {
+        reportPath: "/archive/report.json",
+        sourceDirectory: "/archive/registered",
       },
     });
   });

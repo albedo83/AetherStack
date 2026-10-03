@@ -1402,6 +1402,28 @@ button:active:not(:disabled) {
   cursor: pointer;
 }
 
+.integration-report__source-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+}
+
+.integration-report__source-actions output {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-report__source-actions .button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 9px;
+}
+
 .integration-report__source-browser ol {
   display: grid;
   max-height: 176px;
@@ -1431,6 +1453,16 @@ button:active:not(:disabled) {
 
 .integration-report__source-browser code {
   font-size: 9px;
+}
+
+.integration-report__source-browser li[data-status="verified"] code {
+  color: #75d6b2;
+}
+
+.integration-report__source-browser
+  li:not([data-status="verified"]):not([data-status="unverified"])
+  code {
+  color: #eab774;
 }
 
 .integration-report[data-state="error"] {

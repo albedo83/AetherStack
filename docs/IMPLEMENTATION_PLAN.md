@@ -1149,6 +1149,16 @@ safety reasoning. They do not narrate obvious syntax.
     than rendered. Native and presenter tests cover the evidence contract. Next,
     add an explicit source-directory chooser that can rebind and revalidate
     archived source fingerprints without trusting historical absolute paths.
+85. Rebind archived source evidence to an explicit local directory. The desktop
+    never restores historical paths: the user selects one directory, then a
+    bounded native worker rejects directory and file symlinks, confines every
+    lookup to a validated sibling filename, checks exact byte length, and
+    streams SHA-256 with fixed 64 KiB scratch memory. Missing, non-regular,
+    unreadable, size-mismatched, fingerprint-mismatched, and verified sources
+    remain distinct results. Report digests and async tickets prevent stale
+    verification from attaching to another archive. Native, bridge, presenter,
+    lint, and build tests cover the workflow. Next, add cancellable progress for
+    very large source sets and cameras producing multi-gigabyte sessions.
 
 ## 11. Stable-release definition
 

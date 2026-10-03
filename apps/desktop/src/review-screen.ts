@@ -7,6 +7,7 @@ import type {
 import type {
   RegisteredStackIntegrationSettings,
   RegisteredStackReportProductInspection,
+  RegisteredStackSourceVerification,
 } from "./registration-bridge.ts";
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import type {
@@ -192,6 +193,14 @@ export function mountReviewScreen(
     registeredStackReportSources: required<HTMLElement>(
       root,
       "[data-registered-stack-report-sources]",
+    ),
+    verifyRegisteredStackSources: required<HTMLButtonElement>(
+      root,
+      '[data-action="verify-registered-stack-sources"]',
+    ),
+    registeredStackSourceVerification: required<HTMLElement>(
+      root,
+      "[data-registered-stack-source-verification]",
     ),
     returnToActiveStack: required<HTMLButtonElement>(
       root,
@@ -541,6 +550,10 @@ export function mountReviewScreen(
     }
     if (action === "return-to-active-stack") {
       actions.onReturnToActiveStack();
+      return;
+    }
+    if (action === "verify-registered-stack-sources") {
+      actions.onVerifyRegisteredStackSources();
       return;
     }
 
@@ -1507,6 +1520,8 @@ interface RegistrationElements {
   readonly registeredStackReportSummary: HTMLElement;
   readonly registeredStackReportProducts: HTMLElement;
   readonly registeredStackReportSources: HTMLElement;
+  readonly verifyRegisteredStackSources: HTMLButtonElement;
+  readonly registeredStackSourceVerification: HTMLElement;
   readonly returnToActiveStack: HTMLButtonElement;
   readonly openRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackEstimator: HTMLSelectElement;
@@ -1720,13 +1735,38 @@ function renderRegistration(
       return row;
     }),
   );
+  const sourceVerification = registration.stack.sourceVerification;
+  const verifiedSources = new Map(
+    (sourceVerification?.sources ?? []).map((source) => [
+      source.frameId,
+      source,
+    ]),
+  );
+  elements.verifyRegisteredStackSources.disabled =
+    reportInspection === null ||
+    registration.stack.sourceVerificationState === "loading";
+  elements.verifyRegisteredStackSources.textContent =
+    registration.stack.sourceVerificationState === "loading"
+      ? "Hashing sources…"
+      : sourceVerification
+        ? "Verify another folder"
+        : "Verify source folder";
+  elements.registeredStackSourceVerification.textContent = sourceVerification
+    ? `${sourceVerification.allSourcesVerified ? "All source fingerprints verified" : "Source evidence mismatch"} · ${sourceVerification.sourceDirectory}`
+    : registration.stack.sourceVerificationState === "error"
+      ? "Source verification failed safely"
+      : "Choose the directory containing the registered source FITS files";
   elements.registeredStackReportSources.replaceChildren(
     ...(reportInspection?.sources ?? []).map((source) => {
+      const verification = verifiedSources.get(source.frameId);
       const row = document.createElement("li");
+      row.dataset.status = verification?.status ?? "unverified";
       const identity = document.createElement("span");
       identity.textContent = `${source.fileName} · ${formatByteCount(source.byteLength)}`;
       const seals = document.createElement("code");
-      seals.textContent = `frame ${source.frameId.slice(0, 12)}… · sha256 ${source.sha256.slice(0, 12)}…`;
+      seals.textContent = verification
+        ? formatRegisteredSourceStatus(verification.status)
+        : `frame ${source.frameId.slice(0, 12)}… · sha256 ${source.sha256.slice(0, 12)}…`;
       seals.title = `Frame identity: ${source.frameId}\nSource SHA-256: ${source.sha256}`;
       row.append(identity, seals);
       return row;
@@ -2286,6 +2326,25 @@ function formatRegisteredProductStatus(
       return "provenance mismatch";
     case "checksum_mismatch":
       return "checksum mismatch";
+  }
+}
+
+function formatRegisteredSourceStatus(
+  status: RegisteredStackSourceVerification["status"],
+): string {
+  switch (status) {
+    case "verified":
+      return "SHA-256 verified";
+    case "missing":
+      return "source missing";
+    case "non_regular":
+      return "unsafe file type";
+    case "byte_length_mismatch":
+      return "byte length mismatch";
+    case "read_failed":
+      return "source unreadable";
+    case "fingerprint_mismatch":
+      return "SHA-256 mismatch";
   }
 }
 
@@ -3242,6 +3301,10 @@ function shellMarkup(): string {
                     <ul class="integration-report__products" data-registered-stack-report-products aria-label="Verified integration products"></ul>
                     <details class="integration-report__source-browser">
                       <summary>Source evidence</summary>
+                      <div class="integration-report__source-actions">
+                        <output data-registered-stack-source-verification>Choose the directory containing the registered source FITS files</output>
+                        <button class="button button--quiet" type="button" data-action="verify-registered-stack-sources">Verify source folder</button>
+                      </div>
                       <ol data-registered-stack-report-sources aria-label="Sealed source evidence"></ol>
                     </details>
                   </div>

@@ -456,6 +456,13 @@ struct RegisteredStackReportInspectionRequest {
     path: PathBuf,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegisteredStackSourceVerificationRequest {
+    report_path: PathBuf,
+    source_directory: PathBuf,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RegisteredStackReportInspectionResponse {
@@ -506,6 +513,36 @@ enum RegisteredStackReportProductStatus {
     InvalidFits,
     MetadataMismatch,
     ChecksumMismatch,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackSourceVerificationResponse {
+    report_sha256: String,
+    source_directory: String,
+    all_sources_verified: bool,
+    sources: Vec<RegisteredStackSourceVerification>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackSourceVerification {
+    frame_id: String,
+    file_name: String,
+    path: String,
+    byte_length: u64,
+    status: RegisteredStackSourceVerificationStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RegisteredStackSourceVerificationStatus {
+    Verified,
+    Missing,
+    NonRegular,
+    ByteLengthMismatch,
+    ReadFailed,
+    FingerprintMismatch,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -1167,6 +1204,19 @@ async fn inspect_registered_stack_report(
     validate_runtime_source_path(&request.path)?;
     tauri::async_runtime::spawn_blocking(move || {
         inspect_registered_stack_report_sync(&request.path)
+    })
+    .await
+    .map_err(|_| preview_worker_error())?
+}
+
+#[tauri::command]
+async fn verify_registered_stack_sources(
+    request: RegisteredStackSourceVerificationRequest,
+) -> Result<RegisteredStackSourceVerificationResponse, PreviewCommandError> {
+    validate_runtime_source_path(&request.report_path)?;
+    validate_runtime_source_path(&request.source_directory)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        verify_registered_stack_sources_sync(&request.report_path, &request.source_directory)
     })
     .await
     .map_err(|_| preview_worker_error())?
@@ -2197,6 +2247,15 @@ fn inspect_registered_stack_report_sync(
     if source_ids.len() != envelope.report.sources.len() {
         return Err(registered_stack_report_validation_error());
     }
+    let source_names = envelope
+        .report
+        .sources
+        .iter()
+        .map(|source| source.file_name.as_str())
+        .collect::<BTreeSet<_>>();
+    if source_names.len() != envelope.report.sources.len() {
+        return Err(registered_stack_report_validation_error());
+    }
     let product_roles = envelope
         .report
         .products
@@ -2302,6 +2361,78 @@ fn inspect_registered_stack_report_sync(
         all_products_verified,
         sources,
         products,
+    })
+}
+
+fn verify_registered_stack_sources_sync(
+    report_path: &Path,
+    source_directory: &Path,
+) -> Result<RegisteredStackSourceVerificationResponse, PreviewCommandError> {
+    let directory_metadata = fs::symlink_metadata(source_directory)
+        .map_err(|_| registered_stack_source_directory_error())?;
+    if !directory_metadata.file_type().is_dir() {
+        return Err(registered_stack_source_directory_error());
+    }
+    let inspection = inspect_registered_stack_report_sync(report_path)?;
+    let source_directory_text = source_directory
+        .to_str()
+        .ok_or_else(registered_stack_source_directory_error)?
+        .to_owned();
+    let sources = inspection
+        .sources
+        .iter()
+        .map(|source| verify_registered_stack_source(source_directory, source))
+        .collect::<Result<Vec<_>, _>>()?;
+    let all_sources_verified = sources
+        .iter()
+        .all(|source| source.status == RegisteredStackSourceVerificationStatus::Verified);
+    Ok(RegisteredStackSourceVerificationResponse {
+        report_sha256: inspection.report_sha256,
+        source_directory: source_directory_text,
+        all_sources_verified,
+        sources,
+    })
+}
+
+fn verify_registered_stack_source(
+    source_directory: &Path,
+    source: &RegisteredStackReportSourceInspection,
+) -> Result<RegisteredStackSourceVerification, PreviewCommandError> {
+    let path = source_directory.join(&source.file_name);
+    let path_text = path
+        .to_str()
+        .ok_or_else(registered_stack_source_directory_error)?
+        .to_owned();
+    let status = match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            RegisteredStackSourceVerificationStatus::Missing
+        }
+        Err(_) => RegisteredStackSourceVerificationStatus::ReadFailed,
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            RegisteredStackSourceVerificationStatus::NonRegular
+        }
+        Ok(metadata) if metadata.len() != source.byte_length => {
+            RegisteredStackSourceVerificationStatus::ByteLengthMismatch
+        }
+        Ok(_) => match File::open(&path)
+            .and_then(|mut file| fingerprint_reader(&mut file).map_err(std::io::Error::other))
+        {
+            Ok(fingerprint)
+                if fingerprint.byte_length() == source.byte_length
+                    && fingerprint.sha256() == source.sha256 =>
+            {
+                RegisteredStackSourceVerificationStatus::Verified
+            }
+            Ok(_) => RegisteredStackSourceVerificationStatus::FingerprintMismatch,
+            Err(_) => RegisteredStackSourceVerificationStatus::ReadFailed,
+        },
+    };
+    Ok(RegisteredStackSourceVerification {
+        frame_id: source.frame_id.clone(),
+        file_name: source.file_name.clone(),
+        path: path_text,
+        byte_length: source.byte_length,
+        status,
     })
 }
 
@@ -2703,6 +2834,13 @@ const fn registered_stack_report_validation_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "registered_stack_report_invalid",
         "The integration report is malformed or contains incoherent evidence.",
+    )
+}
+
+const fn registered_stack_source_directory_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registered_stack_source_directory_invalid",
+        "The selected source directory is unavailable or is not a regular directory.",
     )
 }
 
@@ -5246,7 +5384,8 @@ pub fn run() -> Result<(), tauri::Error> {
             preview_registered_weights,
             render_fits_preview,
             sort_review_frames,
-            undo_review_decision
+            undo_review_decision,
+            verify_registered_stack_sources
         ])
         .run(tauri::generate_context!())
 }
@@ -6020,7 +6159,7 @@ mod tests {
         fs::create_dir(&session_root)?;
         let session = registration_planning_session(&session_root)?;
         let registration_request =
-            registration_execution_request(&session, &artifact_root, registered_root)?;
+            registration_execution_request(&session, &artifact_root, registered_root.clone())?;
         let planning = registration_request.planning.clone();
         let expected_plan_sha256 = registration_request.expected_plan_sha256.clone();
         let registered = execute_registration_plan_sync(
@@ -6109,6 +6248,51 @@ mod tests {
         assert_eq!(inspection.sources[0].frame_id.len(), 64);
         assert_eq!(inspection.sources[0].sha256.len(), 64);
         assert!(inspection.sources[0].byte_length > 0);
+        let verified_sources =
+            verify_registered_stack_sources_sync(&report_path, &registered_root)?;
+        assert!(verified_sources.all_sources_verified);
+        assert_eq!(verified_sources.report_sha256, result.report_sha256);
+        assert_eq!(verified_sources.sources.len(), 2);
+        assert!(verified_sources.sources.iter().all(|source| {
+            source.status == RegisteredStackSourceVerificationStatus::Verified
+                && source
+                    .path
+                    .starts_with(registered_root.to_string_lossy().as_ref())
+                && source.byte_length > 0
+        }));
+        let first_source_path = registered_root.join(&inspection.sources[0].file_name);
+        let parked_source_path = registered_root.join("parked-source.fits");
+        fs::rename(&first_source_path, &parked_source_path)?;
+        let missing_source = verify_registered_stack_sources_sync(&report_path, &registered_root)?;
+        assert!(!missing_source.all_sources_verified);
+        assert_eq!(
+            missing_source.sources[0].status,
+            RegisteredStackSourceVerificationStatus::Missing
+        );
+        fs::rename(&parked_source_path, &first_source_path)?;
+        let mut altered_source = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&first_source_path)?;
+        let mut source_byte = [0_u8; 1];
+        altered_source.read_exact(&mut source_byte)?;
+        altered_source.seek(SeekFrom::Start(0))?;
+        altered_source.write_all(&[source_byte[0] ^ 0x01])?;
+        altered_source.flush()?;
+        let changed_source = verify_registered_stack_sources_sync(&report_path, &registered_root)?;
+        assert!(!changed_source.all_sources_verified);
+        assert_eq!(
+            changed_source.sources[0].status,
+            RegisteredStackSourceVerificationStatus::FingerprintMismatch
+        );
+        altered_source.seek(SeekFrom::Start(0))?;
+        altered_source.write_all(&source_byte)?;
+        altered_source.flush()?;
+        drop(altered_source);
+        assert!(
+            verify_registered_stack_sources_sync(&report_path, &registered_root)?
+                .all_sources_verified
+        );
         assert!(inspection.all_products_verified);
         assert_eq!(inspection.products.len(), 1);
         assert_eq!(inspection.products[0].role, "science");

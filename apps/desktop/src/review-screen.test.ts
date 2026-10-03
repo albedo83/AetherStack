@@ -26,6 +26,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onInspectRegisteredStackReport: vi.fn(),
     onOpenRegisteredStackReport: vi.fn(),
     onReturnToActiveStack: vi.fn(),
+    onVerifyRegisteredStackSources: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -832,6 +833,11 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("Science · m31.fits");
     expect(root.textContent).toContain("FITS missing");
     expect(root.textContent).toContain("m31-registered-001.fits · 266.1 MiB");
+    fireEvent.click(getByText(root, "Source evidence"));
+    fireEvent.click(
+      getByRole(root, "button", { name: "Verify source folder" }),
+    );
+    expect(actions.onVerifyRegisteredStackSources).toHaveBeenCalledOnce();
     expect(root.textContent).toContain("f".repeat(64));
     expect(root.textContent).toContain(
       "Published registered artifacts required",
@@ -861,6 +867,21 @@ describe("frame review workspace", () => {
             frameId: `${"f".repeat(64)}:reported-stack:science`,
             url: "blob:reopened-stack",
           },
+          sourceVerificationState: "ready",
+          sourceVerification: {
+            reportSha256: "f".repeat(64),
+            sourceDirectory: "/archive/registered",
+            allSourcesVerified: true,
+            sources: [
+              {
+                frameId: "c".repeat(64),
+                fileName: "m31-registered-001.fits",
+                path: "/archive/registered/m31-registered-001.fits",
+                byteLength: 278_992_800,
+                status: "verified",
+              },
+            ],
+          },
           reportInspection: {
             ...external.registration.stack.reportInspection!,
             allProductsVerified: true,
@@ -879,6 +900,10 @@ describe("frame review workspace", () => {
         name: "Integrated registered common-crop preview",
       }).src,
     ).toContain("blob:reopened-stack");
+    expect(root.textContent).toContain(
+      "All source fingerprints verified · /archive/registered",
+    );
+    expect(root.textContent).toContain("SHA-256 verified");
     const science = getByRole<HTMLButtonElement>(root, "tab", {
       name: "Science",
     });
