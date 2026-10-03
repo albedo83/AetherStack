@@ -4050,6 +4050,108 @@ tr[data-state="blocked"] .association-state {
   line-height: 1.5;
 }
 
+.diagnostics-evidence-toolbar {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.8fr) minmax(0, 1.2fr);
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.diagnostics-search {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  background: linear-gradient(180deg, #090e14, #111923);
+  border: 1px solid #39485c;
+  border-radius: var(--radius-md);
+  box-shadow:
+    inset 0 3px 8px #000a,
+    0 1px #ffffff0a;
+}
+
+.diagnostics-search:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 3px 8px #000a,
+    0 0 0 2px #78aefc2e;
+}
+
+.diagnostics-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.diagnostics-search input::placeholder {
+  color: #718096;
+}
+
+.diagnostics-search input::-webkit-search-cancel-button {
+  filter: invert(0.78);
+}
+
+.diagnostics-filters {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  background: #0a1018;
+  border: 1px solid #354255;
+  border-radius: var(--radius-md);
+  box-shadow:
+    inset 0 2px 7px #000a,
+    0 1px #ffffff0b;
+}
+
+.diagnostics-filters button {
+  flex: 1 0 auto;
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  background: linear-gradient(180deg, #1c2632, #111821);
+  border: 0;
+  border-right: 1px solid #354255;
+  cursor: pointer;
+  box-shadow: inset 0 1px #ffffff12;
+}
+
+.diagnostics-filters button:last-child {
+  border-right: 0;
+}
+
+.diagnostics-filters button:hover {
+  color: var(--text);
+  background: linear-gradient(180deg, #27374a, #172331);
+}
+
+.diagnostics-filters button[aria-pressed="true"] {
+  color: #d9eaff;
+  background: linear-gradient(180deg, #315b89, #173452);
+  box-shadow:
+    inset 0 1px #ffffff24,
+    inset 0 -2px #06111e99;
+}
+
+.diagnostics-evidence-summary {
+  display: block;
+  margin: 0 2px 8px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .diagnostics-empty {
   margin: 0;
   padding: 16px;
@@ -4319,6 +4421,14 @@ tr[data-state="blocked"] .association-state {
 
   .diagnostics-grid div:last-child:nth-child(3n + 2) {
     grid-column: auto;
+  }
+
+  .diagnostics-evidence-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostics-filters button {
+    min-height: 42px;
   }
 
   .diagnostics-item {

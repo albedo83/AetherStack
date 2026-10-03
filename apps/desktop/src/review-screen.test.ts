@@ -346,6 +346,67 @@ describe("frame review workspace", () => {
     ).toBe(true);
   });
 
+  it("filters bounded diagnostic evidence without changing native totals", () => {
+    const { root } = fixture({
+      ...demoReviewModel,
+      sessionDiagnostics: {
+        ...demoReviewModel.sessionDiagnostics,
+        items: [
+          {
+            category: "fits",
+            source: "LIGHTS/light_0001.fits",
+            code: "fits_truncated_data",
+          },
+          {
+            category: "quality_cache",
+            source: "LIGHTS/light_0042.fits",
+            code: "quality_cache_artifact_invalid",
+          },
+          {
+            category: "classification",
+            source: "DARKS/dark_0007.fits",
+            code: "classification_conflict",
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(getByRole(root, "button", { name: "Diagnostics" }));
+    const dialog = getByRole(root, "dialog", { name: "Import diagnostics" });
+    expect(dialog.textContent).toContain("3 of 3 displayed issues");
+
+    const cacheFilter = getByRole(dialog, "button", {
+      name: "Quality cache",
+    });
+    fireEvent.click(cacheFilter);
+    expect(cacheFilter.getAttribute("aria-pressed")).toBe("true");
+    expect(dialog.textContent).toContain("1 of 3 displayed issues");
+    expect(dialog.textContent).toContain("light_0042.fits");
+    expect(dialog.textContent).not.toContain("light_0001.fits");
+
+    fireEvent.click(getByRole(dialog, "button", { name: "All" }));
+    fireEvent.input(
+      getByRole(dialog, "searchbox", {
+        name: "Search diagnostic evidence",
+      }),
+      { target: { value: "dark_0007" } },
+    );
+    expect(dialog.textContent).toContain("1 of 3 displayed issues");
+    expect(dialog.textContent).toContain("DARKS/dark_0007.fits");
+    expect(dialog.textContent).not.toContain("LIGHTS/light_0042.fits");
+
+    fireEvent.input(
+      getByRole(dialog, "searchbox", {
+        name: "Search diagnostic evidence",
+      }),
+      { target: { value: "not-present" } },
+    );
+    expect(dialog.textContent).toContain(
+      "No issue evidence matches the current filter.",
+    );
+    expect(dialog.textContent).toContain("0 of 3 displayed issues");
+  });
+
   it("keeps classification overrides visibly and accessibly explained", () => {
     const first = demoReviewModel.frames[0];
     expect(first).toBeDefined();

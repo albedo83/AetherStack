@@ -1296,94 +1296,102 @@ safety reasoning. They do not narrate obvious syntax.
     versioned quality evidence with source fingerprints so a validated session
     can resume without recomputing every diagnostic.
 100. Explain automatic rejections at the point of review. Each rejected table
-    badge now names its single failed metric or reports the number of failed
-    gates, and its accessible description enumerates every failed or
-    missing-rejected gate in canonical rule order. Retain badges explicitly
-    state that all gates passed. DOM coverage binds the visible label and full
-    explanation to native evidence rather than deriving a second decision in
-    the presenter. Next, expose the same aligned evidence in a selected-frame
-    rule inspector with measured value and threshold details.
+     badge now names its single failed metric or reports the number of failed
+     gates, and its accessible description enumerates every failed or
+     missing-rejected gate in canonical rule order. Retain badges explicitly
+     state that all gates passed. DOM coverage binds the visible label and full
+     explanation to native evidence rather than deriving a second decision in
+     the presenter. Next, expose the same aligned evidence in a selected-frame
+     rule inspector with measured value and threshold details.
 101. Add a selected-frame automatic-selection evidence instrument. The panel
-    renders every native evidence item in canonical rule order with a status
-    lamp, metric, measured value or explicit missing marker, strict comparator,
-    typed threshold, and outcome. It uses the plan's aligned result directly and
-    performs no duplicate scientific comparison in TypeScript. Responsive grid
-    layout keeps the evidence readable from narrow panels through wide desktop
-    views, and DOM tests bind representative scalar evidence to its visible
-    equation. Next, persist the validated measurements and their algorithm and
-    source identities across application restarts.
+     renders every native evidence item in canonical rule order with a status
+     lamp, metric, measured value or explicit missing marker, strict comparator,
+     typed threshold, and outcome. It uses the plan's aligned result directly and
+     performs no duplicate scientific comparison in TypeScript. Responsive grid
+     layout keeps the evidence readable from narrow panels through wide desktop
+     views, and DOM tests bind representative scalar evidence to its visible
+     equation. Next, persist the validated measurements and their algorithm and
+     source identities across application restarts.
 102. Persist raw-source quality evidence in the verified immutable cache. Each
-    bounded, versioned payload binds frame identity, explicit source length and
-    SHA-256, current profile and algorithm identities, complete measurement
-    accounting, and validated metrics. The cache key excludes machine paths but
-    includes source and algorithm identity, so relocation remains valid while a
-    changed FITS or implementation becomes a miss. Import re-derives identity,
-    verifies the cache container and JSON schema, revalidates physical domains
-    and interpretation/scale/algorithm combinations, then installs evidence
-    under the current absolute path in both Rust and the presenter. Tests cover
-    round-trip restoration, changed-source misses, bit corruption, algorithm
-    drift, and exact native artifact indexing. Next, expose restored-versus-new
-    measurement provenance and cache diagnostics in the Review UI.
+     bounded, versioned payload binds frame identity, explicit source length and
+     SHA-256, current profile and algorithm identities, complete measurement
+     accounting, and validated metrics. The cache key excludes machine paths but
+     includes source and algorithm identity, so relocation remains valid while a
+     changed FITS or implementation becomes a miss. Import re-derives identity,
+     verifies the cache container and JSON schema, revalidates physical domains
+     and interpretation/scale/algorithm combinations, then installs evidence
+     under the current absolute path in both Rust and the presenter. Tests cover
+     round-trip restoration, changed-source misses, bit corruption, algorithm
+     drift, and exact native artifact indexing. Next, expose restored-versus-new
+     measurement provenance and cache diagnostics in the Review UI.
 103. Surface quality-evidence provenance without turning it into a second
-    quality judgment. Every ready Review frame now carries an explicit measured
-    or restored origin. The selected-frame badge and explanatory text identify
-    verified restored evidence, while newly computed diagnostics retain their
-    existing label. Session replacement clears both result and origin maps,
-    fresh measurements atomically install both values, and failed measurements
-    clear provenance. DOM coverage verifies the user-visible distinction. Next,
-    count restored, missing, and rejected cache records during import and expose
-    those diagnostics without treating an optional cache miss as a FITS error.
+     quality judgment. Every ready Review frame now carries an explicit measured
+     or restored origin. The selected-frame badge and explanatory text identify
+     verified restored evidence, while newly computed diagnostics retain their
+     existing label. Session replacement clears both result and origin maps,
+     fresh measurements atomically install both values, and failed measurements
+     clear provenance. DOM coverage verifies the user-visible distinction. Next,
+     count restored, missing, and rejected cache records during import and expose
+     those diagnostics without treating an optional cache miss as a FITS error.
 104. Make optional quality-cache recovery observable and fail-closed. Import
-    classifies every eligible Bayer Light as restored, missing, or rejected;
-    calibration frames and unsupported Lights do not inflate the counters.
-    Missing keys remain a normal ready state, while invalid identities,
-    containers, payloads, schemas, algorithms, and scientific values are
-    rejected, omitted from native evidence, and surfaced as a warning without
-    deleting shared cache state. Rust tests cover all three outcomes and the
-    eligibility boundary; presenter tests bind the exact counts and warning
-    policy. Next, provide a deliberate cache-maintenance action that can remove
-    only explicitly rejected quality artifacts after user confirmation.
+     classifies every eligible Bayer Light as restored, missing, or rejected;
+     calibration frames and unsupported Lights do not inflate the counters.
+     Missing keys remain a normal ready state, while invalid identities,
+     containers, payloads, schemas, algorithms, and scientific values are
+     rejected, omitted from native evidence, and surfaced as a warning without
+     deleting shared cache state. Rust tests cover all three outcomes and the
+     eligibility boundary; presenter tests bind the exact counts and warning
+     policy. Next, provide a deliberate cache-maintenance action that can remove
+     only explicitly rejected quality artifacts after user confirmation.
 105. Connect the first real Diagnostics surface. The former disabled control
-    now opens an accessible, keyboard-dismissable dark instrument panel that
-    separates mandatory FITS import accounting from optional quality-cache
-    recovery. It reports considered sources, verified frames, conflicts,
-    recoverable failures, unassigned sources, and every restored, missing, or
-    rejected quality record. Severity uses text and a status lamp, aggregate
-    presentation avoids private paths, and the three-column layout collapses on
-    narrow screens. DOM and production-build checks cover the interaction and
-    data binding. Next, add bounded per-source diagnostic evidence and a
-    redacted report export before any cache-maintenance control.
+     now opens an accessible, keyboard-dismissable dark instrument panel that
+     separates mandatory FITS import accounting from optional quality-cache
+     recovery. It reports considered sources, verified frames, conflicts,
+     recoverable failures, unassigned sources, and every restored, missing, or
+     rejected quality record. Severity uses text and a status lamp, aggregate
+     presentation avoids private paths, and the three-column layout collapses on
+     narrow screens. DOM and production-build checks cover the interaction and
+     data binding. Next, add bounded per-source diagnostic evidence and a
+     redacted report export before any cache-maintenance control.
 106. Add bounded source-level evidence to Diagnostics. Native cache restoration
-    now classifies every rejected record with a stable boundary code and returns
-    its session-relative source. The presenter combines those records with
-    classification conflicts, recoverable FITS failures, and unassigned sources,
-    renders at most 100 rows, and reports the exact omitted count while aggregate
-    totals remain complete. DOM construction uses text nodes, never diagnostic
-    HTML; tests prove category order, display bounds, and that absolute source
-    roots cannot enter the diagnostics model. Next, export the same evidence as
-    a versioned redacted JSON report with a canonical digest.
+     now classifies every rejected record with a stable boundary code and returns
+     its session-relative source. The presenter combines those records with
+     classification conflicts, recoverable FITS failures, and unassigned sources,
+     renders at most 100 rows, and reports the exact omitted count while aggregate
+     totals remain complete. DOM construction uses text nodes, never diagnostic
+     HTML; tests prove category order, display bounds, and that absolute source
+     roots cannot enter the diagnostics model. Next, export the same evidence as
+     a versioned redacted JSON report with a canonical digest.
 107. Export diagnostics from native authority without leaking acquisition
-    identity. Rust snapshots the imported manifest and cache evidence, replaces
-    every source with an ordered opaque token, excludes all names and paths,
-    binds the payload to the manifest SHA-256 and algorithm identity, and seals
-    its canonical typed JSON with SHA-256. The pretty envelope is bounded to
-    16 MiB and published through synchronized create-new staging, so an existing
-    destination cannot be overwritten. The dark Diagnostics panel exposes a
-    native save flow with cancellation, progress, success digest, and explicit
-    failure states. Tests prove redaction, digest reproduction, exact bytes,
-    collision safety, and destination-only browser IPC. Next, add a native
-    validator/inspector for exported diagnostic reports before implementing any
-    maintenance action.
+     identity. Rust snapshots the imported manifest and cache evidence, replaces
+     every source with an ordered opaque token, excludes all names and paths,
+     binds the payload to the manifest SHA-256 and algorithm identity, and seals
+     its canonical typed JSON with SHA-256. The pretty envelope is bounded to
+     16 MiB and published through synchronized create-new staging, so an existing
+     destination cannot be overwritten. The dark Diagnostics panel exposes a
+     native save flow with cancellation, progress, success digest, and explicit
+     failure states. Tests prove redaction, digest reproduction, exact bytes,
+     collision safety, and destination-only browser IPC. Next, add a native
+     validator/inspector for exported diagnostic reports before implementing any
+     maintenance action.
 108. Validate exported diagnostics independently before trusting them. The
-    native inspector rejects links and non-files, oversized or non-canonical
-    encoding, unknown fields and versions, invalid manifest or report digests,
-    inconsistent aggregate counts, unordered opaque source tokens, unknown
-    categories, malformed stable codes, and payload tampering. Diagnostics now
-    offers a separate Verify report action with explicit selecting, verified,
-    cancelled, and untrusted states; browser IPC carries only the selected path.
-    Rust and bridge tests cover a valid round trip, digest tampering, unknown
-    fields, and path-only transport. Next, design cache maintenance around an
-    inspected rejection set and explicit user confirmation.
+     native inspector rejects links and non-files, oversized or non-canonical
+     encoding, unknown fields and versions, invalid manifest or report digests,
+     inconsistent aggregate counts, unordered opaque source tokens, unknown
+     categories, malformed stable codes, and payload tampering. Diagnostics now
+     offers a separate Verify report action with explicit selecting, verified,
+     cancelled, and untrusted states; browser IPC carries only the selected path.
+     Rust and bridge tests cover a valid round trip, digest tampering, unknown
+     fields, and path-only transport. Next, design cache maintenance around an
+     inspected rejection set and explicit user confirmation.
+109. Add local evidence exploration without weakening native authority. The
+     Diagnostics instrument now offers tactile, no-dropdown category filters and
+     case-insensitive search across relative sources, stable codes, and category
+     labels. Filtering never mutates or re-queries native evidence, and the live
+     summary always distinguishes displayed rows from the complete bounded set.
+     Tests cover category selection, search, empty results, and persistent native
+     totals. Next, preview cache maintenance against an exact inspected rejection
+     set before exposing any destructive action.
 
 ## 11. Stable-release definition
 

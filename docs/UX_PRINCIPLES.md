@@ -120,6 +120,10 @@ is generated from native state, replaces every source with an ordered opaque
 token, seals the typed payload with SHA-256, and never overwrites a destination.
 The same panel can select an existing report for strict native verification and
 shows schema, item count, and shortened digest only after every gate passes.
+Tactile category controls and case-insensitive search narrow the bounded local
+evidence without dropdowns or a new native query. The panel always reports the
+exact displayed and available counts, so exploration cannot be mistaken for a
+change to the sealed session evidence.
 
 ## Dark visual system
 

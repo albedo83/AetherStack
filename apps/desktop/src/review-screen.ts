@@ -96,6 +96,18 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-omitted]",
     ),
+    diagnosticsSearch: required<HTMLInputElement>(
+      root,
+      "[data-diagnostics-search]",
+    ),
+    diagnosticsFilters: requiredAll<HTMLButtonElement>(
+      root,
+      "[data-diagnostics-filter]",
+    ),
+    diagnosticsEvidenceSummary: required<HTMLElement>(
+      root,
+      "[data-diagnostics-evidence-summary]",
+    ),
     diagnosticsExport: required<HTMLButtonElement>(
       root,
       '[data-action="export-diagnostics"]',
@@ -665,6 +677,8 @@ export function mountReviewScreen(
   let sourceEvidenceQuery = "";
   let sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
   let sourceEvidenceReportSha256: string | null = null;
+  let diagnosticsFilter: DiagnosticsEvidenceFilter = "all";
+  let diagnosticsQuery = "";
 
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -985,6 +999,19 @@ export function mountReviewScreen(
       actions.onInspectDiagnosticsReport();
       return;
     }
+    if (action === "filter-diagnostics-evidence") {
+      const filter = actionElement.dataset.diagnosticsFilter;
+      if (isDiagnosticsEvidenceFilter(filter)) {
+        diagnosticsFilter = filter;
+        renderSessionDiagnostics(
+          elements,
+          model,
+          diagnosticsFilter,
+          diagnosticsQuery,
+        );
+      }
+      return;
+    }
     if (action === "viewer-fit") {
       actions.onSetViewerScale("fit");
       return;
@@ -1136,6 +1163,16 @@ export function mountReviewScreen(
   };
 
   const onInput = (event: Event): void => {
+    if (event.target === elements.diagnosticsSearch) {
+      diagnosticsQuery = elements.diagnosticsSearch.value;
+      renderSessionDiagnostics(
+        elements,
+        model,
+        diagnosticsFilter,
+        diagnosticsQuery,
+      );
+      return;
+    }
     if (event.target === elements.registeredStackSourceSearch) {
       sourceEvidenceQuery = elements.registeredStackSourceSearch.value;
       sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
@@ -1468,7 +1505,12 @@ export function mountReviewScreen(
     elements.qualityBadge.dataset.state = frame?.qualityState ?? "unavailable";
     elements.qualityBadge.textContent = qualityBadgeLabel(frame);
     elements.qualityBadge.title = frame?.qualityMessage ?? "";
-    renderSessionDiagnostics(elements, model);
+    renderSessionDiagnostics(
+      elements,
+      model,
+      diagnosticsFilter,
+      diagnosticsQuery,
+    );
     renderStatisticsPanel(elements, model);
     elements.stretch.textContent = model.sharedStretchLabel;
     renderSelectedMetrics(elements, frame);
@@ -2169,12 +2211,17 @@ function renderSessionDiagnostics(
     diagnosticsItems: HTMLOListElement;
     diagnosticsEmpty: HTMLElement;
     diagnosticsOmitted: HTMLElement;
+    diagnosticsSearch: HTMLInputElement;
+    diagnosticsFilters: readonly HTMLButtonElement[];
+    diagnosticsEvidenceSummary: HTMLElement;
     diagnosticsExport: HTMLButtonElement;
     diagnosticsExportStatus: HTMLElement;
     diagnosticsInspect: HTMLButtonElement;
     diagnosticsInspectionStatus: HTMLElement;
   },
   model: ReviewViewModel,
+  filter: DiagnosticsEvidenceFilter,
+  query: string,
 ): void {
   const diagnostics = model.sessionDiagnostics;
   const attention =
@@ -2211,7 +2258,29 @@ function renderSessionDiagnostics(
   elements.diagnosticsRejected.textContent = formatCount(
     diagnostics.qualityEvidenceRejected,
   );
-  const rows = diagnostics.items.map((item) => {
+  const normalizedQuery = query.trim().toLocaleLowerCase("en-US");
+  const filteredItems = diagnostics.items.filter((item) => {
+    const categoryMatches = filter === "all" || item.category === filter;
+    const queryMatches =
+      normalizedQuery.length === 0 ||
+      item.source.toLocaleLowerCase("en-US").includes(normalizedQuery) ||
+      item.code.toLocaleLowerCase("en-US").includes(normalizedQuery) ||
+      diagnosticCategoryLabel(item.category)
+        .toLocaleLowerCase("en-US")
+        .includes(normalizedQuery);
+    return categoryMatches && queryMatches;
+  });
+  if (elements.diagnosticsSearch.value !== query) {
+    elements.diagnosticsSearch.value = query;
+  }
+  for (const button of elements.diagnosticsFilters) {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.diagnosticsFilter === filter),
+    );
+  }
+  elements.diagnosticsEvidenceSummary.textContent = `${formatCount(filteredItems.length)} of ${formatCount(diagnostics.items.length)} displayed issues`;
+  const rows = filteredItems.map((item) => {
     const row = document.createElement("li");
     row.className = "diagnostics-item";
     const category = document.createElement("span");
@@ -2228,6 +2297,10 @@ function renderSessionDiagnostics(
   elements.diagnosticsItems.replaceChildren(...rows);
   elements.diagnosticsItems.hidden = rows.length === 0;
   elements.diagnosticsEmpty.hidden = rows.length > 0;
+  elements.diagnosticsEmpty.textContent =
+    diagnostics.items.length === 0
+      ? "No source-level issue evidence is present."
+      : "No issue evidence matches the current filter.";
   elements.diagnosticsOmitted.hidden = diagnostics.omittedItems === 0;
   elements.diagnosticsOmitted.textContent =
     diagnostics.omittedItems > 0
@@ -2382,6 +2455,9 @@ interface RegistrationElements {
 
 type SourceEvidenceFilter = "all" | "issues" | "verified" | "unverified";
 
+type DiagnosticsEvidenceFilter =
+  "all" | "classification" | "fits" | "grouping" | "quality_cache";
+
 const SOURCE_EVIDENCE_PAGE_SIZE = 250;
 
 function isSourceEvidenceFilter(
@@ -2392,6 +2468,18 @@ function isSourceEvidenceFilter(
     value === "issues" ||
     value === "verified" ||
     value === "unverified"
+  );
+}
+
+function isDiagnosticsEvidenceFilter(
+  value: string | undefined,
+): value is DiagnosticsEvidenceFilter {
+  return (
+    value === "all" ||
+    value === "classification" ||
+    value === "fits" ||
+    value === "grouping" ||
+    value === "quality_cache"
   );
 }
 
@@ -4469,6 +4557,21 @@ function shellMarkup(): string {
         </section>
         <section class="diagnostics-bank" aria-labelledby="diagnostics-evidence-heading">
           <div class="diagnostics-bank__heading"><span aria-hidden="true">●</span><h3 id="diagnostics-evidence-heading">Issue evidence</h3></div>
+          <div class="diagnostics-evidence-toolbar">
+            <label class="diagnostics-search">
+              <span class="sr-only">Search diagnostic evidence</span>
+              <span aria-hidden="true">⌕</span>
+              <input type="search" data-diagnostics-search placeholder="Find source or issue code" autocomplete="off" spellcheck="false" />
+            </label>
+            <div class="diagnostics-filters" role="group" aria-label="Filter diagnostic evidence">
+              <button type="button" data-action="filter-diagnostics-evidence" data-diagnostics-filter="all" aria-pressed="true">All</button>
+              <button type="button" data-action="filter-diagnostics-evidence" data-diagnostics-filter="classification" aria-pressed="false">Classification</button>
+              <button type="button" data-action="filter-diagnostics-evidence" data-diagnostics-filter="fits" aria-pressed="false">FITS</button>
+              <button type="button" data-action="filter-diagnostics-evidence" data-diagnostics-filter="grouping" aria-pressed="false">Grouping</button>
+              <button type="button" data-action="filter-diagnostics-evidence" data-diagnostics-filter="quality_cache" aria-pressed="false">Quality cache</button>
+            </div>
+          </div>
+          <output class="diagnostics-evidence-summary" data-diagnostics-evidence-summary aria-live="polite">0 of 0 displayed issues</output>
           <p class="diagnostics-empty" data-diagnostics-empty>No source-level issue evidence is present.</p>
           <ol class="diagnostics-items" data-diagnostics-items hidden></ol>
           <p class="diagnostics-note" data-diagnostics-omitted hidden></p>
