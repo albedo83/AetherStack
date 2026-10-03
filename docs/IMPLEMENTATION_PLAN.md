@@ -1225,6 +1225,15 @@ safety reasoning. They do not narrate obvious syntax.
     completion update move backward. Unit coverage locks all three boundaries.
     Next, benchmark complete report verification with synthetic high-count files
     to quantify filesystem and IPC overhead separately from SHA-256 throughput.
+93. Establish typed automatic frame-selection evidence without changing review
+    state. The toolkit-independent Rust layer now evaluates background, noise,
+    stellar SNR, exact detected/usable star counts, FWHM, and eccentricity with
+    strict comparators, validated physical domains, explicit missing-value
+    policy, duplicate-rule rejection, bounded allocation, and complete
+    non-short-circuiting evidence. Count thresholds never pass through `f64`.
+    Automatic results are proposals only; tests prove they cannot overwrite an
+    accepted manual decision. Next, bind a canonical rule plan to frame identity
+    and expose previewed native batch evidence before adding desktop controls.
 
 ## 11. Stable-release definition
 

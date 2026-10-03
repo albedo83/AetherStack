@@ -14,13 +14,21 @@ behavior. Changing a threshold recomputes the proposed state but does not erase
 manual decisions. Bulk changes are previewed and undoable until the run plan is
 sealed.
 
-The initial interaction model implements manual accept, reject, and clear
-transactions against content-derived frame identities. A transaction is first
-returned as an immutable generation-bound preview, then applied atomically. One
-undo operation reverts the complete transaction. Sealing advances the generation,
-discards undo history, and permanently blocks mutation. Automatic rule evidence
-and its precedence model remain a separate planned addition; they are not
-simulated by overloading manual decisions.
+The interaction model implements manual accept, reject, and clear transactions
+against content-derived frame identities. A transaction is first returned as an
+immutable generation-bound preview, then applied atomically. One undo operation
+reverts the complete transaction. Sealing advances the generation, discards undo
+history, and permanently blocks mutation.
+
+The first automatic-rule evaluator is a separate non-mutating layer. It supports
+strict thresholds for background, noise, stellar SNR, detected and usable star
+counts, major-axis FWHM, and eccentricity. Scalar and count values remain
+distinct, missing evidence resolves through an explicit retain-or-reject policy,
+duplicate metric rules are rejected, and every rule is evaluated even after one
+failure. The result is only a retain/reject proposal with complete evidence; it
+cannot edit, clear, or override a manual decision. Native session persistence,
+previewed bulk application, and the desktop rule editor remain planned before
+automatic selection can affect a run.
 
 The desktop adapter initializes one native review book after a successful
 session import. Accept, reject, clear, and undo commands mutate that book under a
@@ -55,8 +63,9 @@ The strict backend implements global median/MAD background clipping and
 local-maximum stellar moments for a prepared monochrome detection plane. The
 desktop may explicitly measure declared standard Bayer lights through the
 versioned complete-cell transform in
-[`QUALITY_CONTRACT.md`](QUALITY_CONTRACT.md). Results are visibly diagnostic and
-cannot trigger automatic rejection. Automatic camera presets remain disabled
+[`QUALITY_CONTRACT.md`](QUALITY_CONTRACT.md). Results remain visibly diagnostic
+and cannot trigger automatic rejection until the evaluator is connected through
+a previewed native transaction. Automatic camera presets remain disabled
 until both ASI294MC Pro and ToupTek 585C validation satisfy every release gate.
 
 ## Viewer fidelity

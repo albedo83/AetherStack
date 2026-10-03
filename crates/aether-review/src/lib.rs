@@ -8,6 +8,7 @@
 
 mod blink;
 mod review;
+mod selection;
 
 pub use blink::{
     BlinkController, BlinkError, BlinkPlaybackMode, ChannelPresentation, DISPLAY_TRANSFORM_VERSION,
@@ -19,4 +20,10 @@ pub use review::{
     MAX_LABEL_BYTES, MAX_NOTE_BYTES, MAX_REVIEW_FRAMES, MAX_SOURCE_PATH_BYTES, MAX_UNDO_DEPTH,
     ManualDecision, ManualRejectionReason, MissingPlacement, ReviewBook, ReviewError,
     ReviewPreview, ReviewState, SortDirection, SortField, SortSpec,
+};
+pub use selection::{
+    FRAME_SELECTION_ALGORITHM_ID, FrameSelectionComparator, FrameSelectionError,
+    FrameSelectionEvaluation, FrameSelectionMetric, FrameSelectionProposal, FrameSelectionRule,
+    FrameSelectionRuleEvidence, FrameSelectionRuleState, FrameSelectionValue,
+    MAX_FRAME_SELECTION_RULES, MissingMetricPolicy,
 };

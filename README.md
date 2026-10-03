@@ -70,7 +70,9 @@ optimized CPU and GPU paths must match.
   measurements on prepared linear detection planes;
 - a toolkit-independent frame-review and Blink state model with stable source
   identities, previewed decision transactions, bounded undo, view-only sorting,
-  locked display state, and exact asynchronous preview commits;
+  locked display state, exact asynchronous preview commits, and a separate
+  versioned automatic-threshold evaluator that preserves typed measured values,
+  comparators, and missing-metric evidence without mutating manual decisions;
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, linked-luminance
