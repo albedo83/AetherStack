@@ -1392,6 +1392,17 @@ safety reasoning. They do not narrate obvious syntax.
      Tests cover category selection, search, empty results, and persistent native
      totals. Next, preview cache maintenance against an exact inspected rejection
      set before exposing any destructive action.
+110. Build a non-destructive cache-maintenance preview. Import retains exact
+     native keys only for rejected artifacts whose identities were derivable.
+     The cache crate can fingerprint a complete corrupt file without trusting
+     its header, while enforcing regular-file and caller-defined size bounds.
+     The desktop sorts and seals the eligible rejection set with the current
+     manifest, reports exact bytes, and blocks missing, non-regular, oversized,
+     unreadable, or changing targets. Browser IPC supplies no keys or paths, and
+     the Diagnostics instrument explicitly labels the operation as preview only.
+     Rust, bridge, DOM, and build coverage prove that no deletion capability is
+     present. Next, require an explicit confirmation bound to this plan digest
+     and revalidate every file immediately before a narrowly scoped removal.
 
 ## 11. Stable-release definition
 

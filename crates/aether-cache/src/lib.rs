@@ -9,6 +9,7 @@ mod store;
 
 pub use key::{CACHE_KEY_DOMAIN_MAX_BYTES, CacheKey, CacheKeyError, CacheKeyParseError};
 pub use store::{
-    ARTIFACT_FORMAT_VERSION, ArtifactDigest, ArtifactPublication, ArtifactPublicationState,
-    ArtifactStore, CacheReadError, CacheWriteError, VerifiedArtifact,
+    ARTIFACT_FORMAT_VERSION, ArtifactDigest, ArtifactFileFingerprint, ArtifactPublication,
+    ArtifactPublicationState, ArtifactStore, CacheFingerprintError, CacheReadError,
+    CacheWriteError, VerifiedArtifact,
 };

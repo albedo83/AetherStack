@@ -78,9 +78,11 @@ const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
 const QUALITY_EVIDENCE_SCHEMA_VERSION: u16 = 1;
 const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
 const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
+const MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES: u64 = 128 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
+const QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID: &str = "quality-cache-maintenance-preview-v1";
 const SOURCE_VERIFICATION_PROGRESS_BYTES: u64 = 8 * 1_024 * 1_024;
 static REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -713,55 +715,94 @@ fn publish_quality_evidence(
 enum QualityEvidenceRestore {
     Missing,
     Restored(Box<FrameQualityResponse>),
-    Rejected(&'static str),
+    Rejected {
+        code: &'static str,
+        key: Option<CacheKey>,
+    },
 }
 
 fn restore_quality_evidence(cache_root: &Path, frame: &ImportedFrame) -> QualityEvidenceRestore {
     let Ok(frame_id) = FrameId::new(frame.id.clone()) else {
-        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_identity_invalid",
+            key: None,
+        };
     };
     let Ok(derived) = FrameId::derive(
         &frame.relative_path,
         frame.source_byte_length,
         &frame.source_sha256,
     ) else {
-        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_identity_invalid",
+            key: None,
+        };
     };
     if derived != frame_id {
-        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_identity_invalid",
+            key: None,
+        };
     }
     let Ok(key) = quality_evidence_key(&frame_id, frame.source_byte_length, &frame.source_sha256)
     else {
-        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_identity_invalid",
+            key: None,
+        };
     };
     let Ok(store) = ArtifactStore::new(cache_root.to_owned()) else {
-        return QualityEvidenceRestore::Rejected("quality_cache_unavailable");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_cache_unavailable",
+            key: Some(key),
+        };
     };
     let mut artifact = match store.lookup_verified(&key) {
         Ok(Some(artifact)) => artifact,
         Ok(None) => return QualityEvidenceRestore::Missing,
         Err(_) => {
-            return QualityEvidenceRestore::Rejected("quality_cache_artifact_invalid");
+            return QualityEvidenceRestore::Rejected {
+                code: "quality_cache_artifact_invalid",
+                key: Some(key),
+            };
         }
     };
     if artifact.payload_bytes() > MAX_QUALITY_EVIDENCE_BYTES {
-        return QualityEvidenceRestore::Rejected("quality_evidence_payload_too_large");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_payload_too_large",
+            key: Some(key),
+        };
     }
     let Ok(capacity) = usize::try_from(artifact.payload_bytes()) else {
-        return QualityEvidenceRestore::Rejected("quality_evidence_allocation_failed");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_allocation_failed",
+            key: Some(key),
+        };
     };
     let mut payload = Vec::new();
     if payload.try_reserve_exact(capacity).is_err() {
-        return QualityEvidenceRestore::Rejected("quality_evidence_allocation_failed");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_allocation_failed",
+            key: Some(key),
+        };
     }
     if artifact.read_to_end(&mut payload).is_err() {
-        return QualityEvidenceRestore::Rejected("quality_evidence_read_failed");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_read_failed",
+            key: Some(key),
+        };
     }
     if payload.len() != capacity {
-        return QualityEvidenceRestore::Rejected("quality_evidence_length_mismatch");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_length_mismatch",
+            key: Some(key),
+        };
     }
     let Ok(evidence) = serde_json::from_slice::<StoredFrameQualityEvidence>(&payload) else {
-        return QualityEvidenceRestore::Rejected("quality_evidence_payload_invalid");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_payload_invalid",
+            key: Some(key),
+        };
     };
     if evidence.schema_version != QUALITY_EVIDENCE_SCHEMA_VERSION
         || evidence.frame_id != frame.id
@@ -769,7 +810,10 @@ fn restore_quality_evidence(cache_root: &Path, frame: &ImportedFrame) -> Quality
         || evidence.source_sha256 != frame.source_sha256
         || validate_quality_response(&evidence.response).is_err()
     {
-        return QualityEvidenceRestore::Rejected("quality_evidence_payload_invalid");
+        return QualityEvidenceRestore::Rejected {
+            code: "quality_evidence_payload_invalid",
+            key: Some(key),
+        };
     }
     QualityEvidenceRestore::Restored(Box::new(evidence.response))
 }
@@ -955,11 +999,123 @@ struct SessionDiagnosticsInspectionResponse {
     item_count: usize,
 }
 
-fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSession) {
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QualityCacheMaintenanceItem {
+    source: String,
+    code: String,
+    cache_key: String,
+    file_bytes: u64,
+    file_sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QualityCacheMaintenanceBlockedItem {
+    source: String,
+    code: String,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QualityCacheMaintenancePreviewResponse {
+    algorithm_id: String,
+    plan_sha256: String,
+    eligible_count: usize,
+    blocked_count: usize,
+    total_file_bytes: u64,
+    items: Vec<QualityCacheMaintenanceItem>,
+    blocked_items: Vec<QualityCacheMaintenanceBlockedItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QualityCacheMaintenancePlan<'a> {
+    algorithm_id: &'static str,
+    manifest_sha256: &'a str,
+    items: &'a [QualityCacheMaintenanceItem],
+}
+
+fn preview_quality_cache_maintenance_sync(
+    cache_root: &Path,
+    session: &ImportedNativeSession,
+) -> Result<QualityCacheMaintenancePreviewResponse, PreviewCommandError> {
+    let store = ArtifactStore::new(cache_root.to_owned())
+        .map_err(|_| quality_cache_maintenance_preview_error())?;
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| quality_cache_maintenance_preview_error())?;
+    let mut candidates = session.quality_cache_rejections.clone();
+    candidates.sort_by(|left, right| {
+        left.relative_path
+            .cmp(&right.relative_path)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    let mut items = Vec::new();
+    let mut blocked_items = Vec::new();
+    let mut total_file_bytes = 0_u64;
+    for candidate in candidates {
+        match store.fingerprint_raw(&candidate.key, MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES) {
+            Ok(Some(fingerprint)) => {
+                total_file_bytes = total_file_bytes
+                    .checked_add(fingerprint.file_bytes())
+                    .ok_or_else(quality_cache_maintenance_preview_error)?;
+                items.push(QualityCacheMaintenanceItem {
+                    source: candidate.relative_path,
+                    code: candidate.code,
+                    cache_key: candidate.key.to_string(),
+                    file_bytes: fingerprint.file_bytes(),
+                    file_sha256: fingerprint.sha256().to_owned(),
+                });
+            }
+            Ok(None) => blocked_items.push(QualityCacheMaintenanceBlockedItem {
+                source: candidate.relative_path,
+                code: candidate.code,
+                reason: "cache_artifact_missing".to_owned(),
+            }),
+            Err(_) => blocked_items.push(QualityCacheMaintenanceBlockedItem {
+                source: candidate.relative_path,
+                code: candidate.code,
+                reason: "cache_artifact_not_safely_inspectable".to_owned(),
+            }),
+        }
+    }
+    let canonical = serde_json::to_vec(&QualityCacheMaintenancePlan {
+        algorithm_id: QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID,
+        manifest_sha256: &manifest_sha256,
+        items: &items,
+    })
+    .map_err(|_| quality_cache_maintenance_preview_error())?;
+    let plan_sha256 = lowercase_hex(&Sha256::digest(canonical));
+    Ok(QualityCacheMaintenancePreviewResponse {
+        algorithm_id: QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID.to_owned(),
+        plan_sha256,
+        eligible_count: items.len(),
+        blocked_count: blocked_items.len(),
+        total_file_bytes,
+        items,
+        blocked_items,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct QualityCacheRejectionCandidate {
+    relative_path: String,
+    code: String,
+    key: CacheKey,
+}
+
+fn restore_session_quality_evidence(
+    cache_root: &Path,
+    session: &mut ImportedSession,
+) -> Vec<QualityCacheRejectionCandidate> {
     session.quality_evidence_restored = 0;
     session.quality_evidence_missing = 0;
     session.quality_evidence_rejected = 0;
     session.quality_evidence_rejections.clear();
+    let mut candidates = Vec::new();
     for frame in &mut session.frames {
         // Raw quality diagnostics currently require a declared Bayer phase.
         // Calibration and non-Light sources deliberately do not inflate the
@@ -973,15 +1129,23 @@ fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSes
                 frame.quality = Some(*response);
                 session.quality_evidence_restored += 1;
             }
-            QualityEvidenceRestore::Rejected(code) => {
+            QualityEvidenceRestore::Rejected { code, key } => {
                 session.quality_evidence_rejections.push(ImportedFailure {
                     relative_path: frame.relative_path.clone(),
                     code: code.to_owned(),
                 });
+                if let Some(key) = key {
+                    candidates.push(QualityCacheRejectionCandidate {
+                        relative_path: frame.relative_path.clone(),
+                        code: code.to_owned(),
+                        key,
+                    });
+                }
                 session.quality_evidence_rejected += 1;
             }
         }
     }
+    candidates
 }
 
 fn build_session_diagnostics_report(
@@ -1281,6 +1445,7 @@ struct ImportedNativeSession {
     root: PathBuf,
     manifest: Arc<SessionManifest>,
     diagnostics_report: Option<SessionDiagnosticsReport>,
+    quality_cache_rejections: Vec<QualityCacheRejectionCandidate>,
 }
 
 #[derive(Debug)]
@@ -4136,7 +4301,8 @@ async fn import_session_directory(
     let cache_root = quality_cache_root(&app)?;
     let imported = tauri::async_runtime::spawn_blocking(move || {
         let mut imported = scan_session_directory_sync(&path)?;
-        restore_session_quality_evidence(&cache_root, &mut imported.presentation);
+        imported.native.quality_cache_rejections =
+            restore_session_quality_evidence(&cache_root, &mut imported.presentation);
         let manifest_sha256 = imported
             .native
             .manifest
@@ -4213,6 +4379,27 @@ fn inspect_session_diagnostics_report(
         return Err(session_diagnostics_destination_error());
     }
     inspect_session_diagnostics_report_sync(&path)
+}
+
+#[tauri::command]
+async fn preview_quality_cache_maintenance(
+    app: tauri::AppHandle,
+    session_state: tauri::State<'_, DesktopSessionState>,
+) -> Result<QualityCacheMaintenancePreviewResponse, PreviewCommandError> {
+    let cache_root = quality_cache_root(&app)?;
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_quality_cache_maintenance_sync(&cache_root, &session)
+    })
+    .await
+    .map_err(|_| {
+        PreviewCommandError::new(
+            "quality_cache_maintenance_preview_interrupted",
+            "The quality-cache inspection worker stopped before producing a result.",
+        )
+    })?
 }
 
 #[tauri::command]
@@ -4941,6 +5128,13 @@ const fn session_diagnostics_digest_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "session_diagnostics_digest_mismatch",
         "The diagnostics report payload does not match its SHA-256 seal.",
+    )
+}
+
+const fn quality_cache_maintenance_preview_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "quality_cache_maintenance_preview_failed",
+        "The rejected quality-cache set could not be inspected safely.",
     )
 }
 
@@ -6118,6 +6312,7 @@ fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, Pre
             root: root.to_owned(),
             manifest,
             diagnostics_report: None,
+            quality_cache_rejections: Vec::new(),
         },
     })
 }
@@ -6556,6 +6751,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_session_diagnostics_report,
             inspect_registered_stack_report,
             inspect_stack_pixel,
+            preview_quality_cache_maintenance,
             preview_master_plan,
             preview_frame_selection,
             preview_registration_plan,
@@ -6820,6 +7016,7 @@ mod tests {
                 groups,
             )?),
             diagnostics_report: None,
+            quality_cache_rejections: Vec::new(),
         })
     }
 
@@ -6919,6 +7116,7 @@ mod tests {
                 vec![group],
             )?),
             diagnostics_report: None,
+            quality_cache_rejections: Vec::new(),
         })
     }
 
@@ -9040,10 +9238,13 @@ mod tests {
         artifact.seek(SeekFrom::Start(0))?;
         artifact.write_all(b"X")?;
         artifact.sync_all()?;
-        assert_eq!(
+        assert!(matches!(
             restore_quality_evidence(directory.path(), &frame),
-            QualityEvidenceRestore::Rejected("quality_cache_artifact_invalid")
-        );
+            QualityEvidenceRestore::Rejected {
+                code: "quality_cache_artifact_invalid",
+                key: Some(_),
+            }
+        ));
 
         let mut drifted = selection_test_quality_response(4.0, 600);
         drifted.star_algorithm_id = "future-star-model-v2".to_owned();
@@ -9105,12 +9306,15 @@ mod tests {
             }],
         };
 
-        restore_session_quality_evidence(directory.path(), &mut session);
+        let candidates = restore_session_quality_evidence(directory.path(), &mut session);
 
         assert_eq!(session.quality_evidence_restored, 1);
         assert_eq!(session.quality_evidence_missing, 1);
         assert_eq!(session.quality_evidence_rejected, 1);
         assert_eq!(session.quality_evidence_rejections.len(), 1);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].relative_path, "LIGHTS/rejected.fits");
+        assert_eq!(candidates[0].key, rejected_key);
         assert_eq!(
             session.quality_evidence_rejections[0].relative_path,
             "LIGHTS/rejected.fits"
@@ -9124,6 +9328,98 @@ mod tests {
             session.frames[1..]
                 .iter()
                 .all(|frame| frame.quality.is_none())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cache_maintenance_preview_seals_only_bounded_existing_files() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let store = ArtifactStore::new(directory.path().to_owned())?;
+        let existing_key = CacheKey::derive("maintenance-test-v1", b"existing")?;
+        let missing_key = CacheKey::derive("maintenance-test-v1", b"missing")?;
+        store.publish(&existing_key, &mut Cursor::new(b"invalid quality evidence"))?;
+        let existing_path = directory
+            .path()
+            .join(&existing_key.as_str()[..2])
+            .join(format!("{}.artifact", existing_key.as_str()));
+        let mut artifact = OpenOptions::new().write(true).open(&existing_path)?;
+        artifact.seek(SeekFrom::Start(0))?;
+        artifact.write_all(b"X")?;
+        artifact.sync_all()?;
+
+        let mut session = planning_session(directory.path())?;
+        session.quality_cache_rejections = vec![
+            QualityCacheRejectionCandidate {
+                relative_path: "LIGHTS/z-missing.fits".to_owned(),
+                code: "quality_cache_artifact_invalid".to_owned(),
+                key: missing_key,
+            },
+            QualityCacheRejectionCandidate {
+                relative_path: "LIGHTS/a-existing.fits".to_owned(),
+                code: "quality_cache_artifact_invalid".to_owned(),
+                key: existing_key.clone(),
+            },
+        ];
+
+        let preview = preview_quality_cache_maintenance_sync(directory.path(), &session)?;
+        assert_eq!(preview.algorithm_id, QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID);
+        assert_eq!(preview.eligible_count, 1);
+        assert_eq!(preview.blocked_count, 1);
+        assert_eq!(preview.items.len(), 1);
+        assert_eq!(preview.items[0].source, "LIGHTS/a-existing.fits");
+        assert_eq!(preview.items[0].cache_key, existing_key.as_str());
+        assert_eq!(preview.total_file_bytes, fs::metadata(existing_path)?.len());
+        assert_eq!(preview.blocked_items[0].reason, "cache_artifact_missing");
+        assert!(is_canonical_sha256(&preview.items[0].file_sha256));
+        assert!(is_canonical_sha256(&preview.plan_sha256));
+
+        let repeated = preview_quality_cache_maintenance_sync(directory.path(), &session)?;
+        assert_eq!(repeated.plan_sha256, preview.plan_sha256);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_maintenance_preview_blocks_oversized_and_non_regular_targets() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let oversized_key = CacheKey::derive("maintenance-test-v1", b"oversized")?;
+        let non_file_key = CacheKey::derive("maintenance-test-v1", b"directory")?;
+        let oversized_path = directory
+            .path()
+            .join(&oversized_key.as_str()[..2])
+            .join(format!("{}.artifact", oversized_key.as_str()));
+        fs::create_dir_all(oversized_path.parent().ok_or("missing shard")?)?;
+        File::create(&oversized_path)?.set_len(MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES + 1)?;
+        let non_file_path = directory
+            .path()
+            .join(&non_file_key.as_str()[..2])
+            .join(format!("{}.artifact", non_file_key.as_str()));
+        fs::create_dir_all(&non_file_path)?;
+
+        let mut session = planning_session(directory.path())?;
+        session.quality_cache_rejections = vec![
+            QualityCacheRejectionCandidate {
+                relative_path: "LIGHTS/oversized.fits".to_owned(),
+                code: "quality_evidence_payload_too_large".to_owned(),
+                key: oversized_key,
+            },
+            QualityCacheRejectionCandidate {
+                relative_path: "LIGHTS/non-file.fits".to_owned(),
+                code: "quality_cache_artifact_invalid".to_owned(),
+                key: non_file_key,
+            },
+        ];
+
+        let preview = preview_quality_cache_maintenance_sync(directory.path(), &session)?;
+        assert_eq!(preview.eligible_count, 0);
+        assert_eq!(preview.blocked_count, 2);
+        assert_eq!(preview.total_file_bytes, 0);
+        assert!(preview.items.is_empty());
+        assert!(
+            preview
+                .blocked_items
+                .iter()
+                .all(|item| { item.reason == "cache_artifact_not_safely_inspectable" })
         );
         Ok(())
     }

@@ -124,6 +124,11 @@ Tactile category controls and case-insensitive search narrow the bounded local
 evidence without dropdowns or a new native query. The panel always reports the
 exact displayed and available counts, so exploration cannot be mistaken for a
 change to the sealed session evidence.
+Rejected cache evidence has a separate maintenance preview. Its control first
+fingerprints the exact native rejection set and shows removable count, bounded
+bytes, blocked count, and a shortened plan seal. The wording states “preview
+only”; no destructive control is shown until a later confirmation design can
+prove that the inspected bytes have not changed.
 
 ## Dark visual system
 

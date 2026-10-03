@@ -47,6 +47,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onImportSession: vi.fn(),
     onExportDiagnostics: vi.fn(),
     onInspectDiagnosticsReport: vi.fn(),
+    onPreviewQualityCacheMaintenance: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectLightFrameView: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -317,6 +318,12 @@ describe("frame review workspace", () => {
         exportMessage: "No redacted report exported",
         inspectionState: "idle",
         inspectionMessage: "No diagnostics report verified",
+        maintenanceState: "ready",
+        maintenanceMessage: "1 removable · 0 blocked · preview only",
+        maintenanceEligible: 1,
+        maintenanceBlocked: 0,
+        maintenanceBytes: 4_096,
+        maintenancePlanSha256: "a".repeat(64),
       },
     });
 
@@ -333,6 +340,9 @@ describe("frame review workspace", () => {
     expect(dialog.textContent).toContain("LIGHTS/light_0042.fits");
     expect(dialog.textContent).toContain("quality_cache_artifact_invalid");
     expect(dialog.textContent).toContain("2 additional items omitted");
+    expect(dialog.textContent).toContain("1 removable · 4.0 KiB");
+    fireEvent.click(getByRole(dialog, "button", { name: "Preview cleanup" }));
+    expect(actions.onPreviewQualityCacheMaintenance).toHaveBeenCalledOnce();
     fireEvent.click(
       getByRole(dialog, "button", { name: "Export redacted JSON" }),
     );

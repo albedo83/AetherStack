@@ -64,6 +64,26 @@ export interface SessionDiagnosticsInspection {
   readonly itemCount: number;
 }
 
+export interface QualityCacheMaintenancePreview {
+  readonly algorithmId: string;
+  readonly planSha256: string;
+  readonly eligibleCount: number;
+  readonly blockedCount: number;
+  readonly totalFileBytes: number;
+  readonly items: readonly {
+    readonly source: string;
+    readonly code: string;
+    readonly cacheKey: string;
+    readonly fileBytes: number;
+    readonly fileSha256: string;
+  }[];
+  readonly blockedItems: readonly {
+    readonly source: string;
+    readonly code: string;
+    readonly reason: string;
+  }[];
+}
+
 const MAX_SESSION_DIAGNOSTIC_ITEMS = 100;
 
 /** Builds a path-safe, DOM-bounded list from native session evidence. */
@@ -124,6 +144,12 @@ export function importedSessionDiagnostics(
     exportMessage: "No redacted report exported",
     inspectionState: "idle",
     inspectionMessage: "No diagnostics report verified",
+    maintenanceState: "idle",
+    maintenanceMessage: "Rejected cache artifacts have not been inspected",
+    maintenanceEligible: 0,
+    maintenanceBlocked: 0,
+    maintenanceBytes: 0,
+    maintenancePlanSha256: null,
   };
 }
 
@@ -197,5 +223,12 @@ export async function selectAndInspectSessionDiagnostics(): Promise<SessionDiagn
   return invoke<SessionDiagnosticsInspection>(
     "inspect_session_diagnostics_report",
     { path },
+  );
+}
+
+/** Builds a sealed, read-only preview of exactly removable rejected entries. */
+export async function previewQualityCacheMaintenance(): Promise<QualityCacheMaintenancePreview> {
+  return invoke<QualityCacheMaintenancePreview>(
+    "preview_quality_cache_maintenance",
   );
 }

@@ -61,6 +61,31 @@ pub struct ArtifactPublication {
     state: ArtifactPublicationState,
 }
 
+/// Exact identity of one raw cache file, including its untrusted header.
+///
+/// Maintenance code uses this fingerprint to bind a later mutation to the
+/// bytes that were explicitly inspected. It does not imply that the artifact
+/// payload or header is valid.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArtifactFileFingerprint {
+    file_bytes: u64,
+    sha256: String,
+}
+
+impl ArtifactFileFingerprint {
+    /// Exact size of the complete cache file, including its header.
+    #[must_use]
+    pub const fn file_bytes(&self) -> u64 {
+        self.file_bytes
+    }
+
+    /// SHA-256 of the complete cache file, including its header.
+    #[must_use]
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
 impl ArtifactPublication {
     /// Operation key naming the artifact.
     #[must_use]
@@ -266,6 +291,73 @@ impl ArtifactStore {
         }
     }
 
+    /// Fingerprints an existing raw artifact without trusting its contents.
+    ///
+    /// This deliberately hashes the header and payload together. A caller can
+    /// therefore present an exact maintenance preview even when ordinary cache
+    /// verification rejects the entry. Absence is returned as `None`; links,
+    /// non-files, oversized entries, and I/O failures remain explicit errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed inspection error when the target is not a bounded
+    /// regular file or its bytes cannot be read completely.
+    pub fn fingerprint_raw(
+        &self,
+        key: &CacheKey,
+        maximum_file_bytes: u64,
+    ) -> Result<Option<ArtifactFileFingerprint>, CacheFingerprintError> {
+        let path = self.artifact_path(key);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(CacheFingerprintError::Inspect(error)),
+        };
+        if !metadata.file_type().is_file() {
+            return Err(CacheFingerprintError::NotRegularFile);
+        }
+        let file_bytes = metadata.len();
+        if file_bytes > maximum_file_bytes {
+            return Err(CacheFingerprintError::TooLarge {
+                actual: file_bytes,
+                maximum: maximum_file_bytes,
+            });
+        }
+        let mut file = File::open(path).map_err(CacheFingerprintError::Open)?;
+        let opened_metadata = file.metadata().map_err(CacheFingerprintError::Inspect)?;
+        if !opened_metadata.file_type().is_file() || opened_metadata.len() != file_bytes {
+            return Err(CacheFingerprintError::ChangedDuringInspection);
+        }
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; COPY_BUFFER_BYTES];
+        let mut observed = 0_u64;
+        loop {
+            let read = match file.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(CacheFingerprintError::Read(error)),
+            };
+            observed = observed
+                .checked_add(read as u64)
+                .ok_or(CacheFingerprintError::ChangedDuringInspection)?;
+            if observed > maximum_file_bytes {
+                return Err(CacheFingerprintError::TooLarge {
+                    actual: observed,
+                    maximum: maximum_file_bytes,
+                });
+            }
+            hasher.update(&buffer[..read]);
+        }
+        if observed != file_bytes {
+            return Err(CacheFingerprintError::ChangedDuringInspection);
+        }
+        Ok(Some(ArtifactFileFingerprint {
+            file_bytes,
+            sha256: encode_lower_hex(&hasher.finalize()),
+        }))
+    }
+
     fn shard_path(&self, key: &CacheKey) -> PathBuf {
         self.root.join(&key.as_str()[..2])
     }
@@ -314,6 +406,55 @@ pub enum CacheReadError {
     },
     /// Verified file could not be rewound to its payload.
     Seek(io::Error),
+}
+
+/// Failure while fingerprinting untrusted bytes for maintenance preview.
+#[derive(Debug)]
+pub enum CacheFingerprintError {
+    /// Artifact metadata could not be inspected.
+    Inspect(io::Error),
+    /// Artifact path exists but is not a regular file.
+    NotRegularFile,
+    /// Artifact exceeds the caller's explicit inspection bound.
+    TooLarge {
+        /// Complete observed file length.
+        actual: u64,
+        /// Maximum complete file length accepted by the caller.
+        maximum: u64,
+    },
+    /// Artifact could not be opened after metadata inspection.
+    Open(io::Error),
+    /// Artifact bytes could not be read completely.
+    Read(io::Error),
+    /// Artifact identity or length changed while it was inspected.
+    ChangedDuringInspection,
+}
+
+impl Display for CacheFingerprintError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inspect(error) => write!(formatter, "cannot inspect cache artifact: {error}"),
+            Self::NotRegularFile => formatter.write_str("cache artifact is not a regular file"),
+            Self::TooLarge { actual, maximum } => write!(
+                formatter,
+                "cache artifact is {actual} bytes; inspection limit is {maximum} bytes"
+            ),
+            Self::Open(error) => write!(formatter, "cannot open cache artifact: {error}"),
+            Self::Read(error) => write!(formatter, "cannot read cache artifact: {error}"),
+            Self::ChangedDuringInspection => {
+                formatter.write_str("cache artifact changed during inspection")
+            }
+        }
+    }
+}
+
+impl Error for CacheFingerprintError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Inspect(error) | Self::Open(error) | Self::Read(error) => Some(error),
+            Self::NotRegularFile | Self::TooLarge { .. } | Self::ChangedDuringInspection => None,
+        }
+    }
 }
 
 impl Display for CacheReadError {
@@ -953,6 +1094,49 @@ mod tests {
         assert!(matches!(
             store.lookup_verified(&key),
             Err(CacheReadError::ReadHeader(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn raw_fingerprint_binds_corrupt_bytes_without_trusting_them() -> Result<(), Box<dyn Error>> {
+        let (_directory, store) = store()?;
+        let key = key()?;
+        assert_eq!(store.fingerprint_raw(&key, 1_024)?, None);
+
+        store.publish(&key, &mut Cursor::new(b"payload"))?;
+        let path = store.artifact_path(&key);
+        let mut file = OpenOptions::new().write(true).open(&path)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(b"X")?;
+        file.sync_all()?;
+        assert!(matches!(
+            store.open_verified(&key),
+            Err(CacheReadError::InvalidMagic)
+        ));
+
+        let raw = store
+            .fingerprint_raw(&key, 1_024)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "fingerprint missing"))?;
+        let bytes = fs::read(path)?;
+        assert_eq!(raw.file_bytes(), bytes.len() as u64);
+        assert_eq!(raw.sha256(), encode_lower_hex(&Sha256::digest(bytes)));
+        assert!(matches!(
+            store.fingerprint_raw(&key, raw.file_bytes() - 1),
+            Err(CacheFingerprintError::TooLarge { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn raw_fingerprint_rejects_non_files() -> Result<(), Box<dyn Error>> {
+        let (_directory, store) = store()?;
+        let key = key()?;
+        fs::create_dir_all(store.artifact_path(&key))?;
+
+        assert!(matches!(
+            store.fingerprint_raw(&key, 1_024),
+            Err(CacheFingerprintError::NotRegularFile)
         ));
         Ok(())
     }

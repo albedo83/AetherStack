@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   importedSessionDiagnostics,
   importedSessionStatus,
+  previewQualityCacheMaintenance,
   exportSessionDiagnostics,
   selectAndInspectSessionDiagnostics,
   selectAndImportSession,
@@ -91,6 +92,22 @@ describe("native session bridge", () => {
     expect(invoke).toHaveBeenCalledWith("inspect_session_diagnostics_report", {
       path: "/reports/session.json",
     });
+  });
+
+  it("requests cache maintenance preview without browser-supplied targets", async () => {
+    const preview = {
+      algorithmId: "quality-cache-maintenance-preview-v1",
+      planSha256: "c".repeat(64),
+      eligibleCount: 1,
+      blockedCount: 0,
+      totalFileBytes: 4_096,
+      items: [],
+      blockedItems: [],
+    };
+    vi.mocked(invoke).mockResolvedValue(preview);
+
+    await expect(previewQualityCacheMaintenance()).resolves.toBe(preview);
+    expect(invoke).toHaveBeenCalledWith("preview_quality_cache_maintenance");
   });
 
   it("reports normal cache misses without degrading a verified import", () => {

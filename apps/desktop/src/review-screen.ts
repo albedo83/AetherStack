@@ -124,6 +124,18 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-inspection-status]",
     ),
+    diagnosticsMaintenance: required<HTMLButtonElement>(
+      root,
+      '[data-action="preview-cache-maintenance"]',
+    ),
+    diagnosticsMaintenanceStatus: required<HTMLElement>(
+      root,
+      "[data-diagnostics-maintenance-status]",
+    ),
+    diagnosticsMaintenanceFacts: required<HTMLElement>(
+      root,
+      "[data-diagnostics-maintenance-facts]",
+    ),
     framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
     calibrationWorkspace: required<HTMLElement>(
       root,
@@ -997,6 +1009,10 @@ export function mountReviewScreen(
     }
     if (action === "inspect-diagnostics-report") {
       actions.onInspectDiagnosticsReport();
+      return;
+    }
+    if (action === "preview-cache-maintenance") {
+      actions.onPreviewQualityCacheMaintenance();
       return;
     }
     if (action === "filter-diagnostics-evidence") {
@@ -2218,6 +2234,9 @@ function renderSessionDiagnostics(
     diagnosticsExportStatus: HTMLElement;
     diagnosticsInspect: HTMLButtonElement;
     diagnosticsInspectionStatus: HTMLElement;
+    diagnosticsMaintenance: HTMLButtonElement;
+    diagnosticsMaintenanceStatus: HTMLElement;
+    diagnosticsMaintenanceFacts: HTMLElement;
   },
   model: ReviewViewModel,
   filter: DiagnosticsEvidenceFilter,
@@ -2324,6 +2343,23 @@ function renderSessionDiagnostics(
     diagnostics.inspectionState;
   elements.diagnosticsInspectionStatus.textContent =
     diagnostics.inspectionMessage;
+  elements.diagnosticsMaintenance.disabled =
+    diagnostics.qualityEvidenceRejected === 0 ||
+    diagnostics.maintenanceState === "inspecting";
+  elements.diagnosticsMaintenance.textContent =
+    diagnostics.maintenanceState === "inspecting"
+      ? "Inspecting…"
+      : "Preview cleanup";
+  elements.diagnosticsMaintenanceStatus.dataset.state =
+    diagnostics.maintenanceState;
+  elements.diagnosticsMaintenanceStatus.textContent =
+    diagnostics.maintenanceMessage;
+  elements.diagnosticsMaintenanceFacts.hidden =
+    diagnostics.maintenanceState !== "ready";
+  elements.diagnosticsMaintenanceFacts.textContent =
+    diagnostics.maintenanceState === "ready"
+      ? `${formatCount(diagnostics.maintenanceEligible)} removable · ${formatByteCount(diagnostics.maintenanceBytes)} · ${formatCount(diagnostics.maintenanceBlocked)} blocked · plan ${diagnostics.maintenancePlanSha256?.slice(0, 12) ?? "unsealed"}…`
+      : "";
 }
 
 function diagnosticCategoryLabel(
@@ -4554,6 +4590,14 @@ function shellMarkup(): string {
             ${statistic("Rejected", "data-diagnostics-rejected")}
           </dl>
           <p class="diagnostics-note">Rejected entries never enter a selection plan. They remain untouched in shared cache storage and quality is recomputed safely.</p>
+          <div class="diagnostics-maintenance">
+            <div>
+              <strong>Safe maintenance preview</strong>
+              <p data-diagnostics-maintenance-status aria-live="polite">Rejected cache artifacts have not been inspected</p>
+              <code data-diagnostics-maintenance-facts hidden></code>
+            </div>
+            <button class="button button--quiet" type="button" data-action="preview-cache-maintenance" disabled>Preview cleanup</button>
+          </div>
         </section>
         <section class="diagnostics-bank" aria-labelledby="diagnostics-evidence-heading">
           <div class="diagnostics-bank__heading"><span aria-hidden="true">●</span><h3 id="diagnostics-evidence-heading">Issue evidence</h3></div>

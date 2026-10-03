@@ -55,6 +55,16 @@ codes, digest mismatch, and any JSON representation that differs from the exact
 pretty envelope produced by the exporter. The desktop exposes this through a
 separate native file-selection flow and labels a failure as untrusted.
 
+## Cache maintenance preview
+
+Maintenance begins with a read-only native preview derived from rejection keys
+captured during import; the browser cannot provide cache targets. Each existing
+candidate must be a regular file no larger than 128 KiB. Rust fingerprints the
+complete untrusted file, including its header, and seals the ordered candidate
+set together with the current manifest and algorithm identity. Missing,
+non-regular, oversized, unreadable, or changing targets are blocked separately.
+The preview reports exact counts and bytes but grants no deletion capability.
+
 ## Required tests
 
 - private session names and absolute or relative FITS paths never appear;
@@ -64,4 +74,7 @@ separate native file-selection flow and labels a failure as untrusted.
 - a second publication cannot modify the first report;
 - the browser sends only the user-selected destination to Rust;
 - native inspection rejects digest tampering and unknown fields;
-- the browser sends only the selected report path to native inspection.
+- the browser sends only the selected report path to native inspection;
+- raw cache fingerprints remain available for corrupt bounded files;
+- missing, non-regular, and oversized cache targets remain blocked;
+- the browser requests a preview without supplying paths, keys, or candidates.

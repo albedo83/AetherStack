@@ -89,6 +89,7 @@ import {
   exportSessionDiagnostics,
   importedSessionDiagnostics,
   importedSessionStatus,
+  previewQualityCacheMaintenance,
   selectAndInspectSessionDiagnostics,
   selectAndImportSession,
   type ImportedFrame,
@@ -293,6 +294,9 @@ const screen = mountReviewScreen(root, model, {
   onInspectDiagnosticsReport() {
     void inspectDiagnosticsReport();
   },
+  onPreviewQualityCacheMaintenance() {
+    void previewCacheMaintenance();
+  },
   onSelectRole(role) {
     selectRole(role);
   },
@@ -477,6 +481,53 @@ async function inspectDiagnosticsReport(): Promise<void> {
         ...model.sessionDiagnostics,
         inspectionState: "error",
         inspectionMessage: "Verification failed · report not trusted",
+      },
+    });
+  }
+}
+
+async function previewCacheMaintenance(): Promise<void> {
+  if (
+    !importedSession ||
+    model.sessionDiagnostics.maintenanceState === "inspecting"
+  ) {
+    return;
+  }
+  update({
+    ...model,
+    sessionDiagnostics: {
+      ...model.sessionDiagnostics,
+      maintenanceState: "inspecting",
+      maintenanceMessage: "Fingerprinting rejected cache artifacts…",
+    },
+  });
+  try {
+    const preview = await previewQualityCacheMaintenance();
+    const eligible = preview.eligibleCount.toLocaleString("en-US");
+    const blocked = preview.blockedCount.toLocaleString("en-US");
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        maintenanceState: "ready",
+        maintenanceMessage: `${eligible} removable · ${blocked} blocked · preview only`,
+        maintenanceEligible: preview.eligibleCount,
+        maintenanceBlocked: preview.blockedCount,
+        maintenanceBytes: preview.totalFileBytes,
+        maintenancePlanSha256: preview.planSha256,
+      },
+    });
+  } catch {
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        maintenanceState: "error",
+        maintenanceMessage: "Cache inspection failed · nothing was changed",
+        maintenanceEligible: 0,
+        maintenanceBlocked: 0,
+        maintenanceBytes: 0,
+        maintenancePlanSha256: null,
       },
     });
   }
