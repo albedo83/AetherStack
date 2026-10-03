@@ -1130,6 +1130,13 @@ button:active:not(:disabled) {
   margin-top: 9px !important;
 }
 
+.registered-stack__open-report {
+  width: max-content;
+  min-height: 30px;
+  padding: 5px 11px;
+  font-size: 9px;
+}
+
 .weight-preflight {
   margin-top: 10px;
   overflow: hidden;

@@ -1101,6 +1101,15 @@ safety reasoning. They do not narrate obvious syntax.
     selectable evidence. Presenter, accessibility-contract, frontend, lint,
     and production-build tests cover the interaction. Next, expand the report
     inspector into a reopenable result workspace for reports from prior runs.
+80. Reopen deterministic reports from prior runs. The integration surface now
+    accepts an explicit JSON report chosen through the native file dialog,
+    keeps its path separate from the active stack result, and displays no digest
+    or provenance summary until the bounded Rust validator accepts the file.
+    Loading a prior report neither mutates the current FITS products nor claims
+    they belong to the open session. Dialog, presenter, stale-response, lint,
+    and build coverage protect the workflow. Next, add a dedicated result
+    workspace that can pair a verified report with its referenced FITS products
+    and flag missing or checksum-inconsistent artifacts.
 
 ## 11. Stable-release definition
 

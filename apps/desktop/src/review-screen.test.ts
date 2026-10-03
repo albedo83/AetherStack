@@ -24,6 +24,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSetRegisteredStackOverlayOpacity: vi.fn(),
     onInspectRegisteredStackPixel: vi.fn(),
     onInspectRegisteredStackReport: vi.fn(),
+    onOpenRegisteredStackReport: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -544,6 +545,8 @@ describe("frame review workspace", () => {
     ).toContain("blob:registered-stack");
     expect(root.textContent).toContain("Integration report");
     expect(root.textContent).toContain("d".repeat(64));
+    fireEvent.click(getByRole(root, "button", { name: "Open prior report" }));
+    expect(actions.onOpenRegisteredStackReport).toHaveBeenCalledOnce();
     fireEvent.click(getByRole(root, "button", { name: "Verify report" }));
     expect(actions.onInspectRegisteredStackReport).toHaveBeenCalledOnce();
     controller.update({
@@ -747,6 +750,43 @@ describe("frame review workspace", () => {
         name: "Increase low-tail fraction",
       }).disabled,
     ).toBe(true);
+  });
+
+  it("presents a natively verified report without claiming an active stack", () => {
+    const external: ReviewViewModel = {
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+      registration: {
+        ...demoReviewModel.registration,
+        stack: {
+          ...demoReviewModel.registration.stack,
+          reportInspectionPath: "/archive/m31-integration-report.json",
+          reportInspectionState: "ready",
+          reportInspection: {
+            schemaVersion: 1,
+            reportSha256: "f".repeat(64),
+            planSha256: "a".repeat(64),
+            manifestSha256: "b".repeat(64),
+            estimator: "weighted_mean",
+            sourceCount: 18,
+            productCount: 1,
+            weighted: true,
+          },
+        },
+      },
+    };
+    const { root, actions } = fixture(external);
+
+    expect(root.textContent).toContain("/archive/m31-integration-report.json");
+    expect(root.textContent).toContain(
+      "18 sources · 1 product · balanced PSF weight · schema 1",
+    );
+    expect(root.textContent).toContain("f".repeat(64));
+    expect(root.textContent).toContain(
+      "Published registered artifacts required",
+    );
+    fireEvent.click(getByRole(root, "button", { name: "Verify again" }));
+    expect(actions.onInspectRegisteredStackReport).toHaveBeenCalledOnce();
   });
 
   it("preflights every calibrated Light before enabling weighted integration", () => {

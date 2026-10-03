@@ -281,6 +281,17 @@ export async function selectRegisteredStackOutput(): Promise<string | null> {
   return typeof path === "string" ? path : null;
 }
 
+/** Chooses a previously published deterministic integration report. */
+export async function selectRegisteredStackReport(): Promise<string | null> {
+  const path = await open({
+    title: "Open an AetherStack integration report",
+    multiple: false,
+    directory: false,
+    filters: [{ name: "AetherStack report", extensions: ["json"] }],
+  });
+  return typeof path === "string" ? path : null;
+}
+
 /** Integrates the exact registered set on its sealed common footprint. */
 export function executeRegisteredStack(
   outputPath: string,

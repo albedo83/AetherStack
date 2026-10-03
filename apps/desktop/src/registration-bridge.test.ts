@@ -12,6 +12,7 @@ import {
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
+  selectRegisteredStackReport,
   selectRegisteredStackOutput,
   type RegistrationExecutionProgress,
   type RegisteredStackProgress,
@@ -202,6 +203,24 @@ describe("native registration bridge", () => {
     });
     await expect(cancelRegisteredStack()).resolves.toBe(true);
     expect(invoke).toHaveBeenLastCalledWith("cancel_registered_stack");
+  });
+
+  it("selects a prior integration report without accepting non-string results", async () => {
+    vi.mocked(open).mockResolvedValue(
+      "/results/integrated-integration-report.json",
+    );
+    await expect(selectRegisteredStackReport()).resolves.toBe(
+      "/results/integrated-integration-report.json",
+    );
+    expect(open).toHaveBeenCalledWith({
+      title: "Open an AetherStack integration report",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "AetherStack report", extensions: ["json"] }],
+    });
+
+    vi.mocked(open).mockResolvedValue([]);
+    await expect(selectRegisteredStackReport()).resolves.toBeNull();
   });
 
   it("requests canonical native weight evidence before execution", async () => {

@@ -182,6 +182,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-report-summary]",
     ),
+    openRegisteredStackReport: required<HTMLButtonElement>(
+      root,
+      '[data-action="open-registered-stack-report"]',
+    ),
     registeredStackEstimator: required<HTMLSelectElement>(
       root,
       "[data-registered-stack-estimator]",
@@ -513,6 +517,11 @@ export function mountReviewScreen(
 
     if (action === "inspect-registered-stack-report") {
       actions.onInspectRegisteredStackReport();
+      return;
+    }
+
+    if (action === "open-registered-stack-report") {
+      actions.onOpenRegisteredStackReport();
       return;
     }
 
@@ -1477,6 +1486,7 @@ interface RegistrationElements {
   readonly registeredStackReportDigest: HTMLElement;
   readonly inspectRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackReportSummary: HTMLElement;
+  readonly openRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
   readonly registeredStackHighFraction: HTMLInputElement;
@@ -1643,18 +1653,24 @@ function renderRegistration(
       : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
   const integrationReport = registration.stack.result;
-  elements.registeredStackReport.hidden = integrationReport === null;
-  elements.registeredStackReportPath.textContent =
-    integrationReport?.reportPath ?? "";
-  elements.registeredStackReportPath.title =
-    integrationReport?.reportPath ?? "";
-  elements.registeredStackReportDigest.textContent =
-    integrationReport?.reportSha256 ?? "";
-  elements.registeredStackReportDigest.title =
-    integrationReport?.reportSha256 ?? "";
   const reportInspection = registration.stack.reportInspection;
+  const reportPath =
+    registration.stack.reportInspectionPath ?? integrationReport?.reportPath;
+  const reportDigest =
+    reportInspection?.reportSha256 ??
+    (integrationReport !== null && reportPath === integrationReport.reportPath
+      ? integrationReport.reportSha256
+      : null);
+  elements.registeredStackReport.hidden = reportPath === null;
+  elements.registeredStackReportPath.textContent = reportPath ?? "";
+  elements.registeredStackReportPath.title = reportPath ?? "";
+  elements.registeredStackReportDigest.textContent =
+    reportDigest ?? "Digest available after native verification";
+  elements.registeredStackReportDigest.title = reportDigest ?? "";
   elements.inspectRegisteredStackReport.disabled =
-    integrationReport === null ||
+    reportPath === null ||
+    registration.stack.reportInspectionState === "loading";
+  elements.openRegisteredStackReport.disabled =
     registration.stack.reportInspectionState === "loading";
   elements.inspectRegisteredStackReport.textContent =
     registration.stack.reportInspectionState === "loading"
@@ -1665,7 +1681,7 @@ function renderRegistration(
   elements.registeredStackReport.dataset.state =
     registration.stack.reportInspectionState;
   elements.registeredStackReportSummary.textContent = reportInspection
-    ? `${reportInspection.sourceCount} sources · ${reportInspection.productCount} products · ${formatEstimatorName(reportInspection.estimator)} · schema ${reportInspection.schemaVersion}`
+    ? `${formatCountedNoun(reportInspection.sourceCount, "source")} · ${formatCountedNoun(reportInspection.productCount, "product")} · ${formatEstimatorName(reportInspection.estimator)} · schema ${reportInspection.schemaVersion}`
     : registration.stack.reportInspectionState === "error"
       ? "Native verification failed · report evidence is not trusted"
       : "Verify natively before using this provenance as evidence";
@@ -2166,6 +2182,10 @@ function formatEstimatorName(
     case "percentile_clipped":
       return "percentile clipped";
   }
+}
+
+function formatCountedNoun(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function calibrationSettings(
@@ -3032,6 +3052,7 @@ function shellMarkup(): string {
                     <span class="instrument-label" data-registered-stack-estimator-label>STRICT F64 MEAN</span>
                   </div>
                   <p data-registered-stack-message>Register the reviewed Lights to unlock integration</p>
+                  <button class="button button--quiet registered-stack__open-report" type="button" data-action="open-registered-stack-report">Open prior report</button>
                   <details class="advanced-settings registered-stack__advanced">
                     <summary>Advanced integration</summary>
                     <div class="registered-stack__control-grid">

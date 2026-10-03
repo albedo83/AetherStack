@@ -238,6 +238,7 @@ export interface RegistrationViewModel {
     readonly weightPreflight: RegisteredWeightPreflight | null;
     readonly reportInspectionState: "idle" | "loading" | "ready" | "error";
     readonly reportInspection: RegisteredStackReportInspection | null;
+    readonly reportInspectionPath: string | null;
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
@@ -301,6 +302,7 @@ export interface ReviewActions {
   readonly onSetRegisteredStackOverlayOpacity: (opacity: number) => void;
   readonly onInspectRegisteredStackPixel: (x: number, y: number) => void;
   readonly onInspectRegisteredStackReport: () => void;
+  readonly onOpenRegisteredStackReport: () => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

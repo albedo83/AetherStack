@@ -59,6 +59,7 @@ import {
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
+  selectRegisteredStackReport,
   selectRegisteredStackOutput,
   type RegistrationExecutionProgress,
   type RegisteredStackIntegrationSettings,
@@ -213,6 +214,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onInspectRegisteredStackReport() {
     void inspectStackReport();
+  },
+  onOpenRegisteredStackReport() {
+    void openStackReport();
   },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
@@ -714,6 +718,7 @@ function idleRegisteredStack(
     weightPreflight: null,
     reportInspectionState: "idle",
     reportInspection: null,
+    reportInspectionPath: null,
     settings: defaultRegisteredStackSettings(),
     message,
   };
@@ -1079,6 +1084,7 @@ async function executeStack(): Promise<void> {
         weightPreflight: model.registration.stack.weightPreflight,
         reportInspectionState: "idle",
         reportInspection: null,
+        reportInspectionPath: null,
         settings,
         message:
           settings.estimator === "strict_mean"
@@ -1156,6 +1162,7 @@ async function executeStack(): Promise<void> {
           weightPreflight: model.registration.stack.weightPreflight,
           reportInspectionState: "idle",
           reportInspection: null,
+          reportInspectionPath: result.reportPath,
           settings,
           message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
@@ -1396,9 +1403,20 @@ async function inspectRegisteredStackPixel(
   }
 }
 
-async function inspectStackReport(): Promise<void> {
+async function openStackReport(): Promise<void> {
+  const path = await selectRegisteredStackReport();
+  if (!path) return;
+  await inspectStackReport(path);
+}
+
+async function inspectStackReport(selectedPath?: string): Promise<void> {
   const result = model.registration.stack.result;
-  if (!result || model.registration.stack.state !== "completed") return;
+  const path =
+    selectedPath ??
+    result?.reportPath ??
+    model.registration.stack.reportInspectionPath;
+  if (!path) return;
+  const activeResult = result?.reportPath === path ? result : null;
   const ticket = ++stackReportTicket;
   update({
     ...model,
@@ -1408,20 +1426,22 @@ async function inspectStackReport(): Promise<void> {
         ...model.registration.stack,
         reportInspectionState: "loading",
         reportInspection: null,
+        reportInspectionPath: path,
       },
     },
   });
   try {
-    const inspection = await inspectRegisteredStackReport(result.reportPath);
+    const inspection = await inspectRegisteredStackReport(path);
     if (
       ticket !== stackReportTicket ||
-      model.registration.stack.result?.reportPath !== result.reportPath
+      model.registration.stack.reportInspectionPath !== path
     ) {
       return;
     }
     if (
-      inspection.reportSha256 !== result.reportSha256 ||
-      inspection.planSha256 !== result.planSha256
+      activeResult !== null &&
+      (inspection.reportSha256 !== activeResult.reportSha256 ||
+        inspection.planSha256 !== activeResult.planSha256)
     ) {
       throw new Error("Validated report does not match the active stack");
     }
@@ -1433,6 +1453,7 @@ async function inspectStackReport(): Promise<void> {
           ...model.registration.stack,
           reportInspectionState: "ready",
           reportInspection: inspection,
+          reportInspectionPath: path,
         },
       },
     });
