@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("native frame-selection bridge", () => {
-  it("passes typed metric snapshots and rules without evaluating them", async () => {
+  it("passes artifact identities and typed rules without evaluating them", async () => {
     const frames = demoReviewModel.frames.slice(0, 2);
     const rules: readonly FrameSelectionRule[] = [
       {
@@ -45,15 +45,7 @@ describe("native frame-selection bridge", () => {
       request: {
         frames: frames.map((frame) => ({
           frameId: frame.id,
-          metrics: {
-            background: frame.metrics.background,
-            noise: frame.metrics.noise,
-            signalToNoise: frame.metrics.signalToNoise,
-            detectedStars: frame.metrics.detectedStars,
-            usableStars: frame.metrics.usableStars,
-            fwhmPixels: frame.metrics.fwhmPixels,
-            eccentricity: frame.metrics.eccentricity,
-          },
+          sourcePath: frame.sourcePath,
         })),
         rules,
       },

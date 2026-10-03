@@ -2701,8 +2701,12 @@ async function measureQuality(frameId: string): Promise<void> {
   try {
     const result =
       frame.previewContent.kind === "rgb"
-        ? await inspectRgbFrameQuality(frame.sourcePath)
-        : await inspectCfaFrameQuality(frame.sourcePath, frame.bayerPattern!);
+        ? await inspectRgbFrameQuality(frame.id, frame.sourcePath)
+        : await inspectCfaFrameQuality(
+            frame.id,
+            frame.sourcePath,
+            frame.bayerPattern!,
+          );
     if (sessionRevision !== qualitySessionRevision) return;
     qualityCache.set(artifactKey, result);
     applyQualityResult(frame.id, result);

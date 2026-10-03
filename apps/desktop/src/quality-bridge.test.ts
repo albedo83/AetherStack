@@ -22,10 +22,11 @@ describe("native frame-quality bridge", () => {
     vi.mocked(invoke).mockResolvedValue(expected);
 
     await expect(
-      inspectCfaFrameQuality("/session/LIGHTS/a.fits", "rggb"),
+      inspectCfaFrameQuality("a".repeat(64), "/session/LIGHTS/a.fits", "rggb"),
     ).resolves.toBe(expected);
     expect(invoke).toHaveBeenCalledWith("inspect_frame_quality", {
       request: {
+        frameId: "a".repeat(64),
         path: "/session/LIGHTS/a.fits",
         interpretation: { kind: "bayer_cell_mean", pattern: "rggb" },
       },
@@ -41,10 +42,11 @@ describe("native frame-quality bridge", () => {
     vi.mocked(invoke).mockResolvedValue(expected);
 
     await expect(
-      inspectRgbFrameQuality("/session/CALIBRATED/rgb.fits"),
+      inspectRgbFrameQuality("b".repeat(64), "/session/CALIBRATED/rgb.fits"),
     ).resolves.toBe(expected);
     expect(invoke).toHaveBeenCalledWith("inspect_frame_quality", {
       request: {
+        frameId: "b".repeat(64),
         path: "/session/CALIBRATED/rgb.fits",
         interpretation: { kind: "rgb_luminance" },
       },

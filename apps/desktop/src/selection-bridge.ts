@@ -54,9 +54,10 @@ export interface FrameSelectionPlan {
 /**
  * Requests an identity-bound, non-mutating automatic-selection preview.
  *
- * Rust validates every metric and rule, resolves labels and processing order
- * from native state, and returns the canonical digest. This bridge contains no
- * threshold evaluator and cannot change a manual review decision.
+ * Rust resolves previously measured metrics by exact frame identity and
+ * artifact path, validates every rule, restores native processing order, and
+ * returns the canonical digest. This bridge contains no threshold evaluator
+ * and cannot change a manual review decision.
  */
 export function previewFrameSelection(
   frames: readonly ReviewFrame[],
@@ -66,15 +67,7 @@ export function previewFrameSelection(
     request: {
       frames: frames.map((frame) => ({
         frameId: frame.id,
-        metrics: {
-          background: frame.metrics.background,
-          noise: frame.metrics.noise,
-          signalToNoise: frame.metrics.signalToNoise,
-          detectedStars: frame.metrics.detectedStars,
-          usableStars: frame.metrics.usableStars,
-          fwhmPixels: frame.metrics.fwhmPixels,
-          eccentricity: frame.metrics.eccentricity,
-        },
+        sourcePath: frame.sourcePath,
       })),
       rules,
     },

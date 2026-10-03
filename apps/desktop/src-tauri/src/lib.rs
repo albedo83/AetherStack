@@ -585,6 +585,7 @@ struct FitsStatisticsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FrameQualityRequest {
+    frame_id: String,
     path: PathBuf,
     interpretation: QualityInterpretation,
 }
@@ -730,28 +731,11 @@ enum ReviewSortDirectionWire {
     Descending,
 }
 
-/// Complete metric snapshot supplied to a non-mutating selection preview.
-///
-/// The native adapter validates every value again and resolves frame order and
-/// labels from its own review state. The browser cannot introduce identities or
-/// choose a different processing order.
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FrameSelectionMetricsWire {
-    background: Option<f64>,
-    noise: Option<f64>,
-    signal_to_noise: Option<f64>,
-    detected_stars: Option<usize>,
-    usable_stars: Option<usize>,
-    fwhm_pixels: Option<f64>,
-    eccentricity: Option<f64>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FrameSelectionFrameWire {
     frame_id: String,
-    metrics: FrameSelectionMetricsWire,
+    source_path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -813,9 +797,12 @@ struct FrameSelectionPreviewRequest {
 /// The browser presenter receives small immutable updates, while the audited
 /// transaction history remains in Rust and cannot be bypassed by local DOM
 /// state. Re-importing a session replaces this book atomically.
+type NativeQualityMetrics = BTreeMap<(FrameId, PathBuf), FrameMetrics>;
+
 #[derive(Debug, Default)]
 struct DesktopReviewState {
     book: Mutex<Option<ReviewBook>>,
+    quality_metrics: Mutex<NativeQualityMetrics>,
 }
 
 /// Native owner of the exact imported manifest and its runtime-only root.
@@ -1343,16 +1330,24 @@ fn cancel_registered_stack_source_verification(
 #[tauri::command]
 async fn inspect_frame_quality(
     request: FrameQualityRequest,
+    review_state: tauri::State<'_, DesktopReviewState>,
 ) -> Result<FrameQualityResponse, PreviewCommandError> {
     validate_runtime_source_path(&request.path)?;
-    tauri::async_runtime::spawn_blocking(move || inspect_frame_quality_sync(&request))
-        .await
-        .map_err(|_| {
-            PreviewCommandError::new(
-                "frame_quality_interrupted",
-                "The frame-quality worker stopped before producing a result.",
-            )
-        })?
+    let frame_id =
+        FrameId::new(request.frame_id.clone()).map_err(|_| frame_quality_identity_error())?;
+    ensure_review_frame_exists(&review_state, &frame_id)?;
+    let artifact_path = request.path.clone();
+    let response =
+        tauri::async_runtime::spawn_blocking(move || inspect_frame_quality_sync(&request))
+            .await
+            .map_err(|_| {
+                PreviewCommandError::new(
+                    "frame_quality_interrupted",
+                    "The frame-quality worker stopped before producing a result.",
+                )
+            })??;
+    record_frame_quality(&review_state, frame_id, artifact_path, &response)?;
+    Ok(response)
 }
 
 #[tauri::command]
@@ -3822,8 +3817,10 @@ fn install_imported_session(
     let book = prepare_review_book(&imported.presentation)?;
     let mut native_state = lock_session_state(session_state)?;
     let mut native_review = lock_review_state(review_state)?;
+    let mut quality_metrics = lock_review_quality_metrics(review_state)?;
     *native_state = Some(Arc::new(imported.native));
     *native_review = book;
+    quality_metrics.clear();
     Ok(imported.presentation)
 }
 
@@ -3920,11 +3917,14 @@ fn preview_frame_selection_sync(
         return Err(frame_selection_input_error());
     }
 
-    let mut metrics_by_id = BTreeMap::new();
+    let mut artifacts_by_id = BTreeMap::new();
     for frame in request.frames {
         let frame_id = FrameId::new(frame.frame_id).map_err(|_| frame_selection_input_error())?;
-        let metrics = frame_selection_metrics(frame.metrics)?;
-        if metrics_by_id.insert(frame_id, metrics).is_some() {
+        validate_runtime_source_path(&frame.source_path)?;
+        if artifacts_by_id
+            .insert(frame_id, frame.source_path)
+            .is_some()
+        {
             return Err(frame_selection_input_error());
         }
     }
@@ -3934,11 +3934,15 @@ fn preview_frame_selection_sync(
     let native_book = native_state
         .as_ref()
         .ok_or_else(review_state_missing_error)?;
-    let mut frames = review_entry_buffer(metrics_by_id.len())?;
+    let quality_metrics = lock_review_quality_metrics(review_state)?;
+    let mut frames = review_entry_buffer(artifacts_by_id.len())?;
     for frame_id in native_book.processing_order() {
-        let Some(metrics) = metrics_by_id.remove(frame_id) else {
+        let Some(artifact_path) = artifacts_by_id.remove(frame_id) else {
             continue;
         };
+        let metrics = *quality_metrics
+            .get(&(frame_id.clone(), artifact_path))
+            .ok_or_else(frame_selection_evidence_missing_error)?;
         let label = native_book
             .label(frame_id)
             .ok_or_else(frame_selection_state_error)?;
@@ -3947,27 +3951,12 @@ fn preview_frame_selection_sync(
                 .map_err(|_| frame_selection_state_error())?,
         );
     }
-    if !metrics_by_id.is_empty() || frames.is_empty() {
+    if !artifacts_by_id.is_empty() || frames.is_empty() {
         return Err(frame_selection_input_error());
     }
 
     let preview_book = ReviewBook::new(frames, 1).map_err(|_| frame_selection_state_error())?;
     FrameSelectionPlan::build(&preview_book, &rules).map_err(|_| frame_selection_input_error())
-}
-
-fn frame_selection_metrics(
-    metrics: FrameSelectionMetricsWire,
-) -> Result<FrameMetrics, PreviewCommandError> {
-    FrameMetrics::new(
-        metrics.background,
-        metrics.noise,
-        metrics.detected_stars,
-        metrics.usable_stars,
-        metrics.fwhm_pixels,
-        metrics.eccentricity,
-    )
-    .and_then(|validated| validated.with_signal_to_noise(metrics.signal_to_noise))
-    .map_err(|_| frame_selection_input_error())
 }
 
 fn frame_selection_rules(
@@ -4076,6 +4065,53 @@ fn lock_review_state(
     })
 }
 
+fn lock_review_quality_metrics(
+    state: &DesktopReviewState,
+) -> Result<MutexGuard<'_, NativeQualityMetrics>, PreviewCommandError> {
+    state.quality_metrics.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "review_quality_state_unavailable",
+            "Native quality evidence is unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
+fn ensure_review_frame_exists(
+    state: &DesktopReviewState,
+    frame_id: &FrameId,
+) -> Result<(), PreviewCommandError> {
+    let native_review = lock_review_state(state)?;
+    let book = native_review
+        .as_ref()
+        .ok_or_else(review_state_missing_error)?;
+    book.metrics(frame_id)
+        .map(|_| ())
+        .ok_or_else(frame_quality_identity_error)
+}
+
+fn record_frame_quality(
+    state: &DesktopReviewState,
+    frame_id: FrameId,
+    artifact_path: PathBuf,
+    response: &FrameQualityResponse,
+) -> Result<(), PreviewCommandError> {
+    // Recheck after the worker completes so an import that replaced the review
+    // book cannot receive a stale result from the preceding session.
+    ensure_review_frame_exists(state, &frame_id)?;
+    let metrics = FrameMetrics::new(
+        Some(response.background),
+        Some(response.noise),
+        Some(response.detected_stars),
+        Some(response.usable_stars),
+        response.fwhm_pixels,
+        response.eccentricity,
+    )
+    .and_then(|validated| validated.with_signal_to_noise(response.signal_to_noise))
+    .map_err(|_| frame_quality_result_error())?;
+    lock_review_quality_metrics(state)?.insert((frame_id, artifact_path), metrics);
+    Ok(())
+}
+
 fn lock_session_state(
     state: &DesktopSessionState,
 ) -> Result<MutexGuard<'_, Option<Arc<ImportedNativeSession>>>, PreviewCommandError> {
@@ -4173,6 +4209,27 @@ const fn frame_selection_state_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "frame_selection_state_invalid",
         "The native review state cannot produce a consistent automatic-selection preview.",
+    )
+}
+
+const fn frame_selection_evidence_missing_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_selection_evidence_missing",
+        "Measure native quality evidence for every selected artifact before previewing rules.",
+    )
+}
+
+const fn frame_quality_identity_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_quality_identity_invalid",
+        "Quality evidence must target a frame identity in the current native review session.",
+    )
+}
+
+const fn frame_quality_result_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_quality_result_invalid",
+        "The native quality result could not be represented as validated review metrics.",
     )
 }
 
@@ -7644,6 +7701,7 @@ mod tests {
         let path = directory.path().join("quality.fits");
         fs::write(&path, quality_fits_bytes()?)?;
         let request = FrameQualityRequest {
+            frame_id: "a".repeat(64),
             path,
             interpretation: QualityInterpretation::BayerCellMean {
                 pattern: BayerPatternWire::Rggb,
@@ -7676,6 +7734,7 @@ mod tests {
         fs::write(&path, rgb_quality_fits_bytes()?)?;
 
         let quality = inspect_frame_quality_sync(&FrameQualityRequest {
+            frame_id: "a".repeat(64),
             path,
             interpretation: QualityInterpretation::RgbLuminance,
         })?;
@@ -7840,6 +7899,8 @@ mod tests {
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
+        install_selection_test_quality(&state, 'a', 3.0, 700)?;
+        install_selection_test_quality(&state, 'b', 5.0, 300)?;
         apply_review_decision_sync(
             &state,
             ReviewDecisionRequest {
@@ -7852,10 +7913,7 @@ mod tests {
             &state,
             FrameSelectionPreviewRequest {
                 // Deliberately reversed: the native review book owns processing order.
-                frames: vec![
-                    selection_test_frame('b', 5.0, 300),
-                    selection_test_frame('a', 3.0, 700),
-                ],
+                frames: vec![selection_test_frame('b'), selection_test_frame('a')],
                 rules: vec![FrameSelectionRuleWire {
                     metric: FrameSelectionMetricWire::FwhmPixels,
                     comparator: FrameSelectionComparatorWire::LessThan,
@@ -7907,7 +7965,7 @@ mod tests {
         let Err(foreign) = preview_frame_selection_sync(
             &state,
             FrameSelectionPreviewRequest {
-                frames: vec![selection_test_frame('b', 3.0, 700)],
+                frames: vec![selection_test_frame('b')],
                 rules: vec![selection_test_fwhm_rule()],
             },
         ) else {
@@ -7915,10 +7973,21 @@ mod tests {
         };
         assert_eq!(foreign.code, "frame_selection_input_invalid");
 
+        let Err(missing) = preview_frame_selection_sync(
+            &state,
+            FrameSelectionPreviewRequest {
+                frames: vec![selection_test_frame('a')],
+                rules: vec![selection_test_fwhm_rule()],
+            },
+        ) else {
+            return Err("selection without native quality evidence was accepted".into());
+        };
+        assert_eq!(missing.code, "frame_selection_evidence_missing");
+
         let Err(wrong_kind) = preview_frame_selection_sync(
             &state,
             FrameSelectionPreviewRequest {
-                frames: vec![selection_test_frame('a', 3.0, 700)],
+                frames: vec![selection_test_frame('a')],
                 rules: vec![FrameSelectionRuleWire {
                     metric: FrameSelectionMetricWire::DetectedStars,
                     comparator: FrameSelectionComparatorWire::GreaterThan,
@@ -7933,23 +8002,51 @@ mod tests {
         Ok(())
     }
 
-    fn selection_test_frame(
+    fn selection_test_frame(digit: char) -> FrameSelectionFrameWire {
+        FrameSelectionFrameWire {
+            frame_id: digit.to_string().repeat(64),
+            source_path: PathBuf::from(format!("/runtime-only/LIGHTS/{digit}.fits")),
+        }
+    }
+
+    fn install_selection_test_quality(
+        state: &DesktopReviewState,
         digit: char,
         fwhm_pixels: f64,
         usable_stars: usize,
-    ) -> FrameSelectionFrameWire {
-        FrameSelectionFrameWire {
-            frame_id: digit.to_string().repeat(64),
-            metrics: FrameSelectionMetricsWire {
-                background: Some(1_000.0),
-                noise: Some(12.0),
-                signal_to_noise: Some(30.0),
-                detected_stars: Some(usable_stars + 20),
-                usable_stars: Some(usable_stars),
-                fwhm_pixels: Some(fwhm_pixels),
-                eccentricity: Some(0.4),
-            },
-        }
+    ) -> TestResult {
+        let response = FrameQualityResponse {
+            profile_id: DESKTOP_QUALITY_PROFILE_ID,
+            background_algorithm_id: GLOBAL_BACKGROUND_ALGORITHM_ID,
+            star_algorithm_id: STAR_MEASUREMENT_ALGORITHM_ID,
+            detection_plane_algorithm_id: CFA_CELL_MEAN_ALGORITHM_ID,
+            interpretation: "raw CFA · RGGB",
+            source_pixel_scale: 2.0,
+            diagnostic_only: true,
+            background: 1_000.0,
+            noise: 12.0,
+            initial_usable_samples: 10_000,
+            retained_background_samples: 9_000,
+            masked_samples: 0,
+            non_finite_samples: 0,
+            detected_stars: usable_stars + 20,
+            usable_stars,
+            saturation_level: None,
+            saturated_stars: None,
+            raw_candidates: usable_stars + 30,
+            suppressed_candidates: 10,
+            rejected_measurements: 20,
+            signal_to_noise: Some(30.0),
+            fwhm_pixels: Some(fwhm_pixels),
+            eccentricity: Some(0.4),
+        };
+        record_frame_quality(
+            state,
+            FrameId::new(digit.to_string().repeat(64))?,
+            PathBuf::from(format!("/runtime-only/LIGHTS/{digit}.fits")),
+            &response,
+        )?;
+        Ok(())
     }
 
     const fn selection_test_fwhm_rule() -> FrameSelectionRuleWire {
@@ -8046,6 +8143,7 @@ mod tests {
         let path = std::env::var_os("AETHERSTACK_TEST_QUALITY_FRAME")
             .ok_or("AETHERSTACK_TEST_QUALITY_FRAME is not configured")?;
         let quality = inspect_frame_quality_sync(&FrameQualityRequest {
+            frame_id: "a".repeat(64),
             path: PathBuf::from(path),
             interpretation: QualityInterpretation::BayerCellMean {
                 pattern: BayerPatternWire::Rggb,

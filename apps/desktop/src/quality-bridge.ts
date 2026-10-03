@@ -30,11 +30,13 @@ export interface FrameQualityResult {
 
 /** Measures one raw CFA light without feeding display pixels into science. */
 export function inspectCfaFrameQuality(
+  frameId: string,
   path: string,
   pattern: BayerPattern,
 ): Promise<FrameQualityResult> {
   return invoke<FrameQualityResult>("inspect_frame_quality", {
     request: {
+      frameId,
       path,
       interpretation: { kind: "bayer_cell_mean", pattern },
     },
@@ -43,10 +45,12 @@ export function inspectCfaFrameQuality(
 
 /** Measures a calibrated planar RGB light on linked linear Rec. 709 luminance. */
 export function inspectRgbFrameQuality(
+  frameId: string,
   path: string,
 ): Promise<FrameQualityResult> {
   return invoke<FrameQualityResult>("inspect_frame_quality", {
     request: {
+      frameId,
       path,
       interpretation: { kind: "rgb_luminance" },
     },

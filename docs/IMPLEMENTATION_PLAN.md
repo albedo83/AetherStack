@@ -1245,16 +1245,23 @@ safety reasoning. They do not narrate obvious syntax.
     changes. Next, expose this plan through the native adapter as a previewed
     batch transaction without granting it authority over manual decisions.
 95. Expose automatic selection through a validation-only native boundary. The
-    desktop command accepts typed scalar/count thresholds and complete metric
-    snapshots, validates all physical domains in Rust, rejects duplicate or
+    desktop command accepts typed scalar/count thresholds, rejects duplicate or
     foreign frame identities, reconstructs immutable processing order from the
     native review book, and returns the canonical plan without changing manual
-    state or undo generation. Its TypeScript bridge transports typed data but
-    contains no evaluator. Native and bridge tests cover canonical camel-case
+    state or undo generation. Its TypeScript bridge contains no evaluator.
+    Native and bridge tests cover canonical camel-case
     serialization, native-order restoration, manual-state isolation, foreign
     identity rejection, threshold-kind rejection, and usable-star transport.
-    Next, retain quality evidence in native session state so preview input no
-    longer needs to cross back from the browser before building the plan.
+96. Keep selection measurements on the trusted side of the desktop boundary.
+    Every successful quality command now names a stable frame, revalidates its
+    membership before and after worker execution, converts the result back into
+    validated review metrics, and stores it under the exact artifact path.
+    Import clears this process-local evidence. Selection preview transports only
+    frame/path identities and rules; Rust refuses missing evidence and never
+    accepts browser-provided metric values. Tests exercise the same recording
+    path used by the command and the fail-closed missing-evidence boundary. Next,
+    persist versioned quality evidence durably with its source fingerprint and
+    algorithm identities before exposing the advanced rule editor.
 
 ## 11. Stable-release definition
 

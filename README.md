@@ -75,8 +75,9 @@ optimized CPU and GPU paths must match.
   comparators, and missing-metric evidence without mutating manual decisions,
   plus a bounded canonical plan whose path-free SHA-256 binds ordered frame
   identities, rules, measurements, and proposals for reproducible review; the
-  native desktop adapter validates typed metric snapshots and rules, restores
-  native processing order, and returns this plan through a tested thin bridge;
+  native desktop adapter retains validated quality evidence by frame identity
+  and exact artifact path, validates typed rules, restores native processing
+  order, and returns this plan through a tested thin bridge;
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, linked-luminance
