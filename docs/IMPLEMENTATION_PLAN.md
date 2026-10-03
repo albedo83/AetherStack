@@ -1188,6 +1188,16 @@ safety reasoning. They do not narrate obvious syntax.
     cover mixed verified and fingerprint-mismatched evidence plus every filter
     transition. Next, add an opt-in fingerprint-throughput benchmark that can run
     against the private ASI294MC corpus without recording paths or image data.
+89. Measure the production fingerprint primitive on the priority corpus. A new
+    release-mode engineering command walks regular FITS inputs without following
+    symbolic links, retains evidence only in memory, detects changes between
+    passes, and reports aggregate timing without paths, filenames, digests,
+    headers, or pixels. The desktop verifier and benchmark now share one tested
+    64 KiB progress-aware SHA-256 primitive. Three stable passes over 135
+    ASI294MC files (3,158,611,200 bytes per pass) reached a 1,761.26 MiB/s median
+    on the development system. This does not justify platform-specific read
+    hints yet. Next, measure end-to-end verification overhead and ensure progress
+    delivery stays bounded when source counts reach the thousands.
 
 ## 11. Stable-release definition
 

@@ -9,7 +9,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -59,7 +59,7 @@ use aether_session::{
     LightMasterMismatchReason, ManifestFile, ManifestGroup, MasterPlan, MasterPlanOptions,
     MasterProductKind, PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason,
     PedestalSourceKind, SessionManifest, TemperatureBasis, fingerprint_reader,
-    generate_manifest_from_directory,
+    fingerprint_reader_with_progress, generate_manifest_from_directory,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2580,29 +2580,32 @@ where
     R: Read,
     F: FnMut(u64),
 {
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; aether_session::FINGERPRINT_BUFFER_BYTES];
-    let mut byte_length = 0_u64;
-    let mut next_progress = SOURCE_VERIFICATION_PROGRESS_BYTES;
-    loop {
-        cancellation.checkpoint()?;
-        let read = match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(Box::new(error)),
-        };
-        byte_length = byte_length
-            .checked_add(u64::try_from(read)?)
-            .ok_or_else(|| std::io::Error::other("source byte length overflow"))?;
-        hasher.update(&buffer[..read]);
-        if byte_length >= next_progress {
-            on_bytes(byte_length);
-            next_progress = byte_length.saturating_add(SOURCE_VERIFICATION_PROGRESS_BYTES);
-        }
+    let Some(progress_interval) = NonZeroU64::new(SOURCE_VERIFICATION_PROGRESS_BYTES) else {
+        return Err(Box::new(std::io::Error::other(
+            "source progress interval must be non-zero",
+        )));
+    };
+    let mut reader = CancellationCheckpointReader {
+        inner: reader,
+        cancellation,
+    };
+    let fingerprint =
+        fingerprint_reader_with_progress(&mut reader, progress_interval, &mut on_bytes)?;
+    Ok((fingerprint.byte_length(), fingerprint.sha256().to_owned()))
+}
+
+struct CancellationCheckpointReader<'a, R> {
+    inner: &'a mut R,
+    cancellation: &'a CancellationToken,
+}
+
+impl<R: Read> Read for CancellationCheckpointReader<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.cancellation
+            .checkpoint()
+            .map_err(std::io::Error::other)?;
+        self.inner.read(buffer)
     }
-    on_bytes(byte_length);
-    Ok((byte_length, lowercase_hex(&hasher.finalize())))
 }
 
 fn is_safe_report_file_name(file_name: &str) -> bool {

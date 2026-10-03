@@ -25,7 +25,10 @@ pub use directory::{
     DirectoryManifestError, DirectoryManifestOptions, DirectoryManifestReport,
     DirectoryScanFailure, DirectoryScanLimits, generate_manifest_from_directory,
 };
-pub use fingerprint::{FINGERPRINT_BUFFER_BYTES, FingerprintError, fingerprint_reader};
+pub use fingerprint::{
+    FINGERPRINT_BUFFER_BYTES, FingerprintError, fingerprint_reader,
+    fingerprint_reader_with_progress,
+};
 pub use generator::{ManifestGenerationError, generate_manifest};
 pub use grouping::{GroupingField, GroupingKeyError, StrictGroupingKey};
 pub use light_plan::{

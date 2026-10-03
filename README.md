@@ -221,6 +221,8 @@ initial automatic-reference policy without claiming that matching or resampling
 is complete.
 The [preview contract](docs/PREVIEW_CONTRACT.md) separates bounded display
 artifacts from scientific pixels and records the remaining viewer release gates.
+The [fingerprint benchmark](docs/FINGERPRINT_BENCHMARK.md) documents the
+path-private throughput method used to evaluate large-session evidence checks.
 
 ## Build and test
 
@@ -249,6 +251,14 @@ Inspect a FITS file or directory without loading image pixels:
 ```shell
 cargo run -p aether-inspect -- /path/to/fits-corpus
 cargo run -p aether-inspect -- --strict --examples 10 /path/to/fits-corpus
+```
+
+Measure the exact streaming fingerprint primitive on a private FITS corpus
+without printing paths, file names, digests, or image content:
+
+```shell
+cargo run --release -p aether-inspect --bin aether-fingerprint-bench -- \
+  --passes 3 /path/to/fits-corpus
 ```
 
 Calculate strict pixel statistics without loading complete images:

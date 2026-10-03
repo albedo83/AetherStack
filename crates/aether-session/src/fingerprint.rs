@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{self, Read};
+use std::num::NonZeroU64;
 
 use sha2::{Digest, Sha256};
 
@@ -54,9 +55,46 @@ impl Error for FingerprintError {
 /// [`FingerprintError::LengthOverflow`] when the byte count exceeds `u64`, or
 /// [`FingerprintError::InvalidFingerprint`] for an empty source.
 pub fn fingerprint_reader<R: Read>(reader: &mut R) -> Result<SourceFingerprint, FingerprintError> {
+    fingerprint_reader_internal(reader, None, |_| {})
+}
+
+/// Computes a source fingerprint and reports bounded byte progress.
+///
+/// Progress is emitted after crossing each non-zero interval and once at EOF
+/// when the final byte count was not already reported. The callback never sees
+/// duplicate or decreasing counts. Reads remain fixed at 64 KiB, so callers can
+/// wrap the reader to add cooperative cancellation without changing the
+/// fingerprint implementation used by batch tools.
+///
+/// # Errors
+///
+/// Returns the same errors as [`fingerprint_reader`].
+pub fn fingerprint_reader_with_progress<R, F>(
+    reader: &mut R,
+    progress_interval: NonZeroU64,
+    on_progress: F,
+) -> Result<SourceFingerprint, FingerprintError>
+where
+    R: Read,
+    F: FnMut(u64),
+{
+    fingerprint_reader_internal(reader, Some(progress_interval), on_progress)
+}
+
+fn fingerprint_reader_internal<R, F>(
+    reader: &mut R,
+    progress_interval: Option<NonZeroU64>,
+    mut on_progress: F,
+) -> Result<SourceFingerprint, FingerprintError>
+where
+    R: Read,
+    F: FnMut(u64),
+{
     let mut hasher = Sha256::new();
     let mut byte_length = 0_u64;
     let mut buffer = [0_u8; FINGERPRINT_BUFFER_BYTES];
+    let mut last_progress = 0_u64;
+    let mut next_progress = progress_interval.map(NonZeroU64::get);
 
     loop {
         let read = match reader.read(&mut buffer) {
@@ -70,6 +108,16 @@ pub fn fingerprint_reader<R: Read>(reader: &mut R) -> Result<SourceFingerprint, 
             return Err(FingerprintError::LengthOverflow);
         };
         hasher.update(bytes);
+        if next_progress.is_some_and(|threshold| byte_length >= threshold) {
+            on_progress(byte_length);
+            last_progress = byte_length;
+            next_progress =
+                progress_interval.map(|interval| byte_length.saturating_add(interval.get()));
+        }
+    }
+
+    if progress_interval.is_some() && byte_length > last_progress {
+        on_progress(byte_length);
     }
 
     let digest = hasher.finalize();
@@ -188,5 +236,41 @@ mod tests {
             checked_byte_length(u64::MAX, 1),
             Err(FingerprintError::LengthOverflow)
         ));
+    }
+
+    #[test]
+    fn reports_monotone_interval_and_final_progress_without_duplicates() {
+        let input = vec![0x5a_u8; FINGERPRINT_BUFFER_BYTES * 2 + 17];
+        let mut progress = Vec::new();
+        let result = fingerprint_reader_with_progress(
+            &mut Cursor::new(input),
+            NonZeroU64::new(FINGERPRINT_BUFFER_BYTES as u64).unwrap_or(NonZeroU64::MIN),
+            |bytes| progress.push(bytes),
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(
+            progress,
+            vec![
+                FINGERPRINT_BUFFER_BYTES as u64,
+                (FINGERPRINT_BUFFER_BYTES * 2) as u64,
+                (FINGERPRINT_BUFFER_BYTES * 2 + 17) as u64,
+            ]
+        );
+
+        let mut exact_progress = Vec::new();
+        let exact_result = fingerprint_reader_with_progress(
+            &mut Cursor::new(vec![0x5a_u8; FINGERPRINT_BUFFER_BYTES * 2]),
+            NonZeroU64::new(FINGERPRINT_BUFFER_BYTES as u64).unwrap_or(NonZeroU64::MIN),
+            |bytes| exact_progress.push(bytes),
+        );
+        assert!(exact_result.is_ok());
+        assert_eq!(
+            exact_progress,
+            vec![
+                FINGERPRINT_BUFFER_BYTES as u64,
+                (FINGERPRINT_BUFFER_BYTES * 2) as u64,
+            ]
+        );
     }
 }
