@@ -124,6 +124,8 @@ export interface SessionDiagnostics {
   readonly qualityEvidenceRejected: number;
   readonly items: readonly SessionDiagnosticItem[];
   readonly omittedItems: number;
+  readonly exportState: "idle" | "exporting" | "ready" | "error";
+  readonly exportMessage: string;
 }
 
 export interface SessionDiagnosticItem {
@@ -360,6 +362,7 @@ export interface ReviewActions {
   readonly onExecuteLightPlan: () => void;
   readonly onCancelLightPlan: () => void;
   readonly onImportSession: () => void;
+  readonly onExportDiagnostics: () => void;
   readonly onSelectRole: (role: FrameRole) => void;
   readonly onSelectLightFrameView: (view: LightFrameView) => void;
   readonly onSelectFrame: (frameId: string) => void;

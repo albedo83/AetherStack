@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
   BayerPattern,
@@ -48,6 +48,12 @@ export interface ImportedSession {
 export interface ImportedSessionStatus {
   readonly tone: "ready" | "warning";
   readonly label: string;
+}
+
+export interface SessionDiagnosticsExport {
+  readonly path: string;
+  readonly reportSha256: string;
+  readonly itemCount: number;
 }
 
 const MAX_SESSION_DIAGNOSTIC_ITEMS = 100;
@@ -106,6 +112,8 @@ export function importedSessionDiagnostics(
     qualityEvidenceRejected: session.qualityEvidenceRejected,
     items,
     omittedItems: Math.max(0, totalItems - items.length),
+    exportState: "idle",
+    exportMessage: "No redacted report exported",
   };
 }
 
@@ -152,4 +160,17 @@ export async function selectAndImportSession(): Promise<ImportedSession | null> 
   });
   if (typeof path !== "string") return null;
   return invoke<ImportedSession>("import_session_directory", { path });
+}
+
+/** Requests a new destination, then asks Rust to seal and publish the report. */
+export async function exportSessionDiagnostics(): Promise<SessionDiagnosticsExport | null> {
+  const path = await save({
+    title: "Export redacted session diagnostics",
+    defaultPath: "aetherstack-session-diagnostics.json",
+    filters: [{ name: "JSON diagnostics", extensions: ["json"] }],
+  });
+  if (!path) return null;
+  return invoke<SessionDiagnosticsExport>("export_session_diagnostics", {
+    path,
+  });
 }

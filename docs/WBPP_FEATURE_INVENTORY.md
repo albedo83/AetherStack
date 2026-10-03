@@ -68,7 +68,7 @@ stored in provenance.
 | Cache purge | Inspect size, provenance, verification state, and affected stages before removal. | Diagnostics | Cache core implemented; UI planned |
 | Reference image: automatic or manual | Show the ranking evidence and allow a pinned reference per group. | Essentials / Advanced | Planned |
 | Output directory | Validate capacity, permissions, collision policy, and private staging location before a run. | Essentials | Atomic create-new core implemented |
-| Diagnostics | Provide a dedicated view with stable codes, evidence, suggested actions, and exportable redacted reports. | Diagnostics | Import summary and bounded per-source evidence connected; redacted export planned |
+| Diagnostics | Provide a dedicated view with stable codes, evidence, suggested actions, and exportable redacted reports. | Diagnostics | Import summary, bounded per-source evidence, and sealed redacted JSON export connected |
 
 ## Shared master integration controls
 

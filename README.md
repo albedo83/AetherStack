@@ -222,6 +222,8 @@ semantics. The
 encoding and unavailable-sample representation. The
 [cache contract](docs/CACHE_CONTRACT.md) defines immutable operation keys,
 artifact verification, and publication failure boundaries.
+The [diagnostics contract](docs/DIAGNOSTICS_CONTRACT.md) defines native report
+authority, redaction, canonical integrity, bounds, and create-new export.
 The [reference feature inventory](docs/WBPP_FEATURE_INVENTORY.md) records the
 preprocessing controls that must be considered for scientific parity, while the
 [UX principles](docs/UX_PRINCIPLES.md) define the modern dark interface,

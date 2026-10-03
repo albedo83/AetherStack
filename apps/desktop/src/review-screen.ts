@@ -96,6 +96,14 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-omitted]",
     ),
+    diagnosticsExport: required<HTMLButtonElement>(
+      root,
+      '[data-action="export-diagnostics"]',
+    ),
+    diagnosticsExportStatus: required<HTMLElement>(
+      root,
+      "[data-diagnostics-export-status]",
+    ),
     framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
     calibrationWorkspace: required<HTMLElement>(
       root,
@@ -959,6 +967,10 @@ export function mountReviewScreen(
     if (action === "close-diagnostics") {
       elements.diagnosticsDialog.hidden = true;
       queueMicrotask(() => elements.diagnosticsButton.focus());
+      return;
+    }
+    if (action === "export-diagnostics") {
+      actions.onExportDiagnostics();
       return;
     }
     if (action === "viewer-fit") {
@@ -2145,6 +2157,8 @@ function renderSessionDiagnostics(
     diagnosticsItems: HTMLOListElement;
     diagnosticsEmpty: HTMLElement;
     diagnosticsOmitted: HTMLElement;
+    diagnosticsExport: HTMLButtonElement;
+    diagnosticsExportStatus: HTMLElement;
   },
   model: ReviewViewModel,
 ): void {
@@ -2205,6 +2219,14 @@ function renderSessionDiagnostics(
     diagnostics.omittedItems > 0
       ? `${formatCount(diagnostics.omittedItems)} additional item${diagnostics.omittedItems === 1 ? "" : "s"} omitted by the display bound`
       : "";
+  elements.diagnosticsExport.disabled =
+    !model.reviewSessionReady || diagnostics.exportState === "exporting";
+  elements.diagnosticsExport.textContent =
+    diagnostics.exportState === "exporting"
+      ? "Exporting…"
+      : "Export redacted JSON";
+  elements.diagnosticsExportStatus.dataset.state = diagnostics.exportState;
+  elements.diagnosticsExportStatus.textContent = diagnostics.exportMessage;
 }
 
 function diagnosticCategoryLabel(
@@ -4427,6 +4449,10 @@ function shellMarkup(): string {
           <ol class="diagnostics-items" data-diagnostics-items hidden></ol>
           <p class="diagnostics-note" data-diagnostics-omitted hidden></p>
         </section>
+        <footer class="diagnostics-export">
+          <p data-diagnostics-export-status aria-live="polite">No redacted report exported</p>
+          <button class="button button--primary" type="button" data-action="export-diagnostics">Export redacted JSON</button>
+        </footer>
       </section>
     </div>
 

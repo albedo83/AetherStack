@@ -80,8 +80,9 @@ const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
 const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
+const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
 const SOURCE_VERIFICATION_PROGRESS_BYTES: u64 = 8 * 1_024 * 1_024;
-static REGISTERED_STACK_REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -896,6 +897,54 @@ struct ImportedFailure {
     code: String,
 }
 
+const SESSION_DIAGNOSTICS_ALGORITHM_ID: &str = "aetherstack-session-diagnostics-v1";
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDiagnosticsReportCounts {
+    files_considered: usize,
+    verified_frames: usize,
+    classification_conflicts: usize,
+    recoverable_failures: usize,
+    unassigned_sources: usize,
+    quality_evidence_restored: usize,
+    quality_evidence_missing: usize,
+    quality_evidence_rejected: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDiagnosticsReportItem {
+    source_token: String,
+    category: &'static str,
+    code: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDiagnosticsReport {
+    algorithm_id: &'static str,
+    manifest_sha256: String,
+    counts: SessionDiagnosticsReportCounts,
+    items: Vec<SessionDiagnosticsReportItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDiagnosticsReportEnvelope {
+    schema_version: u16,
+    report_sha256: String,
+    report: SessionDiagnosticsReport,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDiagnosticsExportResponse {
+    path: String,
+    report_sha256: String,
+    item_count: usize,
+}
+
 fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSession) {
     session.quality_evidence_restored = 0;
     session.quality_evidence_missing = 0;
@@ -923,6 +972,72 @@ fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSes
             }
         }
     }
+}
+
+fn build_session_diagnostics_report(
+    session: &ImportedSession,
+    manifest_sha256: String,
+) -> SessionDiagnosticsReport {
+    let mut items = Vec::new();
+    let mut push = |category: &'static str, code: &str| {
+        let source_token = format!("source-{:06}", items.len() + 1);
+        items.push(SessionDiagnosticsReportItem {
+            source_token,
+            category,
+            code: code.to_owned(),
+        });
+    };
+    for frame in &session.frames {
+        if frame.classification_conflict {
+            push("classification", "classification_conflict");
+        }
+    }
+    for failure in &session.recoverable_failures {
+        push("fits", &failure.code);
+    }
+    for _source in &session.unassigned_sources {
+        push("grouping", "session_source_unassigned");
+    }
+    for rejection in &session.quality_evidence_rejections {
+        push("quality_cache", &rejection.code);
+    }
+    SessionDiagnosticsReport {
+        algorithm_id: SESSION_DIAGNOSTICS_ALGORITHM_ID,
+        manifest_sha256,
+        counts: SessionDiagnosticsReportCounts {
+            files_considered: session.files_considered,
+            verified_frames: session.frames.len(),
+            classification_conflicts: session.classification_conflicts,
+            recoverable_failures: session.recoverable_failures.len(),
+            unassigned_sources: session.unassigned_sources.len(),
+            quality_evidence_restored: session.quality_evidence_restored,
+            quality_evidence_missing: session.quality_evidence_missing,
+            quality_evidence_rejected: session.quality_evidence_rejected,
+        },
+        items,
+    }
+}
+
+fn encode_session_diagnostics_report(
+    report: SessionDiagnosticsReport,
+) -> Result<(String, Vec<u8>), PreviewCommandError> {
+    let canonical = serde_json::to_vec(&report).map_err(|_| session_diagnostics_export_error())?;
+    if canonical.len() > MAX_SESSION_DIAGNOSTICS_REPORT_BYTES {
+        return Err(session_diagnostics_export_error());
+    }
+    let report_sha256 = lowercase_hex(&Sha256::digest(&canonical));
+    let envelope = SessionDiagnosticsReportEnvelope {
+        schema_version: 1,
+        report_sha256: report_sha256.clone(),
+        report,
+    };
+    let mut encoded =
+        serde_json::to_vec_pretty(&envelope).map_err(|_| session_diagnostics_export_error())?;
+    encoded.push(b'\n');
+    if encoded.len() > MAX_SESSION_DIAGNOSTICS_REPORT_BYTES {
+        return Err(session_diagnostics_export_error());
+    }
+    Ok((report_sha256, encoded))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1069,6 +1184,7 @@ struct DesktopCalibrationExecutionState {
 struct ImportedNativeSession {
     root: PathBuf,
     manifest: Arc<SessionManifest>,
+    diagnostics_report: Option<SessionDiagnosticsReport>,
 }
 
 #[derive(Debug)]
@@ -2345,7 +2461,7 @@ where
         products,
     };
     let (report_sha256, report_bytes) = encode_registered_stack_report(report)?;
-    if publish_registered_stack_report(&report_path, &report_bytes).is_err() {
+    if publish_immutable_report(&report_path, &report_bytes).is_err() {
         let mut published = vec![output_path.as_path()];
         if let Some((low_path, high_path)) = rejection_paths.as_ref() {
             published.push(low_path.as_path());
@@ -3079,7 +3195,7 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn publish_registered_stack_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn publish_immutable_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -3094,7 +3210,7 @@ fn publish_registered_stack_report(path: &Path, bytes: &[u8]) -> std::io::Result
     })?;
     let mut last_error = None;
     for _ in 0..128 {
-        let sequence = REGISTERED_STACK_REPORT_TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let sequence = REPORT_TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let mut temporary_name = file_name.to_os_string();
         temporary_name.push(format!(".aetherstack-{sequence}.tmp"));
         let temporary_path = parent.join(temporary_name);
@@ -3925,6 +4041,15 @@ async fn import_session_directory(
     let imported = tauri::async_runtime::spawn_blocking(move || {
         let mut imported = scan_session_directory_sync(&path)?;
         restore_session_quality_evidence(&cache_root, &mut imported.presentation);
+        let manifest_sha256 = imported
+            .native
+            .manifest
+            .canonical_sha256()
+            .map_err(|_| session_diagnostics_export_error())?;
+        imported.native.diagnostics_report = Some(build_session_diagnostics_report(
+            &imported.presentation,
+            manifest_sha256,
+        ));
         Ok::<_, PreviewCommandError>(imported)
     })
     .await
@@ -3935,6 +4060,48 @@ async fn import_session_directory(
         )
     })??;
     install_imported_session(&session_state, &review_state, imported)
+}
+
+#[tauri::command]
+fn export_session_diagnostics(
+    path: PathBuf,
+    session_state: tauri::State<'_, DesktopSessionState>,
+) -> Result<SessionDiagnosticsExportResponse, PreviewCommandError> {
+    if !path.is_absolute()
+        || path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(session_diagnostics_destination_error());
+    }
+    match fs::symlink_metadata(&path) {
+        Ok(_) => return Err(session_diagnostics_exists_error()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(session_diagnostics_export_error()),
+    }
+    let report = lock_session_state(&session_state)?
+        .as_ref()
+        .and_then(|session| session.diagnostics_report.clone())
+        .ok_or_else(session_state_missing_error)?;
+    let item_count = report.items.len();
+    let (report_sha256, encoded) = encode_session_diagnostics_report(report)?;
+    publish_immutable_report(&path, &encoded).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            session_diagnostics_exists_error()
+        } else {
+            session_diagnostics_export_error()
+        }
+    })?;
+    let path = path
+        .to_str()
+        .ok_or_else(session_diagnostics_destination_error)?
+        .to_owned();
+    Ok(SessionDiagnosticsExportResponse {
+        path,
+        report_sha256,
+        item_count,
+    })
 }
 
 #[tauri::command]
@@ -4628,6 +4795,27 @@ const fn frame_quality_cache_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "frame_quality_cache_failed",
         "Validated quality evidence could not be published to the verified cache.",
+    )
+}
+
+const fn session_diagnostics_destination_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_diagnostics_destination_invalid",
+        "The diagnostics report destination must be an absolute JSON path.",
+    )
+}
+
+const fn session_diagnostics_exists_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_diagnostics_destination_exists",
+        "The diagnostics report destination already exists and was not modified.",
+    )
+}
+
+const fn session_diagnostics_export_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_diagnostics_export_failed",
+        "The redacted diagnostics report could not be published.",
     )
 }
 
@@ -5804,6 +5992,7 @@ fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, Pre
         native: ImportedNativeSession {
             root: root.to_owned(),
             manifest,
+            diagnostics_report: None,
         },
     })
 }
@@ -6234,6 +6423,7 @@ pub fn run() -> Result<(), tauri::Error> {
             execute_master_plan,
             execute_registration_plan,
             execute_registered_stack,
+            export_session_diagnostics,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
@@ -6503,6 +6693,7 @@ mod tests {
                 vec![dark, flat, light],
                 groups,
             )?),
+            diagnostics_report: None,
         })
     }
 
@@ -6601,6 +6792,7 @@ mod tests {
                 vec![reference, source],
                 vec![group],
             )?),
+            diagnostics_report: None,
         })
     }
 
@@ -7531,7 +7723,7 @@ mod tests {
         let report_path = directory.path().join("stack-integration-report.json");
         fs::write(&report_path, b"existing evidence\n")?;
 
-        assert!(publish_registered_stack_report(&report_path, b"replacement\n").is_err());
+        assert!(publish_immutable_report(&report_path, b"replacement\n").is_err());
         assert_eq!(fs::read(&report_path)?, b"existing evidence\n");
         Ok(())
     }
@@ -8807,6 +8999,54 @@ mod tests {
                 .iter()
                 .all(|frame| frame.quality.is_none())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn diagnostics_report_is_redacted_sealed_and_published_create_new() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let mut frame = cached_quality_test_frame('e', "private-target.fits")?;
+        frame.classification_conflict = true;
+        let session = ImportedSession {
+            name: "private session name".to_owned(),
+            root_path: "/private/acquisition/root".to_owned(),
+            frames: vec![frame],
+            files_considered: 2,
+            classification_conflicts: 1,
+            recoverable_failures: vec![ImportedFailure {
+                relative_path: "DARKS/private-dark.fits".to_owned(),
+                code: "fits_header_invalid".to_owned(),
+            }],
+            unassigned_sources: Vec::new(),
+            quality_evidence_restored: 0,
+            quality_evidence_missing: 1,
+            quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
+        };
+        let report = build_session_diagnostics_report(&session, "f".repeat(64));
+        let canonical = serde_json::to_vec(&report)?;
+        let (digest, encoded) = encode_session_diagnostics_report(report)?;
+        let text = std::str::from_utf8(&encoded)?;
+        assert!(!text.contains("private"));
+        assert!(!text.contains(".fits"));
+        let envelope: serde_json::Value = serde_json::from_slice(&encoded)?;
+        assert_eq!(envelope["schemaVersion"], 1);
+        assert_eq!(envelope["reportSha256"], digest);
+        assert_eq!(
+            envelope["report"]["items"][0]["sourceToken"],
+            "source-000001"
+        );
+        assert_eq!(
+            envelope["report"]["items"][1]["sourceToken"],
+            "source-000002"
+        );
+        assert_eq!(lowercase_hex(&Sha256::digest(&canonical)), digest);
+
+        let destination = directory.path().join("diagnostics.json");
+        publish_immutable_report(&destination, &encoded)?;
+        assert_eq!(fs::read(&destination)?, encoded);
+        assert!(publish_immutable_report(&destination, b"replacement\n").is_err());
+        assert_eq!(fs::read(&destination)?, encoded);
         Ok(())
     }
 

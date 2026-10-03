@@ -1,16 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   importedSessionDiagnostics,
   importedSessionStatus,
+  exportSessionDiagnostics,
   selectAndImportSession,
   type ImportedSession,
 } from "./session-bridge.ts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+  save: vi.fn(),
+}));
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -45,6 +49,28 @@ describe("native session bridge", () => {
     expect(invoke).toHaveBeenCalledWith("import_session_directory", {
       path: "/selected/session",
     });
+  });
+
+  it("exports only after a JSON destination is selected", async () => {
+    vi.mocked(save).mockResolvedValue("/reports/session.json");
+    const exported = {
+      path: "/reports/session.json",
+      reportSha256: "a".repeat(64),
+      itemCount: 4,
+    };
+    vi.mocked(invoke).mockResolvedValue(exported);
+
+    await expect(exportSessionDiagnostics()).resolves.toBe(exported);
+    expect(invoke).toHaveBeenCalledWith("export_session_diagnostics", {
+      path: "/reports/session.json",
+    });
+  });
+
+  it("does not invoke Rust when diagnostics export is cancelled", async () => {
+    vi.mocked(save).mockResolvedValue(null);
+
+    await expect(exportSessionDiagnostics()).resolves.toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("reports normal cache misses without degrading a verified import", () => {

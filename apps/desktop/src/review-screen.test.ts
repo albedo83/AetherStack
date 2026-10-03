@@ -45,6 +45,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onExecuteLightPlan: vi.fn(),
     onCancelLightPlan: vi.fn(),
     onImportSession: vi.fn(),
+    onExportDiagnostics: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectLightFrameView: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -291,8 +292,9 @@ describe("frame review workspace", () => {
   });
 
   it("presents FITS and quality-cache diagnostics with explicit severity", () => {
-    const { root } = fixture({
+    const { root, actions } = fixture({
       ...demoReviewModel,
+      reviewSessionReady: true,
       sessionDiagnostics: {
         filesConsidered: 42,
         verifiedFrames: 40,
@@ -310,6 +312,8 @@ describe("frame review workspace", () => {
           },
         ],
         omittedItems: 2,
+        exportState: "idle",
+        exportMessage: "No redacted report exported",
       },
     });
 
@@ -326,6 +330,10 @@ describe("frame review workspace", () => {
     expect(dialog.textContent).toContain("LIGHTS/light_0042.fits");
     expect(dialog.textContent).toContain("quality_cache_artifact_invalid");
     expect(dialog.textContent).toContain("2 additional items omitted");
+    fireEvent.click(
+      getByRole(dialog, "button", { name: "Export redacted JSON" }),
+    );
+    expect(actions.onExportDiagnostics).toHaveBeenCalledOnce();
 
     fireEvent.keyDown(root, { key: "Escape" });
     expect(

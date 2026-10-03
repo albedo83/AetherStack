@@ -4118,6 +4118,34 @@ tr[data-state="blocked"] .association-state {
   text-align: right;
 }
 
+.diagnostics-export {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #344052;
+}
+
+.diagnostics-export p {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostics-export p[data-state="ready"] {
+  color: var(--success);
+}
+
+.diagnostics-export p[data-state="error"] {
+  color: var(--danger);
+}
+
 .reason-dialog h2 {
   margin-top: 5px;
   font-size: 22px;
@@ -4288,6 +4316,15 @@ tr[data-state="blocked"] .association-state {
 
   .diagnostics-item code {
     text-align: left;
+  }
+
+  .diagnostics-export {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .diagnostics-export .button {
+    width: 100%;
   }
 
   .light-association-panel__heading {

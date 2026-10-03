@@ -1362,6 +1362,18 @@ safety reasoning. They do not narrate obvious syntax.
     HTML; tests prove category order, display bounds, and that absolute source
     roots cannot enter the diagnostics model. Next, export the same evidence as
     a versioned redacted JSON report with a canonical digest.
+107. Export diagnostics from native authority without leaking acquisition
+    identity. Rust snapshots the imported manifest and cache evidence, replaces
+    every source with an ordered opaque token, excludes all names and paths,
+    binds the payload to the manifest SHA-256 and algorithm identity, and seals
+    its canonical typed JSON with SHA-256. The pretty envelope is bounded to
+    16 MiB and published through synchronized create-new staging, so an existing
+    destination cannot be overwritten. The dark Diagnostics panel exposes a
+    native save flow with cancellation, progress, success digest, and explicit
+    failure states. Tests prove redaction, digest reproduction, exact bytes,
+    collision safety, and destination-only browser IPC. Next, add a native
+    validator/inspector for exported diagnostic reports before implementing any
+    maintenance action.
 
 ## 11. Stable-release definition
 

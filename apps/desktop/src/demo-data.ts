@@ -21,6 +21,8 @@ export const demoReviewModel: ReviewViewModel = {
     qualityEvidenceRejected: 0,
     items: [],
     omittedItems: 0,
+    exportState: "idle",
+    exportMessage: "No redacted report exported",
   },
   activeRole: "light",
   lightFrameView: "raw",

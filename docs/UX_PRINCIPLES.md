@@ -116,7 +116,8 @@ well as a distinct status lamp. A bounded issue-evidence list identifies
 classification, FITS, grouping, and cache failures with session-relative sources
 and stable codes. It renders at most 100 rows, reports the omitted count, and
 never exposes an absolute acquisition or cache path. Redacted report export
-remains planned.
+is generated from native state, replaces every source with an ordered opaque
+token, seals the typed payload with SHA-256, and never overwrites a destination.
 
 ## Dark visual system
 

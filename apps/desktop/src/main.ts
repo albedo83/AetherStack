@@ -86,6 +86,7 @@ import {
   type FrameSelectionRule,
 } from "./selection-bridge.ts";
 import {
+  exportSessionDiagnostics,
   importedSessionDiagnostics,
   importedSessionStatus,
   selectAndImportSession,
@@ -285,6 +286,9 @@ const screen = mountReviewScreen(root, model, {
   onImportSession() {
     void importSession();
   },
+  onExportDiagnostics() {
+    void exportDiagnostics();
+  },
   onSelectRole(role) {
     selectRole(role);
   },
@@ -378,6 +382,54 @@ async function importSession(): Promise<void> {
       sessionStatus: {
         tone: "error",
         label: "Import failed · open Diagnostics",
+      },
+    });
+  }
+}
+
+async function exportDiagnostics(): Promise<void> {
+  if (
+    !importedSession ||
+    model.sessionDiagnostics.exportState === "exporting"
+  ) {
+    return;
+  }
+  update({
+    ...model,
+    sessionDiagnostics: {
+      ...model.sessionDiagnostics,
+      exportState: "exporting",
+      exportMessage: "Sealing redacted native diagnostics…",
+    },
+  });
+  try {
+    const exported = await exportSessionDiagnostics();
+    if (!exported) {
+      update({
+        ...model,
+        sessionDiagnostics: {
+          ...model.sessionDiagnostics,
+          exportState: "idle",
+          exportMessage: "Diagnostics export cancelled",
+        },
+      });
+      return;
+    }
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        exportState: "ready",
+        exportMessage: `${exported.itemCount.toLocaleString("en-US")} redacted items · sha256 ${exported.reportSha256.slice(0, 12)}…`,
+      },
+    });
+  } catch {
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        exportState: "error",
+        exportMessage: "Export failed · the destination was not modified",
       },
     });
   }
