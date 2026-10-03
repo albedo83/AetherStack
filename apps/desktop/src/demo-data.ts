@@ -303,6 +303,7 @@ export const demoReviewModel: ReviewViewModel = {
       qualityState: "ready",
       qualityMessage: "Synthetic diagnostic metrics",
       qualityProfileId: "demo-quality-v1",
+      qualityOrigin: "measured",
       state: "accepted",
       rejectionReason: null,
       metrics: {
@@ -327,6 +328,7 @@ export const demoReviewModel: ReviewViewModel = {
       qualityState: "ready",
       qualityMessage: "Synthetic diagnostic metrics",
       qualityProfileId: "demo-quality-v1",
+      qualityOrigin: "measured",
       state: "undecided",
       rejectionReason: null,
       metrics: {
@@ -351,6 +353,7 @@ export const demoReviewModel: ReviewViewModel = {
       qualityState: "ready",
       qualityMessage: "Synthetic diagnostic metrics",
       qualityProfileId: "demo-quality-v1",
+      qualityOrigin: "measured",
       state: "rejected",
       rejectionReason: "trailing",
       metrics: {
@@ -375,6 +378,7 @@ export const demoReviewModel: ReviewViewModel = {
       qualityState: "ready",
       qualityMessage: "Synthetic diagnostic metrics",
       qualityProfileId: "demo-quality-v1",
+      qualityOrigin: "measured",
       state: "undecided",
       rejectionReason: null,
       metrics: {
@@ -399,6 +403,7 @@ export const demoReviewModel: ReviewViewModel = {
       qualityState: "error",
       qualityMessage: "Synthetic metrics unavailable",
       qualityProfileId: null,
+      qualityOrigin: null,
       state: "undecided",
       rejectionReason: null,
       metrics: {

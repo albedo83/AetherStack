@@ -1909,6 +1909,7 @@ describe("frame review workspace", () => {
             qualityState: "idle" as const,
             qualityMessage: "Ready for phase-neutral CFA diagnostics",
             qualityProfileId: null,
+            qualityOrigin: null,
             metrics: {
               signalToNoise: null,
               fwhmPixels: null,
@@ -1943,6 +1944,7 @@ describe("frame review workspace", () => {
               qualityMessage:
                 "812 measured stars · raw CFA · RGGB · cfa-cell-mean-v1 + local-max-moments-v1 · saturation unclassified · diagnostic only",
               qualityProfileId: "desktop-diagnostic-quality-v1",
+              qualityOrigin: "measured" as const,
               metrics: {
                 signalToNoise: 34.8,
                 fwhmPixels: 3.42,
@@ -1964,6 +1966,31 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("34.8");
     expect(root.textContent).toContain("3.42");
     expect(root.textContent).toContain("817");
+  });
+
+  it("identifies quality evidence restored from the verified cache", () => {
+    const selectedFrameId = demoReviewModel.selectedFrameId;
+    expect(selectedFrameId).not.toBeNull();
+    if (!selectedFrameId) return;
+    const frames = demoReviewModel.frames.map((frame) =>
+      frame.id === selectedFrameId
+        ? {
+            ...frame,
+            qualityState: "ready" as const,
+            qualityOrigin: "restored" as const,
+            qualityMessage:
+              "Verified cache · 812 measured stars · raw CFA · RGGB · diagnostic only",
+          }
+        : frame,
+    );
+    const { root } = fixture({
+      ...demoReviewModel,
+      frames,
+    });
+
+    const badge = root.querySelector<HTMLElement>("[data-quality-badge]");
+    expect(badge?.textContent).toBe("QUALITY · RESTORED");
+    expect(badge?.title).toContain("Verified cache");
   });
 
   it("offers bounded batch quality measurement for eligible light frames", () => {

@@ -27,6 +27,7 @@ function frame(
     qualityState: "ready",
     qualityMessage: "Measured",
     qualityProfileId: "test-quality-v1",
+    qualityOrigin: "measured",
     state: "accepted",
     rejectionReason: null,
     metrics: {

@@ -80,7 +80,9 @@ optimized CPU and GPU paths must match.
   order, and returns this plan through a tested thin bridge; raw-source quality
   evidence is also retained in a verified immutable cache keyed by source
   fingerprint and algorithm identities, so valid diagnostics survive restarts
-  and whole-session relocation without trusting machine paths;
+  and whole-session relocation without trusting machine paths; Review marks
+  restored evidence explicitly so its provenance is never confused with a new
+  in-process measurement;
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, linked-luminance

@@ -37,7 +37,7 @@ only that stored evidence, validates typed rules, rejects missing, duplicate, or
 foreign identities, restores processing order from its native review book, and
 returns the plan without mutating manual state. The browser bridge transports
 artifact identities and rules but contains neither measurements nor a threshold
-evaluator. Durable metric persistence and custom expressions remain planned.
+evaluator. Custom expressions remain planned.
 
 The desktop editor exposes one to seven simultaneous quality gates in an
 expandable instrument panel. Gates can be added and removed without allowing an
@@ -68,6 +68,11 @@ absolute artifact path. Missing, stale, oversized, malformed, or corrupt cache
 entries are treated as absent evidence and can never enter a selection plan.
 Calibrated runtime products are intentionally excluded until their own product
 provenance has an equivalent durable identity.
+The selected-frame quality badge distinguishes a fresh in-process measurement
+from restored evidence. Restored evidence is labelled `QUALITY · RESTORED`, and
+its explanatory text starts with `Verified cache`; a fresh result remains
+`QUALITY · DIAGNOSTIC`. This is provenance only: both states expose the same
+strictly validated native result and neither changes a review decision.
 Applying a preview requires a dedicated confirmation dialog. Rust rebuilds the
 plan from its retained evidence under the same synchronization boundary and
 requires the canonical digest to match before mutation. It converts proposals

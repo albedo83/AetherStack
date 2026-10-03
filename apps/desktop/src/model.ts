@@ -102,6 +102,7 @@ export interface ReviewFrame {
   readonly qualityState: QualityState;
   readonly qualityMessage: string;
   readonly qualityProfileId: string | null;
+  readonly qualityOrigin: "measured" | "restored" | null;
   readonly state: ReviewState;
   readonly rejectionReason: ReviewRejectionReason | null;
   readonly metrics: FrameMetrics;

@@ -1324,6 +1324,15 @@ safety reasoning. They do not narrate obvious syntax.
     round-trip restoration, changed-source misses, bit corruption, algorithm
     drift, and exact native artifact indexing. Next, expose restored-versus-new
     measurement provenance and cache diagnostics in the Review UI.
+103. Surface quality-evidence provenance without turning it into a second
+    quality judgment. Every ready Review frame now carries an explicit measured
+    or restored origin. The selected-frame badge and explanatory text identify
+    verified restored evidence, while newly computed diagnostics retain their
+    existing label. Session replacement clears both result and origin maps,
+    fresh measurements atomically install both values, and failed measurements
+    clear provenance. DOM coverage verifies the user-visible distinction. Next,
+    count restored, missing, and rejected cache records during import and expose
+    those diagnostics without treating an optional cache miss as a FITS error.
 
 ## 11. Stable-release definition
 

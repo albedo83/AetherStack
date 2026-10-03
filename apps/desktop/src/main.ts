@@ -125,6 +125,7 @@ let sortTicket = 0;
 let statisticsTicket = 0;
 const statisticsCache = new Map<string, FitsStatistics>();
 const qualityCache = new Map<string, FrameQualityResult>();
+const qualityOrigins = new Map<string, "measured" | "restored">();
 const qualityPending = new Set<string>();
 const decisionCache = new Map<
   string,
@@ -393,9 +394,12 @@ function installImportedSession(session: ImportedSession): void {
   qualityBatchTicket += 1;
   frameSelectionTicket += 1;
   qualityCache.clear();
+  qualityOrigins.clear();
   for (const frame of session.frames) {
     if (frame.quality) {
-      qualityCache.set(frameArtifactKey(frame.id, frame.path), frame.quality);
+      const artifactKey = frameArtifactKey(frame.id, frame.path);
+      qualityCache.set(artifactKey, frame.quality);
+      qualityOrigins.set(artifactKey, "restored");
     }
   }
   qualityPending.clear();
@@ -2569,6 +2573,7 @@ function reviewFrameFromImported(
 ): ReviewFrame {
   const artifactKey = frameArtifactKey(frame.id, sourcePath);
   const cachedQuality = qualityCache.get(artifactKey);
+  const qualityOrigin = qualityOrigins.get(artifactKey) ?? null;
   const cachedDecision = decisionCache.get(frame.id);
   const qualityAvailable =
     frame.role === "light" &&
@@ -2593,7 +2598,9 @@ function reviewFrameFromImported(
     bayerPattern: frame.bayerPattern,
     qualityState,
     qualityMessage: cachedQuality
-      ? qualityResultMessage(cachedQuality)
+      ? qualityOrigin === "restored"
+        ? `Verified cache · ${qualityResultMessage(cachedQuality)}`
+        : qualityResultMessage(cachedQuality)
       : qualityState === "loading"
         ? "Measuring immutable linear pixels…"
         : qualityAvailable
@@ -2604,6 +2611,7 @@ function reviewFrameFromImported(
             ? "Blocked · no supported CFA phase"
             : "Quality metrics apply to light frames",
     qualityProfileId: cachedQuality?.profileId ?? null,
+    qualityOrigin,
     state: cachedDecision?.state ?? "undecided",
     rejectionReason: cachedDecision?.rejectionReason ?? null,
     metrics: cachedQuality
@@ -2720,7 +2728,11 @@ async function measureQuality(frameId: string): Promise<void> {
 
   const cached = qualityCache.get(artifactKey);
   if (cached) {
-    applyQualityResult(frame.id, cached);
+    applyQualityResult(
+      frame.id,
+      cached,
+      qualityOrigins.get(artifactKey) ?? "measured",
+    );
     return;
   }
 
@@ -2741,13 +2753,15 @@ async function measureQuality(frameId: string): Promise<void> {
           );
     if (sessionRevision !== qualitySessionRevision) return;
     qualityCache.set(artifactKey, result);
-    applyQualityResult(frame.id, result);
+    qualityOrigins.set(artifactKey, "measured");
+    applyQualityResult(frame.id, result, "measured");
   } catch {
     if (sessionRevision !== qualitySessionRevision) return;
     updateQualityFrame(frame.id, {
       qualityState: "error",
       qualityMessage: "Strict quality diagnostics could not be completed",
       qualityProfileId: null,
+      qualityOrigin: null,
       metrics: emptyQualityMetrics(),
     });
   } finally {
@@ -2755,11 +2769,19 @@ async function measureQuality(frameId: string): Promise<void> {
   }
 }
 
-function applyQualityResult(frameId: string, result: FrameQualityResult): void {
+function applyQualityResult(
+  frameId: string,
+  result: FrameQualityResult,
+  origin: "measured" | "restored",
+): void {
   updateQualityFrame(frameId, {
     qualityState: "ready",
-    qualityMessage: qualityResultMessage(result),
+    qualityMessage:
+      origin === "restored"
+        ? `Verified cache · ${qualityResultMessage(result)}`
+        : qualityResultMessage(result),
     qualityProfileId: result.profileId,
+    qualityOrigin: origin,
     metrics: qualityMetrics(result),
   });
 }
@@ -2769,7 +2791,11 @@ function updateQualityFrame(
   patch: Partial<
     Pick<
       ReviewFrame,
-      "qualityState" | "qualityMessage" | "qualityProfileId" | "metrics"
+      | "qualityState"
+      | "qualityMessage"
+      | "qualityProfileId"
+      | "qualityOrigin"
+      | "metrics"
     >
   >,
 ): void {

@@ -1496,7 +1496,9 @@ function qualityBadgeLabel(frame: ReviewFrame | null): string {
     case "loading":
       return "QUALITY · MEASURING";
     case "ready":
-      return "QUALITY · DIAGNOSTIC";
+      return frame.qualityOrigin === "restored"
+        ? "QUALITY · RESTORED"
+        : "QUALITY · DIAGNOSTIC";
     case "error":
       return "QUALITY · FAILED";
     case "idle":
