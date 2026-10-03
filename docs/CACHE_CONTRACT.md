@@ -77,6 +77,11 @@ absent key as `missing`, a fully verified and schema-valid payload as
 Rejected evidence is never installed in the native selection map, is surfaced
 as a warning, and must be recomputed from the immutable FITS source. Import does
 not delete or silently repair the offending shared artifact.
+Each rejection also carries one stable non-path-dependent code that identifies
+the failed boundary: source identity, cache availability, artifact container,
+payload size, allocation, read, length, or payload/schema validation. The UI
+receives only the session-relative source and this code; absolute cache and
+acquisition paths are never part of diagnostic evidence.
 
 The strict runtime uses this store for versioned integrated-tile checkpoints.
 It publishes them only after final source-fingerprint verification, can reuse

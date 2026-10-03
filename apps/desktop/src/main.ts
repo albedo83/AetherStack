@@ -86,6 +86,7 @@ import {
   type FrameSelectionRule,
 } from "./selection-bridge.ts";
 import {
+  importedSessionDiagnostics,
   importedSessionStatus,
   selectAndImportSession,
   type ImportedFrame,
@@ -430,16 +431,7 @@ function installImportedSession(session: ImportedSession): void {
     ...model,
     sessionName: session.name,
     sessionStatus: importedSessionStatus(session),
-    sessionDiagnostics: {
-      filesConsidered: session.filesConsidered,
-      verifiedFrames: session.frames.length,
-      classificationConflicts: session.classificationConflicts,
-      recoverableFailures: session.recoverableFailures.length,
-      unassignedSources: session.unassignedSources.length,
-      qualityEvidenceRestored: session.qualityEvidenceRestored,
-      qualityEvidenceMissing: session.qualityEvidenceMissing,
-      qualityEvidenceRejected: session.qualityEvidenceRejected,
-    },
+    sessionDiagnostics: importedSessionDiagnostics(session),
     roles,
     activeRole,
     lightFrameView: "raw",

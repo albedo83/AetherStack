@@ -122,6 +122,14 @@ export interface SessionDiagnostics {
   readonly qualityEvidenceRestored: number;
   readonly qualityEvidenceMissing: number;
   readonly qualityEvidenceRejected: number;
+  readonly items: readonly SessionDiagnosticItem[];
+  readonly omittedItems: number;
+}
+
+export interface SessionDiagnosticItem {
+  readonly category: "classification" | "fits" | "grouping" | "quality_cache";
+  readonly source: string;
+  readonly code: string;
 }
 
 export interface RoleSummary {

@@ -87,6 +87,15 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-rejected]",
     ),
+    diagnosticsItems: required<HTMLOListElement>(
+      root,
+      "[data-diagnostics-items]",
+    ),
+    diagnosticsEmpty: required<HTMLElement>(root, "[data-diagnostics-empty]"),
+    diagnosticsOmitted: required<HTMLElement>(
+      root,
+      "[data-diagnostics-omitted]",
+    ),
     framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
     calibrationWorkspace: required<HTMLElement>(
       root,
@@ -2133,6 +2142,9 @@ function renderSessionDiagnostics(
     diagnosticsRestored: HTMLElement;
     diagnosticsMissing: HTMLElement;
     diagnosticsRejected: HTMLElement;
+    diagnosticsItems: HTMLOListElement;
+    diagnosticsEmpty: HTMLElement;
+    diagnosticsOmitted: HTMLElement;
   },
   model: ReviewViewModel,
 ): void {
@@ -2171,6 +2183,43 @@ function renderSessionDiagnostics(
   elements.diagnosticsRejected.textContent = formatCount(
     diagnostics.qualityEvidenceRejected,
   );
+  const rows = diagnostics.items.map((item) => {
+    const row = document.createElement("li");
+    row.className = "diagnostics-item";
+    const category = document.createElement("span");
+    category.className = "diagnostics-item__category";
+    category.textContent = diagnosticCategoryLabel(item.category);
+    const source = document.createElement("strong");
+    source.textContent = item.source;
+    source.title = item.source;
+    const code = document.createElement("code");
+    code.textContent = item.code;
+    row.append(category, source, code);
+    return row;
+  });
+  elements.diagnosticsItems.replaceChildren(...rows);
+  elements.diagnosticsItems.hidden = rows.length === 0;
+  elements.diagnosticsEmpty.hidden = rows.length > 0;
+  elements.diagnosticsOmitted.hidden = diagnostics.omittedItems === 0;
+  elements.diagnosticsOmitted.textContent =
+    diagnostics.omittedItems > 0
+      ? `${formatCount(diagnostics.omittedItems)} additional item${diagnostics.omittedItems === 1 ? "" : "s"} omitted by the display bound`
+      : "";
+}
+
+function diagnosticCategoryLabel(
+  category: ReviewViewModel["sessionDiagnostics"]["items"][number]["category"],
+): string {
+  switch (category) {
+    case "classification":
+      return "Classification";
+    case "fits":
+      return "FITS";
+    case "grouping":
+      return "Grouping";
+    case "quality_cache":
+      return "Quality cache";
+  }
 }
 
 interface CalibrationElements {
@@ -4371,6 +4420,12 @@ function shellMarkup(): string {
             ${statistic("Rejected", "data-diagnostics-rejected")}
           </dl>
           <p class="diagnostics-note">Rejected entries never enter a selection plan. They remain untouched in shared cache storage and quality is recomputed safely.</p>
+        </section>
+        <section class="diagnostics-bank" aria-labelledby="diagnostics-evidence-heading">
+          <div class="diagnostics-bank__heading"><span aria-hidden="true">●</span><h3 id="diagnostics-evidence-heading">Issue evidence</h3></div>
+          <p class="diagnostics-empty" data-diagnostics-empty>No source-level issue evidence is present.</p>
+          <ol class="diagnostics-items" data-diagnostics-items hidden></ol>
+          <p class="diagnostics-note" data-diagnostics-omitted hidden></p>
         </section>
       </section>
     </div>

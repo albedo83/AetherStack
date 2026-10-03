@@ -112,8 +112,11 @@ The first connected Diagnostics surface is an accessible modal instrument for
 session import integrity. It separates mandatory FITS accounting from optional
 quality-cache recovery, shows every restored/missing/rejected count, explains
 that a cache miss is normal, and gives rejected evidence a textual warning as
-well as a distinct status lamp. Aggregate presentation avoids disclosing source
-paths. Deeper per-source evidence and redacted report export remain planned.
+well as a distinct status lamp. A bounded issue-evidence list identifies
+classification, FITS, grouping, and cache failures with session-relative sources
+and stable codes. It renders at most 100 rows, reports the omitted count, and
+never exposes an absolute acquisition or cache path. Redacted report export
+remains planned.
 
 ## Dark visual system
 

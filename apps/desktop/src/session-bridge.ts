@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { BayerPattern, FrameRole } from "./model.ts";
+import type {
+  BayerPattern,
+  FrameRole,
+  SessionDiagnostics,
+  SessionDiagnosticItem,
+} from "./model.ts";
 import type { FrameQualityResult } from "./quality-bridge.ts";
 
 export interface ImportedFrame {
@@ -37,11 +42,71 @@ export interface ImportedSession {
   readonly qualityEvidenceRestored: number;
   readonly qualityEvidenceMissing: number;
   readonly qualityEvidenceRejected: number;
+  readonly qualityEvidenceRejections: readonly ImportedFailure[];
 }
 
 export interface ImportedSessionStatus {
   readonly tone: "ready" | "warning";
   readonly label: string;
+}
+
+const MAX_SESSION_DIAGNOSTIC_ITEMS = 100;
+
+/** Builds a path-safe, DOM-bounded list from native session evidence. */
+export function importedSessionDiagnostics(
+  session: ImportedSession,
+): SessionDiagnostics {
+  const items: SessionDiagnosticItem[] = [];
+  const append = (item: SessionDiagnosticItem): void => {
+    if (items.length < MAX_SESSION_DIAGNOSTIC_ITEMS) items.push(item);
+  };
+  for (const frame of session.frames) {
+    if (frame.classificationConflict) {
+      append({
+        category: "classification",
+        source: frame.relativePath,
+        code: "classification_conflict",
+      });
+    }
+  }
+  for (const failure of session.recoverableFailures) {
+    append({
+      category: "fits",
+      source: failure.relativePath,
+      code: failure.code,
+    });
+  }
+  for (const source of session.unassignedSources) {
+    append({
+      category: "grouping",
+      source,
+      code: "session_source_unassigned",
+    });
+  }
+  for (const rejection of session.qualityEvidenceRejections) {
+    append({
+      category: "quality_cache",
+      source: rejection.relativePath,
+      code: rejection.code,
+    });
+  }
+  const totalItems =
+    session.classificationConflicts +
+    session.recoverableFailures.length +
+    session.unassignedSources.length +
+    session.qualityEvidenceRejected;
+  return {
+    filesConsidered: session.filesConsidered,
+    verifiedFrames: session.frames.length,
+    classificationConflicts: session.classificationConflicts,
+    recoverableFailures: session.recoverableFailures.length,
+    unassignedSources: session.unassignedSources.length,
+    qualityEvidenceRestored: session.qualityEvidenceRestored,
+    qualityEvidenceMissing: session.qualityEvidenceMissing,
+    qualityEvidenceRejected: session.qualityEvidenceRejected,
+    items,
+    omittedItems: Math.max(0, totalItems - items.length),
+  };
 }
 
 /**

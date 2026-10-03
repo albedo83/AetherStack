@@ -19,6 +19,8 @@ export const demoReviewModel: ReviewViewModel = {
     qualityEvidenceRestored: 0,
     qualityEvidenceMissing: 10,
     qualityEvidenceRejected: 0,
+    items: [],
+    omittedItems: 0,
   },
   activeRole: "light",
   lightFrameView: "raw",

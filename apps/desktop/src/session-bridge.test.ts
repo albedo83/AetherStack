@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  importedSessionDiagnostics,
   importedSessionStatus,
   selectAndImportSession,
   type ImportedSession,
@@ -36,6 +37,7 @@ describe("native session bridge", () => {
       qualityEvidenceRestored: 0,
       qualityEvidenceMissing: 0,
       qualityEvidenceRejected: 0,
+      qualityEvidenceRejections: [],
     };
     vi.mocked(invoke).mockResolvedValue(imported);
 
@@ -72,6 +74,81 @@ describe("native session bridge", () => {
         "1 import issue · quality cache 2 restored · 4 missing · 1 rejected",
     });
   });
+
+  it("builds bounded relative-source evidence with stable categories", () => {
+    const frame = {
+      id: "a".repeat(64),
+      role: "light" as const,
+      label: "light.fits",
+      relativePath: "LIGHTS/light.fits",
+      path: "/private/session/LIGHTS/light.fits",
+      exposureSeconds: 60,
+      temperatureCelsius: -5,
+      camera: "ASI294MC Pro",
+      filter: null,
+      bayerPattern: "rggb" as const,
+      axes: [4144, 2822],
+      fitsDiagnosticCount: 1,
+      classificationConflict: true,
+      quality: null,
+    };
+    const session = importedSessionFixture({
+      frames: [frame],
+      classificationConflicts: 1,
+      recoverableFailures: [
+        { relativePath: "DARKS/dark.fits", code: "fits_header_invalid" },
+      ],
+      unassignedSources: ["FLATS/flat.fits"],
+      qualityEvidenceRejected: 1,
+      qualityEvidenceRejections: [
+        {
+          relativePath: "LIGHTS/cache.fits",
+          code: "quality_cache_artifact_invalid",
+        },
+      ],
+    });
+
+    const diagnostics = importedSessionDiagnostics(session);
+
+    expect(diagnostics.items).toEqual([
+      {
+        category: "classification",
+        source: "LIGHTS/light.fits",
+        code: "classification_conflict",
+      },
+      {
+        category: "fits",
+        source: "DARKS/dark.fits",
+        code: "fits_header_invalid",
+      },
+      {
+        category: "grouping",
+        source: "FLATS/flat.fits",
+        code: "session_source_unassigned",
+      },
+      {
+        category: "quality_cache",
+        source: "LIGHTS/cache.fits",
+        code: "quality_cache_artifact_invalid",
+      },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("/private/session");
+  });
+
+  it("bounds source evidence independently from aggregate diagnostics", () => {
+    const recoverableFailures = Array.from({ length: 101 }, (_, index) => ({
+      relativePath: `LIGHTS/frame-${index}.fits`,
+      code: "fits_header_invalid",
+    }));
+    const diagnostics = importedSessionDiagnostics(
+      importedSessionFixture({ recoverableFailures }),
+    );
+
+    expect(diagnostics.recoverableFailures).toBe(101);
+    expect(diagnostics.items).toHaveLength(100);
+    expect(diagnostics.omittedItems).toBe(1);
+    expect(diagnostics.items.at(-1)?.source).toBe("LIGHTS/frame-99.fits");
+  });
 });
 
 function importedSessionFixture(
@@ -88,6 +165,7 @@ function importedSessionFixture(
     qualityEvidenceRestored: 0,
     qualityEvidenceMissing: 0,
     qualityEvidenceRejected: 0,
+    qualityEvidenceRejections: [],
     ...overrides,
   };
 }

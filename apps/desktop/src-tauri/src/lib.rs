@@ -712,50 +712,55 @@ fn publish_quality_evidence(
 enum QualityEvidenceRestore {
     Missing,
     Restored(Box<FrameQualityResponse>),
-    Rejected,
+    Rejected(&'static str),
 }
 
 fn restore_quality_evidence(cache_root: &Path, frame: &ImportedFrame) -> QualityEvidenceRestore {
     let Ok(frame_id) = FrameId::new(frame.id.clone()) else {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
     };
     let Ok(derived) = FrameId::derive(
         &frame.relative_path,
         frame.source_byte_length,
         &frame.source_sha256,
     ) else {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
     };
     if derived != frame_id {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
     }
     let Ok(key) = quality_evidence_key(&frame_id, frame.source_byte_length, &frame.source_sha256)
     else {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_identity_invalid");
     };
     let Ok(store) = ArtifactStore::new(cache_root.to_owned()) else {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_cache_unavailable");
     };
     let mut artifact = match store.lookup_verified(&key) {
         Ok(Some(artifact)) => artifact,
         Ok(None) => return QualityEvidenceRestore::Missing,
-        Err(_) => return QualityEvidenceRestore::Rejected,
+        Err(_) => {
+            return QualityEvidenceRestore::Rejected("quality_cache_artifact_invalid");
+        }
     };
     if artifact.payload_bytes() > MAX_QUALITY_EVIDENCE_BYTES {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_payload_too_large");
     }
     let Ok(capacity) = usize::try_from(artifact.payload_bytes()) else {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_allocation_failed");
     };
     let mut payload = Vec::new();
-    if payload.try_reserve_exact(capacity).is_err() || artifact.read_to_end(&mut payload).is_err() {
-        return QualityEvidenceRestore::Rejected;
+    if payload.try_reserve_exact(capacity).is_err() {
+        return QualityEvidenceRestore::Rejected("quality_evidence_allocation_failed");
+    }
+    if artifact.read_to_end(&mut payload).is_err() {
+        return QualityEvidenceRestore::Rejected("quality_evidence_read_failed");
     }
     if payload.len() != capacity {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_length_mismatch");
     }
     let Ok(evidence) = serde_json::from_slice::<StoredFrameQualityEvidence>(&payload) else {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_payload_invalid");
     };
     if evidence.schema_version != QUALITY_EVIDENCE_SCHEMA_VERSION
         || evidence.frame_id != frame.id
@@ -763,7 +768,7 @@ fn restore_quality_evidence(cache_root: &Path, frame: &ImportedFrame) -> Quality
         || evidence.source_sha256 != frame.source_sha256
         || validate_quality_response(&evidence.response).is_err()
     {
-        return QualityEvidenceRestore::Rejected;
+        return QualityEvidenceRestore::Rejected("quality_evidence_payload_invalid");
     }
     QualityEvidenceRestore::Restored(Box::new(evidence.response))
 }
@@ -858,6 +863,7 @@ struct ImportedSession {
     quality_evidence_restored: usize,
     quality_evidence_missing: usize,
     quality_evidence_rejected: usize,
+    quality_evidence_rejections: Vec<ImportedFailure>,
 }
 
 #[derive(Debug, Serialize)]
@@ -894,6 +900,7 @@ fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSes
     session.quality_evidence_restored = 0;
     session.quality_evidence_missing = 0;
     session.quality_evidence_rejected = 0;
+    session.quality_evidence_rejections.clear();
     for frame in &mut session.frames {
         // Raw quality diagnostics currently require a declared Bayer phase.
         // Calibration and non-Light sources deliberately do not inflate the
@@ -907,7 +914,13 @@ fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSes
                 frame.quality = Some(*response);
                 session.quality_evidence_restored += 1;
             }
-            QualityEvidenceRestore::Rejected => session.quality_evidence_rejected += 1,
+            QualityEvidenceRestore::Rejected(code) => {
+                session.quality_evidence_rejections.push(ImportedFailure {
+                    relative_path: frame.relative_path.clone(),
+                    code: code.to_owned(),
+                });
+                session.quality_evidence_rejected += 1;
+            }
         }
     }
 }
@@ -5850,6 +5863,7 @@ fn imported_session_from_report(
         quality_evidence_restored: 0,
         quality_evidence_missing: 0,
         quality_evidence_rejected: 0,
+        quality_evidence_rejections: Vec::new(),
     })
 }
 
@@ -8225,6 +8239,7 @@ mod tests {
             quality_evidence_restored: 0,
             quality_evidence_missing: 0,
             quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8301,6 +8316,7 @@ mod tests {
             quality_evidence_restored: 0,
             quality_evidence_missing: 0,
             quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8366,6 +8382,7 @@ mod tests {
             quality_evidence_restored: 0,
             quality_evidence_missing: 0,
             quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8428,6 +8445,7 @@ mod tests {
             quality_evidence_restored: 0,
             quality_evidence_missing: 0,
             quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8521,6 +8539,7 @@ mod tests {
             quality_evidence_restored: 0,
             quality_evidence_missing: 0,
             quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8705,7 +8724,7 @@ mod tests {
         artifact.sync_all()?;
         assert_eq!(
             restore_quality_evidence(directory.path(), &frame),
-            QualityEvidenceRestore::Rejected
+            QualityEvidenceRestore::Rejected("quality_cache_artifact_invalid")
         );
 
         let mut drifted = selection_test_quality_response(4.0, 600);
@@ -8762,6 +8781,10 @@ mod tests {
             quality_evidence_restored: usize::MAX,
             quality_evidence_missing: usize::MAX,
             quality_evidence_rejected: usize::MAX,
+            quality_evidence_rejections: vec![ImportedFailure {
+                relative_path: "stale".to_owned(),
+                code: "stale".to_owned(),
+            }],
         };
 
         restore_session_quality_evidence(directory.path(), &mut session);
@@ -8769,6 +8792,15 @@ mod tests {
         assert_eq!(session.quality_evidence_restored, 1);
         assert_eq!(session.quality_evidence_missing, 1);
         assert_eq!(session.quality_evidence_rejected, 1);
+        assert_eq!(session.quality_evidence_rejections.len(), 1);
+        assert_eq!(
+            session.quality_evidence_rejections[0].relative_path,
+            "LIGHTS/rejected.fits"
+        );
+        assert_eq!(
+            session.quality_evidence_rejections[0].code,
+            "quality_cache_artifact_invalid"
+        );
         assert!(session.frames[0].quality.is_some());
         assert!(
             session.frames[1..]
@@ -8795,6 +8827,7 @@ mod tests {
             quality_evidence_restored: 1,
             quality_evidence_missing: 0,
             quality_evidence_rejected: 0,
+            quality_evidence_rejections: Vec::new(),
         };
 
         let restored = prepare_restored_quality(&session)?;

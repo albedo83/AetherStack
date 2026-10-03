@@ -302,6 +302,14 @@ describe("frame review workspace", () => {
         qualityEvidenceRestored: 18,
         qualityEvidenceMissing: 4,
         qualityEvidenceRejected: 1,
+        items: [
+          {
+            category: "quality_cache",
+            source: "LIGHTS/light_0042.fits",
+            code: "quality_cache_artifact_invalid",
+          },
+        ],
+        omittedItems: 2,
       },
     });
 
@@ -315,6 +323,9 @@ describe("frame review workspace", () => {
     expect(dialog.textContent).toContain("Missing4");
     expect(dialog.textContent).toContain("Rejected1");
     expect(dialog.textContent).toContain("never enter a selection plan");
+    expect(dialog.textContent).toContain("LIGHTS/light_0042.fits");
+    expect(dialog.textContent).toContain("quality_cache_artifact_invalid");
+    expect(dialog.textContent).toContain("2 additional items omitted");
 
     fireEvent.keyDown(root, { key: "Escape" });
     expect(

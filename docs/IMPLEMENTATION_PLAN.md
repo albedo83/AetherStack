@@ -1353,6 +1353,15 @@ safety reasoning. They do not narrate obvious syntax.
     narrow screens. DOM and production-build checks cover the interaction and
     data binding. Next, add bounded per-source diagnostic evidence and a
     redacted report export before any cache-maintenance control.
+106. Add bounded source-level evidence to Diagnostics. Native cache restoration
+    now classifies every rejected record with a stable boundary code and returns
+    its session-relative source. The presenter combines those records with
+    classification conflicts, recoverable FITS failures, and unassigned sources,
+    renders at most 100 rows, and reports the exact omitted count while aggregate
+    totals remain complete. DOM construction uses text nodes, never diagnostic
+    HTML; tests prove category order, display bounds, and that absolute source
+    roots cannot enter the diagnostics model. Next, export the same evidence as
+    a versioned redacted JSON report with a canonical digest.
 
 ## 11. Stable-release definition
 
