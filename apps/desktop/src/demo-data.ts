@@ -23,6 +23,8 @@ export const demoReviewModel: ReviewViewModel = {
     omittedItems: 0,
     exportState: "idle",
     exportMessage: "No redacted report exported",
+    inspectionState: "idle",
+    inspectionMessage: "No diagnostics report verified",
   },
   activeRole: "light",
   lightFrameView: "raw",

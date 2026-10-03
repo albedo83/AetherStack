@@ -89,6 +89,7 @@ import {
   exportSessionDiagnostics,
   importedSessionDiagnostics,
   importedSessionStatus,
+  selectAndInspectSessionDiagnostics,
   selectAndImportSession,
   type ImportedFrame,
   type ImportedSession,
@@ -289,6 +290,9 @@ const screen = mountReviewScreen(root, model, {
   onExportDiagnostics() {
     void exportDiagnostics();
   },
+  onInspectDiagnosticsReport() {
+    void inspectDiagnosticsReport();
+  },
   onSelectRole(role) {
     selectRole(role);
   },
@@ -430,6 +434,49 @@ async function exportDiagnostics(): Promise<void> {
         ...model.sessionDiagnostics,
         exportState: "error",
         exportMessage: "Export failed · the destination was not modified",
+      },
+    });
+  }
+}
+
+async function inspectDiagnosticsReport(): Promise<void> {
+  if (model.sessionDiagnostics.inspectionState === "inspecting") return;
+  update({
+    ...model,
+    sessionDiagnostics: {
+      ...model.sessionDiagnostics,
+      inspectionState: "inspecting",
+      inspectionMessage: "Validating the complete native report…",
+    },
+  });
+  try {
+    const inspected = await selectAndInspectSessionDiagnostics();
+    if (!inspected) {
+      update({
+        ...model,
+        sessionDiagnostics: {
+          ...model.sessionDiagnostics,
+          inspectionState: "idle",
+          inspectionMessage: "Diagnostics verification cancelled",
+        },
+      });
+      return;
+    }
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        inspectionState: "ready",
+        inspectionMessage: `Verified schema ${inspected.schemaVersion} · ${inspected.itemCount.toLocaleString("en-US")} items · sha256 ${inspected.reportSha256.slice(0, 12)}…`,
+      },
+    });
+  } catch {
+    update({
+      ...model,
+      sessionDiagnostics: {
+        ...model.sessionDiagnostics,
+        inspectionState: "error",
+        inspectionMessage: "Verification failed · report not trusted",
       },
     });
   }

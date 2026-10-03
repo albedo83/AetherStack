@@ -56,6 +56,14 @@ export interface SessionDiagnosticsExport {
   readonly itemCount: number;
 }
 
+export interface SessionDiagnosticsInspection {
+  readonly schemaVersion: number;
+  readonly algorithmId: string;
+  readonly manifestSha256: string;
+  readonly reportSha256: string;
+  readonly itemCount: number;
+}
+
 const MAX_SESSION_DIAGNOSTIC_ITEMS = 100;
 
 /** Builds a path-safe, DOM-bounded list from native session evidence. */
@@ -114,6 +122,8 @@ export function importedSessionDiagnostics(
     omittedItems: Math.max(0, totalItems - items.length),
     exportState: "idle",
     exportMessage: "No redacted report exported",
+    inspectionState: "idle",
+    inspectionMessage: "No diagnostics report verified",
   };
 }
 
@@ -173,4 +183,19 @@ export async function exportSessionDiagnostics(): Promise<SessionDiagnosticsExpo
   return invoke<SessionDiagnosticsExport>("export_session_diagnostics", {
     path,
   });
+}
+
+/** Selects one report and asks Rust to validate its complete canonical form. */
+export async function selectAndInspectSessionDiagnostics(): Promise<SessionDiagnosticsInspection | null> {
+  const path = await open({
+    directory: false,
+    multiple: false,
+    title: "Verify a session diagnostics report",
+    filters: [{ name: "JSON diagnostics", extensions: ["json"] }],
+  });
+  if (typeof path !== "string") return null;
+  return invoke<SessionDiagnosticsInspection>(
+    "inspect_session_diagnostics_report",
+    { path },
+  );
 }

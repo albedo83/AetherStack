@@ -118,6 +118,8 @@ and stable codes. It renders at most 100 rows, reports the omitted count, and
 never exposes an absolute acquisition or cache path. Redacted report export
 is generated from native state, replaces every source with an ordered opaque
 token, seals the typed payload with SHA-256, and never overwrites a destination.
+The same panel can select an existing report for strict native verification and
+shows schema, item count, and shortened digest only after every gate passes.
 
 ## Dark visual system
 

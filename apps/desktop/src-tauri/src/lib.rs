@@ -899,8 +899,8 @@ struct ImportedFailure {
 
 const SESSION_DIAGNOSTICS_ALGORITHM_ID: &str = "aetherstack-session-diagnostics-v1";
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionDiagnosticsReportCounts {
     files_considered: usize,
     verified_frames: usize,
@@ -912,25 +912,25 @@ struct SessionDiagnosticsReportCounts {
     quality_evidence_rejected: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionDiagnosticsReportItem {
     source_token: String,
-    category: &'static str,
+    category: String,
     code: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionDiagnosticsReport {
-    algorithm_id: &'static str,
+    algorithm_id: String,
     manifest_sha256: String,
     counts: SessionDiagnosticsReportCounts,
     items: Vec<SessionDiagnosticsReportItem>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionDiagnosticsReportEnvelope {
     schema_version: u16,
     report_sha256: String,
@@ -941,6 +941,16 @@ struct SessionDiagnosticsReportEnvelope {
 #[serde(rename_all = "camelCase")]
 struct SessionDiagnosticsExportResponse {
     path: String,
+    report_sha256: String,
+    item_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDiagnosticsInspectionResponse {
+    schema_version: u16,
+    algorithm_id: String,
+    manifest_sha256: String,
     report_sha256: String,
     item_count: usize,
 }
@@ -979,11 +989,11 @@ fn build_session_diagnostics_report(
     manifest_sha256: String,
 ) -> SessionDiagnosticsReport {
     let mut items = Vec::new();
-    let mut push = |category: &'static str, code: &str| {
+    let mut push = |category: &str, code: &str| {
         let source_token = format!("source-{:06}", items.len() + 1);
         items.push(SessionDiagnosticsReportItem {
             source_token,
-            category,
+            category: category.to_owned(),
             code: code.to_owned(),
         });
     };
@@ -1002,7 +1012,7 @@ fn build_session_diagnostics_report(
         push("quality_cache", &rejection.code);
     }
     SessionDiagnosticsReport {
-        algorithm_id: SESSION_DIAGNOSTICS_ALGORITHM_ID,
+        algorithm_id: SESSION_DIAGNOSTICS_ALGORITHM_ID.to_owned(),
         manifest_sha256,
         counts: SessionDiagnosticsReportCounts {
             files_considered: session.files_considered,
@@ -1038,6 +1048,92 @@ fn encode_session_diagnostics_report(
         return Err(session_diagnostics_export_error());
     }
     Ok((report_sha256, encoded))
+}
+
+fn inspect_session_diagnostics_report_sync(
+    path: &Path,
+) -> Result<SessionDiagnosticsInspectionResponse, PreviewCommandError> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| session_diagnostics_validation_error())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(session_diagnostics_validation_error());
+    }
+    let maximum = u64::try_from(MAX_SESSION_DIAGNOSTICS_REPORT_BYTES)
+        .map_err(|_| session_diagnostics_validation_error())?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(MAX_SESSION_DIAGNOSTICS_REPORT_BYTES)
+        .map_err(|_| session_diagnostics_validation_error())?;
+    File::open(path)
+        .map_err(|_| session_diagnostics_validation_error())?
+        .take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| session_diagnostics_validation_error())?;
+    if bytes.is_empty()
+        || bytes.len() > MAX_SESSION_DIAGNOSTICS_REPORT_BYTES
+        || bytes.last() != Some(&b'\n')
+    {
+        return Err(session_diagnostics_validation_error());
+    }
+    let envelope: SessionDiagnosticsReportEnvelope =
+        serde_json::from_slice(&bytes).map_err(|_| session_diagnostics_validation_error())?;
+    if envelope.schema_version != 1
+        || envelope.report.algorithm_id != SESSION_DIAGNOSTICS_ALGORITHM_ID
+        || !is_lower_sha256(&envelope.report_sha256)
+        || !is_lower_sha256(&envelope.report.manifest_sha256)
+    {
+        return Err(session_diagnostics_validation_error());
+    }
+    let expected_items = envelope
+        .report
+        .counts
+        .classification_conflicts
+        .checked_add(envelope.report.counts.recoverable_failures)
+        .and_then(|count| count.checked_add(envelope.report.counts.unassigned_sources))
+        .and_then(|count| count.checked_add(envelope.report.counts.quality_evidence_rejected))
+        .ok_or_else(session_diagnostics_validation_error)?;
+    if expected_items != envelope.report.items.len()
+        || envelope.report.counts.verified_frames > envelope.report.counts.files_considered
+    {
+        return Err(session_diagnostics_validation_error());
+    }
+    for (index, item) in envelope.report.items.iter().enumerate() {
+        if item.source_token != format!("source-{:06}", index + 1)
+            || !matches!(
+                item.category.as_str(),
+                "classification" | "fits" | "grouping" | "quality_cache"
+            )
+            || !is_canonical_diagnostic_code(&item.code)
+        {
+            return Err(session_diagnostics_validation_error());
+        }
+    }
+    let canonical =
+        serde_json::to_vec(&envelope.report).map_err(|_| session_diagnostics_validation_error())?;
+    if lowercase_hex(&Sha256::digest(&canonical)) != envelope.report_sha256 {
+        return Err(session_diagnostics_digest_error());
+    }
+    let mut expected_encoding =
+        serde_json::to_vec_pretty(&envelope).map_err(|_| session_diagnostics_validation_error())?;
+    expected_encoding.push(b'\n');
+    if expected_encoding != bytes {
+        return Err(session_diagnostics_validation_error());
+    }
+    Ok(SessionDiagnosticsInspectionResponse {
+        schema_version: envelope.schema_version,
+        algorithm_id: envelope.report.algorithm_id,
+        manifest_sha256: envelope.report.manifest_sha256,
+        report_sha256: envelope.report_sha256,
+        item_count: envelope.report.items.len(),
+    })
+}
+
+fn is_canonical_diagnostic_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 96
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 #[derive(Debug, Deserialize)]
@@ -4105,6 +4201,21 @@ fn export_session_diagnostics(
 }
 
 #[tauri::command]
+fn inspect_session_diagnostics_report(
+    path: PathBuf,
+) -> Result<SessionDiagnosticsInspectionResponse, PreviewCommandError> {
+    if !path.is_absolute()
+        || path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(session_diagnostics_destination_error());
+    }
+    inspect_session_diagnostics_report_sync(&path)
+}
+
+#[tauri::command]
 async fn preview_master_plan(
     request: MasterPlanPreviewRequest,
     session_state: tauri::State<'_, DesktopSessionState>,
@@ -4816,6 +4927,20 @@ const fn session_diagnostics_export_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "session_diagnostics_export_failed",
         "The redacted diagnostics report could not be published.",
+    )
+}
+
+const fn session_diagnostics_validation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_diagnostics_report_invalid",
+        "The diagnostics report failed strict structural validation.",
+    )
+}
+
+const fn session_diagnostics_digest_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_diagnostics_digest_mismatch",
+        "The diagnostics report payload does not match its SHA-256 seal.",
     )
 }
 
@@ -6428,6 +6553,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_frame_quality,
             inspect_fits_statistics,
             inspect_rejection_histogram,
+            inspect_session_diagnostics_report,
             inspect_registered_stack_report,
             inspect_stack_pixel,
             preview_master_plan,
@@ -9029,7 +9155,7 @@ mod tests {
         let text = std::str::from_utf8(&encoded)?;
         assert!(!text.contains("private"));
         assert!(!text.contains(".fits"));
-        let envelope: serde_json::Value = serde_json::from_slice(&encoded)?;
+        let mut envelope: serde_json::Value = serde_json::from_slice(&encoded)?;
         assert_eq!(envelope["schemaVersion"], 1);
         assert_eq!(envelope["reportSha256"], digest);
         assert_eq!(
@@ -9045,8 +9171,31 @@ mod tests {
         let destination = directory.path().join("diagnostics.json");
         publish_immutable_report(&destination, &encoded)?;
         assert_eq!(fs::read(&destination)?, encoded);
+        let inspected = inspect_session_diagnostics_report_sync(&destination)?;
+        assert_eq!(inspected.report_sha256, digest);
+        assert_eq!(inspected.item_count, 2);
         assert!(publish_immutable_report(&destination, b"replacement\n").is_err());
         assert_eq!(fs::read(&destination)?, encoded);
+
+        envelope["report"]["counts"]["filesConsidered"] = serde_json::json!(3);
+        let tampered_path = directory.path().join("tampered.json");
+        let mut tampered = serde_json::to_vec_pretty(&envelope)?;
+        tampered.push(b'\n');
+        fs::write(&tampered_path, tampered)?;
+        let Err(error) = inspect_session_diagnostics_report_sync(&tampered_path) else {
+            return Err("a tampered diagnostics digest was accepted".into());
+        };
+        assert_eq!(error.code, "session_diagnostics_digest_mismatch");
+
+        envelope["unexpected"] = serde_json::json!(true);
+        let unknown_path = directory.path().join("unknown-field.json");
+        let mut unknown = serde_json::to_vec_pretty(&envelope)?;
+        unknown.push(b'\n');
+        fs::write(&unknown_path, unknown)?;
+        let Err(error) = inspect_session_diagnostics_report_sync(&unknown_path) else {
+            return Err("an unknown diagnostics field was accepted".into());
+        };
+        assert_eq!(error.code, "session_diagnostics_report_invalid");
         Ok(())
     }
 

@@ -104,6 +104,14 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-export-status]",
     ),
+    diagnosticsInspect: required<HTMLButtonElement>(
+      root,
+      '[data-action="inspect-diagnostics-report"]',
+    ),
+    diagnosticsInspectionStatus: required<HTMLElement>(
+      root,
+      "[data-diagnostics-inspection-status]",
+    ),
     framesWorkspace: required<HTMLElement>(root, "[data-frames-workspace]"),
     calibrationWorkspace: required<HTMLElement>(
       root,
@@ -971,6 +979,10 @@ export function mountReviewScreen(
     }
     if (action === "export-diagnostics") {
       actions.onExportDiagnostics();
+      return;
+    }
+    if (action === "inspect-diagnostics-report") {
+      actions.onInspectDiagnosticsReport();
       return;
     }
     if (action === "viewer-fit") {
@@ -2159,6 +2171,8 @@ function renderSessionDiagnostics(
     diagnosticsOmitted: HTMLElement;
     diagnosticsExport: HTMLButtonElement;
     diagnosticsExportStatus: HTMLElement;
+    diagnosticsInspect: HTMLButtonElement;
+    diagnosticsInspectionStatus: HTMLElement;
   },
   model: ReviewViewModel,
 ): void {
@@ -2227,6 +2241,16 @@ function renderSessionDiagnostics(
       : "Export redacted JSON";
   elements.diagnosticsExportStatus.dataset.state = diagnostics.exportState;
   elements.diagnosticsExportStatus.textContent = diagnostics.exportMessage;
+  elements.diagnosticsInspect.disabled =
+    diagnostics.inspectionState === "inspecting";
+  elements.diagnosticsInspect.textContent =
+    diagnostics.inspectionState === "inspecting"
+      ? "Verifying…"
+      : "Verify report";
+  elements.diagnosticsInspectionStatus.dataset.state =
+    diagnostics.inspectionState;
+  elements.diagnosticsInspectionStatus.textContent =
+    diagnostics.inspectionMessage;
 }
 
 function diagnosticCategoryLabel(
@@ -4450,8 +4474,14 @@ function shellMarkup(): string {
           <p class="diagnostics-note" data-diagnostics-omitted hidden></p>
         </section>
         <footer class="diagnostics-export">
-          <p data-diagnostics-export-status aria-live="polite">No redacted report exported</p>
-          <button class="button button--primary" type="button" data-action="export-diagnostics">Export redacted JSON</button>
+          <div class="diagnostics-export__status">
+            <p data-diagnostics-export-status aria-live="polite">No redacted report exported</p>
+            <p data-diagnostics-inspection-status aria-live="polite">No diagnostics report verified</p>
+          </div>
+          <div class="diagnostics-export__actions">
+            <button class="button button--quiet" type="button" data-action="inspect-diagnostics-report">Verify report</button>
+            <button class="button button--primary" type="button" data-action="export-diagnostics">Export redacted JSON</button>
+          </div>
         </footer>
       </section>
     </div>

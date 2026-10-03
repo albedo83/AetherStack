@@ -44,6 +44,17 @@ file is never overwritten, including under concurrent publication.
 The UI reports cancellation as a normal state, success with the item count and
 a shortened digest, and failure without claiming that a file was created.
 
+## Native inspection
+
+An exported report is trusted only after a complete native inspection. The
+validator rejects symbolic links, non-files, empty or oversized input, missing
+final newline, unknown fields, unknown schema or algorithm identities,
+non-canonical SHA-256 values, impossible aggregate counts, missing or extra
+issue items, non-sequential source tokens, unknown categories, non-canonical
+codes, digest mismatch, and any JSON representation that differs from the exact
+pretty envelope produced by the exporter. The desktop exposes this through a
+separate native file-selection flow and labels a failure as untrusted.
+
 ## Required tests
 
 - private session names and absolute or relative FITS paths never appear;
@@ -51,4 +62,6 @@ a shortened digest, and failure without claiming that a file was created.
 - the canonical payload reproduces the envelope digest;
 - publication is byte exact and create-new;
 - a second publication cannot modify the first report;
-- the browser sends only the user-selected destination to Rust.
+- the browser sends only the user-selected destination to Rust;
+- native inspection rejects digest tampering and unknown fields;
+- the browser sends only the selected report path to native inspection.

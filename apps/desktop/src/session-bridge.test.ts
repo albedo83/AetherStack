@@ -6,6 +6,7 @@ import {
   importedSessionDiagnostics,
   importedSessionStatus,
   exportSessionDiagnostics,
+  selectAndInspectSessionDiagnostics,
   selectAndImportSession,
   type ImportedSession,
 } from "./session-bridge.ts";
@@ -71,6 +72,25 @@ describe("native session bridge", () => {
 
     await expect(exportSessionDiagnostics()).resolves.toBeNull();
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("passes only the selected report path to native verification", async () => {
+    vi.mocked(open).mockResolvedValue("/reports/session.json");
+    const inspection = {
+      schemaVersion: 1,
+      algorithmId: "aetherstack-session-diagnostics-v1",
+      manifestSha256: "b".repeat(64),
+      reportSha256: "a".repeat(64),
+      itemCount: 4,
+    };
+    vi.mocked(invoke).mockResolvedValue(inspection);
+
+    await expect(selectAndInspectSessionDiagnostics()).resolves.toBe(
+      inspection,
+    );
+    expect(invoke).toHaveBeenCalledWith("inspect_session_diagnostics_report", {
+      path: "/reports/session.json",
+    });
   });
 
   it("reports normal cache misses without degrading a verified import", () => {

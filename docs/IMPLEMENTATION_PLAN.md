@@ -1374,6 +1374,16 @@ safety reasoning. They do not narrate obvious syntax.
     collision safety, and destination-only browser IPC. Next, add a native
     validator/inspector for exported diagnostic reports before implementing any
     maintenance action.
+108. Validate exported diagnostics independently before trusting them. The
+    native inspector rejects links and non-files, oversized or non-canonical
+    encoding, unknown fields and versions, invalid manifest or report digests,
+    inconsistent aggregate counts, unordered opaque source tokens, unknown
+    categories, malformed stable codes, and payload tampering. Diagnostics now
+    offers a separate Verify report action with explicit selecting, verified,
+    cancelled, and untrusted states; browser IPC carries only the selected path.
+    Rust and bridge tests cover a valid round trip, digest tampering, unknown
+    fields, and path-only transport. Next, design cache maintenance around an
+    inspected rejection set and explicit user confirmation.
 
 ## 11. Stable-release definition
 

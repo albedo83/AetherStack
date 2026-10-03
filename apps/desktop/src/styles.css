@@ -4146,6 +4146,18 @@ tr[data-state="blocked"] .association-state {
   color: var(--danger);
 }
 
+.diagnostics-export__status {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.diagnostics-export__actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
 .reason-dialog h2 {
   margin-top: 5px;
   font-size: 22px;
@@ -4325,6 +4337,10 @@ tr[data-state="blocked"] .association-state {
 
   .diagnostics-export .button {
     width: 100%;
+  }
+
+  .diagnostics-export__actions {
+    flex-direction: column-reverse;
   }
 
   .light-association-panel__heading {

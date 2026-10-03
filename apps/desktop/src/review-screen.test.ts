@@ -46,6 +46,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelLightPlan: vi.fn(),
     onImportSession: vi.fn(),
     onExportDiagnostics: vi.fn(),
+    onInspectDiagnosticsReport: vi.fn(),
     onSelectRole: vi.fn(),
     onSelectLightFrameView: vi.fn(),
     onSelectFrame: vi.fn(),
@@ -314,6 +315,8 @@ describe("frame review workspace", () => {
         omittedItems: 2,
         exportState: "idle",
         exportMessage: "No redacted report exported",
+        inspectionState: "idle",
+        inspectionMessage: "No diagnostics report verified",
       },
     });
 
@@ -334,6 +337,8 @@ describe("frame review workspace", () => {
       getByRole(dialog, "button", { name: "Export redacted JSON" }),
     );
     expect(actions.onExportDiagnostics).toHaveBeenCalledOnce();
+    fireEvent.click(getByRole(dialog, "button", { name: "Verify report" }));
+    expect(actions.onInspectDiagnosticsReport).toHaveBeenCalledOnce();
 
     fireEvent.keyDown(root, { key: "Escape" });
     expect(
