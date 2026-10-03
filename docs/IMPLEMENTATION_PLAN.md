@@ -1216,6 +1216,15 @@ safety reasoning. They do not narrate obvious syntax.
     incremental reveal, full-set search, and accurate shown/matching counts.
     Next, profile substantially larger synthetic reports before choosing between
     this incremental model and viewport virtualization.
+92. Keep verification progress bounded under high source counts and mutation.
+    The shared hasher may report the exact EOF byte count, but the desktop now
+    reserves that value for its single authoritative source-completion event.
+    Small files therefore emit one IPC event instead of two. Intermediate values
+    are accepted only below the sealed report size, so a concurrently grown file
+    cannot push aggregate progress beyond its declared total or make the next
+    completion update move backward. Unit coverage locks all three boundaries.
+    Next, benchmark complete report verification with synthetic high-count files
+    to quantify filesystem and IPC overhead separately from SHA-256 throughput.
 
 ## 11. Stable-release definition
 

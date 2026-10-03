@@ -2472,6 +2472,11 @@ where
             source,
             cancellation,
             |current_file_bytes| {
+                let Some(current_file_bytes) =
+                    intermediate_source_progress_bytes(current_file_bytes, source.byte_length)
+                else {
+                    return;
+                };
                 progress_sequence = progress_sequence.saturating_add(1);
                 on_progress(RegisteredStackSourceVerificationProgress {
                     sequence: progress_sequence,
@@ -2518,6 +2523,16 @@ where
         all_sources_verified,
         sources,
     })
+}
+
+/// Keeps in-file updates strictly below the sealed size.
+///
+/// The caller emits one authoritative file-boundary event after verification.
+/// Suppressing equal values avoids duplicate IPC for small sources, while
+/// suppressing larger values prevents a concurrently grown file from making
+/// aggregate progress exceed its report-bound total before it is rejected.
+fn intermediate_source_progress_bytes(current: u64, sealed: u64) -> Option<u64> {
+    (current < sealed).then_some(current)
 }
 
 fn verify_registered_stack_source<F>(
@@ -5644,6 +5659,13 @@ mod tests {
             Some(SOURCE_VERIFICATION_PROGRESS_BYTES + 17)
         );
         assert!(progress.windows(2).all(|values| values[0] < values[1]));
+    }
+
+    #[test]
+    fn source_progress_reserves_the_exact_boundary_for_one_completion_event() {
+        assert_eq!(intermediate_source_progress_bytes(7, 8), Some(7));
+        assert_eq!(intermediate_source_progress_bytes(8, 8), None);
+        assert_eq!(intermediate_source_progress_bytes(9, 8), None);
     }
 
     #[test]
