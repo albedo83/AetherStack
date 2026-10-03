@@ -180,8 +180,22 @@ describe("frame review workspace", () => {
       algorithmId: "frame-selection-rules-v1",
       rules: demoReviewModel.frameSelection.rules,
       frames: [
-        { frameId: first.id, proposal: "retain" as const, evidence: [] },
-        { frameId: second.id, proposal: "reject" as const, evidence: [] },
+        {
+          frameId: first.id,
+          proposal: "retain" as const,
+          evidence: demoReviewModel.frameSelection.rules.map(() => ({
+            measured: null,
+            state: "passed" as const,
+          })),
+        },
+        {
+          frameId: second.id,
+          proposal: "reject" as const,
+          evidence: demoReviewModel.frameSelection.rules.map((_, index) => ({
+            measured: null,
+            state: index === 0 ? ("failed" as const) : ("passed" as const),
+          })),
+        },
       ],
       planSha256: "d".repeat(64),
     };
@@ -196,7 +210,13 @@ describe("frame review workspace", () => {
     });
 
     expect(root.textContent).toContain("AUTO KEEP");
-    expect(root.textContent).toContain("AUTO REJECT");
+    expect(root.textContent).toContain("AUTO REJECT · FWHM");
+    const rejectedProposal = root.querySelector<HTMLElement>(
+      `[data-frame-id="${second.id}"] .selection-proposal`,
+    );
+    expect(rejectedProposal?.title).toBe(
+      "Automatic recommendation: reject. Failed quality gates: FWHM.",
+    );
     expect(root.textContent).toContain("1 retained · 1 proposed reject");
     expect(root.textContent).toContain("d".repeat(64));
     expect(first.state).toBe("accepted");

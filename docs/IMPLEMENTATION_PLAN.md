@@ -1295,6 +1295,14 @@ safety reasoning. They do not narrate obvious syntax.
     fail-closed behavior, and identity-only browser transport. Next, persist
     versioned quality evidence with source fingerprints so a validated session
     can resume without recomputing every diagnostic.
+100. Explain automatic rejections at the point of review. Each rejected table
+    badge now names its single failed metric or reports the number of failed
+    gates, and its accessible description enumerates every failed or
+    missing-rejected gate in canonical rule order. Retain badges explicitly
+    state that all gates passed. DOM coverage binds the visible label and full
+    explanation to native evidence rather than deriving a second decision in
+    the presenter. Next, expose the same aligned evidence in a selected-frame
+    rule inspector with measured value and threshold details.
 
 ## 11. Stable-release definition
 

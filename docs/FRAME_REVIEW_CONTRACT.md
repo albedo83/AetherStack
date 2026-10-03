@@ -45,7 +45,9 @@ empty set or duplicate metric. Each gate makes the metric, strict direction,
 typed threshold, and missing-value policy visible. Metric-aware defaults keep
 new controls valid while remaining explicit and editable. A native preview reports
 retained and rejected totals, the canonical digest, and an `AUTO KEEP` or
-`AUTO REJECT` badge beside each frame. These badges are recommendations only;
+`AUTO REJECT` badge beside each frame. A rejected badge names the sole failing
+metric or the number of failed gates, while its accessible description lists
+every failed or missing-rejected metric. These badges are recommendations only;
 the manual state marker and undo history remain unchanged. Editing a rule,
 changing pixel stage, switching role, importing a session, or refreshing any
 quality result invalidates the previous preview and cancels stale responses.

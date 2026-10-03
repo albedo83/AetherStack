@@ -11,7 +11,9 @@ import type {
 } from "./registration-bridge.ts";
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import type {
+  FrameSelectionFrameResult,
   FrameSelectionMetric,
+  FrameSelectionPlan,
   FrameSelectionRule,
 } from "./selection-bridge.ts";
 import type {
@@ -1797,9 +1799,10 @@ function renderRows(
     row.dataset.action = "select-frame";
     row.dataset.frameId = frame.id;
     row.dataset.state = frame.state;
-    const proposal = model.frameSelection.plan?.frames.find(
+    const selectionResult = model.frameSelection.plan?.frames.find(
       (candidate) => candidate.frameId === frame.id,
-    )?.proposal;
+    );
+    const proposal = selectionResult?.proposal;
     if (proposal) row.dataset.proposal = proposal;
     row.setAttribute("aria-selected", String(selected));
     if (selected) row.classList.add("is-selected");
@@ -1817,8 +1820,13 @@ function renderRows(
       const recommendation = document.createElement("span");
       recommendation.className = "selection-proposal";
       recommendation.dataset.proposal = proposal;
-      recommendation.textContent =
-        proposal === "retain" ? "AUTO KEEP" : "AUTO REJECT";
+      const presentation = selectionProposalPresentation(
+        model.frameSelection.plan,
+        selectionResult,
+      );
+      recommendation.textContent = presentation.label;
+      recommendation.title = presentation.description;
+      recommendation.setAttribute("aria-label", presentation.description);
       frameName.append(" ", recommendation);
     }
     if (frame.classificationWarning) {
@@ -1850,6 +1858,41 @@ function renderRows(
     );
     container.append(row);
   }
+}
+
+function selectionProposalPresentation(
+  plan: FrameSelectionPlan | null,
+  result: FrameSelectionFrameResult | undefined,
+): { readonly label: string; readonly description: string } {
+  if (!plan || !result || result.proposal === "retain") {
+    return {
+      label: "AUTO KEEP",
+      description:
+        "Automatic recommendation: retain. All quality gates passed.",
+    };
+  }
+  const failedMetrics = result.evidence.flatMap((evidence, index) => {
+    if (evidence.state !== "failed" && evidence.state !== "missing_rejected") {
+      return [];
+    }
+    const metric = plan.rules[index]?.metric;
+    const label = selectionMetricOptions.find(
+      ([candidate]) => candidate === metric,
+    )?.[1];
+    return label ? [label] : [];
+  });
+  const detail = failedMetrics.join(", ");
+  return {
+    label:
+      failedMetrics.length === 1
+        ? `AUTO REJECT · ${failedMetrics[0]?.toLocaleUpperCase("en-US")}`
+        : failedMetrics.length > 1
+          ? `AUTO REJECT · ${failedMetrics.length} GATES`
+          : "AUTO REJECT",
+    description: detail
+      ? `Automatic recommendation: reject. Failed quality gates: ${detail}.`
+      : "Automatic recommendation: reject.",
+  };
 }
 
 function renderSelectedMetrics(
