@@ -1706,6 +1706,10 @@ function renderRegistration(
       return row;
     }),
   );
+  const reportIsExternal =
+    reportInspection !== null &&
+    (integrationReport === null || reportPath !== integrationReport.reportPath);
+  const previewResult = reportIsExternal ? null : integrationReport;
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
@@ -1809,27 +1813,37 @@ function renderRegistration(
   );
   for (const button of elements.registeredStackProducts) {
     const product = button.dataset.stackProduct;
-    const available =
-      product === "science"
-        ? registration.stack.result !== null
+    const reportProductAvailable = reportInspection?.products.some(
+      (candidate) =>
+        candidate.role === product && candidate.status === "verified",
+    );
+    const available = previewResult
+      ? product === "science"
+        ? true
         : product === "rejection_low"
-          ? Boolean(registration.stack.result?.lowRejectionMapPath)
-          : Boolean(registration.stack.result?.highRejectionMapPath);
+          ? Boolean(previewResult.lowRejectionMapPath)
+          : Boolean(previewResult.highRejectionMapPath)
+      : Boolean(reportProductAvailable);
     const selected = product === registration.stack.selectedProduct;
     button.disabled = !available || stackBusy;
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
   }
+  const stackPreviewIdentity = previewResult
+    ? `${previewResult.planSha256}:registered-stack`
+    : reportInspection
+      ? `${reportInspection.reportSha256}:reported-stack`
+      : null;
   const stackPreviewReady =
     registration.stack.previewState === "ready" &&
     registration.stack.preview?.frameId ===
-      `${registration.stack.result?.planSha256}:registered-stack:${registration.stack.selectedProduct}`;
+      `${stackPreviewIdentity}:${registration.stack.selectedProduct}`;
   const diagnosticProduct = registration.stack.selectedProduct !== "science";
   const scienceUnderlayReady =
     stackPreviewReady &&
     diagnosticProduct &&
     registration.stack.sciencePreview?.frameId ===
-      `${registration.stack.result?.planSha256}:registered-stack:science`;
+      `${stackPreviewIdentity}:science`;
   elements.registeredStackPreviewImage.hidden = !stackPreviewReady;
   elements.registeredStackScienceImage.hidden = !scienceUnderlayReady;
   elements.registeredStackPreviewPlaceholder.hidden = stackPreviewReady;
@@ -1867,7 +1881,9 @@ function renderRegistration(
       ? "Rendering the integrated FITS preview…"
       : registration.stack.previewState === "error"
         ? "The integrated FITS is valid, but its display preview is unavailable"
-        : "The integrated common crop will appear here after publication";
+        : reportInspection
+          ? "Select a verified report product to preview it"
+          : "The integrated common crop will appear here after publication";
   const stackProgress = registration.stack.progress;
   if (stackProgress?.totalUnits) {
     elements.registeredStackProgress.max = stackProgress.totalUnits;

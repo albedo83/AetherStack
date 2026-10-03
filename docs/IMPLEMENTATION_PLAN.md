@@ -1122,6 +1122,17 @@ safety reasoning. They do not narrate obvious syntax.
     exact verification state. Next, let the result workspace preview verified
     products directly from a reopened report without attaching them to the
     active processing session.
+82. Preview verified products from reopened reports. Native inspection now
+    returns the sealed output dimensions required to select RGB or scalar
+    rendering without guessing. The desktop constructs a report-scoped preview
+    identity, exposes only individually verified science and rejection-map
+    products, retains false-color rejection histograms, and clears prior
+    resources before switching away from an active result. Archived products
+    remain display-only and never replace the processing session's registered
+    artifacts. Presenter coverage proves that missing products stay disabled
+    and a verified external science product renders under its report digest.
+    Next, separate archived result inspection into a focused workspace with a
+    source-evidence browser and explicit return to the active session.
 
 ## 11. Stable-release definition
 

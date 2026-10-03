@@ -1290,8 +1290,8 @@ button:active:not(:disabled) {
 
 .integration-report {
   display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 12px 14px;
   color: #8eb1c8;
   background: linear-gradient(180deg, #10202b, #0a141c);
   border: 1px solid #2c5368;
@@ -1312,7 +1312,7 @@ button:active:not(:disabled) {
 
 .integration-report__heading > span {
   color: #73cbe5;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1321,20 +1321,20 @@ button:active:not(:disabled) {
 .integration-report__heading .button {
   min-height: 28px;
   padding: 4px 9px;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .integration-report code {
   overflow: hidden;
   color: #9bb6c7;
-  font-size: 8px;
+  font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .integration-report output {
   color: #7896aa;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
@@ -1359,10 +1359,10 @@ button:active:not(:disabled) {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  min-height: 28px;
-  padding: 5px 8px;
+  min-height: 32px;
+  padding: 6px 9px;
   color: #9db3c1;
-  font-size: 9px;
+  font-size: 10px;
   background: #071119;
   border: 1px solid #263e4d;
   border-radius: 4px;

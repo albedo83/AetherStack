@@ -464,6 +464,9 @@ struct RegisteredStackReportInspectionResponse {
     plan_sha256: String,
     manifest_sha256: String,
     estimator: RegisteredStackEstimatorInput,
+    width: usize,
+    height: usize,
+    planes: usize,
     source_count: usize,
     product_count: usize,
     weighted: bool,
@@ -2268,6 +2271,9 @@ fn inspect_registered_stack_report_sync(
         plan_sha256: envelope.report.plan_sha256,
         manifest_sha256: envelope.report.manifest_sha256,
         estimator: envelope.report.integration.estimator,
+        width: envelope.report.dimensions.width,
+        height: envelope.report.dimensions.height,
+        planes: envelope.report.dimensions.planes,
         source_count: source_ids.len(),
         product_count: product_roles.len(),
         weighted,
@@ -6072,6 +6078,9 @@ mod tests {
         assert_eq!(inspection.report_sha256, result.report_sha256);
         assert_eq!(inspection.source_count, 2);
         assert_eq!(inspection.product_count, 1);
+        assert_eq!(inspection.width, result.width);
+        assert_eq!(inspection.height, result.height);
+        assert_eq!(inspection.planes, result.planes);
         assert!(!inspection.weighted);
         assert!(inspection.all_products_verified);
         assert_eq!(inspection.products.len(), 1);

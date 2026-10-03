@@ -208,6 +208,9 @@ export interface RegisteredStackReportInspection {
   readonly planSha256: string;
   readonly manifestSha256: string;
   readonly estimator: RegisteredStackIntegrationSettings["estimator"];
+  readonly width: number;
+  readonly height: number;
+  readonly planes: number;
   readonly sourceCount: number;
   readonly productCount: number;
   readonly weighted: boolean;

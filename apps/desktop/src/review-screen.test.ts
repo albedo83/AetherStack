@@ -562,6 +562,9 @@ describe("frame review workspace", () => {
             planSha256,
             manifestSha256: "e".repeat(64),
             estimator: "strict_mean",
+            width: 4_128,
+            height: 2_810,
+            planes: 3,
             sourceCount: 2,
             productCount: 3,
             weighted: false,
@@ -781,6 +784,9 @@ describe("frame review workspace", () => {
             planSha256: "a".repeat(64),
             manifestSha256: "b".repeat(64),
             estimator: "weighted_mean",
+            width: 4_144,
+            height: 2_822,
+            planes: 3,
             sourceCount: 18,
             productCount: 1,
             weighted: true,
@@ -798,7 +804,7 @@ describe("frame review workspace", () => {
         },
       },
     };
-    const { root, actions } = fixture(external);
+    const { root, actions, controller } = fixture(external);
 
     expect(root.textContent).toContain("/archive/m31-integration-report.json");
     expect(root.textContent).toContain(
@@ -812,6 +818,51 @@ describe("frame review workspace", () => {
     );
     fireEvent.click(getByRole(root, "button", { name: "Verify again" }));
     expect(actions.onInspectRegisteredStackReport).toHaveBeenCalledOnce();
+    expect(
+      getByRole<HTMLButtonElement>(root, "tab", { name: "Science" }).disabled,
+    ).toBe(true);
+    controller.update({
+      ...external,
+      registration: {
+        ...external.registration,
+        stack: {
+          ...external.registration.stack,
+          selectedProduct: "science",
+          previewState: "ready",
+          preview: {
+            frameId: `${"f".repeat(64)}:reported-stack:science`,
+            url: "blob:reopened-stack",
+          },
+          sciencePreview: {
+            frameId: `${"f".repeat(64)}:reported-stack:science`,
+            url: "blob:reopened-stack",
+          },
+          reportInspection: {
+            ...external.registration.stack.reportInspection!,
+            allProductsVerified: true,
+            products: [
+              {
+                ...external.registration.stack.reportInspection!.products[0]!,
+                status: "verified",
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      getByRole<HTMLImageElement>(root, "img", {
+        name: "Integrated registered common-crop preview",
+      }).src,
+    ).toContain("blob:reopened-stack");
+    const science = getByRole<HTMLButtonElement>(root, "tab", {
+      name: "Science",
+    });
+    expect(science.disabled).toBe(false);
+    fireEvent.click(science);
+    expect(actions.onSelectRegisteredStackProduct).toHaveBeenCalledWith(
+      "science",
+    );
   });
 
   it("preflights every calibrated Light before enabling weighted integration", () => {

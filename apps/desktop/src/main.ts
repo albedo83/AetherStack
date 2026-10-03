@@ -1168,7 +1168,10 @@ async function executeStack(): Promise<void> {
         },
       },
     });
-    void loadRegisteredStackPreview(result, "science");
+    void loadRegisteredStackPreview(
+      registeredStackPreviewSourceFromResult(result),
+      "science",
+    );
   } catch (error) {
     if (ticket !== registeredStackTicket) return;
     const cancelled = nativeErrorCode(error) === "registered_stack_cancelled";
@@ -1221,7 +1224,7 @@ async function cancelStack(): Promise<void> {
 }
 
 async function loadRegisteredStackPreview(
-  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  source: RegisteredStackPreviewSource,
   product: RegisteredStackProductView,
 ): Promise<void> {
   const ticket = ++registeredStackPreviewTicket;
@@ -1229,18 +1232,19 @@ async function loadRegisteredStackPreview(
   let diagnosticResource: PreviewResource | null = null;
   try {
     scienceResource = await requestRegisteredStackProductPreview(
-      result,
+      source,
       "science",
     );
     if (product !== "science") {
       diagnosticResource = await requestRegisteredStackProductPreview(
-        result,
+        source,
         product,
       );
     }
     if (
       ticket !== registeredStackPreviewTicket ||
-      model.registration.stack.result?.outputPath !== result.outputPath ||
+      registeredStackPreviewSource(model.registration.stack)?.identity !==
+        source.identity ||
       model.registration.stack.selectedProduct !== product
     ) {
       scienceResource.revoke();
@@ -1267,7 +1271,7 @@ async function loadRegisteredStackPreview(
       },
     });
     if (product !== "science") {
-      void loadRegisteredStackHistogram(result, product, ticket);
+      void loadRegisteredStackHistogram(source, product, ticket);
     }
   } catch {
     scienceResource?.revoke();
@@ -1291,17 +1295,18 @@ async function loadRegisteredStackPreview(
 }
 
 async function loadRegisteredStackHistogram(
-  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  source: RegisteredStackPreviewSource,
   product: Exclude<RegisteredStackProductView, "science">,
   ticket: number,
 ): Promise<void> {
-  const path = registeredStackProductPath(result, product);
+  const path = registeredStackProductPath(source, product);
   if (!path) return;
   try {
     const histogram = await inspectRejectionHistogram(path);
     if (
       ticket !== registeredStackPreviewTicket ||
-      model.registration.stack.result?.outputPath !== result.outputPath ||
+      registeredStackPreviewSource(model.registration.stack)?.identity !==
+        source.identity ||
       model.registration.stack.selectedProduct !== product
     ) {
       return;
@@ -1418,6 +1423,11 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
   if (!path) return;
   const activeResult = result?.reportPath === path ? result : null;
   const ticket = ++stackReportTicket;
+  if (activeResult === null) {
+    registeredStackPreviewTicket += 1;
+    stackPixelTicket += 1;
+    clearRegisteredStackPreviewResources();
+  }
   update({
     ...model,
     registration: {
@@ -1427,6 +1437,34 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
         reportInspectionState: "loading",
         reportInspection: null,
         reportInspectionPath: path,
+        previewState:
+          activeResult === null
+            ? "idle"
+            : model.registration.stack.previewState,
+        preview:
+          activeResult === null ? null : model.registration.stack.preview,
+        sciencePreview:
+          activeResult === null
+            ? null
+            : model.registration.stack.sciencePreview,
+        selectedProduct:
+          activeResult === null
+            ? "science"
+            : model.registration.stack.selectedProduct,
+        histogramState:
+          activeResult === null
+            ? "idle"
+            : model.registration.stack.histogramState,
+        histogram:
+          activeResult === null ? null : model.registration.stack.histogram,
+        pixelInspectionState:
+          activeResult === null
+            ? "idle"
+            : model.registration.stack.pixelInspectionState,
+        pixelInspection:
+          activeResult === null
+            ? null
+            : model.registration.stack.pixelInspection,
       },
     },
   });
@@ -1457,6 +1495,9 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
         },
       },
     });
+    if (activeResult === null) {
+      selectRegisteredStackProduct("science");
+    }
   } catch {
     if (ticket !== stackReportTicket) return;
     update({
@@ -1474,13 +1515,13 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
 }
 
 async function requestRegisteredStackProductPreview(
-  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  source: RegisteredStackPreviewSource,
   product: RegisteredStackProductView,
 ): Promise<PreviewResource> {
-  const path = registeredStackProductPath(result, product);
+  const path = registeredStackProductPath(source, product);
   if (!path) throw new Error("registered stack product is unavailable");
   const content =
-    product === "science" && result.planes === 3
+    product === "science" && source.planes === 3
       ? ({ kind: "rgb" } as const)
       : ({ kind: "scalar", plane: 0 } as const);
   const transform = await estimateFitsPreviewTransform({
@@ -1489,7 +1530,7 @@ async function requestRegisteredStackProductPreview(
     ...previewBounds,
   });
   return requestFitsPreview({
-    frameId: `${result.planSha256}:registered-stack:${product}`,
+    frameId: `${source.identity}:${product}`,
     path,
     content,
     ...previewBounds,
@@ -1507,26 +1548,76 @@ async function requestRegisteredStackProductPreview(
 }
 
 function registeredStackProductPath(
-  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+  source: RegisteredStackPreviewSource,
   product: RegisteredStackProductView,
 ): string | null {
   switch (product) {
     case "science":
-      return result.outputPath;
+      return source.sciencePath;
     case "rejection_low":
-      return result.lowRejectionMapPath;
+      return source.lowRejectionPath;
     case "rejection_high":
-      return result.highRejectionMapPath;
+      return source.highRejectionPath;
   }
+}
+
+interface RegisteredStackPreviewSource {
+  readonly identity: string;
+  readonly planes: number;
+  readonly sciencePath: string;
+  readonly lowRejectionPath: string | null;
+  readonly highRejectionPath: string | null;
+}
+
+function registeredStackPreviewSourceFromResult(
+  result: NonNullable<ReviewViewModel["registration"]["stack"]["result"]>,
+): RegisteredStackPreviewSource {
+  return {
+    identity: `${result.planSha256}:registered-stack`,
+    planes: result.planes,
+    sciencePath: result.outputPath,
+    lowRejectionPath: result.lowRejectionMapPath,
+    highRejectionPath: result.highRejectionMapPath,
+  };
+}
+
+function registeredStackPreviewSource(
+  stack: ReviewViewModel["registration"]["stack"],
+): RegisteredStackPreviewSource | null {
+  const report = stack.reportInspection;
+  const reportIsExternal =
+    report !== null &&
+    (stack.result === null ||
+      stack.reportInspectionPath !== stack.result.reportPath);
+  if (
+    stack.result !== null &&
+    stack.state === "completed" &&
+    !reportIsExternal
+  ) {
+    return registeredStackPreviewSourceFromResult(stack.result);
+  }
+  if (report === null) return null;
+  const verifiedPath = (role: RegisteredStackProductView): string | null =>
+    report.products.find(
+      (product) => product.role === role && product.status === "verified",
+    )?.path ?? null;
+  const sciencePath = verifiedPath("science");
+  if (sciencePath === null) return null;
+  return {
+    identity: `${report.reportSha256}:reported-stack`,
+    planes: report.planes,
+    sciencePath,
+    lowRejectionPath: verifiedPath("rejection_low"),
+    highRejectionPath: verifiedPath("rejection_high"),
+  };
 }
 
 function selectRegisteredStackProduct(
   product: RegisteredStackProductView,
 ): void {
   const stack = model.registration.stack;
-  const result = stack.result;
-  if (!result || stack.state !== "completed") return;
-  if (!registeredStackProductPath(result, product)) return;
+  const source = registeredStackPreviewSource(stack);
+  if (!source || !registeredStackProductPath(source, product)) return;
   registeredStackPreviewTicket += 1;
   stackPixelTicket += 1;
   clearRegisteredStackPreviewResources();
@@ -1547,7 +1638,7 @@ function selectRegisteredStackProduct(
       },
     },
   });
-  void loadRegisteredStackPreview(result, product);
+  void loadRegisteredStackPreview(source, product);
 }
 
 function selectRegisteredFrame(frameId: string): void {
