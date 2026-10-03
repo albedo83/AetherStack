@@ -1207,6 +1207,15 @@ safety reasoning. They do not narrate obvious syntax.
     narrow screens. Presenter tests cover query composition, case folding, clear,
     focus restoration, and status-filter interaction. Next, virtualize evidence
     rows only after profiling identifies DOM construction as a real bottleneck.
+91. Bound evidence-row construction before large reports reach the browser.
+    Verification and search still evaluate the complete sealed source set, but
+    the presenter materializes at most 250 matching rows at once and exposes an
+    explicit deterministic continuation control. Changing reports, status, or
+    search resets the window, so stale expansion state cannot hide the beginning
+    of a new result set. A 251-source presenter test proves the initial bound,
+    incremental reveal, full-set search, and accurate shown/matching counts.
+    Next, profile substantially larger synthetic reports before choosing between
+    this incremental model and viewport virtualization.
 
 ## 11. Stable-release definition
 

@@ -1582,6 +1582,40 @@ button:active:not(:disabled) {
   border-left-color: #263e4d;
 }
 
+.integration-report__show-more {
+  width: 100%;
+  min-height: 30px;
+  margin-top: 5px;
+  color: #8eb1c8;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #142733, #0b1821);
+  border: 1px solid #2b4b5d;
+  border-radius: 5px;
+  box-shadow:
+    inset 0 1px #d4f6ff12,
+    0 2px 4px #0007;
+  cursor: pointer;
+}
+
+.integration-report__show-more:hover {
+  color: #d6f5ff;
+  background: linear-gradient(180deg, #1b3544, #10232e);
+  border-color: #3c7189;
+}
+
+.integration-report__show-more:focus-visible {
+  outline: 2px solid #73cbe5;
+  outline-offset: 2px;
+}
+
+.integration-report__show-more[hidden] {
+  display: none;
+}
+
 @media (max-width: 760px) {
   .integration-report__source-toolbar {
     align-items: stretch;

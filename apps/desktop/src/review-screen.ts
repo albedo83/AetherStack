@@ -206,6 +206,10 @@ export function mountReviewScreen(
       root,
       '[data-action="clear-source-evidence-search"]',
     ),
+    showMoreRegisteredStackSources: required<HTMLButtonElement>(
+      root,
+      '[data-action="show-more-source-evidence"]',
+    ),
     registeredStackSourceFilters: requiredAll<HTMLButtonElement>(
       root,
       "[data-source-evidence-filter]",
@@ -558,6 +562,8 @@ export function mountReviewScreen(
   const sortDirections = new Map<SortField, SortDirection>();
   let sourceEvidenceFilter: SourceEvidenceFilter = "all";
   let sourceEvidenceQuery = "";
+  let sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
+  let sourceEvidenceReportSha256: string | null = null;
 
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -590,24 +596,42 @@ export function mountReviewScreen(
       const filter = actionElement.dataset.sourceEvidenceFilter;
       if (isSourceEvidenceFilter(filter)) {
         sourceEvidenceFilter = filter;
+        sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
         renderRegistration(
           elements,
           model,
           sourceEvidenceFilter,
           sourceEvidenceQuery,
+          sourceEvidenceLimit,
         );
       }
       return;
     }
     if (action === "clear-source-evidence-search") {
       sourceEvidenceQuery = "";
+      sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
       renderRegistration(
         elements,
         model,
         sourceEvidenceFilter,
         sourceEvidenceQuery,
+        sourceEvidenceLimit,
       );
       elements.registeredStackSourceSearch.focus();
+      return;
+    }
+    if (action === "show-more-source-evidence") {
+      sourceEvidenceLimit = Math.min(
+        Number.MAX_SAFE_INTEGER,
+        sourceEvidenceLimit + SOURCE_EVIDENCE_PAGE_SIZE,
+      );
+      renderRegistration(
+        elements,
+        model,
+        sourceEvidenceFilter,
+        sourceEvidenceQuery,
+        sourceEvidenceLimit,
+      );
       return;
     }
 
@@ -914,11 +938,13 @@ export function mountReviewScreen(
   const onInput = (event: Event): void => {
     if (event.target === elements.registeredStackSourceSearch) {
       sourceEvidenceQuery = elements.registeredStackSourceSearch.value;
+      sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
       renderRegistration(
         elements,
         model,
         sourceEvidenceFilter,
         sourceEvidenceQuery,
+        sourceEvidenceLimit,
       );
       return;
     }
@@ -1066,11 +1092,20 @@ export function mountReviewScreen(
       item.classList.toggle("nav-item--active", selected);
     }
     renderCalibration(elements, model);
+    const nextSourceEvidenceReportSha256 =
+      model.registration.stack.reportInspection?.reportSha256 ?? null;
+    if (nextSourceEvidenceReportSha256 !== sourceEvidenceReportSha256) {
+      sourceEvidenceReportSha256 = nextSourceEvidenceReportSha256;
+      sourceEvidenceFilter = "all";
+      sourceEvidenceQuery = "";
+      sourceEvidenceLimit = SOURCE_EVIDENCE_PAGE_SIZE;
+    }
     renderRegistration(
       elements,
       model,
       sourceEvidenceFilter,
       sourceEvidenceQuery,
+      sourceEvidenceLimit,
     );
     syncStepperStates(root);
     elements.importSession.disabled = importing || masterBusy;
@@ -1594,6 +1629,7 @@ interface RegistrationElements {
   readonly registeredStackSourceSummary: HTMLElement;
   readonly registeredStackSourceSearch: HTMLInputElement;
   readonly clearRegisteredStackSourceSearch: HTMLButtonElement;
+  readonly showMoreRegisteredStackSources: HTMLButtonElement;
   readonly registeredStackSourceFilters: readonly HTMLButtonElement[];
   readonly verifyRegisteredStackSources: HTMLButtonElement;
   readonly cancelRegisteredStackSourceVerification: HTMLButtonElement;
@@ -1639,6 +1675,8 @@ interface RegistrationElements {
 
 type SourceEvidenceFilter = "all" | "issues" | "verified" | "unverified";
 
+const SOURCE_EVIDENCE_PAGE_SIZE = 250;
+
 function isSourceEvidenceFilter(
   value: string | undefined,
 ): value is SourceEvidenceFilter {
@@ -1655,6 +1693,7 @@ function renderRegistration(
   model: ReviewViewModel,
   sourceEvidenceFilter: SourceEvidenceFilter,
   sourceEvidenceQuery: string,
+  sourceEvidenceLimit: number,
 ): void {
   const registration = model.registration;
   const options = registration.frames.map((frame) => {
@@ -1895,8 +1934,20 @@ function renderRegistration(
         .includes(normalizedSourceQuery);
     return matchesStatus && matchesQuery;
   });
-  elements.registeredStackSourceSummary.textContent = `${formatCountedNoun(sourceEvidence.length, "source")} · ${verifiedSourceCount} verified · ${issueSourceCount} ${issueSourceCount === 1 ? "issue" : "issues"} · ${unverifiedSourceCount} pending · ${visibleSourceEvidence.length} shown`;
-  const sourceRows = visibleSourceEvidence.map(({ source, status }) => {
+  const renderedSourceEvidence = visibleSourceEvidence.slice(
+    0,
+    sourceEvidenceLimit,
+  );
+  const remainingSourceEvidence =
+    visibleSourceEvidence.length - renderedSourceEvidence.length;
+  elements.registeredStackSourceSummary.textContent = `${formatCountedNoun(sourceEvidence.length, "source")} · ${verifiedSourceCount} verified · ${issueSourceCount} ${issueSourceCount === 1 ? "issue" : "issues"} · ${unverifiedSourceCount} pending · ${renderedSourceEvidence.length} shown${remainingSourceEvidence > 0 ? ` · ${visibleSourceEvidence.length} matching` : ""}`;
+  elements.showMoreRegisteredStackSources.hidden =
+    remainingSourceEvidence === 0;
+  elements.showMoreRegisteredStackSources.textContent =
+    remainingSourceEvidence > 0
+      ? `Show next ${Math.min(SOURCE_EVIDENCE_PAGE_SIZE, remainingSourceEvidence)}`
+      : "All matching sources shown";
+  const sourceRows = renderedSourceEvidence.map(({ source, status }) => {
     const verification = verifiedSources.get(source.frameId);
     const row = document.createElement("li");
     row.dataset.status = status;
@@ -3468,6 +3519,7 @@ function shellMarkup(): string {
                         </div>
                       </div>
                       <ol data-registered-stack-report-sources aria-label="Sealed source evidence"></ol>
+                      <button class="integration-report__show-more" type="button" data-action="show-more-source-evidence" hidden>Show next 250</button>
                     </details>
                   </div>
                   <div class="registered-stack__product-tabs" role="tablist" aria-label="Integrated product view">

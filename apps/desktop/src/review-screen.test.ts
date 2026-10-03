@@ -991,6 +991,62 @@ describe("frame review workspace", () => {
     );
   });
 
+  it("bounds large source evidence sets without limiting search", () => {
+    const sources = Array.from({ length: 251 }, (_, index) => ({
+      frameId: index.toString(16).padStart(64, "0"),
+      fileName: `source-${index.toString().padStart(4, "0")}.fits`,
+      byteLength: 23_397_120,
+      sha256: "a".repeat(64),
+    }));
+    const model: ReviewViewModel = {
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+      registration: {
+        ...demoReviewModel.registration,
+        stack: {
+          ...demoReviewModel.registration.stack,
+          reportInspectionPath: "/archive/large-integration-report.json",
+          reportInspectionState: "ready",
+          reportInspection: {
+            schemaVersion: 1,
+            reportSha256: "f".repeat(64),
+            planSha256: "b".repeat(64),
+            manifestSha256: "c".repeat(64),
+            estimator: "strict_mean",
+            width: 4_144,
+            height: 2_822,
+            planes: 1,
+            sourceCount: sources.length,
+            productCount: 0,
+            weighted: false,
+            allProductsVerified: true,
+            sources,
+            products: [],
+          },
+        },
+      },
+    };
+    const { root } = fixture(model);
+
+    fireEvent.click(getByText(root, "Source evidence"));
+    const evidence = getByRole(root, "list", {
+      name: "Sealed source evidence",
+    });
+    expect(within(evidence).getAllByRole("listitem")).toHaveLength(250);
+    expect(root.textContent).toContain("250 shown · 251 matching");
+    fireEvent.click(getByRole(root, "button", { name: "Show next 1" }));
+    expect(within(evidence).getAllByRole("listitem")).toHaveLength(251);
+    expect(queryByText(root, /251 matching/)).toBeNull();
+
+    const search = getByRole<HTMLInputElement>(root, "textbox", {
+      name: "Search source filenames",
+    });
+    fireEvent.input(search, { target: { value: "source-0250" } });
+    expect(within(evidence).getAllByRole("listitem")).toHaveLength(1);
+    expect(root.textContent).toContain("source-0250.fits");
+    expect(queryByText(root, /source-0000\.fits/)).toBeNull();
+  });
+
   it("preflights every calibrated Light before enabling weighted integration", () => {
     const frameA = demoReviewModel.frames[0]!;
     const frameB = demoReviewModel.frames[1]!;
