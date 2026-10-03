@@ -86,7 +86,8 @@ optimized CPU and GPU paths must match.
   transform with generation-cancelled adjacent prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
   workspace, an instrument-inspired advanced quality-gate editor with native
-  preview totals, canonical digest, and per-frame recommendations, an
+  preview totals, canonical digest, per-frame recommendations, and an explicit
+  one-undo confirmation that preserves existing manual decisions, an
   instrument-inspired Calibration laboratory, and a dedicated
   Registration laboratory that selects an explicit Light pair, runs the native
   solver, exposes confidence metrics and the accepted full-resolution affine

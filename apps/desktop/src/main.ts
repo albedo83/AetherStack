@@ -81,6 +81,7 @@ import {
 } from "./review-bridge.ts";
 import { mountReviewScreen } from "./review-screen.ts";
 import {
+  applyFrameSelection,
   previewFrameSelection,
   type FrameSelectionRule,
 } from "./selection-bridge.ts";
@@ -337,6 +338,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onPreviewFrameSelection() {
     void previewAutomaticSelection();
+  },
+  onApplyFrameSelection() {
+    void applyAutomaticSelection();
   },
 });
 
@@ -2840,6 +2844,39 @@ async function previewAutomaticSelection(): Promise<void> {
   }
 }
 
+async function applyAutomaticSelection(): Promise<void> {
+  const plan = model.frameSelection.plan;
+  if (
+    !importedSession ||
+    !plan ||
+    model.frameSelection.state !== "ready" ||
+    model.decisionPending ||
+    isRegistrationWorkActive()
+  ) {
+    return;
+  }
+  const frames = model.frames.filter(
+    (frame) => frame.sourcePath !== null && frame.qualityState === "ready",
+  );
+  if (frames.length !== model.frames.length || frames.length === 0) return;
+  const rules = model.frameSelection.rules;
+  const applied = await runDecisionTransaction(() =>
+    applyFrameSelection(frames, rules, plan.planSha256),
+  );
+  if (!applied) return;
+  frameSelectionTicket += 1;
+  update({
+    ...model,
+    frameSelection: {
+      state: "idle",
+      rules,
+      plan: null,
+      message:
+        "Recommendations applied to undecided Lights · one undo restores the batch",
+    },
+  });
+}
+
 function resetFrameSelection(
   rules: readonly FrameSelectionRule[],
 ): ReviewViewModel["frameSelection"] {
@@ -3365,15 +3402,16 @@ async function undoDecision(): Promise<void> {
 
 async function runDecisionTransaction(
   transaction: () => Promise<ReviewDecisionUpdate>,
-): Promise<void> {
+): Promise<boolean> {
   const sessionRevision = decisionSessionRevision;
   update({ ...model, decisionPending: true });
   try {
     const result = await transaction();
-    if (sessionRevision !== decisionSessionRevision) return;
+    if (sessionRevision !== decisionSessionRevision) return false;
     applyDecisionUpdate(result);
+    return true;
   } catch {
-    if (sessionRevision !== decisionSessionRevision) return;
+    if (sessionRevision !== decisionSessionRevision) return false;
     update({
       ...model,
       decisionPending: false,
@@ -3382,6 +3420,7 @@ async function runDecisionTransaction(
         label: "Review transaction failed · state preserved",
       },
     });
+    return false;
   }
 }
 

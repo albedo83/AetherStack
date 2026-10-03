@@ -3384,6 +3384,21 @@ tr[data-state="blocked"] .association-state {
   gap: 12px;
 }
 
+.selection-console__actions,
+.selection-confirmation__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.selection-confirmation {
+  width: min(470px, calc(100vw - 32px));
+}
+
+.selection-confirmation__actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .selection-plan-summary {
   display: flex;
   flex-wrap: wrap;
@@ -3996,6 +4011,10 @@ tr[data-state="blocked"] .association-state {
 
   .selection-console__footer .button {
     width: 100%;
+  }
+
+  .selection-console__actions {
+    flex-direction: column-reverse;
   }
 
   .registration-metrics,

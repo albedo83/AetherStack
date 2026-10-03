@@ -66,7 +66,8 @@ export type ReviewRejectionReason =
   | "intrusive_trail"
   | "gradient"
   | "framing"
-  | "saturation";
+  | "saturation"
+  | "quality_rules";
 
 export type MetricValue = number | null;
 
@@ -360,4 +361,5 @@ export interface ReviewActions {
     rules: readonly FrameSelectionRule[],
   ) => void;
   readonly onPreviewFrameSelection: () => void;
+  readonly onApplyFrameSelection: () => void;
 }

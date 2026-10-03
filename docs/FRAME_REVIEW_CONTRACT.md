@@ -37,8 +37,7 @@ only that stored evidence, validates typed rules, rejects missing, duplicate, or
 foreign identities, restores processing order from its native review book, and
 returns the plan without mutating manual state. The browser bridge transports
 artifact identities and rules but contains neither measurements nor a threshold
-evaluator. Durable metric persistence, previewed bulk application, and custom
-expressions remain planned before automatic selection can affect a run.
+evaluator. Durable metric persistence and custom expressions remain planned.
 
 The desktop editor exposes one to seven simultaneous quality gates in an
 expandable instrument panel. Gates can be added and removed without allowing an
@@ -50,6 +49,12 @@ retained and rejected totals, the canonical digest, and an `AUTO KEEP` or
 the manual state marker and undo history remain unchanged. Editing a rule,
 changing pixel stage, switching role, importing a session, or refreshing any
 quality result invalidates the previous preview and cancels stale responses.
+Applying a preview requires a dedicated confirmation dialog. Rust rebuilds the
+plan from its retained evidence under the same synchronization boundary and
+requires the canonical digest to match before mutation. It converts proposals
+only for undecided frames, records automatic exclusions as `quality_rules`, and
+preserves every existing manual decision. The complete effective batch is one
+native transaction, so one Undo restores it atomically.
 
 The desktop adapter initializes one native review book after a successful
 session import. Accept, reject, clear, and undo commands mutate that book under a

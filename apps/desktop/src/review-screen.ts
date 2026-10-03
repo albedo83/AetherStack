@@ -521,10 +521,22 @@ export function mountReviewScreen(
       root,
       '[data-action="preview-frame-selection"]',
     ),
+    selectionApply: required<HTMLButtonElement>(
+      root,
+      '[data-action="open-selection-confirmation"]',
+    ),
     selectionStatus: required<HTMLElement>(root, "[data-selection-status]"),
     selectionRetained: required<HTMLElement>(root, "[data-selection-retained]"),
     selectionRejected: required<HTMLElement>(root, "[data-selection-rejected]"),
     selectionDigest: required<HTMLElement>(root, "[data-selection-digest]"),
+    selectionConfirmation: required<HTMLElement>(
+      root,
+      "[data-selection-confirmation]",
+    ),
+    selectionConfirmationCount: required<HTMLElement>(
+      root,
+      "[data-selection-confirmation-count]",
+    ),
     cfaBadge: required<HTMLElement>(root, "[data-cfa-badge]"),
     state: required<HTMLElement>(root, "[data-review-state]"),
     signalToNoise: required<HTMLElement>(root, "[data-metric-signal-to-noise]"),
@@ -916,6 +928,28 @@ export function mountReviewScreen(
       actions.onPreviewFrameSelection();
       return;
     }
+    if (action === "open-selection-confirmation") {
+      const undecided = automaticSelectionChangeCount(model);
+      if (model.frameSelection.state !== "ready" || undecided === 0) return;
+      elements.selectionConfirmationCount.textContent = String(undecided);
+      elements.selectionConfirmation.hidden = false;
+      queueMicrotask(() => {
+        required<HTMLButtonElement>(
+          elements.selectionConfirmation,
+          '[data-action="confirm-frame-selection"]',
+        ).focus();
+      });
+      return;
+    }
+    if (action === "cancel-frame-selection") {
+      closeSelectionConfirmation();
+      return;
+    }
+    if (action === "confirm-frame-selection") {
+      elements.selectionConfirmation.hidden = true;
+      actions.onApplyFrameSelection();
+      return;
+    }
     if (action === "add-selection-rule") {
       const rules = readFrameSelectionRules(
         selectionRuleRows(elements.selectionRules),
@@ -1033,6 +1067,10 @@ export function mountReviewScreen(
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && !elements.selectionConfirmation.hidden) {
+      closeSelectionConfirmation();
+      return;
+    }
     if (event.key === "Escape" && !elements.rejectDialog.hidden) {
       closeRejectDialog();
       return;
@@ -1043,7 +1081,11 @@ export function mountReviewScreen(
       return;
     }
     const target = event.target instanceof Element ? event.target : null;
-    if (!elements.rejectDialog.hidden || !elements.statisticsDialog.hidden) {
+    if (
+      !elements.rejectDialog.hidden ||
+      !elements.statisticsDialog.hidden ||
+      !elements.selectionConfirmation.hidden
+    ) {
       return;
     }
     if (!event.repeat && !isTextEntryTarget(target)) {
@@ -1139,6 +1181,11 @@ export function mountReviewScreen(
     pendingRejectFrameId = null;
     elements.rejectDialog.hidden = true;
     required<HTMLButtonElement>(root, '[data-action="open-reject"]').focus();
+  };
+
+  const closeSelectionConfirmation = (): void => {
+    elements.selectionConfirmation.hidden = true;
+    queueMicrotask(() => elements.selectionApply.focus());
   };
 
   const update = (nextModel: ReviewViewModel): void => {
@@ -1640,6 +1687,7 @@ function renderFrameSelection(
     selectionRules: HTMLElement;
     selectionAddRule: HTMLButtonElement;
     selectionPreview: HTMLButtonElement;
+    selectionApply: HTMLButtonElement;
     selectionStatus: HTMLElement;
     selectionRetained: HTMLElement;
     selectionRejected: HTMLElement;
@@ -1694,6 +1742,16 @@ function renderFrameSelection(
     selection.state === "previewing"
       ? "Evaluating…"
       : "Preview recommendations";
+  const proposedChanges = automaticSelectionChangeCount(model);
+  elements.selectionApply.disabled =
+    selection.state !== "ready" ||
+    selection.plan === null ||
+    proposedChanges === 0 ||
+    model.decisionPending;
+  elements.selectionApply.textContent =
+    proposedChanges === 0
+      ? "Apply recommendations"
+      : `Apply ${proposedChanges} undecided`;
   elements.selectionStatus.textContent = selection.message;
   const retained =
     selection.plan?.frames.filter((frame) => frame.proposal === "retain")
@@ -1708,6 +1766,14 @@ function renderFrameSelection(
   elements.selectionDigest.textContent = selection.plan
     ? `${selection.plan.algorithmId} · ${selection.plan.planSha256}`
     : "Canonical plan digest appears after native preview";
+}
+
+function automaticSelectionChangeCount(model: ReviewViewModel): number {
+  if (!model.frameSelection.plan) return 0;
+  const byIdentity = new Map(model.frames.map((frame) => [frame.id, frame]));
+  return model.frameSelection.plan.frames.filter(
+    (result) => byIdentity.get(result.frameId)?.state === "undecided",
+  ).length;
 }
 
 function renderRows(
@@ -3590,7 +3656,10 @@ function shellMarkup(): string {
                       <span><b data-selection-rejected>—</b> reject</span>
                       <span data-selection-status>Measure every Light, then preview</span>
                     </div>
-                    <button class="button button--primary" type="button" data-action="preview-frame-selection">Preview recommendations</button>
+                    <div class="selection-console__actions">
+                      <button class="button button--quiet" type="button" data-action="open-selection-confirmation" disabled>Apply recommendations</button>
+                      <button class="button button--primary" type="button" data-action="preview-frame-selection">Preview recommendations</button>
+                    </div>
                   </div>
                   <code class="selection-digest" data-selection-digest>Canonical plan digest appears after native preview</code>
                 </div>
@@ -4049,6 +4118,17 @@ function shellMarkup(): string {
         <p id="reject-description">The reason is stored with <strong data-reject-frame></strong> and remains visible in the run plan.</p>
         <div class="reason-grid">${reasonButtons}</div>
         <button class="button button--quiet dialog-cancel" type="button" data-action="cancel-reject">Cancel</button>
+      </section>
+    </div>
+    <div class="dialog-backdrop" role="presentation" data-selection-confirmation hidden>
+      <section class="reason-dialog selection-confirmation" role="dialog" aria-modal="true" aria-labelledby="selection-confirmation-title" aria-describedby="selection-confirmation-description">
+        <p class="eyebrow">Confirmed batch decision</p>
+        <h2 id="selection-confirmation-title">Apply the native recommendations?</h2>
+        <p id="selection-confirmation-description"><strong data-selection-confirmation-count>0</strong> undecided Lights will receive explicit decisions. Existing manual decisions stay untouched, and one Undo restores the complete batch.</p>
+        <div class="selection-confirmation__actions">
+          <button class="button button--quiet" type="button" data-action="cancel-frame-selection">Cancel</button>
+          <button class="button button--primary" type="button" data-action="confirm-frame-selection">Apply reviewed plan</button>
+        </div>
       </section>
     </div>
     <div class="dialog-backdrop" role="presentation" data-statistics-dialog hidden>

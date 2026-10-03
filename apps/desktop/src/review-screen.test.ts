@@ -61,6 +61,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onMeasureAllQuality: vi.fn(),
     onUpdateFrameSelectionRules: vi.fn(),
     onPreviewFrameSelection: vi.fn(),
+    onApplyFrameSelection: vi.fn(),
   };
   const controller = mountReviewScreen(root, model, actions);
   return { root, actions, controller };
@@ -200,6 +201,45 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("d".repeat(64));
     expect(first.state).toBe("accepted");
     expect(second.state).toBe("undecided");
+  });
+
+  it("requires explicit confirmation before applying recommendations to undecided frames", () => {
+    const first = demoReviewModel.frames[0];
+    const second = demoReviewModel.frames[1];
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (!first || !second) return;
+    const { root, actions } = fixture({
+      ...demoReviewModel,
+      frameSelection: {
+        ...demoReviewModel.frameSelection,
+        state: "ready",
+        plan: {
+          schemaVersion: 1,
+          algorithmId: "frame-selection-rules-v1",
+          rules: demoReviewModel.frameSelection.rules,
+          frames: [
+            { frameId: first.id, proposal: "retain", evidence: [] },
+            { frameId: second.id, proposal: "reject", evidence: [] },
+          ],
+          planSha256: "d".repeat(64),
+        },
+        message: "Ready to confirm",
+      },
+    });
+
+    fireEvent.click(getByRole(root, "button", { name: "Apply 1 undecided" }));
+    const dialog = getByRole(root, "dialog", {
+      name: "Apply the native recommendations?",
+    });
+    expect(dialog.textContent).toContain("1 undecided Lights");
+    expect(dialog.textContent).toContain("manual decisions stay untouched");
+    expect(actions.onApplyFrameSelection).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      getByRole(dialog, "button", { name: "Apply reviewed plan" }),
+    );
+    expect(actions.onApplyFrameSelection).toHaveBeenCalledOnce();
   });
 
   it("requests a native session import from the primary workspace action", () => {

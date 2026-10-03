@@ -37,8 +37,8 @@ use aether_register::{RegistrationDiagnostic, diagnose_paths};
 use aether_registration::{AffineTransform, PlannedRegistrationFrame, RegistrationPlan};
 use aether_review::{
     DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics,
-    FrameSelectionComparator, FrameSelectionMetric, FrameSelectionPlan, FrameSelectionRule,
-    FrameSpec, MAX_FRAME_SELECTION_PLAN_FRAMES, MAX_UNDO_DEPTH, ManualDecision,
+    FrameSelectionComparator, FrameSelectionMetric, FrameSelectionPlan, FrameSelectionProposal,
+    FrameSelectionRule, FrameSpec, MAX_FRAME_SELECTION_PLAN_FRAMES, MAX_UNDO_DEPTH, ManualDecision,
     ManualRejectionReason, MissingMetricPolicy, MissingPlacement, ReviewBook, ReviewError,
     ReviewState, SortDirection as ReviewSortDirection, SortField as ReviewSortField, SortSpec,
     TransferFunction,
@@ -790,6 +790,14 @@ struct FrameSelectionRuleWire {
 struct FrameSelectionPreviewRequest {
     frames: Vec<FrameSelectionFrameWire>,
     rules: Vec<FrameSelectionRuleWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrameSelectionApplyRequest {
+    frames: Vec<FrameSelectionFrameWire>,
+    rules: Vec<FrameSelectionRuleWire>,
+    plan_sha256: String,
 }
 
 /// Native owner of the current session's manual review decisions.
@@ -3809,6 +3817,14 @@ fn preview_frame_selection(
     preview_frame_selection_sync(&review_state, request)
 }
 
+#[tauri::command]
+fn apply_frame_selection(
+    request: FrameSelectionApplyRequest,
+    review_state: tauri::State<'_, DesktopReviewState>,
+) -> Result<ReviewDecisionUpdate, PreviewCommandError> {
+    apply_frame_selection_sync(&review_state, request)
+}
+
 fn install_imported_session(
     session_state: &DesktopSessionState,
     review_state: &DesktopReviewState,
@@ -3913,6 +3929,19 @@ fn preview_frame_selection_sync(
     review_state: &DesktopReviewState,
     request: FrameSelectionPreviewRequest,
 ) -> Result<FrameSelectionPlan, PreviewCommandError> {
+    let native_state = lock_review_state(review_state)?;
+    let native_book = native_state
+        .as_ref()
+        .ok_or_else(review_state_missing_error)?;
+    let quality_metrics = lock_review_quality_metrics(review_state)?;
+    build_frame_selection_plan(native_book, &quality_metrics, request)
+}
+
+fn build_frame_selection_plan(
+    native_book: &ReviewBook,
+    quality_metrics: &NativeQualityMetrics,
+    request: FrameSelectionPreviewRequest,
+) -> Result<FrameSelectionPlan, PreviewCommandError> {
     if request.frames.is_empty() || request.frames.len() > MAX_FRAME_SELECTION_PLAN_FRAMES {
         return Err(frame_selection_input_error());
     }
@@ -3930,11 +3959,6 @@ fn preview_frame_selection_sync(
     }
     let rules = frame_selection_rules(&request.rules)?;
 
-    let native_state = lock_review_state(review_state)?;
-    let native_book = native_state
-        .as_ref()
-        .ok_or_else(review_state_missing_error)?;
-    let quality_metrics = lock_review_quality_metrics(review_state)?;
     let mut frames = review_entry_buffer(artifacts_by_id.len())?;
     for frame_id in native_book.processing_order() {
         let Some(artifact_path) = artifacts_by_id.remove(frame_id) else {
@@ -3957,6 +3981,67 @@ fn preview_frame_selection_sync(
 
     let preview_book = ReviewBook::new(frames, 1).map_err(|_| frame_selection_state_error())?;
     FrameSelectionPlan::build(&preview_book, &rules).map_err(|_| frame_selection_input_error())
+}
+
+fn apply_frame_selection_sync(
+    review_state: &DesktopReviewState,
+    request: FrameSelectionApplyRequest,
+) -> Result<ReviewDecisionUpdate, PreviewCommandError> {
+    if !is_canonical_sha256(&request.plan_sha256) {
+        return Err(frame_selection_input_error());
+    }
+    let mut native_state = lock_review_state(review_state)?;
+    let book = native_state
+        .as_mut()
+        .ok_or_else(review_state_missing_error)?;
+    let quality_metrics = lock_review_quality_metrics(review_state)?;
+    let plan = build_frame_selection_plan(
+        book,
+        &quality_metrics,
+        FrameSelectionPreviewRequest {
+            frames: request.frames,
+            rules: request.rules,
+        },
+    )?;
+    if plan.plan_sha256() != request.plan_sha256 {
+        return Err(frame_selection_stale_error());
+    }
+
+    let mut requested = review_entry_buffer(plan.frames().len())?;
+    for result in plan.frames() {
+        // Explicit decisions always win. Applying an automatic plan only fills
+        // undecided rows, so a user can safely confirm a batch after reviewing
+        // individual exceptions.
+        if book.decision(result.frame_id()).is_some() {
+            continue;
+        }
+        let decision = match result.proposal() {
+            FrameSelectionProposal::Retain => {
+                ManualDecision::accept(None).map_err(|_| review_decision_failed_error())?
+            }
+            FrameSelectionProposal::Reject => {
+                ManualDecision::reject(ManualRejectionReason::QualityRules, None)
+                    .map_err(|_| review_decision_failed_error())?
+            }
+        };
+        requested.push(DecisionChange::set(result.frame_id().clone(), decision));
+    }
+    if requested.is_empty() {
+        return Ok(review_decision_update(book, Vec::new()));
+    }
+    let preview = book
+        .preview_changes(&requested)
+        .map_err(|_| review_decision_failed_error())?;
+    let mut changes = review_entry_buffer(preview.changes().len())?;
+    changes.extend(
+        preview
+            .changes()
+            .iter()
+            .map(review_decision_entry_from_delta),
+    );
+    book.apply_preview(preview)
+        .map_err(|_| review_decision_failed_error())?;
+    Ok(review_decision_update(book, changes))
 }
 
 fn frame_selection_rules(
@@ -4217,6 +4302,20 @@ const fn frame_selection_evidence_missing_error() -> PreviewCommandError {
         "frame_selection_evidence_missing",
         "Measure native quality evidence for every selected artifact before previewing rules.",
     )
+}
+
+const fn frame_selection_stale_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_selection_plan_stale",
+        "Quality evidence or rules changed after this automatic-selection preview.",
+    )
+}
+
+fn is_canonical_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 const fn frame_quality_identity_error() -> PreviewCommandError {
@@ -5809,6 +5908,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(DesktopReviewState::default())
         .manage(DesktopSessionState::default())
         .invoke_handler(tauri::generate_handler![
+            apply_frame_selection,
             apply_review_decision,
             cancel_light_plan,
             cancel_master_plan,
@@ -7999,6 +8099,138 @@ mod tests {
             return Err("a scalar star-count threshold was accepted".into());
         };
         assert_eq!(wrong_kind.code, "frame_selection_input_invalid");
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_selection_applies_once_preserves_manual_decisions_and_undoes_atomically()
+    -> TestResult {
+        let imported = ImportedSession {
+            name: "selection apply".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![
+                imported_review_test_frame('a', "first.fits"),
+                imported_review_test_frame('b', "second.fits"),
+                imported_review_test_frame('c', "third.fits"),
+            ],
+            files_considered: 3,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+        };
+        let state = DesktopReviewState::default();
+        install_review_book(&state, &imported)?;
+        install_selection_test_quality(&state, 'a', 3.0, 700)?;
+        install_selection_test_quality(&state, 'b', 5.0, 300)?;
+        install_selection_test_quality(&state, 'c', 2.5, 800)?;
+        apply_review_decision_sync(
+            &state,
+            ReviewDecisionRequest {
+                frame_id: "c".repeat(64),
+                action: ReviewDecisionAction::Reject {
+                    reason: ReviewRejectionReasonWire::Trailing,
+                },
+            },
+        )?;
+
+        let plan = preview_frame_selection_sync(
+            &state,
+            FrameSelectionPreviewRequest {
+                frames: vec![
+                    selection_test_frame('a'),
+                    selection_test_frame('b'),
+                    selection_test_frame('c'),
+                ],
+                rules: vec![selection_test_fwhm_rule()],
+            },
+        )?;
+        let update = apply_frame_selection_sync(
+            &state,
+            FrameSelectionApplyRequest {
+                frames: vec![
+                    selection_test_frame('c'),
+                    selection_test_frame('b'),
+                    selection_test_frame('a'),
+                ],
+                rules: vec![selection_test_fwhm_rule()],
+                plan_sha256: plan.plan_sha256().to_owned(),
+            },
+        )?;
+
+        assert_eq!(update.generation, 2);
+        assert!(update.can_undo);
+        assert_eq!(update.changes.len(), 2);
+        let native = lock_review_state(&state)?;
+        let book = native.as_ref().ok_or("missing review book")?;
+        assert_eq!(
+            book.state(&FrameId::new("a".repeat(64))?),
+            Some(ReviewState::Accepted)
+        );
+        assert_eq!(
+            book.decision(&FrameId::new("b".repeat(64))?)
+                .and_then(ManualDecision::rejection_reason),
+            Some(ManualRejectionReason::QualityRules)
+        );
+        assert_eq!(
+            book.decision(&FrameId::new("c".repeat(64))?)
+                .and_then(ManualDecision::rejection_reason),
+            Some(ManualRejectionReason::Trailing)
+        );
+        drop(native);
+
+        let undone = undo_review_decision_sync(&state)?;
+        assert_eq!(undone.changes.len(), 2);
+        let native = lock_review_state(&state)?;
+        let book = native.as_ref().ok_or("missing review book")?;
+        assert_eq!(
+            book.state(&FrameId::new("a".repeat(64))?),
+            Some(ReviewState::Undecided)
+        );
+        assert_eq!(
+            book.state(&FrameId::new("b".repeat(64))?),
+            Some(ReviewState::Undecided)
+        );
+        assert_eq!(
+            book.state(&FrameId::new("c".repeat(64))?),
+            Some(ReviewState::Rejected)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_selection_rejects_a_stale_digest_without_mutation() -> TestResult {
+        let imported = ImportedSession {
+            name: "stale selection".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![imported_review_test_frame('a', "first.fits")],
+            files_considered: 1,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+        };
+        let state = DesktopReviewState::default();
+        install_review_book(&state, &imported)?;
+        install_selection_test_quality(&state, 'a', 3.0, 700)?;
+
+        let Err(error) = apply_frame_selection_sync(
+            &state,
+            FrameSelectionApplyRequest {
+                frames: vec![selection_test_frame('a')],
+                rules: vec![selection_test_fwhm_rule()],
+                plan_sha256: "f".repeat(64),
+            },
+        ) else {
+            return Err("a stale selection plan was applied".into());
+        };
+        assert_eq!(error.code, "frame_selection_plan_stale");
+        let native = lock_review_state(&state)?;
+        let book = native.as_ref().ok_or("missing review book")?;
+        assert_eq!(book.generation(), 0);
+        assert_eq!(
+            book.state(&FrameId::new("a".repeat(64))?),
+            Some(ReviewState::Undecided)
+        );
+        assert!(!book.can_undo());
         Ok(())
     }
 

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { ReviewFrame } from "./model.ts";
+import type { ReviewDecisionUpdate } from "./review-bridge.ts";
 
 export type FrameSelectionMetric =
   | "background"
@@ -70,6 +71,28 @@ export function previewFrameSelection(
         sourcePath: frame.sourcePath,
       })),
       rules,
+    },
+  });
+}
+
+/**
+ * Confirms one already-previewed native plan as a single undoable transaction.
+ * Rust rebuilds the plan from retained evidence and rejects a stale digest.
+ * Existing explicit decisions remain authoritative.
+ */
+export function applyFrameSelection(
+  frames: readonly ReviewFrame[],
+  rules: readonly FrameSelectionRule[],
+  planSha256: string,
+): Promise<ReviewDecisionUpdate> {
+  return invoke<ReviewDecisionUpdate>("apply_frame_selection", {
+    request: {
+      frames: frames.map((frame) => ({
+        frameId: frame.id,
+        sourcePath: frame.sourcePath,
+      })),
+      rules,
+      planSha256,
     },
   });
 }

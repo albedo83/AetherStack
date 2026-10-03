@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { demoReviewModel } from "./demo-data.ts";
 import {
+  applyFrameSelection,
   previewFrameSelection,
   type FrameSelectionPlan,
   type FrameSelectionRule,
@@ -48,6 +49,28 @@ describe("native frame-selection bridge", () => {
           sourcePath: frame.sourcePath,
         })),
         rules,
+      },
+    });
+  });
+
+  it("confirms only the sealed digest and lets Rust rebuild the transaction", async () => {
+    const frames = demoReviewModel.frames.slice(0, 2);
+    const rules = demoReviewModel.frameSelection.rules;
+    const planSha256 = "d".repeat(64);
+    const response = { generation: 9, canUndo: true, changes: [] };
+    vi.mocked(invoke).mockResolvedValue(response);
+
+    await expect(applyFrameSelection(frames, rules, planSha256)).resolves.toBe(
+      response,
+    );
+    expect(invoke).toHaveBeenCalledWith("apply_frame_selection", {
+      request: {
+        frames: frames.map((frame) => ({
+          frameId: frame.id,
+          sourcePath: frame.sourcePath,
+        })),
+        rules,
+        planSha256,
       },
     });
   });

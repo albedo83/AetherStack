@@ -275,6 +275,8 @@ pub enum ManualRejectionReason {
     Framing,
     /// Saturation or clipping is unacceptable.
     Saturation,
+    /// A user-confirmed automatic quality plan excluded the frame.
+    QualityRules,
     /// A defect not covered by a stable predefined reason.
     Other,
 }

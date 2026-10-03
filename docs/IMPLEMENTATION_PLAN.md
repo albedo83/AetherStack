@@ -1284,6 +1284,17 @@ safety reasoning. They do not narrate obvious syntax.
     the non-empty invariant, and duplicate-metric prevention. Next, design the
     explicit preview-to-manual confirmation transaction with one undo step and
     stale-plan rejection.
+99. Apply reviewed automatic recommendations through an explicit native
+    transaction. The confirmation surface reports the exact undecided-frame
+    count and states that manual decisions remain authoritative. Rust rebuilds
+    the plan from native evidence while holding review and evidence locks,
+    rejects a non-canonical or mismatched digest, maps retain/reject proposals
+    only onto undecided frames, and records exclusions with the stable
+    `quality_rules` reason. All effective changes occupy one undo slot; adapter
+    tests prove manual-decision preservation, atomic undo, stale-plan
+    fail-closed behavior, and identity-only browser transport. Next, persist
+    versioned quality evidence with source fingerprints so a validated session
+    can resume without recomputing every diagnostic.
 
 ## 11. Stable-release definition
 
