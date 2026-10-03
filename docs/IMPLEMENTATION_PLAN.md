@@ -1303,6 +1303,15 @@ safety reasoning. They do not narrate obvious syntax.
     explanation to native evidence rather than deriving a second decision in
     the presenter. Next, expose the same aligned evidence in a selected-frame
     rule inspector with measured value and threshold details.
+101. Add a selected-frame automatic-selection evidence instrument. The panel
+    renders every native evidence item in canonical rule order with a status
+    lamp, metric, measured value or explicit missing marker, strict comparator,
+    typed threshold, and outcome. It uses the plan's aligned result directly and
+    performs no duplicate scientific comparison in TypeScript. Responsive grid
+    layout keeps the evidence readable from narrow panels through wide desktop
+    views, and DOM tests bind representative scalar evidence to its visible
+    equation. Next, persist the validated measurements and their algorithm and
+    source identities across application restarts.
 
 ## 11. Stable-release definition
 

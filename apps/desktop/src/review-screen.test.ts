@@ -192,7 +192,8 @@ describe("frame review workspace", () => {
           frameId: second.id,
           proposal: "reject" as const,
           evidence: demoReviewModel.frameSelection.rules.map((_, index) => ({
-            measured: null,
+            measured:
+              index === 0 ? ({ kind: "scalar", value: 5.84 } as const) : null,
             state: index === 0 ? ("failed" as const) : ("passed" as const),
           })),
         },
@@ -217,6 +218,14 @@ describe("frame review workspace", () => {
     expect(rejectedProposal?.title).toBe(
       "Automatic recommendation: reject. Failed quality gates: FWHM.",
     );
+    const evidence = root.querySelector<HTMLElement>(
+      "[data-selection-evidence]",
+    );
+    expect(evidence?.hidden).toBe(false);
+    expect(evidence?.textContent).toContain(second.label);
+    expect(evidence?.textContent).toContain("FWHM");
+    expect(evidence?.textContent).toContain("5.84 < 4.5");
+    expect(evidence?.textContent).toContain("Fail");
     expect(root.textContent).toContain("1 retained · 1 proposed reject");
     expect(root.textContent).toContain("d".repeat(64));
     expect(first.state).toBe("accepted");

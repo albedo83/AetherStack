@@ -531,6 +531,15 @@ export function mountReviewScreen(
     selectionRetained: required<HTMLElement>(root, "[data-selection-retained]"),
     selectionRejected: required<HTMLElement>(root, "[data-selection-rejected]"),
     selectionDigest: required<HTMLElement>(root, "[data-selection-digest]"),
+    selectionEvidence: required<HTMLElement>(root, "[data-selection-evidence]"),
+    selectionEvidenceFrame: required<HTMLElement>(
+      root,
+      "[data-selection-evidence-frame]",
+    ),
+    selectionEvidenceList: required<HTMLOListElement>(
+      root,
+      "[data-selection-evidence-list]",
+    ),
     selectionConfirmation: required<HTMLElement>(
       root,
       "[data-selection-confirmation]",
@@ -1694,6 +1703,9 @@ function renderFrameSelection(
     selectionRetained: HTMLElement;
     selectionRejected: HTMLElement;
     selectionDigest: HTMLElement;
+    selectionEvidence: HTMLElement;
+    selectionEvidenceFrame: HTMLElement;
+    selectionEvidenceList: HTMLOListElement;
   },
   model: ReviewViewModel,
 ): void {
@@ -1768,6 +1780,68 @@ function renderFrameSelection(
   elements.selectionDigest.textContent = selection.plan
     ? `${selection.plan.algorithmId} · ${selection.plan.planSha256}`
     : "Canonical plan digest appears after native preview";
+  renderSelectionEvidence(elements, model);
+}
+
+function renderSelectionEvidence(
+  elements: {
+    selectionEvidence: HTMLElement;
+    selectionEvidenceFrame: HTMLElement;
+    selectionEvidenceList: HTMLOListElement;
+  },
+  model: ReviewViewModel,
+): void {
+  const frame = selectedFrame(model);
+  const plan = model.frameSelection.plan;
+  const result = plan?.frames.find(
+    (candidate) => candidate.frameId === frame?.id,
+  );
+  elements.selectionEvidenceList.replaceChildren();
+  elements.selectionEvidence.hidden = !frame || !plan || !result;
+  if (!frame || !plan || !result) return;
+  elements.selectionEvidenceFrame.textContent = frame.label;
+  for (const [index, evidence] of result.evidence.entries()) {
+    const rule = plan.rules[index];
+    if (!rule) continue;
+    const item = document.createElement("li");
+    item.dataset.state = evidence.state;
+    const metric = selectionMetricOptions.find(
+      ([candidate]) => candidate === rule.metric,
+    )?.[1];
+    const measured = evidence.measured;
+    const value =
+      measured === null ? "missing" : formatSelectionValue(measured.value);
+    const comparator = rule.comparator === "less_than" ? "<" : ">";
+    item.innerHTML = `<span class="selection-evidence__lamp" aria-hidden="true"></span><span class="selection-evidence__metric"></span><code class="selection-evidence__equation"></code><strong class="selection-evidence__state"></strong>`;
+    required<HTMLElement>(item, ".selection-evidence__metric").textContent =
+      metric ?? rule.metric;
+    required<HTMLElement>(item, ".selection-evidence__equation").textContent =
+      `${value} ${comparator} ${formatSelectionValue(rule.threshold.value)}`;
+    required<HTMLElement>(item, ".selection-evidence__state").textContent =
+      selectionEvidenceStateLabel(evidence.state);
+    elements.selectionEvidenceList.append(item);
+  }
+}
+
+function formatSelectionValue(value: number): string {
+  return Number.isInteger(value)
+    ? value.toLocaleString("en-US")
+    : value.toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
+function selectionEvidenceStateLabel(
+  state: FrameSelectionFrameResult["evidence"][number]["state"],
+): string {
+  switch (state) {
+    case "passed":
+      return "Pass";
+    case "failed":
+      return "Fail";
+    case "missing_retained":
+      return "Missing · retain";
+    case "missing_rejected":
+      return "Missing · reject";
+  }
 }
 
 function automaticSelectionChangeCount(model: ReviewViewModel): number {
@@ -3693,6 +3767,13 @@ function shellMarkup(): string {
                   <p>Preview-only rules. Rust evaluates native measurements and never overwrites manual decisions.</p>
                   <div class="selection-rules" data-selection-rules aria-label="Automatic frame selection rules"></div>
                   <button class="selection-add-rule" type="button" data-action="add-selection-rule">＋ Add quality gate</button>
+                  <section class="selection-evidence" data-selection-evidence aria-labelledby="selection-evidence-title" hidden>
+                    <div class="selection-evidence__heading">
+                      <span id="selection-evidence-title">Selected-frame evidence</span>
+                      <strong data-selection-evidence-frame></strong>
+                    </div>
+                    <ol data-selection-evidence-list></ol>
+                  </section>
                   <div class="selection-console__footer">
                     <div class="selection-plan-summary" aria-live="polite">
                       <span><b data-selection-retained>—</b> retain</span>

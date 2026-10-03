@@ -51,6 +51,9 @@ every failed or missing-rejected metric. These badges are recommendations only;
 the manual state marker and undo history remain unchanged. Editing a rule,
 changing pixel stage, switching role, importing a session, or refreshing any
 quality result invalidates the previous preview and cancels stale responses.
+The selected-frame evidence instrument expands the same ordered native result
+into metric, measured value or explicit missing state, strict comparator,
+threshold, and pass/fail outcome. It never repeats the threshold calculation.
 Applying a preview requires a dedicated confirmation dialog. Rust rebuilds the
 plan from its retained evidence under the same synchronization boundary and
 requires the canonical digest to match before mutation. It converts proposals

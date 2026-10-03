@@ -3377,6 +3377,108 @@ tr[data-state="blocked"] .association-state {
   cursor: not-allowed;
 }
 
+.selection-evidence {
+  overflow: hidden;
+  background: #080d13;
+  border: 1px solid #293747;
+  border-radius: 9px;
+  box-shadow:
+    inset 0 2px 9px #000b,
+    0 1px #ffffff08;
+}
+
+.selection-evidence__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  color: #8195aa;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #19232e, #101720);
+  border-bottom: 1px solid #293747;
+}
+
+.selection-evidence__heading strong {
+  overflow: hidden;
+  color: #c5d6e7;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.selection-evidence ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  margin: 0;
+  padding: 1px;
+  list-style: none;
+  background: #263444;
+}
+
+.selection-evidence li {
+  display: grid;
+  grid-template-columns: 8px minmax(70px, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 9px;
+  color: #99acc0;
+  font-size: 9px;
+  background: linear-gradient(180deg, #111923, #0c1219);
+}
+
+.selection-evidence__lamp {
+  width: 7px;
+  height: 7px;
+  background: #4a5865;
+  border-radius: 50%;
+  box-shadow: inset 0 1px 2px #000;
+}
+
+.selection-evidence li[data-state="passed"] .selection-evidence__lamp,
+.selection-evidence
+  li[data-state="missing_retained"]
+  .selection-evidence__lamp {
+  background: #65d3a0;
+  box-shadow: 0 0 8px #43c78c88;
+}
+
+.selection-evidence li[data-state="failed"] .selection-evidence__lamp,
+.selection-evidence
+  li[data-state="missing_rejected"]
+  .selection-evidence__lamp {
+  background: #ed796f;
+  box-shadow: 0 0 8px #ed796f88;
+}
+
+.selection-evidence__metric {
+  color: #cfdeec;
+  font-weight: 750;
+}
+
+.selection-evidence__equation {
+  color: #8296aa;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.selection-evidence__state {
+  color: #a6b8c9;
+  text-transform: uppercase;
+}
+
+.selection-evidence li[data-state="failed"] .selection-evidence__state,
+.selection-evidence
+  li[data-state="missing_rejected"]
+  .selection-evidence__state {
+  color: #f19a92;
+}
+
 .selection-console__footer {
   display: flex;
   align-items: center;
