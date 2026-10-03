@@ -1275,6 +1275,15 @@ safety reasoning. They do not narrate obvious syntax.
     cover editing, readiness, results, state separation, and the expanded
     panel's accessibility tree. Next, support adding/removing bounded rules and
     a native preview-to-manual batch transaction with an explicit confirmation.
+98. Make advanced quality gates composable without weakening validation. The
+    editor now supports one through seven rules, offers only metrics not already
+    in use, chooses domain-correct typed defaults, and disables removal of the
+    final rule. Add/remove actions reuse the same immutable rules callback, so
+    every structural edit invalidates native preview evidence through the
+    existing ticket boundary. DOM tests cover typed addition, indexed removal,
+    the non-empty invariant, and duplicate-metric prevention. Next, design the
+    explicit preview-to-manual confirmation transaction with one undo step and
+    stale-plan rejection.
 
 ## 11. Stable-release definition
 

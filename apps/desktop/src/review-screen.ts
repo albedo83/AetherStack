@@ -512,7 +512,11 @@ export function mountReviewScreen(
       root,
       "[data-selection-panel]",
     ),
-    selectionRules: requiredAll<HTMLElement>(root, "[data-selection-rule]"),
+    selectionRules: required<HTMLElement>(root, "[data-selection-rules]"),
+    selectionAddRule: required<HTMLButtonElement>(
+      root,
+      '[data-action="add-selection-rule"]',
+    ),
     selectionPreview: required<HTMLButtonElement>(
       root,
       '[data-action="preview-frame-selection"]',
@@ -912,6 +916,33 @@ export function mountReviewScreen(
       actions.onPreviewFrameSelection();
       return;
     }
+    if (action === "add-selection-rule") {
+      const rules = readFrameSelectionRules(
+        selectionRuleRows(elements.selectionRules),
+      );
+      if (!rules) return;
+      const used = new Set(rules.map((rule) => rule.metric));
+      const metric = selectionMetricOptions.find(
+        ([candidate]) => !used.has(candidate),
+      )?.[0];
+      if (!metric) return;
+      actions.onUpdateFrameSelectionRules([
+        ...rules,
+        defaultSelectionRule(metric),
+      ]);
+      return;
+    }
+    if (action === "remove-selection-rule") {
+      const rules = readFrameSelectionRules(
+        selectionRuleRows(elements.selectionRules),
+      );
+      const index = Number(actionElement.dataset.ruleIndex);
+      if (!rules || rules.length <= 1 || !Number.isSafeInteger(index)) return;
+      actions.onUpdateFrameSelectionRules(
+        rules.filter((_, ruleIndex) => ruleIndex !== index),
+      );
+      return;
+    }
     if (action === "close-statistics") {
       actions.onCloseStatistics();
       queueMicrotask(() => elements.statisticsButton.focus());
@@ -928,7 +959,9 @@ export function mountReviewScreen(
       if (row && target.matches("[data-selection-metric]")) {
         configureSelectionThreshold(row);
       }
-      const rules = readFrameSelectionRules(elements.selectionRules);
+      const rows = selectionRuleRows(elements.selectionRules);
+      configureAvailableSelectionMetrics(rows);
+      const rules = readFrameSelectionRules(rows);
       if (rules) actions.onUpdateFrameSelectionRules(rules);
       return;
     }
@@ -1494,6 +1527,75 @@ function readFrameSelectionRules(
   return rules;
 }
 
+function selectionRuleRows(container: ParentNode): readonly HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>("[data-selection-rule]")];
+}
+
+function defaultSelectionRule(
+  metric: FrameSelectionMetric,
+): FrameSelectionRule {
+  switch (metric) {
+    case "signal_to_noise":
+      return {
+        metric,
+        comparator: "greater_than",
+        threshold: { kind: "scalar", value: 10 },
+        missingPolicy: "reject",
+      };
+    case "detected_stars":
+    case "usable_stars":
+      return {
+        metric,
+        comparator: "greater_than",
+        threshold: { kind: "count", value: 100 },
+        missingPolicy: "reject",
+      };
+    case "eccentricity":
+      return {
+        metric,
+        comparator: "less_than",
+        threshold: { kind: "scalar", value: 0.6 },
+        missingPolicy: "reject",
+      };
+    case "background":
+      return {
+        metric,
+        comparator: "less_than",
+        threshold: { kind: "scalar", value: 0 },
+        missingPolicy: "reject",
+      };
+    case "noise":
+      return {
+        metric,
+        comparator: "less_than",
+        threshold: { kind: "scalar", value: 1 },
+        missingPolicy: "reject",
+      };
+    case "fwhm_pixels":
+      return {
+        metric,
+        comparator: "less_than",
+        threshold: { kind: "scalar", value: 4.5 },
+        missingPolicy: "reject",
+      };
+  }
+}
+
+function configureAvailableSelectionMetrics(
+  rows: readonly HTMLElement[],
+): void {
+  const selected = rows.map(
+    (row) => required<HTMLSelectElement>(row, "[data-selection-metric]").value,
+  );
+  for (const [index, row] of rows.entries()) {
+    const select = required<HTMLSelectElement>(row, "[data-selection-metric]");
+    for (const option of select.options) {
+      option.disabled =
+        option.value !== selected[index] && selected.includes(option.value);
+    }
+  }
+}
+
 function validSelectionThreshold(
   metric: FrameSelectionMetric,
   threshold: number,
@@ -1535,7 +1637,8 @@ function configureSelectionThreshold(row: HTMLElement): void {
 function renderFrameSelection(
   elements: {
     selectionPanel: HTMLDetailsElement;
-    selectionRules: readonly HTMLElement[];
+    selectionRules: HTMLElement;
+    selectionAddRule: HTMLButtonElement;
     selectionPreview: HTMLButtonElement;
     selectionStatus: HTMLElement;
     selectionRetained: HTMLElement;
@@ -1547,9 +1650,17 @@ function renderFrameSelection(
   const selection = model.frameSelection;
   elements.selectionPanel.hidden = model.activeRole !== "light";
   elements.selectionPanel.dataset.state = selection.state;
-  for (const [index, row] of elements.selectionRules.entries()) {
+  let rows = selectionRuleRows(elements.selectionRules);
+  if (rows.length !== selection.rules.length) {
+    elements.selectionRules.innerHTML = selection.rules
+      .map((rule, index) => selectionRuleMarkup(index, rule))
+      .join("");
+    rows = selectionRuleRows(elements.selectionRules);
+  }
+  for (const [index, row] of rows.entries()) {
     const rule = selection.rules[index];
     if (!rule) continue;
+    required<HTMLElement>(row, "legend span").textContent = `Rule ${index + 1}`;
     required<HTMLSelectElement>(row, "[data-selection-metric]").value =
       rule.metric;
     configureSelectionThreshold(row);
@@ -1559,7 +1670,17 @@ function renderFrameSelection(
       String(rule.threshold.value);
     required<HTMLSelectElement>(row, "[data-selection-missing]").value =
       rule.missingPolicy;
+    const remove = required<HTMLButtonElement>(
+      row,
+      '[data-action="remove-selection-rule"]',
+    );
+    remove.dataset.ruleIndex = String(index);
+    remove.disabled = selection.rules.length <= 1;
+    remove.setAttribute("aria-label", `Remove rule ${index + 1}`);
   }
+  configureAvailableSelectionMetrics(rows);
+  elements.selectionAddRule.disabled =
+    selection.rules.length >= selectionMetricOptions.length;
   const allMeasured =
     model.frames.length > 0 &&
     model.frames.every(
@@ -3340,31 +3461,26 @@ const selectionMetricOptions: readonly [FrameSelectionMetric, string][] = [
   ["noise", "Noise"],
 ];
 
-function selectionRuleMarkup(
-  index: number,
-  label: string,
-  metric: FrameSelectionMetric,
-  comparator: FrameSelectionRule["comparator"],
-  threshold: number,
-): string {
+function selectionRuleMarkup(index: number, rule: FrameSelectionRule): string {
   const options = selectionMetricOptions
     .map(
       ([value, optionLabel]) =>
-        `<option value="${value}"${value === metric ? " selected" : ""}>${optionLabel}</option>`,
+        `<option value="${value}"${value === rule.metric ? " selected" : ""}>${optionLabel}</option>`,
     )
     .join("");
   return `<fieldset class="selection-rule" data-selection-rule data-rule-index="${index}">
-    <legend>Rule ${index + 1} · ${label}</legend>
+    <legend><span>Rule ${index + 1}</span></legend>
     <label><span>Metric</span><select class="instrument-select" data-selection-control data-selection-metric>${options}</select></label>
     <label><span>Condition</span><select class="instrument-select" data-selection-control data-selection-comparator>
-      <option value="less_than"${comparator === "less_than" ? " selected" : ""}>below</option>
-      <option value="greater_than"${comparator === "greater_than" ? " selected" : ""}>above</option>
+      <option value="less_than"${rule.comparator === "less_than" ? " selected" : ""}>below</option>
+      <option value="greater_than"${rule.comparator === "greater_than" ? " selected" : ""}>above</option>
     </select></label>
-    <label><span>Threshold</span><input class="instrument-input" data-selection-control data-selection-threshold type="number" min="0" step="any" value="${threshold}" inputmode="decimal" /></label>
+    <label><span>Threshold</span><input class="instrument-input" data-selection-control data-selection-threshold type="number" min="0" step="any" value="${rule.threshold.value}" inputmode="decimal" /></label>
     <label><span>When missing</span><select class="instrument-select" data-selection-control data-selection-missing>
-      <option value="reject" selected>reject</option>
-      <option value="retain">retain</option>
+      <option value="reject"${rule.missingPolicy === "reject" ? " selected" : ""}>reject</option>
+      <option value="retain"${rule.missingPolicy === "retain" ? " selected" : ""}>retain</option>
     </select></label>
+    <button class="selection-rule__remove" type="button" data-action="remove-selection-rule" data-rule-index="${index}" aria-label="Remove rule ${index + 1}" title="Remove this quality gate">×</button>
   </fieldset>`;
 }
 
@@ -3466,11 +3582,8 @@ function shellMarkup(): string {
                 </summary>
                 <div class="selection-console__body">
                   <p>Preview-only rules. Rust evaluates native measurements and never overwrites manual decisions.</p>
-                  <div class="selection-rules" aria-label="Automatic frame selection rules">
-                    ${selectionRuleMarkup(0, "FWHM", "fwhm_pixels", "less_than", 4.5)}
-                    ${selectionRuleMarkup(1, "Eccentricity", "eccentricity", "less_than", 0.6)}
-                    ${selectionRuleMarkup(2, "Usable stars", "usable_stars", "greater_than", 100)}
-                  </div>
+                  <div class="selection-rules" data-selection-rules aria-label="Automatic frame selection rules"></div>
+                  <button class="selection-add-rule" type="button" data-action="add-selection-rule">＋ Add quality gate</button>
                   <div class="selection-console__footer">
                     <div class="selection-plan-summary" aria-live="polite">
                       <span><b data-selection-retained>—</b> retain</span>

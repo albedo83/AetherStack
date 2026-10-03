@@ -117,6 +117,57 @@ describe("frame review workspace", () => {
     expect(actions.onPreviewFrameSelection).toHaveBeenCalledOnce();
   });
 
+  it("adds and removes unique quality gates without allowing an empty rule set", () => {
+    const { root, actions } = fixture();
+
+    fireEvent.click(getByRole(root, "button", { name: "＋ Add quality gate" }));
+    expect(actions.onUpdateFrameSelectionRules).toHaveBeenLastCalledWith([
+      ...demoReviewModel.frameSelection.rules,
+      {
+        metric: "signal_to_noise",
+        comparator: "greater_than",
+        threshold: { kind: "scalar", value: 10 },
+        missingPolicy: "reject",
+      },
+    ]);
+
+    fireEvent.click(getByRole(root, "button", { name: "Remove rule 2" }));
+    expect(actions.onUpdateFrameSelectionRules).toHaveBeenLastCalledWith([
+      demoReviewModel.frameSelection.rules[0],
+      demoReviewModel.frameSelection.rules[2],
+    ]);
+
+    const singleRule = {
+      ...demoReviewModel,
+      frameSelection: {
+        ...demoReviewModel.frameSelection,
+        rules: demoReviewModel.frameSelection.rules.slice(0, 1),
+      },
+    };
+    const only = fixture(singleRule);
+    expect(
+      getByRole(only.root, "button", { name: "Remove rule 1" }).hasAttribute(
+        "disabled",
+      ),
+    ).toBe(true);
+  });
+
+  it("disables metrics already used by another quality gate", () => {
+    const { root } = fixture();
+    const secondMetric = root.querySelector<HTMLSelectElement>(
+      '[data-selection-rule][data-rule-index="1"] [data-selection-metric]',
+    );
+    const fwhm = secondMetric?.querySelector<HTMLOptionElement>(
+      'option[value="fwhm_pixels"]',
+    );
+    const eccentricity = secondMetric?.querySelector<HTMLOptionElement>(
+      'option[value="eccentricity"]',
+    );
+
+    expect(fwhm?.disabled).toBe(true);
+    expect(eccentricity?.disabled).toBe(false);
+  });
+
   it("shows canonical selection totals and per-frame proposals without changing decisions", () => {
     const first = demoReviewModel.frames[0];
     const second = demoReviewModel.frames[1];

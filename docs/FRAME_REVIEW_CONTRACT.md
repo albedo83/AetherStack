@@ -37,13 +37,14 @@ only that stored evidence, validates typed rules, rejects missing, duplicate, or
 foreign identities, restores processing order from its native review book, and
 returns the plan without mutating manual state. The browser bridge transports
 artifact identities and rules but contains neither measurements nor a threshold
-evaluator. Durable metric persistence, previewed bulk application, dynamic rule
-counts, and custom expressions remain planned before automatic selection can
-affect a run.
+evaluator. Durable metric persistence, previewed bulk application, and custom
+expressions remain planned before automatic selection can affect a run.
 
-The first desktop editor exposes three simultaneous quality gates in an
-expandable instrument panel. Each gate makes the metric, strict direction,
-typed threshold, and missing-value policy visible. A native preview reports
+The desktop editor exposes one to seven simultaneous quality gates in an
+expandable instrument panel. Gates can be added and removed without allowing an
+empty set or duplicate metric. Each gate makes the metric, strict direction,
+typed threshold, and missing-value policy visible. Metric-aware defaults keep
+new controls valid while remaining explicit and editable. A native preview reports
 retained and rejected totals, the canonical digest, and an `AUTO KEEP` or
 `AUTO REJECT` badge beside each frame. These badges are recommendations only;
 the manual state marker and undo history remain unchanged. Editing a rule,
