@@ -303,6 +303,7 @@ export interface ReviewActions {
   readonly onInspectRegisteredStackPixel: (x: number, y: number) => void;
   readonly onInspectRegisteredStackReport: () => void;
   readonly onOpenRegisteredStackReport: () => void;
+  readonly onReturnToActiveStack: () => void;
   readonly onSelectRegisteredFrame: (frameId: string) => void;
   readonly onSetRegisteredPlaying: (playing: boolean) => void;
   readonly onStepRegisteredFrame: (direction: "backward" | "forward") => void;

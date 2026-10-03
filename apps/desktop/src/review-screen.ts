@@ -189,6 +189,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-report-products]",
     ),
+    returnToActiveStack: required<HTMLButtonElement>(
+      root,
+      '[data-action="return-to-active-stack"]',
+    ),
     openRegisteredStackReport: required<HTMLButtonElement>(
       root,
       '[data-action="open-registered-stack-report"]',
@@ -529,6 +533,10 @@ export function mountReviewScreen(
 
     if (action === "open-registered-stack-report") {
       actions.onOpenRegisteredStackReport();
+      return;
+    }
+    if (action === "return-to-active-stack") {
+      actions.onReturnToActiveStack();
       return;
     }
 
@@ -1494,6 +1502,7 @@ interface RegistrationElements {
   readonly inspectRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackReportSummary: HTMLElement;
   readonly registeredStackReportProducts: HTMLElement;
+  readonly returnToActiveStack: HTMLButtonElement;
   readonly openRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
@@ -1709,6 +1718,10 @@ function renderRegistration(
   const reportIsExternal =
     reportInspection !== null &&
     (integrationReport === null || reportPath !== integrationReport.reportPath);
+  elements.returnToActiveStack.hidden = !reportIsExternal;
+  elements.returnToActiveStack.textContent = integrationReport
+    ? "Back to active result"
+    : "Close archived report";
   const previewResult = reportIsExternal ? null : integrationReport;
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
   elements.registeredStackEstimator.value = stackSettings.estimator;
@@ -3201,7 +3214,10 @@ function shellMarkup(): string {
                   <div class="integration-report" data-registered-stack-report hidden>
                     <div class="integration-report__heading">
                       <span>Integration report</span>
-                      <button class="button button--quiet" type="button" data-action="inspect-registered-stack-report">Verify report</button>
+                      <div class="integration-report__actions">
+                        <button class="button button--quiet" type="button" data-action="return-to-active-stack" hidden>Close archived report</button>
+                        <button class="button button--quiet" type="button" data-action="inspect-registered-stack-report">Verify report</button>
+                      </div>
                     </div>
                     <code data-registered-stack-report-path></code>
                     <code data-registered-stack-report-digest></code>

@@ -1133,6 +1133,14 @@ safety reasoning. They do not narrate obvious syntax.
     and a verified external science product renders under its report digest.
     Next, separate archived result inspection into a focused workspace with a
     source-evidence browser and explicit return to the active session.
+83. Make archived-result context reversible and explicit. Opening a prior report
+    clears in-flight preview, histogram, and pixel-inspection resources before
+    adopting the report-scoped identity. The report card exposes a contextual
+    close action, or a return-to-active-result action when a current stack still
+    exists; either transition cancels stale async responses and reconstructs the
+    active science preview without changing any native artifact. Presenter tests
+    cover the archived close control. Next, add a browsable source-evidence table
+    with fingerprint status and bounded on-demand source revalidation.
 
 ## 11. Stable-release definition
 

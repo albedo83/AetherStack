@@ -218,6 +218,9 @@ const screen = mountReviewScreen(root, model, {
   onOpenRegisteredStackReport() {
     void openStackReport();
   },
+  onReturnToActiveStack() {
+    returnToActiveStack();
+  },
   onSelectRegisteredFrame(frameId) {
     selectRegisteredFrame(frameId);
   },
@@ -1511,6 +1514,41 @@ async function inspectStackReport(selectedPath?: string): Promise<void> {
         },
       },
     });
+  }
+}
+
+function returnToActiveStack(): void {
+  const stack = model.registration.stack;
+  const result = stack.result;
+  registeredStackPreviewTicket += 1;
+  stackPixelTicket += 1;
+  stackReportTicket += 1;
+  clearRegisteredStackPreviewResources();
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...stack,
+        previewState: result === null ? "idle" : "loading",
+        preview: null,
+        sciencePreview: null,
+        selectedProduct: "science",
+        histogramState: "idle",
+        histogram: null,
+        pixelInspectionState: "idle",
+        pixelInspection: null,
+        reportInspectionState: "idle",
+        reportInspection: null,
+        reportInspectionPath: result?.reportPath ?? null,
+      },
+    },
+  });
+  if (result !== null && stack.state === "completed") {
+    void loadRegisteredStackPreview(
+      registeredStackPreviewSourceFromResult(result),
+      "science",
+    );
   }
 }
 

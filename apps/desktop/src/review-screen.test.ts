@@ -25,6 +25,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onInspectRegisteredStackPixel: vi.fn(),
     onInspectRegisteredStackReport: vi.fn(),
     onOpenRegisteredStackReport: vi.fn(),
+    onReturnToActiveStack: vi.fn(),
     onSelectRegisteredFrame: vi.fn(),
     onSetRegisteredPlaying: vi.fn(),
     onStepRegisteredFrame: vi.fn(),
@@ -816,6 +817,10 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain(
       "Published registered artifacts required",
     );
+    fireEvent.click(
+      getByRole(root, "button", { name: "Close archived report" }),
+    );
+    expect(actions.onReturnToActiveStack).toHaveBeenCalledOnce();
     fireEvent.click(getByRole(root, "button", { name: "Verify again" }));
     expect(actions.onInspectRegisteredStackReport).toHaveBeenCalledOnce();
     expect(
