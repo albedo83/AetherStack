@@ -23,7 +23,8 @@ pub use review::{
 };
 pub use selection::{
     FRAME_SELECTION_ALGORITHM_ID, FrameSelectionComparator, FrameSelectionError,
-    FrameSelectionEvaluation, FrameSelectionMetric, FrameSelectionProposal, FrameSelectionRule,
+    FrameSelectionEvaluation, FrameSelectionFrameResult, FrameSelectionMetric,
+    FrameSelectionMetricEvidence, FrameSelectionPlan, FrameSelectionProposal, FrameSelectionRule,
     FrameSelectionRuleEvidence, FrameSelectionRuleState, FrameSelectionValue,
-    MAX_FRAME_SELECTION_RULES, MissingMetricPolicy,
+    MAX_FRAME_SELECTION_PLAN_FRAMES, MAX_FRAME_SELECTION_RULES, MissingMetricPolicy,
 };

@@ -72,7 +72,9 @@ optimized CPU and GPU paths must match.
   identities, previewed decision transactions, bounded undo, view-only sorting,
   locked display state, exact asynchronous preview commits, and a separate
   versioned automatic-threshold evaluator that preserves typed measured values,
-  comparators, and missing-metric evidence without mutating manual decisions;
+  comparators, and missing-metric evidence without mutating manual decisions,
+  plus a bounded canonical plan whose path-free SHA-256 binds ordered frame
+  identities, rules, measurements, and proposals for reproducible review;
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, linked-luminance

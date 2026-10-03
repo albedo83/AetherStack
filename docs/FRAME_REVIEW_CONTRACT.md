@@ -26,9 +26,13 @@ counts, major-axis FWHM, and eccentricity. Scalar and count values remain
 distinct, missing evidence resolves through an explicit retain-or-reject policy,
 duplicate metric rules are rejected, and every rule is evaluated even after one
 failure. The result is only a retain/reject proposal with complete evidence; it
-cannot edit, clear, or override a manual decision. Native session persistence,
-previewed bulk application, and the desktop rule editor remain planned before
-automatic selection can affect a run.
+cannot edit, clear, or override a manual decision. A bounded selection plan now
+seals those rules and results in immutable processing order. Its versioned,
+path-free canonical SHA-256 includes frame identities, exact typed measurements,
+missing states, and proposals while excluding display labels and machine paths.
+Changing a rule, metric, or processing position therefore changes the plan
+identity. Native session persistence, previewed bulk application, and the
+desktop rule editor remain planned before automatic selection can affect a run.
 
 The desktop adapter initializes one native review book after a successful
 session import. Accept, reject, clear, and undo commands mutate that book under a

@@ -1234,6 +1234,16 @@ safety reasoning. They do not narrate obvious syntax.
     Automatic results are proposals only; tests prove they cannot overwrite an
     accepted manual decision. Next, bind a canonical rule plan to frame identity
     and expose previewed native batch evidence before adding desktop controls.
+94. Bind automatic selection to a reproducible review-plan identity. The Rust
+    review layer now evaluates every frame in immutable processing order and
+    seals the validated rules, typed measurements, explicit missing states, and
+    retain/reject proposals behind a versioned path-free SHA-256. The plan is
+    capped at 100,000 frames, excludes labels and machine paths, canonicalizes
+    signed zero, and fails on allocation or inconsistent review state. Tests
+    prove repeatability, rule/evidence alignment, strict threshold equality,
+    label independence, and digest sensitivity to rule, measurement, and order
+    changes. Next, expose this plan through the native adapter as a previewed
+    batch transaction without granting it authority over manual decisions.
 
 ## 11. Stable-release definition
 
