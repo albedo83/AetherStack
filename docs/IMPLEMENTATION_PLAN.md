@@ -1198,6 +1198,15 @@ safety reasoning. They do not narrate obvious syntax.
     on the development system. This does not justify platform-specific read
     hints yet. Next, measure end-to-end verification overhead and ensure progress
     delivery stays bounded when source counts reach the thousands.
+90. Make thousand-source evidence sets searchable without another disk read.
+    The archived report browser now combines case-insensitive filename search
+    with every verification-status segment, reports the exact visible count,
+    keeps an explicit no-match state, and restores keyboard focus after clearing
+    the query. The recessed search control uses the same dark instrument language
+    as the surrounding evidence panel and expands to the available width on
+    narrow screens. Presenter tests cover query composition, case folding, clear,
+    focus restoration, and status-filter interaction. Next, virtualize evidence
+    rows only after profiling identifies DOM construction as a real bottleneck.
 
 ## 11. Stable-release definition
 

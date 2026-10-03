@@ -198,6 +198,14 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-source-summary]",
     ),
+    registeredStackSourceSearch: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-source-search]",
+    ),
+    clearRegisteredStackSourceSearch: required<HTMLButtonElement>(
+      root,
+      '[data-action="clear-source-evidence-search"]',
+    ),
     registeredStackSourceFilters: requiredAll<HTMLButtonElement>(
       root,
       "[data-source-evidence-filter]",
@@ -549,6 +557,7 @@ export function mountReviewScreen(
   let pendingRejectFrameId: string | null = null;
   const sortDirections = new Map<SortField, SortDirection>();
   let sourceEvidenceFilter: SourceEvidenceFilter = "all";
+  let sourceEvidenceQuery = "";
 
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -581,8 +590,24 @@ export function mountReviewScreen(
       const filter = actionElement.dataset.sourceEvidenceFilter;
       if (isSourceEvidenceFilter(filter)) {
         sourceEvidenceFilter = filter;
-        renderRegistration(elements, model, sourceEvidenceFilter);
+        renderRegistration(
+          elements,
+          model,
+          sourceEvidenceFilter,
+          sourceEvidenceQuery,
+        );
       }
+      return;
+    }
+    if (action === "clear-source-evidence-search") {
+      sourceEvidenceQuery = "";
+      renderRegistration(
+        elements,
+        model,
+        sourceEvidenceFilter,
+        sourceEvidenceQuery,
+      );
+      elements.registeredStackSourceSearch.focus();
       return;
     }
 
@@ -887,10 +912,22 @@ export function mountReviewScreen(
   };
 
   const onInput = (event: Event): void => {
-    if (event.target !== elements.registeredStackOverlayOpacity) return;
-    const opacity = elements.registeredStackOverlayOpacity.valueAsNumber / 100;
-    if (Number.isFinite(opacity)) {
-      actions.onSetRegisteredStackOverlayOpacity(opacity);
+    if (event.target === elements.registeredStackSourceSearch) {
+      sourceEvidenceQuery = elements.registeredStackSourceSearch.value;
+      renderRegistration(
+        elements,
+        model,
+        sourceEvidenceFilter,
+        sourceEvidenceQuery,
+      );
+      return;
+    }
+    if (event.target === elements.registeredStackOverlayOpacity) {
+      const opacity =
+        elements.registeredStackOverlayOpacity.valueAsNumber / 100;
+      if (Number.isFinite(opacity)) {
+        actions.onSetRegisteredStackOverlayOpacity(opacity);
+      }
     }
   };
 
@@ -1029,7 +1066,12 @@ export function mountReviewScreen(
       item.classList.toggle("nav-item--active", selected);
     }
     renderCalibration(elements, model);
-    renderRegistration(elements, model, sourceEvidenceFilter);
+    renderRegistration(
+      elements,
+      model,
+      sourceEvidenceFilter,
+      sourceEvidenceQuery,
+    );
     syncStepperStates(root);
     elements.importSession.disabled = importing || masterBusy;
     elements.importSession.textContent = importing
@@ -1550,6 +1592,8 @@ interface RegistrationElements {
   readonly registeredStackReportProducts: HTMLElement;
   readonly registeredStackReportSources: HTMLElement;
   readonly registeredStackSourceSummary: HTMLElement;
+  readonly registeredStackSourceSearch: HTMLInputElement;
+  readonly clearRegisteredStackSourceSearch: HTMLButtonElement;
   readonly registeredStackSourceFilters: readonly HTMLButtonElement[];
   readonly verifyRegisteredStackSources: HTMLButtonElement;
   readonly cancelRegisteredStackSourceVerification: HTMLButtonElement;
@@ -1610,6 +1654,7 @@ function renderRegistration(
   elements: RegistrationElements,
   model: ReviewViewModel,
   sourceEvidenceFilter: SourceEvidenceFilter,
+  sourceEvidenceQuery: string,
 ): void {
   const registration = model.registration;
   const options = registration.frames.map((frame) => {
@@ -1827,19 +1872,30 @@ function renderRegistration(
   ).length;
   const issueSourceCount =
     sourceEvidence.length - verifiedSourceCount - unverifiedSourceCount;
-  elements.registeredStackSourceSummary.textContent = `${formatCountedNoun(sourceEvidence.length, "source")} · ${verifiedSourceCount} verified · ${issueSourceCount} ${issueSourceCount === 1 ? "issue" : "issues"} · ${unverifiedSourceCount} pending`;
+  elements.registeredStackSourceSearch.value = sourceEvidenceQuery;
+  elements.clearRegisteredStackSourceSearch.hidden = sourceEvidenceQuery === "";
   for (const button of elements.registeredStackSourceFilters) {
     const selected =
       button.dataset.sourceEvidenceFilter === sourceEvidenceFilter;
     button.setAttribute("aria-pressed", String(selected));
   }
-  const visibleSourceEvidence = sourceEvidence.filter(({ status }) => {
-    if (sourceEvidenceFilter === "all") return true;
-    if (sourceEvidenceFilter === "issues") {
-      return status !== "verified" && status !== "unverified";
-    }
-    return status === sourceEvidenceFilter;
+  const normalizedSourceQuery = sourceEvidenceQuery
+    .trim()
+    .toLocaleLowerCase("en-US");
+  const visibleSourceEvidence = sourceEvidence.filter(({ source, status }) => {
+    const matchesStatus =
+      sourceEvidenceFilter === "all" ||
+      (sourceEvidenceFilter === "issues"
+        ? status !== "verified" && status !== "unverified"
+        : status === sourceEvidenceFilter);
+    const matchesQuery =
+      normalizedSourceQuery === "" ||
+      source.fileName
+        .toLocaleLowerCase("en-US")
+        .includes(normalizedSourceQuery);
+    return matchesStatus && matchesQuery;
   });
+  elements.registeredStackSourceSummary.textContent = `${formatCountedNoun(sourceEvidence.length, "source")} · ${verifiedSourceCount} verified · ${issueSourceCount} ${issueSourceCount === 1 ? "issue" : "issues"} · ${unverifiedSourceCount} pending · ${visibleSourceEvidence.length} shown`;
   const sourceRows = visibleSourceEvidence.map(({ source, status }) => {
     const verification = verifiedSources.get(source.frameId);
     const row = document.createElement("li");
@@ -1857,7 +1913,7 @@ function renderRegistration(
   if (sourceEvidence.length > 0 && sourceRows.length === 0) {
     const empty = document.createElement("li");
     empty.dataset.empty = "true";
-    empty.textContent = `No ${sourceEvidenceFilter} sources in this report.`;
+    empty.textContent = "No sources match the current filters.";
     sourceRows.push(empty);
   }
   elements.registeredStackReportSources.replaceChildren(...sourceRows);
@@ -3398,6 +3454,12 @@ function shellMarkup(): string {
                       <progress data-registered-stack-source-progress aria-label="Archived source verification progress" hidden></progress>
                       <div class="integration-report__source-toolbar">
                         <output data-registered-stack-source-summary>0 sources · 0 verified · 0 issues · 0 pending</output>
+                        <label class="integration-report__source-search">
+                          <span class="sr-only">Search source filenames</span>
+                          <span aria-hidden="true">⌕</span>
+                          <input type="text" data-registered-stack-source-search placeholder="Find FITS" autocomplete="off" spellcheck="false" />
+                          <button type="button" data-action="clear-source-evidence-search" aria-label="Clear source search" hidden>×</button>
+                        </label>
                         <div class="integration-report__source-filters" role="group" aria-label="Filter source evidence">
                           <button type="button" data-action="filter-source-evidence" data-source-evidence-filter="all" aria-pressed="true">All</button>
                           <button type="button" data-action="filter-source-evidence" data-source-evidence-filter="issues" aria-pressed="false">Issues</button>

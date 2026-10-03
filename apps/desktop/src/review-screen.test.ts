@@ -968,7 +968,19 @@ describe("frame review workspace", () => {
     expect(getByText(root, /m31-registered-001\.fits/)).toBeTruthy();
     expect(queryByText(root, /m31-registered-002\.fits/)).toBeNull();
     fireEvent.click(getByRole(root, "button", { name: "Pending" }));
-    expect(root.textContent).toContain("No unverified sources in this report.");
+    expect(root.textContent).toContain("No sources match the current filters.");
+    fireEvent.click(getByRole(root, "button", { name: "All" }));
+    const sourceSearch = getByRole<HTMLInputElement>(root, "textbox", {
+      name: "Search source filenames",
+    });
+    fireEvent.input(sourceSearch, { target: { value: "002.FITS" } });
+    expect(queryByText(root, /m31-registered-001\.fits/)).toBeNull();
+    expect(getByText(root, /m31-registered-002\.fits/)).toBeTruthy();
+    expect(root.textContent).toContain("1 shown");
+    fireEvent.click(getByRole(root, "button", { name: "Clear source search" }));
+    expect(getByText(root, /m31-registered-001\.fits/)).toBeTruthy();
+    expect(getByText(root, /m31-registered-002\.fits/)).toBeTruthy();
+    expect(document.activeElement).toBe(sourceSearch);
     const science = getByRole<HTMLButtonElement>(root, "tab", {
       name: "Science",
     });
