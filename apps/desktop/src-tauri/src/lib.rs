@@ -708,44 +708,64 @@ fn publish_quality_evidence(
     Ok(())
 }
 
-fn restore_quality_evidence(
-    cache_root: &Path,
-    frame: &ImportedFrame,
-) -> Option<FrameQualityResponse> {
-    let frame_id = FrameId::new(frame.id.clone()).ok()?;
-    let derived = FrameId::derive(
+#[derive(Debug, PartialEq)]
+enum QualityEvidenceRestore {
+    Missing,
+    Restored(Box<FrameQualityResponse>),
+    Rejected,
+}
+
+fn restore_quality_evidence(cache_root: &Path, frame: &ImportedFrame) -> QualityEvidenceRestore {
+    let Ok(frame_id) = FrameId::new(frame.id.clone()) else {
+        return QualityEvidenceRestore::Rejected;
+    };
+    let Ok(derived) = FrameId::derive(
         &frame.relative_path,
         frame.source_byte_length,
         &frame.source_sha256,
-    )
-    .ok()?;
+    ) else {
+        return QualityEvidenceRestore::Rejected;
+    };
     if derived != frame_id {
-        return None;
+        return QualityEvidenceRestore::Rejected;
     }
-    let key =
-        quality_evidence_key(&frame_id, frame.source_byte_length, &frame.source_sha256).ok()?;
-    let store = ArtifactStore::new(cache_root.to_owned()).ok()?;
-    let mut artifact = store.lookup_verified(&key).ok()??;
+    let Ok(key) = quality_evidence_key(&frame_id, frame.source_byte_length, &frame.source_sha256)
+    else {
+        return QualityEvidenceRestore::Rejected;
+    };
+    let Ok(store) = ArtifactStore::new(cache_root.to_owned()) else {
+        return QualityEvidenceRestore::Rejected;
+    };
+    let mut artifact = match store.lookup_verified(&key) {
+        Ok(Some(artifact)) => artifact,
+        Ok(None) => return QualityEvidenceRestore::Missing,
+        Err(_) => return QualityEvidenceRestore::Rejected,
+    };
     if artifact.payload_bytes() > MAX_QUALITY_EVIDENCE_BYTES {
-        return None;
+        return QualityEvidenceRestore::Rejected;
     }
-    let capacity = usize::try_from(artifact.payload_bytes()).ok()?;
+    let Ok(capacity) = usize::try_from(artifact.payload_bytes()) else {
+        return QualityEvidenceRestore::Rejected;
+    };
     let mut payload = Vec::new();
-    payload.try_reserve_exact(capacity).ok()?;
-    artifact.read_to_end(&mut payload).ok()?;
-    if payload.len() != capacity {
-        return None;
+    if payload.try_reserve_exact(capacity).is_err() || artifact.read_to_end(&mut payload).is_err() {
+        return QualityEvidenceRestore::Rejected;
     }
-    let evidence: StoredFrameQualityEvidence = serde_json::from_slice(&payload).ok()?;
+    if payload.len() != capacity {
+        return QualityEvidenceRestore::Rejected;
+    }
+    let Ok(evidence) = serde_json::from_slice::<StoredFrameQualityEvidence>(&payload) else {
+        return QualityEvidenceRestore::Rejected;
+    };
     if evidence.schema_version != QUALITY_EVIDENCE_SCHEMA_VERSION
         || evidence.frame_id != frame.id
         || evidence.source_byte_length != frame.source_byte_length
         || evidence.source_sha256 != frame.source_sha256
         || validate_quality_response(&evidence.response).is_err()
     {
-        return None;
+        return QualityEvidenceRestore::Rejected;
     }
-    Some(evidence.response)
+    QualityEvidenceRestore::Restored(Box::new(evidence.response))
 }
 
 fn validate_quality_response(
@@ -835,6 +855,9 @@ struct ImportedSession {
     classification_conflicts: usize,
     recoverable_failures: Vec<ImportedFailure>,
     unassigned_sources: Vec<String>,
+    quality_evidence_restored: usize,
+    quality_evidence_missing: usize,
+    quality_evidence_rejected: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -865,6 +888,28 @@ struct ImportedFrame {
 struct ImportedFailure {
     relative_path: String,
     code: String,
+}
+
+fn restore_session_quality_evidence(cache_root: &Path, session: &mut ImportedSession) {
+    session.quality_evidence_restored = 0;
+    session.quality_evidence_missing = 0;
+    session.quality_evidence_rejected = 0;
+    for frame in &mut session.frames {
+        // Raw quality diagnostics currently require a declared Bayer phase.
+        // Calibration and non-Light sources deliberately do not inflate the
+        // cache-miss count because they are not eligible for this evidence.
+        if frame.role != "light" || frame.bayer_pattern.is_none() {
+            continue;
+        }
+        match restore_quality_evidence(cache_root, frame) {
+            QualityEvidenceRestore::Missing => session.quality_evidence_missing += 1,
+            QualityEvidenceRestore::Restored(response) => {
+                frame.quality = Some(*response);
+                session.quality_evidence_restored += 1;
+            }
+            QualityEvidenceRestore::Rejected => session.quality_evidence_rejected += 1,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3866,9 +3911,7 @@ async fn import_session_directory(
     let cache_root = quality_cache_root(&app)?;
     let imported = tauri::async_runtime::spawn_blocking(move || {
         let mut imported = scan_session_directory_sync(&path)?;
-        for frame in &mut imported.presentation.frames {
-            frame.quality = restore_quality_evidence(&cache_root, frame);
-        }
+        restore_session_quality_evidence(&cache_root, &mut imported.presentation);
         Ok::<_, PreviewCommandError>(imported)
     })
     .await
@@ -5804,6 +5847,9 @@ fn imported_session_from_report(
             .count(),
         recoverable_failures,
         unassigned_sources: report.unassigned_sources().to_vec(),
+        quality_evidence_restored: 0,
+        quality_evidence_missing: 0,
+        quality_evidence_rejected: 0,
     })
 }
 
@@ -8176,6 +8222,9 @@ mod tests {
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
+            quality_evidence_restored: 0,
+            quality_evidence_missing: 0,
+            quality_evidence_rejected: 0,
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8249,6 +8298,9 @@ mod tests {
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
+            quality_evidence_restored: 0,
+            quality_evidence_missing: 0,
+            quality_evidence_rejected: 0,
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8311,6 +8363,9 @@ mod tests {
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
+            quality_evidence_restored: 0,
+            quality_evidence_missing: 0,
+            quality_evidence_rejected: 0,
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8370,6 +8425,9 @@ mod tests {
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
+            quality_evidence_restored: 0,
+            quality_evidence_missing: 0,
+            quality_evidence_rejected: 0,
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8460,6 +8518,9 @@ mod tests {
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
+            quality_evidence_restored: 0,
+            quality_evidence_missing: 0,
+            quality_evidence_rejected: 0,
         };
         let state = DesktopReviewState::default();
         install_review_book(&state, &imported)?;
@@ -8599,14 +8660,24 @@ mod tests {
         )?;
         assert_eq!(
             restore_quality_evidence(directory.path(), &frame),
-            Some(response)
+            QualityEvidenceRestore::Restored(Box::new(response))
         );
 
-        let changed = ImportedFrame {
+        let mut changed = ImportedFrame {
             source_byte_length: 2,
             ..cached_quality_test_frame('a', "first.fits")?
         };
-        assert_eq!(restore_quality_evidence(directory.path(), &changed), None);
+        changed.id = FrameId::derive(
+            &changed.relative_path,
+            changed.source_byte_length,
+            &changed.source_sha256,
+        )?
+        .as_str()
+        .to_owned();
+        assert_eq!(
+            restore_quality_evidence(directory.path(), &changed),
+            QualityEvidenceRestore::Missing
+        );
         Ok(())
     }
 
@@ -8632,7 +8703,10 @@ mod tests {
         artifact.seek(SeekFrom::Start(0))?;
         artifact.write_all(b"X")?;
         artifact.sync_all()?;
-        assert_eq!(restore_quality_evidence(directory.path(), &frame), None);
+        assert_eq!(
+            restore_quality_evidence(directory.path(), &frame),
+            QualityEvidenceRestore::Rejected
+        );
 
         let mut drifted = selection_test_quality_response(4.0, 600);
         drifted.star_algorithm_id = "future-star-model-v2".to_owned();
@@ -8640,6 +8714,67 @@ mod tests {
             return Err("algorithm drift restored persisted quality evidence".into());
         };
         assert_eq!(error.code, "frame_quality_result_invalid");
+        Ok(())
+    }
+
+    #[test]
+    fn session_quality_restore_counts_only_eligible_cache_outcomes() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let restored = cached_quality_test_frame('a', "restored.fits")?;
+        let missing = cached_quality_test_frame('b', "missing.fits")?;
+        let rejected = cached_quality_test_frame('c', "rejected.fits")?;
+        let response = selection_test_quality_response(3.25, 720);
+
+        for frame in [&restored, &rejected] {
+            publish_quality_evidence(
+                directory.path(),
+                &FrameId::new(frame.id.clone())?,
+                frame.source_byte_length,
+                &frame.source_sha256,
+                &response,
+            )?;
+        }
+        let rejected_key = quality_evidence_key(
+            &FrameId::new(rejected.id.clone())?,
+            rejected.source_byte_length,
+            &rejected.source_sha256,
+        )?;
+        let rejected_path = directory
+            .path()
+            .join(&rejected_key.as_str()[..2])
+            .join(format!("{}.artifact", rejected_key.as_str()));
+        let mut artifact = OpenOptions::new().write(true).open(rejected_path)?;
+        artifact.seek(SeekFrom::Start(0))?;
+        artifact.write_all(b"X")?;
+        artifact.sync_all()?;
+
+        let mut ineligible = cached_quality_test_frame('d', "master-dark.fits")?;
+        ineligible.role = "dark";
+        ineligible.bayer_pattern = None;
+        let mut session = ImportedSession {
+            name: "cache diagnostics".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![restored, missing, rejected, ineligible],
+            files_considered: 4,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+            quality_evidence_restored: usize::MAX,
+            quality_evidence_missing: usize::MAX,
+            quality_evidence_rejected: usize::MAX,
+        };
+
+        restore_session_quality_evidence(directory.path(), &mut session);
+
+        assert_eq!(session.quality_evidence_restored, 1);
+        assert_eq!(session.quality_evidence_missing, 1);
+        assert_eq!(session.quality_evidence_rejected, 1);
+        assert!(session.frames[0].quality.is_some());
+        assert!(
+            session.frames[1..]
+                .iter()
+                .all(|frame| frame.quality.is_none())
+        );
         Ok(())
     }
 
@@ -8657,6 +8792,9 @@ mod tests {
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
+            quality_evidence_restored: 1,
+            quality_evidence_missing: 0,
+            quality_evidence_rejected: 0,
         };
 
         let restored = prepare_restored_quality(&session)?;

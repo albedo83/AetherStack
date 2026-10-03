@@ -1333,6 +1333,16 @@ safety reasoning. They do not narrate obvious syntax.
     clear provenance. DOM coverage verifies the user-visible distinction. Next,
     count restored, missing, and rejected cache records during import and expose
     those diagnostics without treating an optional cache miss as a FITS error.
+104. Make optional quality-cache recovery observable and fail-closed. Import
+    classifies every eligible Bayer Light as restored, missing, or rejected;
+    calibration frames and unsupported Lights do not inflate the counters.
+    Missing keys remain a normal ready state, while invalid identities,
+    containers, payloads, schemas, algorithms, and scientific values are
+    rejected, omitted from native evidence, and surfaced as a warning without
+    deleting shared cache state. Rust tests cover all three outcomes and the
+    eligibility boundary; presenter tests bind the exact counts and warning
+    policy. Next, provide a deliberate cache-maintenance action that can remove
+    only explicitly rejected quality artifacts after user confirmation.
 
 ## 11. Stable-release definition
 

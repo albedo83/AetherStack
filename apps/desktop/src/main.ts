@@ -86,6 +86,7 @@ import {
   type FrameSelectionRule,
 } from "./selection-bridge.ts";
 import {
+  importedSessionStatus,
   selectAndImportSession,
   type ImportedFrame,
   type ImportedSession,
@@ -425,23 +426,10 @@ function installImportedSession(session: ImportedSession): void {
     "light";
   const frames = reviewFramesForRole(session, activeRole);
   const registrationFrames = registrationFramesForSession(session);
-  const issueCount =
-    session.classificationConflicts +
-    session.recoverableFailures.length +
-    session.unassignedSources.length;
   update({
     ...model,
     sessionName: session.name,
-    sessionStatus:
-      issueCount === 0
-        ? {
-            tone: "ready",
-            label: `${session.frames.length} FITS verified`,
-          }
-        : {
-            tone: "warning",
-            label: `${issueCount} import issue${issueCount === 1 ? "" : "s"}`,
-          },
+    sessionStatus: importedSessionStatus(session),
     roles,
     activeRole,
     lightFrameView: "raw",

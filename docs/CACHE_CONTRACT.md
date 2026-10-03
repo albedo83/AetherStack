@@ -69,6 +69,15 @@ payload length.
 The store does not delete or repair corrupt entries automatically. Recovery
 policy belongs to a higher layer because deletion changes shared cache state.
 
+Raw-source Review quality evidence is optional acceleration, so its higher-layer
+recovery policy is deliberately fail-closed but non-fatal. Import counts an
+absent key as `missing`, a fully verified and schema-valid payload as
+`restored`, and any present artifact or identity that fails validation as
+`rejected`. Only eligible Bayer Light frames participate in these counters.
+Rejected evidence is never installed in the native selection map, is surfaced
+as a warning, and must be recomputed from the immutable FITS source. Import does
+not delete or silently repair the offending shared artifact.
+
 The strict runtime uses this store for versioned integrated-tile checkpoints.
 It publishes them only after final source-fingerprint verification, can reuse
 them after cancellation, and treats invalid entries as hard errors. Streaming

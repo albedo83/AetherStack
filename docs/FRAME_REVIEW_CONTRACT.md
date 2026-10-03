@@ -73,6 +73,10 @@ from restored evidence. Restored evidence is labelled `QUALITY · RESTORED`, and
 its explanatory text starts with `Verified cache`; a fresh result remains
 `QUALITY · DIAGNOSTIC`. This is provenance only: both states expose the same
 strictly validated native result and neither changes a review decision.
+The session status separately reports restored, missing, and rejected cache
+counts for eligible Bayer Lights. Missing is a normal first-run state. Rejected
+means an entry was present but failed identity, container, payload, schema, or
+scientific validation; it produces a warning and no evidence is installed.
 Applying a preview requires a dedicated confirmation dialog. Rust rebuilds the
 plan from its retained evidence under the same synchronization boundary and
 requires the canonical digest to match before mutation. It converts proposals
