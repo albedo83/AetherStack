@@ -1772,13 +1772,13 @@ function renderRegistration(
   const sourceProgress = registration.stack.sourceVerificationProgress;
   elements.registeredStackSourceProgress.hidden = !sourceVerificationBusy;
   elements.registeredStackSourceProgress.max =
-    sourceProgress?.totalSources ?? 1;
+    sourceProgress?.totalBytes || sourceProgress?.totalSources || 1;
   elements.registeredStackSourceProgress.value =
-    sourceProgress?.completedSources ?? 0;
+    sourceProgress?.completedBytes || sourceProgress?.completedSources || 0;
   elements.registeredStackSourceVerification.textContent = sourceVerification
     ? `${sourceVerification.allSourcesVerified ? "All source fingerprints verified" : "Source evidence mismatch"} · ${sourceVerification.sourceDirectory}`
     : sourceVerificationBusy
-      ? `${registration.stack.sourceVerificationState === "cancelling" ? "Cancelling after the current 64 KiB block" : "Hashing archived sources"} · ${sourceProgress?.completedSources ?? 0}/${sourceProgress?.totalSources ?? reportInspection?.sourceCount ?? 0}${sourceProgress?.currentFileName ? ` · ${sourceProgress.currentFileName}` : ""}`
+      ? `${registration.stack.sourceVerificationState === "cancelling" ? "Cancelling after the current 64 KiB block" : "Hashing archived sources"} · ${sourceProgress?.completedSources ?? 0}/${sourceProgress?.totalSources ?? reportInspection?.sourceCount ?? 0}${sourceProgress?.totalBytes ? ` · ${formatByteCount(sourceProgress.completedBytes)}/${formatByteCount(sourceProgress.totalBytes)}` : ""}${sourceProgress?.currentFileName ? ` · ${sourceProgress.currentFileName}${sourceProgress.currentFileTotalBytes ? ` ${Math.min(100, Math.round((sourceProgress.currentFileBytes / sourceProgress.currentFileTotalBytes) * 100))}%` : ""}` : ""}`
       : registration.stack.sourceVerificationState === "error"
         ? "Source verification failed safely"
         : "Choose the directory containing the registered source FITS files";

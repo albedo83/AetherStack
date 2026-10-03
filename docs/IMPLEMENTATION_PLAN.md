@@ -1170,6 +1170,15 @@ safety reasoning. They do not narrate obvious syntax.
     build tests cover the contract. Next, expose byte-level progress within very
     large individual source files and estimate remaining I/O without promising
     unstable wall-clock times.
+87. Report byte-level evidence progress without flooding the desktop bridge.
+    Source hashing retains 64 KiB cancellation checkpoints but publishes at most
+    one intermediate update per 8 MiB plus the exact file boundary. Checked
+    aggregate byte totals drive the progress bar, while the UI shows session
+    bytes, current-file percentage, and deterministic source counts without an
+    unreliable time estimate. Native tests prove throttled monotone byte events
+    and cancellation between fixed reads. Next, benchmark fingerprint throughput
+    on the ASI294MC corpus and consider platform-specific sequential-read hints
+    only when measurements justify their complexity.
 
 ## 11. Stable-release definition
 

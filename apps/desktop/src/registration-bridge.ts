@@ -239,6 +239,10 @@ export interface RegisteredStackSourceVerificationProgress {
   readonly completedSources: number;
   readonly totalSources: number;
   readonly currentFileName: string | null;
+  readonly completedBytes: number;
+  readonly totalBytes: number;
+  readonly currentFileBytes: number;
+  readonly currentFileTotalBytes: number;
 }
 
 export interface RegisteredStackSourceVerification {

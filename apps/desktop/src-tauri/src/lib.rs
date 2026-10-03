@@ -73,6 +73,7 @@ const MAX_DESKTOP_QUALITY_SOURCE_PIXELS: u64 = 64 * 1_024 * 1_024;
 const DESKTOP_QUALITY_PROFILE_ID: &str = "desktop-diagnostic-quality-v1";
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
+const SOURCE_VERIFICATION_PROGRESS_BYTES: u64 = 8 * 1_024 * 1_024;
 static REGISTERED_STACK_REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
@@ -532,6 +533,10 @@ struct RegisteredStackSourceVerificationProgress {
     completed_sources: usize,
     total_sources: usize,
     current_file_name: Option<String>,
+    completed_bytes: u64,
+    total_bytes: u64,
+    current_file_bytes: u64,
+    current_file_total_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2431,12 +2436,23 @@ where
         .checkpoint()
         .map_err(|_| registered_stack_source_verification_cancelled_error())?;
     let total_sources = inspection.sources.len();
+    let total_bytes = inspection
+        .sources
+        .iter()
+        .try_fold(0_u64, |total, source| total.checked_add(source.byte_length))
+        .ok_or_else(registered_stack_report_validation_error)?;
+    let mut progress_sequence = 0_u64;
+    let mut completed_bytes = 0_u64;
     on_progress(RegisteredStackSourceVerificationProgress {
-        sequence: 0,
+        sequence: progress_sequence,
         state: "started",
         completed_sources: 0,
         total_sources,
         current_file_name: None,
+        completed_bytes,
+        total_bytes,
+        current_file_bytes: 0,
+        current_file_total_bytes: 0,
     });
     let source_directory_text = source_directory
         .to_str()
@@ -2450,15 +2466,35 @@ where
         cancellation
             .checkpoint()
             .map_err(|_| registered_stack_source_verification_cancelled_error())?;
+        let completed_before_file = completed_bytes;
         sources.push(verify_registered_stack_source(
             source_directory,
             source,
             cancellation,
+            |current_file_bytes| {
+                progress_sequence = progress_sequence.saturating_add(1);
+                on_progress(RegisteredStackSourceVerificationProgress {
+                    sequence: progress_sequence,
+                    state: "running",
+                    completed_sources: index,
+                    total_sources,
+                    current_file_name: Some(source.file_name.clone()),
+                    completed_bytes: completed_before_file.saturating_add(current_file_bytes),
+                    total_bytes,
+                    current_file_bytes,
+                    current_file_total_bytes: source.byte_length,
+                });
+            },
         )?);
         let completed_sources = index + 1;
+        completed_bytes = completed_bytes
+            .checked_add(source.byte_length)
+            .ok_or_else(registered_stack_report_validation_error)?;
+        progress_sequence = progress_sequence
+            .checked_add(1)
+            .ok_or_else(registered_stack_report_validation_error)?;
         on_progress(RegisteredStackSourceVerificationProgress {
-            sequence: u64::try_from(completed_sources)
-                .map_err(|_| registered_stack_report_validation_error())?,
+            sequence: progress_sequence,
             state: if completed_sources == total_sources {
                 "completed"
             } else {
@@ -2467,6 +2503,10 @@ where
             completed_sources,
             total_sources,
             current_file_name: Some(source.file_name.clone()),
+            completed_bytes,
+            total_bytes,
+            current_file_bytes: source.byte_length,
+            current_file_total_bytes: source.byte_length,
         });
     }
     let all_sources_verified = sources
@@ -2480,11 +2520,15 @@ where
     })
 }
 
-fn verify_registered_stack_source(
+fn verify_registered_stack_source<F>(
     source_directory: &Path,
     source: &RegisteredStackReportSourceInspection,
     cancellation: &CancellationToken,
-) -> Result<RegisteredStackSourceVerification, PreviewCommandError> {
+    mut on_bytes: F,
+) -> Result<RegisteredStackSourceVerification, PreviewCommandError>
+where
+    F: FnMut(u64),
+{
     let path = source_directory.join(&source.file_name);
     let path_text = path
         .to_str()
@@ -2501,13 +2545,13 @@ fn verify_registered_stack_source(
         Ok(metadata) if metadata.len() != source.byte_length => {
             RegisteredStackSourceVerificationStatus::ByteLengthMismatch
         }
-        Ok(_) => match File::open(&path).and_then(|file| {
-            let mut reader = CancellationReader::new(file, cancellation);
-            fingerprint_reader(&mut reader).map_err(std::io::Error::other)
+        Ok(_) => match File::open(&path).and_then(|mut file| {
+            fingerprint_registered_stack_source(&mut file, cancellation, &mut on_bytes)
+                .map_err(std::io::Error::other)
         }) {
-            Ok(fingerprint)
-                if fingerprint.byte_length() == source.byte_length
-                    && fingerprint.sha256() == source.sha256 =>
+            Ok((byte_length, sha256))
+                if byte_length == source.byte_length
+                    && sha256.as_str() == source.sha256.as_str() =>
             {
                 RegisteredStackSourceVerificationStatus::Verified
             }
@@ -2527,27 +2571,38 @@ fn verify_registered_stack_source(
     })
 }
 
-struct CancellationReader<'a, R> {
-    inner: R,
-    cancellation: &'a CancellationToken,
-}
-
-impl<'a, R> CancellationReader<'a, R> {
-    const fn new(inner: R, cancellation: &'a CancellationToken) -> Self {
-        Self {
-            inner,
-            cancellation,
+fn fingerprint_registered_stack_source<R, F>(
+    reader: &mut R,
+    cancellation: &CancellationToken,
+    mut on_bytes: F,
+) -> Result<(u64, String), Box<dyn Error + Send + Sync>>
+where
+    R: Read,
+    F: FnMut(u64),
+{
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; aether_session::FINGERPRINT_BUFFER_BYTES];
+    let mut byte_length = 0_u64;
+    let mut next_progress = SOURCE_VERIFICATION_PROGRESS_BYTES;
+    loop {
+        cancellation.checkpoint()?;
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(Box::new(error)),
+        };
+        byte_length = byte_length
+            .checked_add(u64::try_from(read)?)
+            .ok_or_else(|| std::io::Error::other("source byte length overflow"))?;
+        hasher.update(&buffer[..read]);
+        if byte_length >= next_progress {
+            on_bytes(byte_length);
+            next_progress = byte_length.saturating_add(SOURCE_VERIFICATION_PROGRESS_BYTES);
         }
     }
-}
-
-impl<R: Read> Read for CancellationReader<'_, R> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.cancellation
-            .checkpoint()
-            .map_err(std::io::Error::other)?;
-        self.inner.read(buffer)
-    }
+    on_bytes(byte_length);
+    Ok((byte_length, lowercase_hex(&hasher.finalize())))
 }
 
 fn is_safe_report_file_name(file_name: &str) -> bool {
@@ -5564,6 +5619,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn source_fingerprint_progress_is_monotone_and_throttled() {
+        let input = vec![0x5a_u8; 8 * 1_024 * 1_024 + 17];
+        let expected = lowercase_hex(&Sha256::digest(&input));
+        let mut progress = Vec::new();
+        let result = fingerprint_registered_stack_source(
+            &mut Cursor::new(input),
+            &CancellationToken::new(),
+            |bytes| progress.push(bytes),
+        );
+
+        assert!(matches!(result, Ok((bytes, ref digest))
+            if bytes == SOURCE_VERIFICATION_PROGRESS_BYTES + 17 && digest == &expected));
+        assert_eq!(
+            progress.first().copied(),
+            Some(SOURCE_VERIFICATION_PROGRESS_BYTES)
+        );
+        assert_eq!(
+            progress.last().copied(),
+            Some(SOURCE_VERIFICATION_PROGRESS_BYTES + 17)
+        );
+        assert!(progress.windows(2).all(|values| values[0] < values[1]));
+    }
+
+    #[test]
+    fn source_fingerprint_cancels_between_fixed_reads() {
+        struct CancelAfterFirstRead {
+            inner: Cursor<Vec<u8>>,
+            cancellation: CancellationToken,
+            reads: usize,
+        }
+
+        impl Read for CancelAfterFirstRead {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let read = self.inner.read(buffer)?;
+                self.reads += 1;
+                if self.reads == 1 {
+                    assert!(self.cancellation.cancel());
+                }
+                Ok(read)
+            }
+        }
+
+        let cancellation = CancellationToken::new();
+        let mut reader = CancelAfterFirstRead {
+            inner: Cursor::new(vec![0x5a_u8; aether_session::FINGERPRINT_BUFFER_BYTES * 2]),
+            cancellation: cancellation.clone(),
+            reads: 0,
+        };
+        let result = fingerprint_registered_stack_source(&mut reader, &cancellation, |_| {});
+
+        assert!(result.is_err());
+        assert_eq!(reader.reads, 1);
+    }
+
     fn request(transfer: PreviewTransfer) -> FitsPreviewRequest {
         FitsPreviewRequest {
             path: PathBuf::from("unused-in-memory-test.fits"),
@@ -6392,6 +6502,14 @@ mod tests {
             source_progress.last().map(|event| event.completed_sources),
             Some(2)
         );
+        assert_eq!(
+            source_progress.last().map(|event| event.completed_bytes),
+            source_progress.last().map(|event| event.total_bytes)
+        );
+        assert!(source_progress.windows(2).all(|events| {
+            events[0].sequence < events[1].sequence
+                && events[0].completed_bytes <= events[1].completed_bytes
+        }));
         assert!(verified_sources.sources.iter().all(|source| {
             source.status == RegisteredStackSourceVerificationStatus::Verified
                 && source

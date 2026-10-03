@@ -852,18 +852,22 @@ describe("frame review workspace", () => {
             completedSources: 4,
             totalSources: 18,
             currentFileName: "m31-registered-004.fits",
+            completedBytes: 25 * 1_024 * 1_024,
+            totalBytes: 100 * 1_024 * 1_024,
+            currentFileBytes: 5 * 1_024 * 1_024,
+            currentFileTotalBytes: 20 * 1_024 * 1_024,
           },
         },
       },
     });
     expect(root.textContent).toContain(
-      "Hashing archived sources · 4/18 · m31-registered-004.fits",
+      "Hashing archived sources · 4/18 · 25.0 MiB/100.0 MiB · m31-registered-004.fits 25%",
     );
     const sourceProgress = getByRole<HTMLProgressElement>(root, "progressbar", {
       name: "Archived source verification progress",
     });
-    expect(sourceProgress.value).toBe(4);
-    expect(sourceProgress.max).toBe(18);
+    expect(sourceProgress.value).toBe(25 * 1_024 * 1_024);
+    expect(sourceProgress.max).toBe(100 * 1_024 * 1_024);
     fireEvent.click(getByRole(root, "button", { name: "Cancel hashing" }));
     expect(
       actions.onCancelRegisteredStackSourceVerification,
