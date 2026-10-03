@@ -565,6 +565,16 @@ describe("frame review workspace", () => {
             sourceCount: 2,
             productCount: 3,
             weighted: false,
+            allProductsVerified: true,
+            products: [
+              {
+                role: "science",
+                fileName: "integrated.fits",
+                path: "/stack/integrated.fits",
+                bytesWritten: 278_992_800,
+                status: "verified",
+              },
+            ],
           },
         },
       },
@@ -572,6 +582,9 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain(
       "2 sources · 3 products · strict mean · schema 1",
     );
+    expect(root.textContent).toContain("all FITS verified");
+    expect(root.textContent).toContain("Science · integrated.fits");
+    expect(root.textContent).toContain("266.1 MiB · FITS verified");
     expect(getByRole(root, "button", { name: "Verify again" })).not.toBeNull();
     fireEvent.click(
       getByRole(root, "button", { name: "Next registered frame" }),
@@ -771,6 +784,16 @@ describe("frame review workspace", () => {
             sourceCount: 18,
             productCount: 1,
             weighted: true,
+            allProductsVerified: false,
+            products: [
+              {
+                role: "science",
+                fileName: "m31.fits",
+                path: "/archive/m31.fits",
+                bytesWritten: 278_992_800,
+                status: "missing",
+              },
+            ],
           },
         },
       },
@@ -779,8 +802,10 @@ describe("frame review workspace", () => {
 
     expect(root.textContent).toContain("/archive/m31-integration-report.json");
     expect(root.textContent).toContain(
-      "18 sources · 1 product · balanced PSF weight · schema 1",
+      "18 sources · 1 product · balanced PSF weight · schema 1 · product evidence incomplete",
     );
+    expect(root.textContent).toContain("Science · m31.fits");
+    expect(root.textContent).toContain("FITS missing");
     expect(root.textContent).toContain("f".repeat(64));
     expect(root.textContent).toContain(
       "Published registered artifacts required",

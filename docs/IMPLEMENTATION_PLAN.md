@@ -1110,6 +1110,18 @@ safety reasoning. They do not narrate obvious syntax.
     and build coverage protect the workflow. Next, add a dedicated result
     workspace that can pair a verified report with its referenced FITS products
     and flag missing or checksum-inconsistent artifacts.
+81. Verify every FITS product referenced by a reopened integration report. The
+    native inspector confines product names to one sibling path component,
+    refuses symbolic links and non-regular files, compares exact stream length,
+    dimensions, sample count, manifest/plan/algorithm/source provenance, stored
+    checksum evidence, and independently recalculated `DATASUM` and `CHECKSUM`.
+    Missing, malformed, mismatched, and verified products remain distinct UI
+    states so a valid JSON seal cannot imply that its image artifacts are still
+    intact. Native tests cover missing products, modified pixels, restored
+    checksums, and path traversal; the result card lists each artifact and its
+    exact verification state. Next, let the result workspace preview verified
+    products directly from a reopened report without attaching them to the
+    active processing session.
 
 ## 11. Stable-release definition
 

@@ -270,6 +270,16 @@ describe("native registration bridge", () => {
       sourceCount: 12,
       productCount: 1,
       weighted: true,
+      allProductsVerified: true,
+      products: [
+        {
+          role: "science",
+          fileName: "integrated.fits",
+          path: "/results/integrated.fits",
+          bytesWritten: 33_177_600,
+          status: "verified",
+        },
+      ],
     };
     vi.mocked(invoke).mockResolvedValue(result);
 

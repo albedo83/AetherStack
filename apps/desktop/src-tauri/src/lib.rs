@@ -16,9 +16,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_fits::{
-    DEFAULT_STATISTICS_CHUNK_SAMPLES, FITS_STATISTICS_ALGORITHM_ID, FitsOutputProvenance,
-    FitsWriteSummary, HeaderReadOptions, ImageRegion, PrimaryImageReader, SampleStatus,
-    StoredSampleFormat, primary_image_statistics,
+    DEFAULT_STATISTICS_CHUNK_SAMPLES, DatasumVerification, FITS_STATISTICS_ALGORITHM_ID,
+    FitsOutputProvenance, FitsWriteSummary, HduChecksumVerification, HeaderReadOptions,
+    ImageRegion, PrimaryImageReader, SampleStatus, StoredSampleFormat, primary_image_statistics,
 };
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
@@ -467,6 +467,31 @@ struct RegisteredStackReportInspectionResponse {
     source_count: usize,
     product_count: usize,
     weighted: bool,
+    all_products_verified: bool,
+    products: Vec<RegisteredStackReportProductInspection>,
+}
+
+/// On-disk verification result for one product named by an integration report.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredStackReportProductInspection {
+    role: String,
+    file_name: String,
+    path: String,
+    bytes_written: u64,
+    status: RegisteredStackReportProductStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RegisteredStackReportProductStatus {
+    Verified,
+    Missing,
+    NonRegular,
+    ByteLengthMismatch,
+    InvalidFits,
+    MetadataMismatch,
+    ChecksumMismatch,
 }
 
 /// Exact bounded-memory summary of the complete primary FITS array.
@@ -2163,7 +2188,7 @@ fn inspect_registered_stack_report_sync(
         .products
         .iter()
         .map(|product| {
-            if product.file_name.is_empty()
+            if !is_safe_report_file_name(&product.file_name)
                 || product.samples_written == 0
                 || product.bytes_written == 0
                 || product
@@ -2177,6 +2202,12 @@ fn inspect_registered_stack_report_sync(
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     if product_roles.len() != envelope.report.products.len() || !product_roles.contains("science") {
+        return Err(registered_stack_report_validation_error());
+    }
+    if product_roles
+        .iter()
+        .any(|role| !matches!(*role, "science" | "rejection_low" | "rejection_high"))
+    {
         return Err(registered_stack_report_validation_error());
     }
     let weighted = matches!(
@@ -2212,6 +2243,25 @@ fn inspect_registered_stack_report_sync(
         None if !weighted => {}
         _ => return Err(registered_stack_report_validation_error()),
     }
+    let report_parent = path
+        .parent()
+        .ok_or_else(registered_stack_report_validation_error)?;
+    let products = envelope
+        .report
+        .products
+        .iter()
+        .map(|product| {
+            inspect_registered_stack_product(
+                report_parent,
+                product,
+                &envelope.report,
+                source_ids.len(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let all_products_verified = products
+        .iter()
+        .all(|product| product.status == RegisteredStackReportProductStatus::Verified);
     Ok(RegisteredStackReportInspectionResponse {
         schema_version: envelope.schema_version,
         report_sha256: envelope.report_sha256,
@@ -2221,7 +2271,126 @@ fn inspect_registered_stack_report_sync(
         source_count: source_ids.len(),
         product_count: product_roles.len(),
         weighted,
+        all_products_verified,
+        products,
     })
+}
+
+fn is_safe_report_file_name(file_name: &str) -> bool {
+    let mut components = Path::new(file_name).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
+fn inspect_registered_stack_product(
+    report_parent: &Path,
+    product: &RegisteredStackReportProduct,
+    report: &RegisteredStackReport,
+    source_count: usize,
+) -> Result<RegisteredStackReportProductInspection, PreviewCommandError> {
+    let path = report_parent.join(&product.file_name);
+    let path_text = path
+        .to_str()
+        .ok_or_else(registered_stack_report_validation_error)?
+        .to_owned();
+    let status = match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            RegisteredStackReportProductStatus::Missing
+        }
+        Err(_) => RegisteredStackReportProductStatus::NonRegular,
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            RegisteredStackReportProductStatus::NonRegular
+        }
+        Ok(metadata) if metadata.len() != product.bytes_written => {
+            RegisteredStackReportProductStatus::ByteLengthMismatch
+        }
+        Ok(_) => inspect_registered_stack_product_fits(&path, product, report, source_count),
+    };
+    Ok(RegisteredStackReportProductInspection {
+        role: product.role.clone(),
+        file_name: product.file_name.clone(),
+        path: path_text,
+        bytes_written: product.bytes_written,
+        status,
+    })
+}
+
+fn inspect_registered_stack_product_fits(
+    path: &Path,
+    product: &RegisteredStackReportProduct,
+    report: &RegisteredStackReport,
+    source_count: usize,
+) -> RegisteredStackReportProductStatus {
+    let Ok(file) = File::open(path) else {
+        return RegisteredStackReportProductStatus::InvalidFits;
+    };
+    let Ok(mut reader) = PrimaryImageReader::open(file, HeaderReadOptions::default()) else {
+        return RegisteredStackReportProductStatus::InvalidFits;
+    };
+    if !reader
+        .report()
+        .is_accepted(aether_fits::ValidationMode::Strict)
+    {
+        return RegisteredStackReportProductStatus::InvalidFits;
+    }
+    let expected_axes = if report.dimensions.planes == 1 {
+        vec![
+            u64::try_from(report.dimensions.width).ok(),
+            u64::try_from(report.dimensions.height).ok(),
+        ]
+    } else {
+        vec![
+            u64::try_from(report.dimensions.width).ok(),
+            u64::try_from(report.dimensions.height).ok(),
+            u64::try_from(report.dimensions.planes).ok(),
+        ]
+    };
+    let Some(expected_axes) = expected_axes.into_iter().collect::<Option<Vec<_>>>() else {
+        return RegisteredStackReportProductStatus::MetadataMismatch;
+    };
+    let expected_algorithm = match product.role.as_str() {
+        "science" => registered_stack_estimator_algorithm_id(report.integration.estimator),
+        "rejection_low" | "rejection_high" => PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+        _ => return RegisteredStackReportProductStatus::MetadataMismatch,
+    };
+    let header = reader.report().header();
+    if reader.descriptor().axes() != expected_axes
+        || reader.descriptor().pixel_count() != product.samples_written
+        || header.string("AETHMAN") != Some(report.manifest_sha256.as_str())
+        || header.string("AETHPLN") != Some(report.plan_sha256.as_str())
+        || header.string("AETHALG") != Some(expected_algorithm)
+        || header.integer("AETHSRC") != i64::try_from(source_count).ok()
+        || header.string("CHECKSUM") != product.checksum.as_deref()
+    {
+        return RegisteredStackReportProductStatus::MetadataMismatch;
+    }
+    let Ok(checksums) = reader.verify_checksums() else {
+        return RegisteredStackReportProductStatus::InvalidFits;
+    };
+    match (checksums.datasum(), checksums.checksum(), product.data_sum) {
+        (
+            DatasumVerification::Valid { checksum },
+            HduChecksumVerification::Valid,
+            Some(expected),
+        ) if checksum == expected => RegisteredStackReportProductStatus::Verified,
+        _ => RegisteredStackReportProductStatus::ChecksumMismatch,
+    }
+}
+
+const fn registered_stack_estimator_algorithm_id(
+    estimator: RegisteredStackEstimatorInput,
+) -> &'static str {
+    match estimator {
+        RegisteredStackEstimatorInput::StrictMean => {
+            aether_runtime::REGISTERED_CROP_MEAN_ALGORITHM_ID
+        }
+        RegisteredStackEstimatorInput::WeightedMean => {
+            aether_runtime::REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID
+        }
+        RegisteredStackEstimatorInput::PercentileClipped => {
+            aether_runtime::REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID
+        }
+    }
 }
 
 fn lowercase_hex(bytes: &[u8]) -> String {
@@ -5904,6 +6073,47 @@ mod tests {
         assert_eq!(inspection.source_count, 2);
         assert_eq!(inspection.product_count, 1);
         assert!(!inspection.weighted);
+        assert!(inspection.all_products_verified);
+        assert_eq!(inspection.products.len(), 1);
+        assert_eq!(inspection.products[0].role, "science");
+        assert_eq!(
+            inspection.products[0].status,
+            RegisteredStackReportProductStatus::Verified
+        );
+        assert_eq!(inspection.products[0].bytes_written, result.bytes_written);
+        let parked_stack_path = directory.path().join("parked-stack.fits");
+        fs::rename(&stack_path, &parked_stack_path)?;
+        let missing_product = inspect_registered_stack_report_sync(&report_path)?;
+        assert!(!missing_product.all_products_verified);
+        assert_eq!(
+            missing_product.products[0].status,
+            RegisteredStackReportProductStatus::Missing
+        );
+        fs::rename(&parked_stack_path, &stack_path)?;
+        let mut altered_stack = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&stack_path)?;
+        altered_stack.seek(SeekFrom::Start(2_888))?;
+        let mut stored_byte = [0_u8; 1];
+        altered_stack.read_exact(&mut stored_byte)?;
+        altered_stack.seek(SeekFrom::Start(2_888))?;
+        altered_stack.write_all(&[stored_byte[0] ^ 0x01])?;
+        altered_stack.flush()?;
+        let changed_product = inspect_registered_stack_report_sync(&report_path)?;
+        assert!(!changed_product.all_products_verified);
+        assert_eq!(
+            changed_product.products[0].status,
+            RegisteredStackReportProductStatus::ChecksumMismatch
+        );
+        altered_stack.seek(SeekFrom::Start(2_888))?;
+        altered_stack.write_all(&stored_byte)?;
+        altered_stack.flush()?;
+        drop(altered_stack);
+        assert!(inspect_registered_stack_report_sync(&report_path)?.all_products_verified);
+        assert!(is_safe_report_file_name("integrated.fits"));
+        assert!(!is_safe_report_file_name("../integrated.fits"));
+        assert!(!is_safe_report_file_name("nested/integrated.fits"));
         assert_eq!(progress.first().map(|event| event.state), Some("started"));
         assert_eq!(progress.last().map(|event| event.state), Some("completed"));
         report["report"]["dimensions"]["width"] = serde_json::json!(1);

@@ -211,6 +211,23 @@ export interface RegisteredStackReportInspection {
   readonly sourceCount: number;
   readonly productCount: number;
   readonly weighted: boolean;
+  readonly allProductsVerified: boolean;
+  readonly products: readonly RegisteredStackReportProductInspection[];
+}
+
+export interface RegisteredStackReportProductInspection {
+  readonly role: "science" | "rejection_low" | "rejection_high";
+  readonly fileName: string;
+  readonly path: string;
+  readonly bytesWritten: number;
+  readonly status:
+    | "verified"
+    | "missing"
+    | "non_regular"
+    | "byte_length_mismatch"
+    | "invalid_fits"
+    | "metadata_mismatch"
+    | "checksum_mismatch";
 }
 
 /** Runs the bounded native registration diagnostic without exposing file data to JavaScript. */

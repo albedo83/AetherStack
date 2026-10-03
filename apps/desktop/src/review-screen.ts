@@ -4,7 +4,10 @@ import type {
   MasterPlanSettings,
   MasterProductPlan,
 } from "./calibration-bridge.ts";
-import type { RegisteredStackIntegrationSettings } from "./registration-bridge.ts";
+import type {
+  RegisteredStackIntegrationSettings,
+  RegisteredStackReportProductInspection,
+} from "./registration-bridge.ts";
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import type {
   ReviewActions,
@@ -181,6 +184,10 @@ export function mountReviewScreen(
     registeredStackReportSummary: required<HTMLElement>(
       root,
       "[data-registered-stack-report-summary]",
+    ),
+    registeredStackReportProducts: required<HTMLElement>(
+      root,
+      "[data-registered-stack-report-products]",
     ),
     openRegisteredStackReport: required<HTMLButtonElement>(
       root,
@@ -1486,6 +1493,7 @@ interface RegistrationElements {
   readonly registeredStackReportDigest: HTMLElement;
   readonly inspectRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackReportSummary: HTMLElement;
+  readonly registeredStackReportProducts: HTMLElement;
   readonly openRegisteredStackReport: HTMLButtonElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
@@ -1681,10 +1689,23 @@ function renderRegistration(
   elements.registeredStackReport.dataset.state =
     registration.stack.reportInspectionState;
   elements.registeredStackReportSummary.textContent = reportInspection
-    ? `${formatCountedNoun(reportInspection.sourceCount, "source")} · ${formatCountedNoun(reportInspection.productCount, "product")} · ${formatEstimatorName(reportInspection.estimator)} · schema ${reportInspection.schemaVersion}`
+    ? `${formatCountedNoun(reportInspection.sourceCount, "source")} · ${formatCountedNoun(reportInspection.productCount, "product")} · ${formatEstimatorName(reportInspection.estimator)} · schema ${reportInspection.schemaVersion} · ${reportInspection.allProductsVerified ? "all FITS verified" : "product evidence incomplete"}`
     : registration.stack.reportInspectionState === "error"
       ? "Native verification failed · report evidence is not trusted"
       : "Verify natively before using this provenance as evidence";
+  elements.registeredStackReportProducts.replaceChildren(
+    ...(reportInspection?.products ?? []).map((product) => {
+      const row = document.createElement("li");
+      row.dataset.status = product.status;
+      const identity = document.createElement("span");
+      identity.textContent = `${formatRegisteredProductRole(product.role)} · ${product.fileName}`;
+      identity.title = product.path;
+      const evidence = document.createElement("span");
+      evidence.textContent = `${formatByteCount(product.bytesWritten)} · ${formatRegisteredProductStatus(product.status)}`;
+      row.append(identity, evidence);
+      return row;
+    }),
+  );
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
@@ -2186,6 +2207,46 @@ function formatEstimatorName(
 
 function formatCountedNoun(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function formatRegisteredProductRole(
+  role: RegisteredStackReportProductInspection["role"],
+): string {
+  switch (role) {
+    case "science":
+      return "Science";
+    case "rejection_low":
+      return "Low rejection map";
+    case "rejection_high":
+      return "High rejection map";
+  }
+}
+
+function formatRegisteredProductStatus(
+  status: RegisteredStackReportProductInspection["status"],
+): string {
+  switch (status) {
+    case "verified":
+      return "FITS verified";
+    case "missing":
+      return "FITS missing";
+    case "non_regular":
+      return "unsafe file type";
+    case "byte_length_mismatch":
+      return "byte length mismatch";
+    case "invalid_fits":
+      return "invalid FITS";
+    case "metadata_mismatch":
+      return "provenance mismatch";
+    case "checksum_mismatch":
+      return "checksum mismatch";
+  }
+}
+
+function formatByteCount(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
 }
 
 function calibrationSettings(
@@ -3129,6 +3190,7 @@ function shellMarkup(): string {
                     <code data-registered-stack-report-path></code>
                     <code data-registered-stack-report-digest></code>
                     <output data-registered-stack-report-summary aria-live="polite"></output>
+                    <ul class="integration-report__products" data-registered-stack-report-products aria-label="Verified integration products"></ul>
                   </div>
                   <div class="registered-stack__product-tabs" role="tablist" aria-label="Integrated product view">
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="science" aria-selected="true">Science</button>
