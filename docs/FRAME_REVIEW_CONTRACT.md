@@ -31,8 +31,12 @@ seals those rules and results in immutable processing order. Its versioned,
 path-free canonical SHA-256 includes frame identities, exact typed measurements,
 missing states, and proposals while excluding display labels and machine paths.
 Changing a rule, metric, or processing position therefore changes the plan
-identity. Native session persistence, previewed bulk application, and the
-desktop rule editor remain planned before automatic selection can affect a run.
+identity. The desktop adapter now validates typed metric snapshots and rules,
+rejects duplicate or foreign identities, restores the processing order from its
+native review book, and returns the plan without mutating manual state. The
+browser bridge only transports data; it contains no threshold evaluator. Native
+metric persistence, previewed bulk application, and the desktop rule editor
+remain planned before automatic selection can affect a run.
 
 The desktop adapter initializes one native review book after a successful
 session import. Accept, reject, clear, and undo commands mutate that book under a

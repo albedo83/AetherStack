@@ -76,6 +76,7 @@ export interface FrameMetrics {
   readonly fwhmPixels: MetricValue;
   readonly eccentricity: MetricValue;
   readonly detectedStars: number | null;
+  readonly usableStars: number | null;
   readonly background: MetricValue;
   readonly noise: MetricValue;
 }

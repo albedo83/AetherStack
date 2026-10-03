@@ -36,10 +36,12 @@ use aether_quality::{
 use aether_register::{RegistrationDiagnostic, diagnose_paths};
 use aether_registration::{AffineTransform, PlannedRegistrationFrame, RegistrationPlan};
 use aether_review::{
-    DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics, FrameSpec,
-    MAX_UNDO_DEPTH, ManualDecision, ManualRejectionReason, MissingPlacement, ReviewBook,
-    ReviewError, ReviewState, SortDirection as ReviewSortDirection, SortField as ReviewSortField,
-    SortSpec, TransferFunction,
+    DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics,
+    FrameSelectionComparator, FrameSelectionMetric, FrameSelectionPlan, FrameSelectionRule,
+    FrameSpec, MAX_FRAME_SELECTION_PLAN_FRAMES, MAX_UNDO_DEPTH, ManualDecision,
+    ManualRejectionReason, MissingMetricPolicy, MissingPlacement, ReviewBook, ReviewError,
+    ReviewState, SortDirection as ReviewSortDirection, SortField as ReviewSortField, SortSpec,
+    TransferFunction,
 };
 use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, LightPlanExecutionError,
@@ -726,6 +728,84 @@ enum ReviewSortFieldWire {
 enum ReviewSortDirectionWire {
     Ascending,
     Descending,
+}
+
+/// Complete metric snapshot supplied to a non-mutating selection preview.
+///
+/// The native adapter validates every value again and resolves frame order and
+/// labels from its own review state. The browser cannot introduce identities or
+/// choose a different processing order.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrameSelectionMetricsWire {
+    background: Option<f64>,
+    noise: Option<f64>,
+    signal_to_noise: Option<f64>,
+    detected_stars: Option<usize>,
+    usable_stars: Option<usize>,
+    fwhm_pixels: Option<f64>,
+    eccentricity: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrameSelectionFrameWire {
+    frame_id: String,
+    metrics: FrameSelectionMetricsWire,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FrameSelectionMetricWire {
+    Background,
+    Noise,
+    SignalToNoise,
+    DetectedStars,
+    UsableStars,
+    FwhmPixels,
+    Eccentricity,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FrameSelectionComparatorWire {
+    LessThan,
+    GreaterThan,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MissingMetricPolicyWire {
+    Retain,
+    Reject,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum FrameSelectionThresholdWire {
+    Scalar(f64),
+    Count(u64),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrameSelectionRuleWire {
+    metric: FrameSelectionMetricWire,
+    comparator: FrameSelectionComparatorWire,
+    threshold: FrameSelectionThresholdWire,
+    missing_policy: MissingMetricPolicyWire,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrameSelectionPreviewRequest {
+    frames: Vec<FrameSelectionFrameWire>,
+    rules: Vec<FrameSelectionRuleWire>,
 }
 
 /// Native owner of the current session's manual review decisions.
@@ -3726,6 +3806,14 @@ fn undo_review_decision(
     undo_review_decision_sync(&review_state)
 }
 
+#[tauri::command]
+fn preview_frame_selection(
+    request: FrameSelectionPreviewRequest,
+    review_state: tauri::State<'_, DesktopReviewState>,
+) -> Result<FrameSelectionPlan, PreviewCommandError> {
+    preview_frame_selection_sync(&review_state, request)
+}
+
 fn install_imported_session(
     session_state: &DesktopSessionState,
     review_state: &DesktopReviewState,
@@ -3822,6 +3910,100 @@ fn undo_review_decision_sync(
     })?;
     changes.extend(inverse.iter().map(review_decision_entry_from_delta));
     Ok(review_decision_update(book, changes))
+}
+
+fn preview_frame_selection_sync(
+    review_state: &DesktopReviewState,
+    request: FrameSelectionPreviewRequest,
+) -> Result<FrameSelectionPlan, PreviewCommandError> {
+    if request.frames.is_empty() || request.frames.len() > MAX_FRAME_SELECTION_PLAN_FRAMES {
+        return Err(frame_selection_input_error());
+    }
+
+    let mut metrics_by_id = BTreeMap::new();
+    for frame in request.frames {
+        let frame_id = FrameId::new(frame.frame_id).map_err(|_| frame_selection_input_error())?;
+        let metrics = frame_selection_metrics(frame.metrics)?;
+        if metrics_by_id.insert(frame_id, metrics).is_some() {
+            return Err(frame_selection_input_error());
+        }
+    }
+    let rules = frame_selection_rules(&request.rules)?;
+
+    let native_state = lock_review_state(review_state)?;
+    let native_book = native_state
+        .as_ref()
+        .ok_or_else(review_state_missing_error)?;
+    let mut frames = review_entry_buffer(metrics_by_id.len())?;
+    for frame_id in native_book.processing_order() {
+        let Some(metrics) = metrics_by_id.remove(frame_id) else {
+            continue;
+        };
+        let label = native_book
+            .label(frame_id)
+            .ok_or_else(frame_selection_state_error)?;
+        frames.push(
+            FrameSpec::new(frame_id.clone(), label, metrics)
+                .map_err(|_| frame_selection_state_error())?,
+        );
+    }
+    if !metrics_by_id.is_empty() || frames.is_empty() {
+        return Err(frame_selection_input_error());
+    }
+
+    let preview_book = ReviewBook::new(frames, 1).map_err(|_| frame_selection_state_error())?;
+    FrameSelectionPlan::build(&preview_book, &rules).map_err(|_| frame_selection_input_error())
+}
+
+fn frame_selection_metrics(
+    metrics: FrameSelectionMetricsWire,
+) -> Result<FrameMetrics, PreviewCommandError> {
+    FrameMetrics::new(
+        metrics.background,
+        metrics.noise,
+        metrics.detected_stars,
+        metrics.usable_stars,
+        metrics.fwhm_pixels,
+        metrics.eccentricity,
+    )
+    .and_then(|validated| validated.with_signal_to_noise(metrics.signal_to_noise))
+    .map_err(|_| frame_selection_input_error())
+}
+
+fn frame_selection_rules(
+    rules: &[FrameSelectionRuleWire],
+) -> Result<Vec<FrameSelectionRule>, PreviewCommandError> {
+    let mut output = review_entry_buffer(rules.len())?;
+    for rule in rules {
+        let metric = match rule.metric {
+            FrameSelectionMetricWire::Background => FrameSelectionMetric::Background,
+            FrameSelectionMetricWire::Noise => FrameSelectionMetric::Noise,
+            FrameSelectionMetricWire::SignalToNoise => FrameSelectionMetric::SignalToNoise,
+            FrameSelectionMetricWire::DetectedStars => FrameSelectionMetric::DetectedStars,
+            FrameSelectionMetricWire::UsableStars => FrameSelectionMetric::UsableStars,
+            FrameSelectionMetricWire::FwhmPixels => FrameSelectionMetric::FwhmMajorPixels,
+            FrameSelectionMetricWire::Eccentricity => FrameSelectionMetric::Eccentricity,
+        };
+        let comparator = match rule.comparator {
+            FrameSelectionComparatorWire::LessThan => FrameSelectionComparator::LessThan,
+            FrameSelectionComparatorWire::GreaterThan => FrameSelectionComparator::GreaterThan,
+        };
+        let missing_policy = match rule.missing_policy {
+            MissingMetricPolicyWire::Retain => MissingMetricPolicy::Retain,
+            MissingMetricPolicyWire::Reject => MissingMetricPolicy::Reject,
+        };
+        let validated = match rule.threshold {
+            FrameSelectionThresholdWire::Scalar(value) => {
+                FrameSelectionRule::scalar(metric, comparator, value, missing_policy)
+            }
+            FrameSelectionThresholdWire::Count(value) => {
+                FrameSelectionRule::count(metric, comparator, value, missing_policy)
+            }
+        }
+        .map_err(|_| frame_selection_input_error())?;
+        output.push(validated);
+    }
+    Ok(output)
 }
 
 fn review_decision_update(
@@ -3977,6 +4159,20 @@ const fn review_nothing_to_undo_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "review_nothing_to_undo",
         "No applied review transaction remains to undo.",
+    )
+}
+
+const fn frame_selection_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_selection_input_invalid",
+        "The automatic-selection preview contains invalid rules, metrics, or frame identities.",
+    )
+}
+
+const fn frame_selection_state_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "frame_selection_state_invalid",
+        "The native review state cannot produce a consistent automatic-selection preview.",
     )
 }
 
@@ -5575,6 +5771,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_registered_stack_report,
             inspect_stack_pixel,
             preview_master_plan,
+            preview_frame_selection,
             preview_registration_plan,
             preview_registered_weights,
             render_fits_preview,
@@ -7625,6 +7822,143 @@ mod tests {
         };
         assert_eq!(error.code, "review_nothing_to_undo");
         Ok(())
+    }
+
+    #[test]
+    fn previews_selection_in_native_order_without_mutating_manual_state() -> TestResult {
+        let imported = ImportedSession {
+            name: "selection test".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![
+                imported_review_test_frame('a', "first.fits"),
+                imported_review_test_frame('b', "second.fits"),
+            ],
+            files_considered: 2,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+        };
+        let state = DesktopReviewState::default();
+        install_review_book(&state, &imported)?;
+        apply_review_decision_sync(
+            &state,
+            ReviewDecisionRequest {
+                frame_id: "a".repeat(64),
+                action: ReviewDecisionAction::Accept,
+            },
+        )?;
+
+        let plan = preview_frame_selection_sync(
+            &state,
+            FrameSelectionPreviewRequest {
+                // Deliberately reversed: the native review book owns processing order.
+                frames: vec![
+                    selection_test_frame('b', 5.0, 300),
+                    selection_test_frame('a', 3.0, 700),
+                ],
+                rules: vec![FrameSelectionRuleWire {
+                    metric: FrameSelectionMetricWire::FwhmPixels,
+                    comparator: FrameSelectionComparatorWire::LessThan,
+                    threshold: FrameSelectionThresholdWire::Scalar(4.0),
+                    missing_policy: MissingMetricPolicyWire::Reject,
+                }],
+            },
+        )?;
+
+        assert_eq!(plan.frames()[0].frame_id().as_str(), "a".repeat(64));
+        assert_eq!(plan.frames()[1].frame_id().as_str(), "b".repeat(64));
+        assert_eq!(
+            plan.frames()[0].proposal(),
+            aether_review::FrameSelectionProposal::Retain
+        );
+        assert_eq!(
+            plan.frames()[1].proposal(),
+            aether_review::FrameSelectionProposal::Reject
+        );
+        let native = lock_review_state(&state)?;
+        let book = native.as_ref().ok_or("missing review book")?;
+        assert_eq!(book.generation(), 1);
+        assert_eq!(
+            book.state(&FrameId::new("a".repeat(64))?),
+            Some(ReviewState::Accepted)
+        );
+
+        let json = serde_json::to_value(&plan)?;
+        assert_eq!(json["schemaVersion"], 1);
+        assert_eq!(json["frames"][0]["frameId"], "a".repeat(64));
+        assert!(json.get("schema_version").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn selection_preview_rejects_foreign_identity_and_wrong_threshold_kind() -> TestResult {
+        let imported = ImportedSession {
+            name: "selection validation".to_owned(),
+            root_path: "/runtime-only".to_owned(),
+            frames: vec![imported_review_test_frame('a', "first.fits")],
+            files_considered: 1,
+            classification_conflicts: 0,
+            recoverable_failures: Vec::new(),
+            unassigned_sources: Vec::new(),
+        };
+        let state = DesktopReviewState::default();
+        install_review_book(&state, &imported)?;
+
+        let Err(foreign) = preview_frame_selection_sync(
+            &state,
+            FrameSelectionPreviewRequest {
+                frames: vec![selection_test_frame('b', 3.0, 700)],
+                rules: vec![selection_test_fwhm_rule()],
+            },
+        ) else {
+            return Err("a foreign frame identity was accepted".into());
+        };
+        assert_eq!(foreign.code, "frame_selection_input_invalid");
+
+        let Err(wrong_kind) = preview_frame_selection_sync(
+            &state,
+            FrameSelectionPreviewRequest {
+                frames: vec![selection_test_frame('a', 3.0, 700)],
+                rules: vec![FrameSelectionRuleWire {
+                    metric: FrameSelectionMetricWire::DetectedStars,
+                    comparator: FrameSelectionComparatorWire::GreaterThan,
+                    threshold: FrameSelectionThresholdWire::Scalar(500.0),
+                    missing_policy: MissingMetricPolicyWire::Reject,
+                }],
+            },
+        ) else {
+            return Err("a scalar star-count threshold was accepted".into());
+        };
+        assert_eq!(wrong_kind.code, "frame_selection_input_invalid");
+        Ok(())
+    }
+
+    fn selection_test_frame(
+        digit: char,
+        fwhm_pixels: f64,
+        usable_stars: usize,
+    ) -> FrameSelectionFrameWire {
+        FrameSelectionFrameWire {
+            frame_id: digit.to_string().repeat(64),
+            metrics: FrameSelectionMetricsWire {
+                background: Some(1_000.0),
+                noise: Some(12.0),
+                signal_to_noise: Some(30.0),
+                detected_stars: Some(usable_stars + 20),
+                usable_stars: Some(usable_stars),
+                fwhm_pixels: Some(fwhm_pixels),
+                eccentricity: Some(0.4),
+            },
+        }
+    }
+
+    const fn selection_test_fwhm_rule() -> FrameSelectionRuleWire {
+        FrameSelectionRuleWire {
+            metric: FrameSelectionMetricWire::FwhmPixels,
+            comparator: FrameSelectionComparatorWire::LessThan,
+            threshold: FrameSelectionThresholdWire::Scalar(4.0),
+            missing_policy: MissingMetricPolicyWire::Reject,
+        }
     }
 
     fn imported_review_test_frame(digit: char, label: &str) -> ImportedFrame {

@@ -68,6 +68,7 @@ pub enum FrameSelectionValue {
 
 /// One validated metric threshold.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSelectionRule {
     metric: FrameSelectionMetric,
     comparator: FrameSelectionComparator,
@@ -172,6 +173,7 @@ pub enum FrameSelectionRuleState {
 
 /// Complete evidence for one evaluated rule.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSelectionRuleEvidence {
     rule: FrameSelectionRule,
     measured: Option<FrameSelectionValue>,
@@ -210,6 +212,7 @@ pub enum FrameSelectionProposal {
 
 /// Full non-short-circuiting evaluation for one frame.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSelectionEvaluation {
     algorithm_id: &'static str,
     proposal: FrameSelectionProposal,
@@ -291,6 +294,7 @@ impl FrameSelectionEvaluation {
 
 /// Compact per-rule evidence stored beside one frame identity in a plan.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSelectionMetricEvidence {
     measured: Option<FrameSelectionValue>,
     state: FrameSelectionRuleState,
@@ -312,6 +316,7 @@ impl FrameSelectionMetricEvidence {
 
 /// Automatic proposal and complete metric evidence for one stable frame.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSelectionFrameResult {
     frame_id: FrameId,
     proposal: FrameSelectionProposal,
@@ -340,6 +345,7 @@ impl FrameSelectionFrameResult {
 
 /// Canonical identity-bound automatic-selection evidence for a review set.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameSelectionPlan {
     schema_version: u16,
     algorithm_id: &'static str,

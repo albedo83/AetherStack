@@ -74,7 +74,9 @@ optimized CPU and GPU paths must match.
   versioned automatic-threshold evaluator that preserves typed measured values,
   comparators, and missing-metric evidence without mutating manual decisions,
   plus a bounded canonical plan whose path-free SHA-256 binds ordered frame
-  identities, rules, measurements, and proposals for reproducible review;
+  identities, rules, measurements, and proposals for reproducible review; the
+  native desktop adapter validates typed metric snapshots and rules, restores
+  native processing order, and returns this plan through a tested thin bridge;
 - bounded FITS preview reduction with chunk-size-invariant compensated means,
   complete valid/excluded support accounting, automatic pyramid-level choice,
   explicit linear, midtone, or asinh grayscale display mapping, linked-luminance

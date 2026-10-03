@@ -2603,6 +2603,7 @@ function emptyQualityMetrics(): ReviewFrame["metrics"] {
     fwhmPixels: null,
     eccentricity: null,
     detectedStars: null,
+    usableStars: null,
     background: null,
     noise: null,
   };
@@ -2614,6 +2615,7 @@ function qualityMetrics(result: FrameQualityResult): ReviewFrame["metrics"] {
     fwhmPixels: result.fwhmPixels,
     eccentricity: result.eccentricity,
     detectedStars: result.detectedStars,
+    usableStars: result.usableStars,
     background: result.background,
     noise: result.noise,
   };

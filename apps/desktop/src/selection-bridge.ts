@@ -1,0 +1,82 @@
+import { invoke } from "@tauri-apps/api/core";
+
+import type { ReviewFrame } from "./model.ts";
+
+export type FrameSelectionMetric =
+  | "background"
+  | "noise"
+  | "signal_to_noise"
+  | "detected_stars"
+  | "usable_stars"
+  | "fwhm_pixels"
+  | "eccentricity";
+
+export type FrameSelectionComparator = "less_than" | "greater_than";
+export type MissingMetricPolicy = "retain" | "reject";
+
+export type FrameSelectionThreshold =
+  | { readonly kind: "scalar"; readonly value: number }
+  | { readonly kind: "count"; readonly value: number };
+
+export interface FrameSelectionRule {
+  readonly metric: FrameSelectionMetric;
+  readonly comparator: FrameSelectionComparator;
+  readonly threshold: FrameSelectionThreshold;
+  readonly missingPolicy: MissingMetricPolicy;
+}
+
+export type FrameSelectionValue =
+  | { readonly kind: "scalar"; readonly value: number }
+  | { readonly kind: "count"; readonly value: number };
+
+export type FrameSelectionRuleState =
+  "passed" | "failed" | "missing_retained" | "missing_rejected";
+
+export interface FrameSelectionMetricEvidence {
+  readonly measured: FrameSelectionValue | null;
+  readonly state: FrameSelectionRuleState;
+}
+
+export interface FrameSelectionFrameResult {
+  readonly frameId: string;
+  readonly proposal: "retain" | "reject";
+  readonly evidence: readonly FrameSelectionMetricEvidence[];
+}
+
+export interface FrameSelectionPlan {
+  readonly schemaVersion: number;
+  readonly algorithmId: string;
+  readonly rules: readonly FrameSelectionRule[];
+  readonly frames: readonly FrameSelectionFrameResult[];
+  readonly planSha256: string;
+}
+
+/**
+ * Requests an identity-bound, non-mutating automatic-selection preview.
+ *
+ * Rust validates every metric and rule, resolves labels and processing order
+ * from native state, and returns the canonical digest. This bridge contains no
+ * threshold evaluator and cannot change a manual review decision.
+ */
+export function previewFrameSelection(
+  frames: readonly ReviewFrame[],
+  rules: readonly FrameSelectionRule[],
+): Promise<FrameSelectionPlan> {
+  return invoke<FrameSelectionPlan>("preview_frame_selection", {
+    request: {
+      frames: frames.map((frame) => ({
+        frameId: frame.id,
+        metrics: {
+          background: frame.metrics.background,
+          noise: frame.metrics.noise,
+          signalToNoise: frame.metrics.signalToNoise,
+          detectedStars: frame.metrics.detectedStars,
+          usableStars: frame.metrics.usableStars,
+          fwhmPixels: frame.metrics.fwhmPixels,
+          eccentricity: frame.metrics.eccentricity,
+        },
+      })),
+      rules,
+    },
+  });
+}

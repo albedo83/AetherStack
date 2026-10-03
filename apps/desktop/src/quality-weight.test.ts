@@ -34,6 +34,7 @@ function frame(
       fwhmPixels,
       eccentricity,
       detectedStars: 100,
+      usableStars: 90,
       background: 20,
       noise: 2,
     },

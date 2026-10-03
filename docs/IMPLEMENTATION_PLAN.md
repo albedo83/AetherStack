@@ -1244,6 +1244,17 @@ safety reasoning. They do not narrate obvious syntax.
     label independence, and digest sensitivity to rule, measurement, and order
     changes. Next, expose this plan through the native adapter as a previewed
     batch transaction without granting it authority over manual decisions.
+95. Expose automatic selection through a validation-only native boundary. The
+    desktop command accepts typed scalar/count thresholds and complete metric
+    snapshots, validates all physical domains in Rust, rejects duplicate or
+    foreign frame identities, reconstructs immutable processing order from the
+    native review book, and returns the canonical plan without changing manual
+    state or undo generation. Its TypeScript bridge transports typed data but
+    contains no evaluator. Native and bridge tests cover canonical camel-case
+    serialization, native-order restoration, manual-state isolation, foreign
+    identity rejection, threshold-kind rejection, and usable-star transport.
+    Next, retain quality evidence in native session state so preview input no
+    longer needs to cross back from the browser before building the plan.
 
 ## 11. Stable-release definition
 
