@@ -194,6 +194,14 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-report-sources]",
     ),
+    registeredStackSourceSummary: required<HTMLElement>(
+      root,
+      "[data-registered-stack-source-summary]",
+    ),
+    registeredStackSourceFilters: requiredAll<HTMLButtonElement>(
+      root,
+      "[data-source-evidence-filter]",
+    ),
     verifyRegisteredStackSources: required<HTMLButtonElement>(
       root,
       '[data-action="verify-registered-stack-sources"]',
@@ -540,6 +548,7 @@ export function mountReviewScreen(
   let model = initialModel;
   let pendingRejectFrameId: string | null = null;
   const sortDirections = new Map<SortField, SortDirection>();
+  let sourceEvidenceFilter: SourceEvidenceFilter = "all";
 
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -566,6 +575,14 @@ export function mountReviewScreen(
     }
     if (action === "cancel-registered-stack-source-verification") {
       actions.onCancelRegisteredStackSourceVerification();
+      return;
+    }
+    if (action === "filter-source-evidence") {
+      const filter = actionElement.dataset.sourceEvidenceFilter;
+      if (isSourceEvidenceFilter(filter)) {
+        sourceEvidenceFilter = filter;
+        renderRegistration(elements, model, sourceEvidenceFilter);
+      }
       return;
     }
 
@@ -1012,7 +1029,7 @@ export function mountReviewScreen(
       item.classList.toggle("nav-item--active", selected);
     }
     renderCalibration(elements, model);
-    renderRegistration(elements, model);
+    renderRegistration(elements, model, sourceEvidenceFilter);
     syncStepperStates(root);
     elements.importSession.disabled = importing || masterBusy;
     elements.importSession.textContent = importing
@@ -1532,6 +1549,8 @@ interface RegistrationElements {
   readonly registeredStackReportSummary: HTMLElement;
   readonly registeredStackReportProducts: HTMLElement;
   readonly registeredStackReportSources: HTMLElement;
+  readonly registeredStackSourceSummary: HTMLElement;
+  readonly registeredStackSourceFilters: readonly HTMLButtonElement[];
   readonly verifyRegisteredStackSources: HTMLButtonElement;
   readonly cancelRegisteredStackSourceVerification: HTMLButtonElement;
   readonly registeredStackSourceProgress: HTMLProgressElement;
@@ -1574,9 +1593,23 @@ interface RegistrationElements {
   readonly registeredPreviewPlay: HTMLButtonElement;
 }
 
+type SourceEvidenceFilter = "all" | "issues" | "verified" | "unverified";
+
+function isSourceEvidenceFilter(
+  value: string | undefined,
+): value is SourceEvidenceFilter {
+  return (
+    value === "all" ||
+    value === "issues" ||
+    value === "verified" ||
+    value === "unverified"
+  );
+}
+
 function renderRegistration(
   elements: RegistrationElements,
   model: ReviewViewModel,
+  sourceEvidenceFilter: SourceEvidenceFilter,
 ): void {
   const registration = model.registration;
   const options = registration.frames.map((frame) => {
@@ -1782,22 +1815,52 @@ function renderRegistration(
       : registration.stack.sourceVerificationState === "error"
         ? "Source verification failed safely"
         : "Choose the directory containing the registered source FITS files";
-  elements.registeredStackReportSources.replaceChildren(
-    ...(reportInspection?.sources ?? []).map((source) => {
-      const verification = verifiedSources.get(source.frameId);
-      const row = document.createElement("li");
-      row.dataset.status = verification?.status ?? "unverified";
-      const identity = document.createElement("span");
-      identity.textContent = `${source.fileName} · ${formatByteCount(source.byteLength)}`;
-      const seals = document.createElement("code");
-      seals.textContent = verification
-        ? formatRegisteredSourceStatus(verification.status)
-        : `frame ${source.frameId.slice(0, 12)}… · sha256 ${source.sha256.slice(0, 12)}…`;
-      seals.title = `Frame identity: ${source.frameId}\nSource SHA-256: ${source.sha256}`;
-      row.append(identity, seals);
-      return row;
-    }),
-  );
+  const sourceEvidence = (reportInspection?.sources ?? []).map((source) => ({
+    source,
+    status: verifiedSources.get(source.frameId)?.status ?? "unverified",
+  }));
+  const verifiedSourceCount = sourceEvidence.filter(
+    ({ status }) => status === "verified",
+  ).length;
+  const unverifiedSourceCount = sourceEvidence.filter(
+    ({ status }) => status === "unverified",
+  ).length;
+  const issueSourceCount =
+    sourceEvidence.length - verifiedSourceCount - unverifiedSourceCount;
+  elements.registeredStackSourceSummary.textContent = `${formatCountedNoun(sourceEvidence.length, "source")} · ${verifiedSourceCount} verified · ${issueSourceCount} ${issueSourceCount === 1 ? "issue" : "issues"} · ${unverifiedSourceCount} pending`;
+  for (const button of elements.registeredStackSourceFilters) {
+    const selected =
+      button.dataset.sourceEvidenceFilter === sourceEvidenceFilter;
+    button.setAttribute("aria-pressed", String(selected));
+  }
+  const visibleSourceEvidence = sourceEvidence.filter(({ status }) => {
+    if (sourceEvidenceFilter === "all") return true;
+    if (sourceEvidenceFilter === "issues") {
+      return status !== "verified" && status !== "unverified";
+    }
+    return status === sourceEvidenceFilter;
+  });
+  const sourceRows = visibleSourceEvidence.map(({ source, status }) => {
+    const verification = verifiedSources.get(source.frameId);
+    const row = document.createElement("li");
+    row.dataset.status = status;
+    const identity = document.createElement("span");
+    identity.textContent = `${source.fileName} · ${formatByteCount(source.byteLength)}`;
+    const seals = document.createElement("code");
+    seals.textContent = verification
+      ? formatRegisteredSourceStatus(verification.status)
+      : `frame ${source.frameId.slice(0, 12)}… · sha256 ${source.sha256.slice(0, 12)}…`;
+    seals.title = `Frame identity: ${source.frameId}\nSource SHA-256: ${source.sha256}`;
+    row.append(identity, seals);
+    return row;
+  });
+  if (sourceEvidence.length > 0 && sourceRows.length === 0) {
+    const empty = document.createElement("li");
+    empty.dataset.empty = "true";
+    empty.textContent = `No ${sourceEvidenceFilter} sources in this report.`;
+    sourceRows.push(empty);
+  }
+  elements.registeredStackReportSources.replaceChildren(...sourceRows);
   const reportIsExternal =
     reportInspection !== null &&
     (integrationReport === null || reportPath !== integrationReport.reportPath);
@@ -3333,6 +3396,15 @@ function shellMarkup(): string {
                         <button class="button button--quiet" type="button" data-action="cancel-registered-stack-source-verification" hidden>Cancel hashing</button>
                       </div>
                       <progress data-registered-stack-source-progress aria-label="Archived source verification progress" hidden></progress>
+                      <div class="integration-report__source-toolbar">
+                        <output data-registered-stack-source-summary>0 sources · 0 verified · 0 issues · 0 pending</output>
+                        <div class="integration-report__source-filters" role="group" aria-label="Filter source evidence">
+                          <button type="button" data-action="filter-source-evidence" data-source-evidence-filter="all" aria-pressed="true">All</button>
+                          <button type="button" data-action="filter-source-evidence" data-source-evidence-filter="issues" aria-pressed="false">Issues</button>
+                          <button type="button" data-action="filter-source-evidence" data-source-evidence-filter="verified" aria-pressed="false">Verified</button>
+                          <button type="button" data-action="filter-source-evidence" data-source-evidence-filter="unverified" aria-pressed="false">Pending</button>
+                        </div>
+                      </div>
                       <ol data-registered-stack-report-sources aria-label="Sealed source evidence"></ol>
                     </details>
                   </div>

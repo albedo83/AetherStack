@@ -1179,6 +1179,15 @@ safety reasoning. They do not narrate obvious syntax.
     and cancellation between fixed reads. Next, benchmark fingerprint throughput
     on the ASI294MC corpus and consider platform-specific sequential-read hints
     only when measurements justify their complexity.
+88. Keep large archived source sets auditable after verification. The source
+    browser now derives deterministic verified, issue, and pending totals from
+    the sealed report identity rather than trusting aggregate native claims.
+    Compact segmented controls filter hundreds of entries without a native
+    dropdown, preserve an explicit empty state, expose pressed state to assistive
+    technology, and collapse into a touch-friendly mobile layout. Presenter tests
+    cover mixed verified and fingerprint-mismatched evidence plus every filter
+    transition. Next, add an opt-in fingerprint-throughput benchmark that can run
+    against the private ASI294MC corpus without recording paths or image data.
 
 ## 11. Stable-release definition
 

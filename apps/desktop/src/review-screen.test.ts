@@ -1,4 +1,10 @@
-import { fireEvent, getByRole, getByText, within } from "@testing-library/dom";
+import {
+  fireEvent,
+  getByRole,
+  getByText,
+  queryByText,
+  within,
+} from "@testing-library/dom";
 import axe from "axe-core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -811,6 +817,12 @@ describe("frame review workspace", () => {
                 byteLength: 278_992_800,
                 sha256: "d".repeat(64),
               },
+              {
+                frameId: "e".repeat(64),
+                fileName: "m31-registered-002.fits",
+                byteLength: 278_992_800,
+                sha256: "1".repeat(64),
+              },
             ],
             products: [
               {
@@ -905,7 +917,7 @@ describe("frame review workspace", () => {
           sourceVerification: {
             reportSha256: "f".repeat(64),
             sourceDirectory: "/archive/registered",
-            allSourcesVerified: true,
+            allSourcesVerified: false,
             sources: [
               {
                 frameId: "c".repeat(64),
@@ -913,6 +925,13 @@ describe("frame review workspace", () => {
                 path: "/archive/registered/m31-registered-001.fits",
                 byteLength: 278_992_800,
                 status: "verified",
+              },
+              {
+                frameId: "e".repeat(64),
+                fileName: "m31-registered-002.fits",
+                path: "/archive/registered/m31-registered-002.fits",
+                byteLength: 278_992_800,
+                status: "fingerprint_mismatch",
               },
             ],
           },
@@ -935,9 +954,21 @@ describe("frame review workspace", () => {
       }).src,
     ).toContain("blob:reopened-stack");
     expect(root.textContent).toContain(
-      "All source fingerprints verified · /archive/registered",
+      "Source evidence mismatch · /archive/registered",
+    );
+    expect(root.textContent).toContain(
+      "2 sources · 1 verified · 1 issue · 0 pending",
     );
     expect(root.textContent).toContain("SHA-256 verified");
+    expect(root.textContent).toContain("SHA-256 mismatch");
+    fireEvent.click(getByRole(root, "button", { name: "Issues" }));
+    expect(queryByText(root, /m31-registered-001\.fits/)).toBeNull();
+    expect(getByText(root, /m31-registered-002\.fits/)).toBeTruthy();
+    fireEvent.click(getByRole(root, "button", { name: "Verified" }));
+    expect(getByText(root, /m31-registered-001\.fits/)).toBeTruthy();
+    expect(queryByText(root, /m31-registered-002\.fits/)).toBeNull();
+    fireEvent.click(getByRole(root, "button", { name: "Pending" }));
+    expect(root.textContent).toContain("No unverified sources in this report.");
     const science = getByRole<HTMLButtonElement>(root, "tab", {
       name: "Science",
     });

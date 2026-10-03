@@ -1430,6 +1430,63 @@ button:active:not(:disabled) {
   accent-color: #68d7b0;
 }
 
+.integration-report__source-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 2px;
+}
+
+.integration-report__source-toolbar output {
+  min-width: 0;
+  color: #8eb1c8;
+}
+
+.integration-report__source-filters {
+  display: inline-grid;
+  grid-template-columns: repeat(4, auto);
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  background: #050b10;
+  border: 1px solid #263e4d;
+  border-radius: 6px;
+  box-shadow: inset 0 2px 5px #000a;
+}
+
+.integration-report__source-filters button {
+  min-height: 24px;
+  padding: 3px 7px;
+  color: #6f8999;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.integration-report__source-filters button:hover {
+  color: #b8d8e8;
+  background: #142632;
+}
+
+.integration-report__source-filters button:focus-visible {
+  outline: 2px solid #73cbe5;
+  outline-offset: 1px;
+}
+
+.integration-report__source-filters button[aria-pressed="true"] {
+  color: #d6f5ff;
+  background: linear-gradient(180deg, #28546a, #173849);
+  border-color: #3c7189;
+  box-shadow:
+    inset 0 1px #d4f6ff24,
+    0 1px 2px #000b;
+}
+
 .integration-report__source-browser ol {
   display: grid;
   max-height: 176px;
@@ -1449,6 +1506,24 @@ button:active:not(:disabled) {
   font-size: 10px;
   background: #08131b;
   border-left: 2px solid #315b70;
+}
+
+.integration-report__source-browser li[data-empty="true"] {
+  display: block;
+  color: #6f8999;
+  text-align: center;
+  border-left-color: #263e4d;
+}
+
+@media (max-width: 760px) {
+  .integration-report__source-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .integration-report__source-filters {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .integration-report__source-browser li > span {
