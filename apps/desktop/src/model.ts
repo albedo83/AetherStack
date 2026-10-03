@@ -21,6 +21,10 @@ import type {
   RegisteredStackSourceVerificationProgress,
   RegisteredWeightPreflight,
 } from "./registration-bridge.ts";
+import type {
+  FrameSelectionPlan,
+  FrameSelectionRule,
+} from "./selection-bridge.ts";
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
 
@@ -153,6 +157,13 @@ export interface QualityBatchProgress {
   readonly total: number;
 }
 
+export interface FrameSelectionViewModel {
+  readonly state: "idle" | "previewing" | "ready" | "error";
+  readonly rules: readonly FrameSelectionRule[];
+  readonly plan: FrameSelectionPlan | null;
+  readonly message: string;
+}
+
 export interface ReviewViewModel {
   readonly activeWorkspace: WorkspaceView;
   readonly sessionName: string;
@@ -169,6 +180,7 @@ export interface ReviewViewModel {
   readonly decisionPending: boolean;
   readonly qualityBatchRunning: boolean;
   readonly qualityBatchProgress: QualityBatchProgress | null;
+  readonly frameSelection: FrameSelectionViewModel;
   readonly sharedStretchLabel: string;
   readonly preview: FramePreview | null;
   readonly viewerScale: "fit" | "actual";
@@ -344,4 +356,8 @@ export interface ReviewActions {
   readonly onCloseStatistics: () => void;
   readonly onMeasureQuality: (frameId: string) => void;
   readonly onMeasureAllQuality: () => void;
+  readonly onUpdateFrameSelectionRules: (
+    rules: readonly FrameSelectionRule[],
+  ) => void;
+  readonly onPreviewFrameSelection: () => void;
 }

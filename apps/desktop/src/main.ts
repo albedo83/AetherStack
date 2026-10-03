@@ -81,6 +81,10 @@ import {
 } from "./review-bridge.ts";
 import { mountReviewScreen } from "./review-screen.ts";
 import {
+  previewFrameSelection,
+  type FrameSelectionRule,
+} from "./selection-bridge.ts";
+import {
   selectAndImportSession,
   type ImportedFrame,
   type ImportedSession,
@@ -127,6 +131,7 @@ const decisionCache = new Map<
 >();
 let qualitySessionRevision = 0;
 let qualityBatchTicket = 0;
+let frameSelectionTicket = 0;
 let decisionSessionRevision = 0;
 let decisionGeneration = 0;
 let blinkTimer: number | null = null;
@@ -318,6 +323,21 @@ const screen = mountReviewScreen(root, model, {
   onMeasureAllQuality() {
     void measureAllQuality();
   },
+  onUpdateFrameSelectionRules(rules) {
+    frameSelectionTicket += 1;
+    update({
+      ...model,
+      frameSelection: {
+        state: "idle",
+        rules,
+        plan: null,
+        message: "Rules changed · preview the native recommendations again",
+      },
+    });
+  },
+  onPreviewFrameSelection() {
+    void previewAutomaticSelection();
+  },
 });
 
 window.addEventListener("beforeunload", disposeRuntimeResources, {
@@ -367,6 +387,7 @@ function installImportedSession(session: ImportedSession): void {
   statisticsCache.clear();
   qualitySessionRevision += 1;
   qualityBatchTicket += 1;
+  frameSelectionTicket += 1;
   qualityCache.clear();
   qualityPending.clear();
   decisionSessionRevision += 1;
@@ -419,6 +440,7 @@ function installImportedSession(session: ImportedSession): void {
     decisionPending: false,
     qualityBatchRunning: false,
     qualityBatchProgress: null,
+    frameSelection: resetFrameSelection(model.frameSelection.rules),
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
@@ -2666,6 +2688,7 @@ async function measureAllQuality(): Promise<void> {
         ...model,
         qualityBatchRunning: false,
         qualityBatchProgress: null,
+        frameSelection: resetFrameSelection(model.frameSelection.rules),
       });
     }
   }
@@ -2742,17 +2765,96 @@ function updateQualityFrame(
   >,
 ): void {
   if (!model.frames.some((frame) => frame.id === frameId)) return;
+  frameSelectionTicket += 1;
   update({
     ...model,
     frames: model.frames.map((frame) =>
       frame.id === frameId ? { ...frame, ...patch } : frame,
     ),
+    frameSelection: resetFrameSelection(model.frameSelection.rules),
   });
+}
+
+async function previewAutomaticSelection(): Promise<void> {
+  if (
+    model.activeRole !== "light" ||
+    model.frameSelection.state === "previewing"
+  ) {
+    return;
+  }
+  const frames = model.frames.filter(
+    (frame) => frame.sourcePath !== null && frame.qualityState === "ready",
+  );
+  if (frames.length !== model.frames.length || frames.length === 0) {
+    update({
+      ...model,
+      frameSelection: {
+        ...model.frameSelection,
+        state: "error",
+        plan: null,
+        message:
+          "Measure quality for every shown Light before previewing rules",
+      },
+    });
+    return;
+  }
+
+  const ticket = ++frameSelectionTicket;
+  const rules = model.frameSelection.rules;
+  update({
+    ...model,
+    frameSelection: {
+      ...model.frameSelection,
+      state: "previewing",
+      plan: null,
+      message: "Rust is evaluating every rule against native evidence…",
+    },
+  });
+  try {
+    const plan = await previewFrameSelection(frames, rules);
+    if (ticket !== frameSelectionTicket) return;
+    const rejected = plan.frames.filter(
+      (frame) => frame.proposal === "reject",
+    ).length;
+    update({
+      ...model,
+      frameSelection: {
+        state: "ready",
+        rules,
+        plan,
+        message: `${plan.frames.length - rejected} retained · ${rejected} proposed rejects · no decisions changed`,
+      },
+    });
+  } catch {
+    if (ticket !== frameSelectionTicket) return;
+    update({
+      ...model,
+      frameSelection: {
+        ...model.frameSelection,
+        state: "error",
+        plan: null,
+        message:
+          "Native selection preview could not validate the current evidence",
+      },
+    });
+  }
+}
+
+function resetFrameSelection(
+  rules: readonly FrameSelectionRule[],
+): ReviewViewModel["frameSelection"] {
+  return {
+    state: "idle",
+    rules,
+    plan: null,
+    message: "Measure every Light, then preview automatic recommendations",
+  };
 }
 
 function selectRole(role: FrameRole): void {
   qualityBatchTicket += 1;
   qualitySessionRevision += 1;
+  frameSelectionTicket += 1;
   qualityPending.clear();
   stopBlinkTimer();
   clearPreviewResources();
@@ -2771,6 +2873,7 @@ function selectRole(role: FrameRole): void {
         preview: null,
         qualityBatchRunning: false,
         qualityBatchProgress: null,
+        frameSelection: resetFrameSelection(model.frameSelection.rules),
         statisticsPanel: closedStatisticsPanel(),
       });
       return;
@@ -2784,6 +2887,7 @@ function selectRole(role: FrameRole): void {
       preview: null,
       qualityBatchRunning: false,
       qualityBatchProgress: null,
+      frameSelection: resetFrameSelection(model.frameSelection.rules),
       statisticsPanel: closedStatisticsPanel(),
     });
     return;
@@ -2815,6 +2919,7 @@ function selectRole(role: FrameRole): void {
     playing: false,
     qualityBatchRunning: false,
     qualityBatchProgress: null,
+    frameSelection: resetFrameSelection(model.frameSelection.rules),
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
@@ -2839,6 +2944,7 @@ function selectLightFrameView(view: LightFrameView): void {
   statisticsTicket += 1;
   qualitySessionRevision += 1;
   qualityBatchTicket += 1;
+  frameSelectionTicket += 1;
   qualityPending.clear();
   const frames =
     view === "calibrated"
@@ -2868,6 +2974,7 @@ function selectLightFrameView(view: LightFrameView): void {
     playing: false,
     qualityBatchRunning: false,
     qualityBatchProgress: null,
+    frameSelection: resetFrameSelection(model.frameSelection.rules),
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),

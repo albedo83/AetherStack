@@ -18,6 +18,31 @@ export const demoReviewModel: ReviewViewModel = {
   decisionPending: false,
   qualityBatchRunning: false,
   qualityBatchProgress: null,
+  frameSelection: {
+    state: "idle",
+    rules: [
+      {
+        metric: "fwhm_pixels",
+        comparator: "less_than",
+        threshold: { kind: "scalar", value: 4.5 },
+        missingPolicy: "reject",
+      },
+      {
+        metric: "eccentricity",
+        comparator: "less_than",
+        threshold: { kind: "scalar", value: 0.6 },
+        missingPolicy: "reject",
+      },
+      {
+        metric: "usable_stars",
+        comparator: "greater_than",
+        threshold: { kind: "count", value: 100 },
+        missingPolicy: "reject",
+      },
+    ],
+    plan: null,
+    message: "Measure every Light, then preview automatic recommendations",
+  },
   selectedFrameId: frameId("b"),
   sharedStretchLabel: "Shared stretch · locked",
   preview: null,

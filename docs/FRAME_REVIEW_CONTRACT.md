@@ -37,8 +37,18 @@ only that stored evidence, validates typed rules, rejects missing, duplicate, or
 foreign identities, restores processing order from its native review book, and
 returns the plan without mutating manual state. The browser bridge transports
 artifact identities and rules but contains neither measurements nor a threshold
-evaluator. Durable metric persistence, previewed bulk application, and the
-desktop rule editor remain planned before automatic selection can affect a run.
+evaluator. Durable metric persistence, previewed bulk application, dynamic rule
+counts, and custom expressions remain planned before automatic selection can
+affect a run.
+
+The first desktop editor exposes three simultaneous quality gates in an
+expandable instrument panel. Each gate makes the metric, strict direction,
+typed threshold, and missing-value policy visible. A native preview reports
+retained and rejected totals, the canonical digest, and an `AUTO KEEP` or
+`AUTO REJECT` badge beside each frame. These badges are recommendations only;
+the manual state marker and undo history remain unchanged. Editing a rule,
+changing pixel stage, switching role, importing a session, or refreshing any
+quality result invalidates the previous preview and cancels stale responses.
 
 The desktop adapter initializes one native review book after a successful
 session import. Accept, reject, clear, and undo commands mutate that book under a

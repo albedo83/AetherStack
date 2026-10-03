@@ -85,7 +85,9 @@ optimized CPU and GPU paths must match.
   transport, and a bounded desktop artifact cache keyed by identity and
   transform with generation-cancelled adjacent prefetch;
 - a Tauri 2 desktop shell with an accessible, responsive dark Review/Blink
-  workspace, an instrument-inspired Calibration laboratory, and a dedicated
+  workspace, an instrument-inspired advanced quality-gate editor with native
+  preview totals, canonical digest, and per-frame recommendations, an
+  instrument-inspired Calibration laboratory, and a dedicated
   Registration laboratory that selects an explicit Light pair, runs the native
   solver, exposes confidence metrics and the accepted full-resolution affine
   matrix, previews the analytical common crop, then asks Rust to re-resolve the

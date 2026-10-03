@@ -11,6 +11,10 @@ import type {
 } from "./registration-bridge.ts";
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import type {
+  FrameSelectionMetric,
+  FrameSelectionRule,
+} from "./selection-bridge.ts";
+import type {
   ReviewActions,
   ReviewFrame,
   ReviewRejectionReason,
@@ -504,6 +508,19 @@ export function mountReviewScreen(
       '[data-action="measure-all-quality"]',
     ),
     qualityBadge: required<HTMLElement>(root, "[data-quality-badge]"),
+    selectionPanel: required<HTMLDetailsElement>(
+      root,
+      "[data-selection-panel]",
+    ),
+    selectionRules: requiredAll<HTMLElement>(root, "[data-selection-rule]"),
+    selectionPreview: required<HTMLButtonElement>(
+      root,
+      '[data-action="preview-frame-selection"]',
+    ),
+    selectionStatus: required<HTMLElement>(root, "[data-selection-status]"),
+    selectionRetained: required<HTMLElement>(root, "[data-selection-retained]"),
+    selectionRejected: required<HTMLElement>(root, "[data-selection-rejected]"),
+    selectionDigest: required<HTMLElement>(root, "[data-selection-digest]"),
     cfaBadge: required<HTMLElement>(root, "[data-cfa-badge]"),
     state: required<HTMLElement>(root, "[data-review-state]"),
     signalToNoise: required<HTMLElement>(root, "[data-metric-signal-to-noise]"),
@@ -710,6 +727,15 @@ export function mountReviewScreen(
       }
       return;
     }
+    if (action === "open-selection-panel") {
+      actions.onSelectWorkspace("frames");
+      elements.selectionPanel.open = true;
+      queueMicrotask(() => {
+        elements.selectionPanel.scrollIntoView?.({ block: "nearest" });
+        elements.selectionPanel.querySelector<HTMLElement>("summary")?.focus();
+      });
+      return;
+    }
     if (action === "refresh-master-plan") {
       actions.onRefreshMasterPlan();
       return;
@@ -882,6 +908,10 @@ export function mountReviewScreen(
       actions.onMeasureAllQuality();
       return;
     }
+    if (action === "preview-frame-selection") {
+      actions.onPreviewFrameSelection();
+      return;
+    }
     if (action === "close-statistics") {
       actions.onCloseStatistics();
       queueMicrotask(() => elements.statisticsButton.focus());
@@ -890,6 +920,18 @@ export function mountReviewScreen(
 
   const onChange = (event: Event): void => {
     const target = event.target;
+    if (
+      target instanceof Element &&
+      target.matches("[data-selection-control]")
+    ) {
+      const row = target.closest<HTMLElement>("[data-selection-rule]");
+      if (row && target.matches("[data-selection-metric]")) {
+        configureSelectionThreshold(row);
+      }
+      const rules = readFrameSelectionRules(elements.selectionRules);
+      if (rules) actions.onUpdateFrameSelectionRules(rules);
+      return;
+    }
     if (target === elements.registrationReference) {
       actions.onSelectRegistrationReference(
         elements.registrationReference.value,
@@ -1114,6 +1156,7 @@ export function mountReviewScreen(
       : "＋ Import session";
     renderRoles(elements.roleTabs, model);
     renderRows(elements.tableBody, model);
+    renderFrameSelection(elements, model);
     const activeRole = model.roles.find(
       (role) => role.role === model.activeRole,
     );
@@ -1400,6 +1443,152 @@ function renderRoles(container: HTMLElement, model: ReviewViewModel): void {
   }
 }
 
+function readFrameSelectionRules(
+  rows: readonly HTMLElement[],
+): readonly FrameSelectionRule[] | null {
+  const rules: FrameSelectionRule[] = [];
+  const seen = new Set<FrameSelectionMetric>();
+  for (const row of rows) {
+    const metricValue = required<HTMLSelectElement>(
+      row,
+      "[data-selection-metric]",
+    ).value;
+    const metric = selectionMetricOptions.find(
+      ([candidate]) => candidate === metricValue,
+    )?.[0];
+    const comparator = required<HTMLSelectElement>(
+      row,
+      "[data-selection-comparator]",
+    ).value;
+    const missingPolicy = required<HTMLSelectElement>(
+      row,
+      "[data-selection-missing]",
+    ).value;
+    const threshold = required<HTMLInputElement>(
+      row,
+      "[data-selection-threshold]",
+    ).valueAsNumber;
+    if (
+      !metric ||
+      seen.has(metric) ||
+      (comparator !== "less_than" && comparator !== "greater_than") ||
+      (missingPolicy !== "retain" && missingPolicy !== "reject") ||
+      !Number.isFinite(threshold) ||
+      !validSelectionThreshold(metric, threshold)
+    ) {
+      return null;
+    }
+    const countMetric =
+      metric === "detected_stars" || metric === "usable_stars";
+    if (countMetric && !Number.isSafeInteger(threshold)) return null;
+    seen.add(metric);
+    rules.push({
+      metric,
+      comparator,
+      threshold: countMetric
+        ? { kind: "count", value: threshold }
+        : { kind: "scalar", value: threshold },
+      missingPolicy,
+    });
+  }
+  return rules;
+}
+
+function validSelectionThreshold(
+  metric: FrameSelectionMetric,
+  threshold: number,
+): boolean {
+  switch (metric) {
+    case "background":
+      return true;
+    case "signal_to_noise":
+      return threshold > 0;
+    case "eccentricity":
+      return threshold >= 0 && threshold <= 1;
+    case "noise":
+    case "fwhm_pixels":
+    case "detected_stars":
+    case "usable_stars":
+      return threshold >= 0;
+  }
+}
+
+function configureSelectionThreshold(row: HTMLElement): void {
+  const metric = required<HTMLSelectElement>(
+    row,
+    "[data-selection-metric]",
+  ).value;
+  const input = required<HTMLInputElement>(row, "[data-selection-threshold]");
+  const countMetric = metric === "detected_stars" || metric === "usable_stars";
+  input.step = countMetric ? "1" : "any";
+  input.removeAttribute("min");
+  input.removeAttribute("max");
+  if (metric !== "background") {
+    input.min = metric === "signal_to_noise" ? "0.000001" : "0";
+  }
+  if (metric === "eccentricity") input.max = "1";
+  if (countMetric && Number.isFinite(input.valueAsNumber)) {
+    input.value = String(Math.max(0, Math.round(input.valueAsNumber)));
+  }
+}
+
+function renderFrameSelection(
+  elements: {
+    selectionPanel: HTMLDetailsElement;
+    selectionRules: readonly HTMLElement[];
+    selectionPreview: HTMLButtonElement;
+    selectionStatus: HTMLElement;
+    selectionRetained: HTMLElement;
+    selectionRejected: HTMLElement;
+    selectionDigest: HTMLElement;
+  },
+  model: ReviewViewModel,
+): void {
+  const selection = model.frameSelection;
+  elements.selectionPanel.hidden = model.activeRole !== "light";
+  elements.selectionPanel.dataset.state = selection.state;
+  for (const [index, row] of elements.selectionRules.entries()) {
+    const rule = selection.rules[index];
+    if (!rule) continue;
+    required<HTMLSelectElement>(row, "[data-selection-metric]").value =
+      rule.metric;
+    configureSelectionThreshold(row);
+    required<HTMLSelectElement>(row, "[data-selection-comparator]").value =
+      rule.comparator;
+    required<HTMLInputElement>(row, "[data-selection-threshold]").value =
+      String(rule.threshold.value);
+    required<HTMLSelectElement>(row, "[data-selection-missing]").value =
+      rule.missingPolicy;
+  }
+  const allMeasured =
+    model.frames.length > 0 &&
+    model.frames.every(
+      (frame) => frame.sourcePath !== null && frame.qualityState === "ready",
+    );
+  elements.selectionPreview.disabled =
+    model.activeRole !== "light" ||
+    !allMeasured ||
+    selection.state === "previewing";
+  elements.selectionPreview.textContent =
+    selection.state === "previewing"
+      ? "Evaluating…"
+      : "Preview recommendations";
+  elements.selectionStatus.textContent = selection.message;
+  const retained =
+    selection.plan?.frames.filter((frame) => frame.proposal === "retain")
+      .length ?? null;
+  const rejected =
+    selection.plan?.frames.filter((frame) => frame.proposal === "reject")
+      .length ?? null;
+  elements.selectionRetained.textContent =
+    retained === null ? "—" : String(retained);
+  elements.selectionRejected.textContent =
+    rejected === null ? "—" : String(rejected);
+  elements.selectionDigest.textContent = selection.plan
+    ? `${selection.plan.algorithmId} · ${selection.plan.planSha256}`
+    : "Canonical plan digest appears after native preview";
+}
+
 function renderRows(
   container: HTMLTableSectionElement,
   model: ReviewViewModel,
@@ -1421,6 +1610,10 @@ function renderRows(
     row.dataset.action = "select-frame";
     row.dataset.frameId = frame.id;
     row.dataset.state = frame.state;
+    const proposal = model.frameSelection.plan?.frames.find(
+      (candidate) => candidate.frameId === frame.id,
+    )?.proposal;
+    if (proposal) row.dataset.proposal = proposal;
     row.setAttribute("aria-selected", String(selected));
     if (selected) row.classList.add("is-selected");
 
@@ -1433,6 +1626,14 @@ function renderRows(
       frame.state,
     );
     const frameName = textCell(frame.label, "frame-name");
+    if (proposal) {
+      const recommendation = document.createElement("span");
+      recommendation.className = "selection-proposal";
+      recommendation.dataset.proposal = proposal;
+      recommendation.textContent =
+        proposal === "retain" ? "AUTO KEEP" : "AUTO REJECT";
+      frameName.append(" ", recommendation);
+    }
     if (frame.classificationWarning) {
       const warning = document.createElement("span");
       warning.className = "classification-warning";
@@ -3129,6 +3330,44 @@ function requiredAll<T extends Element>(
   return elements;
 }
 
+const selectionMetricOptions: readonly [FrameSelectionMetric, string][] = [
+  ["fwhm_pixels", "FWHM"],
+  ["eccentricity", "Eccentricity"],
+  ["signal_to_noise", "Stellar SNR"],
+  ["detected_stars", "Detected stars"],
+  ["usable_stars", "Usable stars"],
+  ["background", "Background"],
+  ["noise", "Noise"],
+];
+
+function selectionRuleMarkup(
+  index: number,
+  label: string,
+  metric: FrameSelectionMetric,
+  comparator: FrameSelectionRule["comparator"],
+  threshold: number,
+): string {
+  const options = selectionMetricOptions
+    .map(
+      ([value, optionLabel]) =>
+        `<option value="${value}"${value === metric ? " selected" : ""}>${optionLabel}</option>`,
+    )
+    .join("");
+  return `<fieldset class="selection-rule" data-selection-rule data-rule-index="${index}">
+    <legend>Rule ${index + 1} · ${label}</legend>
+    <label><span>Metric</span><select class="instrument-select" data-selection-control data-selection-metric>${options}</select></label>
+    <label><span>Condition</span><select class="instrument-select" data-selection-control data-selection-comparator>
+      <option value="less_than"${comparator === "less_than" ? " selected" : ""}>below</option>
+      <option value="greater_than"${comparator === "greater_than" ? " selected" : ""}>above</option>
+    </select></label>
+    <label><span>Threshold</span><input class="instrument-input" data-selection-control data-selection-threshold type="number" min="0" step="any" value="${threshold}" inputmode="decimal" /></label>
+    <label><span>When missing</span><select class="instrument-select" data-selection-control data-selection-missing>
+      <option value="reject" selected>reject</option>
+      <option value="retain">retain</option>
+    </select></label>
+  </fieldset>`;
+}
+
 function shellMarkup(): string {
   const reasonButtons = rejectionReasons
     .map(
@@ -3165,7 +3404,7 @@ function shellMarkup(): string {
           <div class="topbar__actions">
             <span class="health-chip" data-session-status data-tone="ready"><span aria-hidden="true">●</span><span data-session-status-label>Demo ready</span></span>
             <button class="button button--quiet" type="button" title="Diagnostics workspace is not connected yet" disabled>Diagnostics</button>
-            <button class="button button--primary" type="button" title="Review planning is not connected yet" disabled>Review plan</button>
+            <button class="button button--primary" type="button" data-action="open-selection-panel">Review plan</button>
           </div>
         </header>
 
@@ -3220,6 +3459,29 @@ function shellMarkup(): string {
                 <span data-state="rejected"><b aria-hidden="true">×</b> Rejected</span>
                 <span data-state="undecided"><b aria-hidden="true">·</b> Undecided</span>
               </div>
+              <details class="selection-console" data-selection-panel>
+                <summary>
+                  <span><small>AUTOMATIC REVIEW</small><strong>Quality gates</strong></span>
+                  <span class="selection-console__lamp" aria-hidden="true"></span>
+                </summary>
+                <div class="selection-console__body">
+                  <p>Preview-only rules. Rust evaluates native measurements and never overwrites manual decisions.</p>
+                  <div class="selection-rules" aria-label="Automatic frame selection rules">
+                    ${selectionRuleMarkup(0, "FWHM", "fwhm_pixels", "less_than", 4.5)}
+                    ${selectionRuleMarkup(1, "Eccentricity", "eccentricity", "less_than", 0.6)}
+                    ${selectionRuleMarkup(2, "Usable stars", "usable_stars", "greater_than", 100)}
+                  </div>
+                  <div class="selection-console__footer">
+                    <div class="selection-plan-summary" aria-live="polite">
+                      <span><b data-selection-retained>—</b> retain</span>
+                      <span><b data-selection-rejected>—</b> reject</span>
+                      <span data-selection-status>Measure every Light, then preview</span>
+                    </div>
+                    <button class="button button--primary" type="button" data-action="preview-frame-selection">Preview recommendations</button>
+                  </div>
+                  <code class="selection-digest" data-selection-digest>Canonical plan digest appears after native preview</code>
+                </div>
+              </details>
             </section>
 
             <section class="viewer" aria-labelledby="viewer-heading">

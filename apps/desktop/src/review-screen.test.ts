@@ -59,12 +59,98 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCloseStatistics: vi.fn(),
     onMeasureQuality: vi.fn(),
     onMeasureAllQuality: vi.fn(),
+    onUpdateFrameSelectionRules: vi.fn(),
+    onPreviewFrameSelection: vi.fn(),
   };
   const controller = mountReviewScreen(root, model, actions);
   return { root, actions, controller };
 }
 
 describe("frame review workspace", () => {
+  it("opens the advanced review plan from the primary top-bar action", async () => {
+    const { root, actions } = fixture();
+    const panel = root.querySelector<HTMLDetailsElement>(
+      "[data-selection-panel]",
+    );
+    expect(panel?.open).toBe(false);
+
+    fireEvent.click(getByRole(root, "button", { name: "Review plan" }));
+    await Promise.resolve();
+
+    expect(actions.onSelectWorkspace).toHaveBeenCalledWith("frames");
+    expect(panel?.open).toBe(true);
+  });
+
+  it("edits typed quality gates and requests a native preview only when evidence is ready", () => {
+    const frames = demoReviewModel.frames.map((frame, index) => ({
+      ...frame,
+      sourcePath: `/session/LIGHTS/light-${index}.fits`,
+      qualityState: "ready" as const,
+    }));
+    const { root, actions } = fixture({ ...demoReviewModel, frames });
+    const panel = root.querySelector<HTMLDetailsElement>(
+      "[data-selection-panel]",
+    );
+    const threshold = root.querySelector<HTMLInputElement>(
+      '[data-selection-rule][data-rule-index="0"] [data-selection-threshold]',
+    );
+    expect(panel).not.toBeNull();
+    expect(threshold).not.toBeNull();
+    if (!panel || !threshold) return;
+    panel.open = true;
+
+    fireEvent.change(threshold, { target: { value: "3.75" } });
+    expect(actions.onUpdateFrameSelectionRules).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metric: "fwhm_pixels",
+          threshold: { kind: "scalar", value: 3.75 },
+        }),
+      ]),
+    );
+
+    const preview = getByRole(root, "button", {
+      name: "Preview recommendations",
+    });
+    expect(preview.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(preview);
+    expect(actions.onPreviewFrameSelection).toHaveBeenCalledOnce();
+  });
+
+  it("shows canonical selection totals and per-frame proposals without changing decisions", () => {
+    const first = demoReviewModel.frames[0];
+    const second = demoReviewModel.frames[1];
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (!first || !second) return;
+    const plan = {
+      schemaVersion: 1,
+      algorithmId: "frame-selection-rules-v1",
+      rules: demoReviewModel.frameSelection.rules,
+      frames: [
+        { frameId: first.id, proposal: "retain" as const, evidence: [] },
+        { frameId: second.id, proposal: "reject" as const, evidence: [] },
+      ],
+      planSha256: "d".repeat(64),
+    };
+    const { root } = fixture({
+      ...demoReviewModel,
+      frameSelection: {
+        ...demoReviewModel.frameSelection,
+        state: "ready",
+        plan,
+        message: "1 retained · 1 proposed reject · no decisions changed",
+      },
+    });
+
+    expect(root.textContent).toContain("AUTO KEEP");
+    expect(root.textContent).toContain("AUTO REJECT");
+    expect(root.textContent).toContain("1 retained · 1 proposed reject");
+    expect(root.textContent).toContain("d".repeat(64));
+    expect(first.state).toBe("accepted");
+    expect(second.state).toBe("undecided");
+  });
+
   it("requests a native session import from the primary workspace action", () => {
     const { root, actions } = fixture();
 
@@ -1608,7 +1694,6 @@ describe("frame review workspace", () => {
 
     for (const name of [
       "Diagnostics",
-      "Review plan",
       "Clipping overlay is not available in this build",
     ]) {
       expect(getByRole(root, "button", { name }).hasAttribute("disabled")).toBe(
@@ -1797,6 +1882,10 @@ describe("frame review workspace", () => {
   it("has no automatically detectable accessibility violations", async () => {
     const frames = fixture();
     const { root } = frames;
+    const selectionPanel = root.querySelector<HTMLDetailsElement>(
+      "[data-selection-panel]",
+    );
+    if (selectionPanel) selectionPanel.open = true;
     const framesReport = await axe.run(root, {
       rules: {
         "color-contrast": { enabled: false },

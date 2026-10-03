@@ -1262,6 +1262,19 @@ safety reasoning. They do not narrate obvious syntax.
     path used by the command and the fail-closed missing-evidence boundary. Next,
     persist versioned quality evidence durably with its source fingerprint and
     algorithm identities before exposing the advanced rule editor.
+97. Add the first advanced automatic-selection review surface. The Frames
+    workspace now provides three simultaneous, keyboard-native quality gates
+    with explicit metric, strict direction, typed threshold, and missing-value
+    policy. It unlocks only when every displayed Light has native evidence,
+    shows retained/rejected totals and the canonical digest, and annotates rows
+    with `AUTO KEEP` or `AUTO REJECT` without changing manual state. Metric
+    changes update numeric domains and exact count stepping. Import, role,
+    pixel-stage, rule, and quality changes invalidate the preview; ticketed
+    responses cannot revive stale results. The primary Review plan action opens
+    the editor, mobile layout collapses to two control columns, and DOM tests
+    cover editing, readiness, results, state separation, and the expanded
+    panel's accessibility tree. Next, support adding/removing bounded rules and
+    a native preview-to-manual batch transaction with an explicit confirmation.
 
 ## 11. Stable-release definition
 
