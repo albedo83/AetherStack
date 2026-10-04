@@ -47,8 +47,10 @@ dependencies = [
 name = "aether-inspect"
 version = "0.1.0"
 dependencies = [
+ "aether-core",
  "aether-fits",
  "aether-metadata",
+ "aether-registration",
  "aether-session",
  "quick-xml",
  "serde",

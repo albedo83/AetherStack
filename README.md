@@ -235,9 +235,8 @@ viewer, Blink, rejection, and reproducibility behavior. The
 [quality contract](docs/QUALITY_CONTRACT.md) defines the strict initial
 background and stellar measurement algorithms and their current release gates.
 The [registration contract](docs/REGISTRATION_CONTRACT.md) fixes scientific
-coordinates, affine direction and composition, residual evidence, and the
-initial automatic-reference policy without claiming that matching or resampling
-is complete.
+coordinates, affine and projective model selection, deterministic Lanczos-3
+resampling, common-crop planning, and transactional publication.
 The [preview contract](docs/PREVIEW_CONTRACT.md) separates bounded display
 artifacts from scientific pixels and records the remaining viewer release gates.
 The [fingerprint benchmark](docs/FINGERPRINT_BENCHMARK.md) documents the
@@ -245,6 +244,8 @@ path-private throughput method used to evaluate large-session evidence checks.
 The [session import benchmark](docs/SESSION_IMPORT_BENCHMARK.md) separates
 directory, FITS-header, fingerprint, verification, and manifest costs without
 disclosing private corpus identities.
+The [registration benchmark](docs/REGISTRATION_BENCHMARK.md) isolates strict
+affine and projective resampling throughput while verifying stable output bits.
 
 ## Build and test
 

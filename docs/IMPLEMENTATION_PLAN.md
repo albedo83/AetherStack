@@ -1707,6 +1707,13 @@ safety reasoning. They do not narrate obvious syntax.
      unspecified; mixed schema/field combinations fail closed. Tests cover both
      current families, legacy compatibility, digest verification, and the visible
      report summary.
+142. Add an opt-in, filesystem-free registration benchmark for the strict scalar
+     oracle. It generates deterministic bounded images, times affine and mildly
+     projective Lanczos-3 resampling independently, reports output megapixels per
+     second, and seals every pixel and mask bit across repeated passes. Argument
+     limits cap axes, planes, passes, and total samples. The benchmark documents
+     that optimization remains subordinate to bit-level differential tests and
+     does not represent FITS I/O or complete transaction latency.
 
 ## 11. Stable-release definition
 

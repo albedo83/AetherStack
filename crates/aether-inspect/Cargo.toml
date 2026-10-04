@@ -10,8 +10,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+aether-core = { path = "../aether-core" }
 aether-fits = { path = "../aether-fits" }
 aether-metadata = { path = "../aether-metadata" }
+aether-registration = { path = "../aether-registration" }
 aether-session = { path = "../aether-session" }
 quick-xml.workspace = true
 serde.workspace = true
