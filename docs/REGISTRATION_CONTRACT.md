@@ -55,6 +55,17 @@ compensated RMS, maximum residual, and rank-separation evidence. No clipping or
 consensus is hidden in this function. Consequently it is not yet eligible for
 registration plans or resampling publication.
 
+`compare_similarity_with_projective` keeps model adequacy distinct from model
+selection. On one caller-supplied robust correspondence set, it evaluates the
+existing similarity residuals and the normalized-DLT fit without removing or
+reordering points. The evidence contains absolute and relative RMS improvement,
+both residual envelopes, DLT rank separation, and the largest difference
+between similarity and projective predictions at the four source corners and
+center. It deliberately emits no `accepted` flag: fitting eight effective
+degrees of freedom on the same points used for estimation will normally reduce
+residuals, so a production selector still requires an explicit complexity
+penalty, independent validation, and confidence thresholds.
+
 ## Residual evidence
 
 A registration correspondence contains one measured source point and its

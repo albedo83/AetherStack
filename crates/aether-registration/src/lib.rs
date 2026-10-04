@@ -10,6 +10,7 @@ mod features;
 mod footprint;
 mod geometry;
 mod matching;
+mod model_comparison;
 mod plan;
 mod projective;
 mod projective_fit;
@@ -46,6 +47,9 @@ pub use matching::{
     DescriptorMatchHypothesis, DescriptorMatchParameters, DescriptorMatchStatistics, FeaturePair,
     MAX_DESCRIPTOR_COMPARISONS, MAX_MATCH_CANDIDATES_PER_DESCRIPTOR, MAX_MATCH_HYPOTHESES,
     ReflectionPolicy, match_triangle_descriptors,
+};
+pub use model_comparison::{
+    ProjectiveAdequacyError, ProjectiveAdequacyEvidence, compare_similarity_with_projective,
 };
 pub use plan::{
     PlannedRegistrationFrame, REGISTRATION_PLAN_ALGORITHM_ID, RegistrationPlan,

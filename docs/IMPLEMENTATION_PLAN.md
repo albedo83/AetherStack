@@ -1535,6 +1535,18 @@ safety reasoning. They do not narrate obvious syntax.
      insufficient, oversized, and collinear inputs. This remains a fitting
      primitive rather than a production selector: robust consensus and model
      adequacy still gate any replacement of the similarity solution.
+122. Separate projective adequacy evidence from projective selection. The new
+     `compare_similarity_with_projective` function evaluates the existing
+     affine similarity and normalized-DLT homography on exactly the same caller-
+     supplied robust correspondences. It reports both residual envelopes,
+     absolute and relative RMS improvement, rank separation, and maximum model
+     displacement across the four source corners and center. It makes no hidden
+     clipping and returns no automatic recommendation. Tests distinguish an
+     exact similarity field from a genuinely projective field and lock failures
+     for invalid dimensions and insufficient support. Production can now define
+     an explicit complexity penalty and validation threshold from evidence
+     instead of selecting the more flexible model merely because it fits its
+     training points better.
 
 ## 11. Stable-release definition
 
