@@ -1722,6 +1722,10 @@ safety reasoning. They do not narrate obvious syntax.
      records median throughput gains of 16.85% for affine and 17.19% for
      projective resampling; these figures are development evidence, not portable
      release thresholds.
+144. Make registration benchmark comparisons resistant to first-pass startup
+     noise. Each geometry now performs one untimed sealed warm-up, verifies every
+     timed output against that baseline, reports individual passes, and computes
+     an order-independent median. Unit tests cover odd and even pass counts.
 
 ## 11. Stable-release definition
 

@@ -87,14 +87,28 @@ fn benchmark_affine(
     config: Config,
     transform: AffineTransform,
 ) -> Result<(), String> {
-    let mut reference = None;
+    let warmup = resample_lanczos3(source, config.width, config.height, transform)
+        .map_err(|error| error.to_string())?;
+    let mut reference = Some(output_seal(warmup.image()));
+    let mut rates = Vec::with_capacity(config.passes);
+    println!("affine_warmup_complete: true");
     for pass in 1..=config.passes {
         let started = Instant::now();
         let output = resample_lanczos3(source, config.width, config.height, transform)
             .map_err(|error| error.to_string())?;
         let elapsed = started.elapsed();
-        verify_and_print("affine", pass, elapsed, output.image(), &mut reference)?;
+        rates.push(verify_and_print(
+            "affine",
+            pass,
+            elapsed,
+            output.image(),
+            &mut reference,
+        )?);
     }
+    println!(
+        "affine_median_megapixels_per_second: {:.3}",
+        median(&mut rates)
+    );
     println!("affine_output_stable_across_passes: true");
     Ok(())
 }
@@ -104,14 +118,28 @@ fn benchmark_projective(
     config: Config,
     transform: ProjectiveTransform,
 ) -> Result<(), String> {
-    let mut reference = None;
+    let warmup = resample_lanczos3_projective(source, config.width, config.height, transform)
+        .map_err(|error| error.to_string())?;
+    let mut reference = Some(output_seal(warmup.image()));
+    let mut rates = Vec::with_capacity(config.passes);
+    println!("projective_warmup_complete: true");
     for pass in 1..=config.passes {
         let started = Instant::now();
         let output = resample_lanczos3_projective(source, config.width, config.height, transform)
             .map_err(|error| error.to_string())?;
         let elapsed = started.elapsed();
-        verify_and_print("projective", pass, elapsed, output.image(), &mut reference)?;
+        rates.push(verify_and_print(
+            "projective",
+            pass,
+            elapsed,
+            output.image(),
+            &mut reference,
+        )?);
     }
+    println!(
+        "projective_median_megapixels_per_second: {:.3}",
+        median(&mut rates)
+    );
     println!("projective_output_stable_across_passes: true");
     Ok(())
 }
@@ -122,7 +150,7 @@ fn verify_and_print(
     elapsed: Duration,
     image: &ScientificImage,
     reference: &mut Option<OutputSeal>,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     let seal = output_seal(image);
     if reference.is_some_and(|expected| expected != seal) {
         return Err(format!("{geometry} output changed on pass {pass}"));
@@ -132,7 +160,17 @@ fn verify_and_print(
     let megapixels_per_second = image.dimensions().pixel_count() as f64 / seconds / 1_000_000.0;
     println!("{geometry}_pass_{pass}_seconds: {seconds:.6}");
     println!("{geometry}_pass_{pass}_megapixels_per_second: {megapixels_per_second:.3}");
-    Ok(())
+    Ok(megapixels_per_second)
+}
+
+fn median(values: &mut [f64]) -> f64 {
+    values.sort_unstable_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[middle - 1] + values[middle]) * 0.5
+    } else {
+        values[middle]
+    }
 }
 
 fn deterministic_pixels(count: usize) -> Result<Vec<f64>, String> {
@@ -290,5 +328,14 @@ mod tests {
         changed.pixels_mut()[0] += 1.0;
         assert_ne!(output_seal(&first), output_seal(&changed));
         Ok(())
+    }
+
+    #[test]
+    fn median_is_order_independent_for_odd_and_even_pass_counts() {
+        assert_eq!(median(&mut [8.0, 2.0, 5.0]).to_bits(), 5.0_f64.to_bits());
+        assert_eq!(
+            median(&mut [8.0, 2.0, 6.0, 4.0]).to_bits(),
+            5.0_f64.to_bits()
+        );
     }
 }

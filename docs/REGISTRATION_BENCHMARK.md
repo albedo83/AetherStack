@@ -24,6 +24,9 @@ covering representative astronomy sensors.
 Each reported duration contains only the resampling call. Source generation and
 output sealing occur outside the timed interval. Throughput is reported as
 output megapixels per second, where a pixel in each plane counts as one sample.
+Each geometry performs one untimed, sealed warm-up first, then reports every
+timed pass and their median. The warm-up output is also the comparison baseline,
+so a difference between warm and timed execution fails the run.
 
 ## Usage
 
@@ -46,7 +49,8 @@ The following local release-build measurement records the effect of sharing the
 plane-invariant kernel normalization across RGB planes. It is evidence for this
 specific development machine, not a portable performance promise. Both runs used
 512 × 384 pixels, three planes, three passes, the same deterministic input, and
-the same compiler and power state.
+the same compiler and power state. These historical measurements predate the
+explicit untimed warm-up now performed by the tool.
 
 | Geometry | Before, median MP/s | After, median MP/s | Change |
 | --- | ---: | ---: | ---: |
