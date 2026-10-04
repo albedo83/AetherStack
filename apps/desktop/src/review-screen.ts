@@ -2766,7 +2766,6 @@ function renderRegistration(
   elements.executeRegisteredStack.disabled =
     !registeredSetReady ||
     stackBusy ||
-    registration.plan?.geometryModel === "projective" ||
     (weightedEstimator && !weightPreflight.ready);
   elements.executeRegisteredStack.hidden = stackBusy;
   elements.cancelRegisteredStack.hidden = !stackBusy;
@@ -2776,11 +2775,9 @@ function renderRegistration(
   elements.registeredStackMessage.textContent = registration.stack.message;
   elements.registeredStackOutput.textContent =
     registration.stack.outputPath ??
-    (registration.plan?.geometryModel === "projective"
-      ? "Projective crop integration is not enabled in this build"
-      : registeredSetReady
-        ? "Registered identity set verified"
-        : "Published registered artifacts required");
+    (registeredSetReady
+      ? "Registered identity set verified"
+      : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
   const integrationReport = registration.stack.result;
   const reportInspection = registration.stack.reportInspection;

@@ -2774,14 +2774,25 @@ where
             )
         }
     };
-    let plan = build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?;
+    let plan = match request.planning.geometry_model {
+        RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
+            build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?,
+        ),
+        RegistrationGeometryModel::Projective => {
+            DesktopRegistrationPlan::Projective(build_projective_registration_plan_for_ids_sync(
+                session,
+                &request.planning,
+                eligible_ids,
+            )?)
+        }
+    };
     if plan.plan_sha256() != request.expected_plan_sha256 {
         return Err(PreviewCommandError::new(
             "registered_stack_plan_stale",
             "The reviewed registration digest no longer matches native evidence.",
         ));
     }
-    if request.artifacts.len() != plan.frames().len() {
+    if request.artifacts.len() != plan.frame_count() {
         return Err(registered_stack_artifact_set_error());
     }
     let mut by_id = BTreeMap::new();
@@ -2795,11 +2806,7 @@ where
             return Err(registered_stack_artifact_set_error());
         }
     }
-    let expected_ids = plan
-        .frames()
-        .iter()
-        .map(|frame| frame.frame_id().clone())
-        .collect::<BTreeSet<_>>();
+    let expected_ids = plan.frame_ids();
     if by_id.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
         return Err(registered_stack_artifact_set_error());
     }
@@ -2854,9 +2861,9 @@ where
     report_sources
         .try_reserve_exact(by_id.len())
         .map_err(|_| registered_stack_allocation_error())?;
-    for frame in plan.frames() {
+    for frame_id in &expected_ids {
         let path = by_id
-            .remove(frame.frame_id())
+            .remove(frame_id)
             .ok_or_else(registered_stack_artifact_set_error)?;
         let mut input = File::open(&path).map_err(|_| registered_stack_artifact_error())?;
         let fingerprint =
@@ -2867,13 +2874,13 @@ where
             .ok_or_else(registered_stack_artifact_error)?
             .to_owned();
         report_sources.push(RegisteredStackReportSource {
-            frame_id: frame.frame_id().as_str().to_owned(),
+            frame_id: frame_id.as_str().to_owned(),
             file_name,
             byte_length: fingerprint.byte_length(),
             sha256: fingerprint.sha256().to_owned(),
         });
         sources.push(RegisteredStackSource::new(
-            frame.frame_id().clone(),
+            frame_id.clone(),
             PipelineSource::new(path, fingerprint),
         ));
     }
@@ -2883,13 +2890,14 @@ where
         .manifest
         .canonical_sha256()
         .map_err(|_| registered_stack_artifact_error())?;
+    let plan_sha256 = plan.plan_sha256().to_owned();
     let mut provenance = FitsOutputProvenance::new(
         manifest_sha256.clone(),
         "registered-stack",
         estimator.algorithm_id(),
         source_count,
     )
-    .and_then(|value| value.with_plan_sha256(plan.plan_sha256()))
+    .and_then(|value| value.with_plan_sha256(&plan_sha256))
     .map_err(|_| registered_stack_configuration_error())?;
     if let Some(weights) = weight_set.as_ref() {
         provenance = provenance
@@ -2901,22 +2909,43 @@ where
         .generate_rejection_maps
         .then(|| rejection_map_paths(&output_path))
         .transpose()?;
-    let execution = if let Some(weights) = weight_set {
-        RegisteredStackRequest::new_weighted(
-            plan,
-            sources,
-            output_path.clone(),
-            provenance,
-            weights,
-        )
-    } else {
-        RegisteredStackRequest::new_with_estimator(
-            plan,
-            sources,
-            output_path.clone(),
-            provenance,
-            estimator,
-        )
+    let execution = match (plan, weight_set) {
+        (DesktopRegistrationPlan::Affine(plan), Some(weights)) => {
+            RegisteredStackRequest::new_weighted(
+                plan,
+                sources,
+                output_path.clone(),
+                provenance,
+                weights,
+            )
+        }
+        (DesktopRegistrationPlan::Projective(plan), Some(weights)) => {
+            RegisteredStackRequest::new_projective_weighted(
+                plan,
+                sources,
+                output_path.clone(),
+                provenance,
+                weights,
+            )
+        }
+        (DesktopRegistrationPlan::Affine(plan), None) => {
+            RegisteredStackRequest::new_with_estimator(
+                plan,
+                sources,
+                output_path.clone(),
+                provenance,
+                estimator,
+            )
+        }
+        (DesktopRegistrationPlan::Projective(plan), None) => {
+            RegisteredStackRequest::new_projective_with_estimator(
+                plan,
+                sources,
+                output_path.clone(),
+                provenance,
+                estimator,
+            )
+        }
     };
     let mut execution = execution
         .and_then(|value| value.with_band_height(request.band_height))
@@ -2928,7 +2957,7 @@ where
             PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
             source_count,
         )
-        .and_then(|value| value.with_plan_sha256(execution.plan().plan_sha256()))
+        .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
         .map_err(|_| registered_stack_configuration_error())?;
         let high_provenance = FitsOutputProvenance::new(
             manifest_sha256.clone(),
@@ -2936,7 +2965,7 @@ where
             PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
             source_count,
         )
-        .and_then(|value| value.with_plan_sha256(execution.plan().plan_sha256()))
+        .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
         .map_err(|_| registered_stack_configuration_error())?;
         execution = execution
             .with_rejection_map(RegisteredRejectionMapOutput::new(

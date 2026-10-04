@@ -574,9 +574,15 @@ when the base similarity is confidence-accepted and all conservative projective
 gates recommend it. One failed pair rejects the complete projective plan. Frame
 responses contain either affine coefficients or a projective matrix, never both,
 and execution reconstructs and digest-checks the selected plan again before it
-opens calibrated artifacts. The desktop does not yet offer registered-stack
-integration for projective products; its integration action remains disabled
-until the stack transaction is bound to `registration-projective-plan-v1`.
+opens calibrated artifacts.
+
+Registered-stack requests retain the selected geometry family as an immutable
+tagged plan. Source identity ordering, optional quality-weight ordering, FITS
+`AETHPLN` checks, reference dimensions, and the common crop are all read through
+that exact plan; a projective digest cannot be substituted for an affine one or
+vice versa. Every existing estimator and rejection-map publication path shares
+the same bounded executor. Projective common-crop integration must produce the
+same FITS bytes for every valid band height, just as affine integration does.
 
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from

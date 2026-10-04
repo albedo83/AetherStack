@@ -1491,6 +1491,7 @@ async function executeStack(): Promise<void> {
         sourceFrameIds: plan.frames
           .filter((frame) => !frame.reference)
           .map((frame) => frame.frameId),
+        geometryModel: plan.geometryModel ?? "affine",
       },
       plan.planSha256,
       registered.frames.map((frame) => ({

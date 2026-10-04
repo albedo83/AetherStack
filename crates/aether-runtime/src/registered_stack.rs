@@ -20,7 +20,7 @@ use aether_integration::{
     integrate_mean, integrate_percentile_clipped_mean, integrate_weighted_mean,
     materialize_percentile_rejection_map,
 };
-use aether_registration::RegistrationPlan;
+use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
 use aether_review::FrameId;
 use sha2::{Digest, Sha256};
 
@@ -281,7 +281,7 @@ impl RegisteredStackSource {
 /// Validated request for one bounded common-crop registered integration.
 #[derive(Clone, Debug)]
 pub struct RegisteredStackRequest {
-    plan: RegistrationPlan,
+    plan: RegisteredStackPlan,
     sources: Vec<RegisteredStackSource>,
     output: PathBuf,
     provenance: FitsOutputProvenance,
@@ -291,6 +291,57 @@ pub struct RegisteredStackRequest {
     estimator: RegisteredStackEstimator,
     weights: Option<Vec<FrameWeight>>,
     rejection_map: Option<RegisteredRejectionMapOutput>,
+}
+
+#[derive(Clone, Debug)]
+enum RegisteredStackPlan {
+    Affine(RegistrationPlan),
+    Projective(ProjectiveRegistrationPlan),
+}
+
+impl RegisteredStackPlan {
+    fn frame_count(&self) -> usize {
+        match self {
+            Self::Affine(plan) => plan.frames().len(),
+            Self::Projective(plan) => plan.frames().len(),
+        }
+    }
+
+    fn frame_ids(&self) -> Vec<FrameId> {
+        match self {
+            Self::Affine(plan) => plan
+                .frames()
+                .iter()
+                .map(|frame| frame.frame_id().clone())
+                .collect(),
+            Self::Projective(plan) => plan
+                .frames()
+                .iter()
+                .map(|frame| frame.frame_id().clone())
+                .collect(),
+        }
+    }
+
+    fn plan_sha256(&self) -> &str {
+        match self {
+            Self::Affine(plan) => plan.plan_sha256(),
+            Self::Projective(plan) => plan.plan_sha256(),
+        }
+    }
+
+    fn reference_dimensions(&self) -> (usize, usize) {
+        match self {
+            Self::Affine(plan) => (plan.reference_width(), plan.reference_height()),
+            Self::Projective(plan) => (plan.reference_width(), plan.reference_height()),
+        }
+    }
+
+    fn crop(&self) -> Option<aether_registration::ReferenceRectangle> {
+        match self {
+            Self::Affine(plan) => plan.common_footprint().crop(),
+            Self::Projective(plan) => plan.common_footprint().crop(),
+        }
+    }
 }
 
 /// Optional companion FITS containing exact low/high rejection counts.
@@ -360,7 +411,35 @@ impl RegisteredStackRequest {
         if matches!(estimator, RegisteredStackEstimator::WeightedMean) {
             return Err(RegisteredStackError::WeightedEstimatorRequiresWeights);
         }
-        Self::new_canonical(plan, sources, output, provenance, estimator, None)
+        Self::new_canonical(
+            RegisteredStackPlan::Affine(plan),
+            sources,
+            output,
+            provenance,
+            estimator,
+            None,
+        )
+    }
+
+    /// Builds a request bound to an immutable projective registration plan.
+    pub fn new_projective_with_estimator(
+        plan: ProjectiveRegistrationPlan,
+        sources: Vec<RegisteredStackSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        estimator: RegisteredStackEstimator,
+    ) -> Result<Self, RegisteredStackError> {
+        if matches!(estimator, RegisteredStackEstimator::WeightedMean) {
+            return Err(RegisteredStackError::WeightedEstimatorRequiresWeights);
+        }
+        Self::new_canonical(
+            RegisteredStackPlan::Projective(plan),
+            sources,
+            output,
+            provenance,
+            estimator,
+            None,
+        )
     }
 
     /// Builds a weighted request and binds every weight to a planned frame.
@@ -375,21 +454,54 @@ impl RegisteredStackRequest {
         provenance: FitsOutputProvenance,
         weight_set: RegisteredWeightSet,
     ) -> Result<Self, RegisteredStackError> {
+        Self::new_weighted_canonical(
+            RegisteredStackPlan::Affine(plan),
+            sources,
+            output,
+            provenance,
+            weight_set,
+        )
+    }
+
+    /// Builds a weighted request bound to a projective registration plan.
+    pub fn new_projective_weighted(
+        plan: ProjectiveRegistrationPlan,
+        sources: Vec<RegisteredStackSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        weight_set: RegisteredWeightSet,
+    ) -> Result<Self, RegisteredStackError> {
+        Self::new_weighted_canonical(
+            RegisteredStackPlan::Projective(plan),
+            sources,
+            output,
+            provenance,
+            weight_set,
+        )
+    }
+
+    fn new_weighted_canonical(
+        plan: RegisteredStackPlan,
+        sources: Vec<RegisteredStackSource>,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        weight_set: RegisteredWeightSet,
+    ) -> Result<Self, RegisteredStackError> {
         if provenance.parameters_sha256() != Some(weight_set.sha256()) {
             return Err(RegisteredStackError::WeightProvenanceMismatch);
         }
-        if weight_set.len() != plan.frames().len() {
+        if weight_set.len() != plan.frame_count() {
             return Err(RegisteredStackError::WeightSetMismatch);
         }
         let mut weights = weight_set.weights;
         let mut canonical = Vec::new();
         canonical
-            .try_reserve_exact(plan.frames().len())
+            .try_reserve_exact(plan.frame_count())
             .map_err(|_| RegisteredStackError::AllocationFailed)?;
-        for frame in plan.frames() {
+        for frame_id in plan.frame_ids() {
             canonical.push(
                 weights
-                    .remove(frame.frame_id())
+                    .remove(&frame_id)
                     .ok_or(RegisteredStackError::WeightSetMismatch)?,
             );
         }
@@ -407,14 +519,14 @@ impl RegisteredStackRequest {
     }
 
     fn new_canonical(
-        plan: RegistrationPlan,
+        plan: RegisteredStackPlan,
         sources: Vec<RegisteredStackSource>,
         output: PathBuf,
         provenance: FitsOutputProvenance,
         estimator: RegisteredStackEstimator,
         weights: Option<Vec<FrameWeight>>,
     ) -> Result<Self, RegisteredStackError> {
-        if sources.len() != plan.frames().len() {
+        if sources.len() != plan.frame_count() {
             return Err(RegisteredStackError::SourceSetMismatch);
         }
         let source_count =
@@ -436,12 +548,12 @@ impl RegisteredStackRequest {
         }
         let mut canonical = Vec::new();
         canonical
-            .try_reserve_exact(plan.frames().len())
+            .try_reserve_exact(plan.frame_count())
             .map_err(|_| RegisteredStackError::AllocationFailed)?;
-        for frame in plan.frames() {
+        for frame_id in plan.frame_ids() {
             canonical.push(
                 by_id
-                    .remove(frame.frame_id())
+                    .remove(&frame_id)
                     .ok_or(RegisteredStackError::SourceSetMismatch)?,
             );
         }
@@ -483,10 +595,10 @@ impl RegisteredStackRequest {
         self
     }
 
-    /// Exact sealed registration plan.
+    /// Exact sealed registration-plan digest.
     #[must_use]
-    pub const fn plan(&self) -> &RegistrationPlan {
-        &self.plan
+    pub fn plan_sha256(&self) -> &str {
+        self.plan.plan_sha256()
     }
 
     /// Canonical registered source order.
@@ -898,7 +1010,6 @@ where
         .map_err(RegisteredStackError::Cancelled)?;
     let crop = request
         .plan
-        .common_footprint()
         .crop()
         .ok_or(RegisteredStackError::SourceSetMismatch)?;
     let planes = validate_sources(request, cancellation)?;
@@ -1183,12 +1294,9 @@ fn validate_sources(
         }
         let actual = dimensions_from_axes(input, reader.descriptor().axes())
             .map_err(RegisteredStackError::Input)?;
-        let expected = Dimensions::new(
-            request.plan.reference_width(),
-            request.plan.reference_height(),
-            actual.planes(),
-        )
-        .map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
+        let (reference_width, reference_height) = request.plan.reference_dimensions();
+        let expected = Dimensions::new(reference_width, reference_height, actual.planes())
+            .map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
         if actual != expected {
             return Err(RegisteredStackError::DimensionMismatch {
                 frame_id: source.frame_id.clone(),
@@ -1381,6 +1489,7 @@ mod tests {
     use aether_fits::write_f64_primary_atomic_new_with_provenance;
     use aether_registration::{
         AffineTransform, LANCZOS3_RESAMPLING_ALGORITHM_ID, PlannedRegistrationFrame,
+        ProjectivePlannedRegistrationFrame, ProjectiveTransform,
     };
     use aether_session::fingerprint_reader;
 
@@ -1455,6 +1564,132 @@ mod tests {
             frame_id,
             PipelineSource::new(path, fingerprint),
         ))
+    }
+
+    fn projective_plan() -> Result<ProjectiveRegistrationPlan, Box<dyn Error>> {
+        Ok(ProjectiveRegistrationPlan::new(
+            id('a')?,
+            12,
+            10,
+            vec![
+                ProjectivePlannedRegistrationFrame::new(
+                    id('a')?,
+                    12,
+                    10,
+                    ProjectiveTransform::IDENTITY,
+                ),
+                ProjectivePlannedRegistrationFrame::new(
+                    id('b')?,
+                    12,
+                    10,
+                    ProjectiveTransform::new([
+                        [1.0, 0.0, 0.2],
+                        [0.0, 1.0, -0.1],
+                        [2.0e-4, -1.0e-4, 1.0],
+                    ])?,
+                ),
+            ],
+        )?)
+    }
+
+    fn projective_registered_source(
+        directory: &TestDirectory,
+        plan: &ProjectiveRegistrationPlan,
+        frame_id: FrameId,
+        value: f64,
+    ) -> Result<RegisteredStackSource, Box<dyn Error>> {
+        let image = ScientificImage::filled(Dimensions::new(12, 10, 3)?, value)?;
+        let path = directory
+            .0
+            .join(format!("projective-registered-{}.fits", frame_id.as_str()));
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-light-projective",
+            LANCZOS3_RESAMPLING_ALGORITHM_ID,
+            1,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_frame_id_sha256(frame_id.as_str())?;
+        write_f64_primary_atomic_new_with_provenance(&path, &image, &provenance)?;
+        let mut file = File::open(&path)?;
+        let fingerprint = fingerprint_reader(&mut file)?;
+        Ok(RegisteredStackSource::new(
+            frame_id,
+            PipelineSource::new(path, fingerprint),
+        ))
+    }
+
+    #[test]
+    fn integrates_the_exact_projective_common_crop() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let plan = projective_plan()?;
+        let crop = plan.common_footprint().crop().ok_or("crop missing")?;
+        let sources = vec![
+            projective_registered_source(&directory, &plan, id('b')?, 4.0)?,
+            projective_registered_source(&directory, &plan, id('a')?, 2.0)?,
+        ];
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack-projective",
+            REGISTERED_CROP_MEAN_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let one_row_output = directory.0.join("integrated-projective-one-row.fits");
+        let four_row_output = directory.0.join("integrated-projective-four-rows.fits");
+        let request = RegisteredStackRequest::new_projective_with_estimator(
+            plan.clone(),
+            sources.clone(),
+            one_row_output.clone(),
+            provenance.clone(),
+            RegisteredStackEstimator::StrictMean,
+        )?
+        .with_band_height(1)?;
+        let four_row_request = RegisteredStackRequest::new_projective_with_estimator(
+            plan,
+            sources,
+            four_row_output.clone(),
+            provenance,
+            RegisteredStackEstimator::StrictMean,
+        )?
+        .with_band_height(4)?;
+
+        let result = run_registered_stack(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        run_registered_stack(
+            &four_row_request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+
+        assert_eq!(
+            result.dimensions(),
+            Dimensions::new(crop.width(), crop.height(), 3)?
+        );
+        assert_eq!(fs::read(&one_row_output)?, fs::read(&four_row_output)?);
+        let mut reader =
+            PrimaryImageReader::open(File::open(request.output())?, HeaderReadOptions::default())?;
+        for plane in 0..3 {
+            let image = reader.read_region_image(ImageRegion::new(
+                plane,
+                0,
+                0,
+                u64::try_from(crop.width())?,
+                u64::try_from(crop.height())?,
+            ))?;
+            assert!(
+                image
+                    .pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == 3.0_f64.to_bits())
+            );
+        }
+        Ok(())
     }
 
     fn stack_request(directory: &TestDirectory) -> Result<RegisteredStackRequest, Box<dyn Error>> {
@@ -1855,7 +2090,7 @@ mod tests {
             PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
             2,
         )?
-        .with_plan_sha256(request.plan().plan_sha256())?;
+        .with_plan_sha256(request.plan_sha256())?;
 
         let error = request
             .with_rejection_map(RegisteredRejectionMapOutput::new(
@@ -1994,7 +2229,7 @@ mod tests {
     fn rejects_stale_plan_binding_before_output() -> TestResult {
         let directory = TestDirectory::new()?;
         let mut request = stack_request(&directory)?;
-        request.plan = RegistrationPlan::new(
+        request.plan = RegisteredStackPlan::Affine(RegistrationPlan::new(
             id('a')?,
             12,
             10,
@@ -2002,7 +2237,7 @@ mod tests {
                 PlannedRegistrationFrame::new(id('a')?, 12, 10, AffineTransform::IDENTITY),
                 PlannedRegistrationFrame::new(id('b')?, 12, 10, AffineTransform::IDENTITY),
             ],
-        )?;
+        )?);
 
         assert!(matches!(
             run_registered_stack(

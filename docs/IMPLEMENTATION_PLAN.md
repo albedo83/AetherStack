@@ -1681,9 +1681,17 @@ safety reasoning. They do not narrate obvious syntax.
      projective coefficient representation per frame. Execution dispatches to
      the corresponding immutable runtime plan and retains the same atomic
      progress and publication contract. The dark skeuomorphic segmented control
-     makes this scientific choice visible and keyboard accessible. Common-crop
-     integration stays disabled for projective output until its stack request
-     accepts the projective plan type explicitly.
+     makes this scientific choice visible and keyboard accessible.
+139. Bind registered-stack integration to either immutable affine or projective
+     registration geometry without weakening provenance. The runtime
+     canonicalizes source identities and optional weights through a tagged plan,
+     validates every registered FITS against the exact selected plan digest and
+     reference canvas, and integrates the exact geometry-specific common crop.
+     Strict mean, balanced weights, percentile rejection, rejection maps,
+     cancellation, late source validation, and atomic publication share the
+     existing executor. A projective regression proves exact crop dimensions,
+     expected F64 pixels, and byte-identical output across band heights. The
+     desktop now dispatches integration by its explicit geometry selection.
 
 ## 11. Stable-release definition
 
