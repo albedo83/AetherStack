@@ -57,14 +57,15 @@ use aether_runtime::{
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
-    DirectoryManifestReport, DirectoryScanCancellation, FlatPedestalAssociation,
-    FlatPedestalBlockingReason, FlatPedestalPolicy, LightCalibrationPlan,
-    LightCalibrationPlanOptions, LightMasterAssociation, LightMasterBlockingReason,
-    LightMasterCandidateCompatibility, LightMasterKind, LightMasterMatchField,
-    LightMasterMismatchReason, ManifestFile, ManifestGroup, MasterPlan, MasterPlanOptions,
-    MasterProductKind, PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason,
-    PedestalSourceKind, SessionManifest, TemperatureBasis, fingerprint_reader,
-    fingerprint_reader_with_progress, generate_manifest_from_directory_with_cancellation,
+    DirectoryManifestReport, DirectoryScanCancellation, DirectoryScanProgress,
+    DirectoryScanProgressStage, FlatPedestalAssociation, FlatPedestalBlockingReason,
+    FlatPedestalPolicy, LightCalibrationPlan, LightCalibrationPlanOptions, LightMasterAssociation,
+    LightMasterBlockingReason, LightMasterCandidateCompatibility, LightMasterKind,
+    LightMasterMatchField, LightMasterMismatchReason, ManifestFile, ManifestGroup, MasterPlan,
+    MasterPlanOptions, MasterProductKind, PedestalCandidateCompatibility, PedestalMatchField,
+    PedestalMismatchReason, PedestalSourceKind, SessionManifest, TemperatureBasis,
+    fingerprint_reader, fingerprint_reader_with_progress,
+    generate_manifest_from_directory_with_progress,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1507,6 +1508,15 @@ struct DesktopSessionState {
 #[derive(Debug, Default)]
 struct DesktopSessionImportState {
     cancellation: Mutex<Option<DirectoryScanCancellation>>,
+}
+
+/// Path-private progress snapshot for one native session import.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionImportProgress {
+    stage: &'static str,
+    completed_sources: usize,
+    total_sources: Option<usize>,
 }
 
 /// Single active native-work slot for bounded execution and cancellation.
@@ -4367,6 +4377,7 @@ const fn fits_statistics_configuration_error() -> PreviewCommandError {
 #[tauri::command]
 async fn import_session_directory(
     path: PathBuf,
+    on_progress: tauri::ipc::Channel<SessionImportProgress>,
     app: tauri::AppHandle,
     review_state: tauri::State<'_, DesktopReviewState>,
     session_state: tauri::State<'_, DesktopSessionState>,
@@ -4382,7 +4393,10 @@ async fn import_session_directory(
     let cancellation = begin_session_import(&import_state)?;
     let worker_cancellation = cancellation.clone();
     let worker = tauri::async_runtime::spawn_blocking(move || {
-        let mut imported = scan_session_directory_with_cancellation(&path, &worker_cancellation)?;
+        let mut imported =
+            scan_session_directory_with_progress(&path, &worker_cancellation, |event| {
+                let _ignored = on_progress.send(session_import_progress(event));
+            })?;
         ensure_session_import_active(&worker_cancellation)?;
         imported.native.quality_cache_rejections =
             restore_session_quality_evidence(&cache_root, &mut imported.presentation);
@@ -6489,13 +6503,25 @@ const fn review_sort_input_error() -> PreviewCommandError {
 
 #[cfg(test)]
 fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, PreviewCommandError> {
-    scan_session_directory_with_cancellation(root, &DirectoryScanCancellation::new())
+    scan_session_directory_with_progress(root, &DirectoryScanCancellation::new(), |_| {})
 }
 
+#[cfg(test)]
 fn scan_session_directory_with_cancellation(
     root: &Path,
     cancellation: &DirectoryScanCancellation,
 ) -> Result<ImportedSessionBundle, PreviewCommandError> {
+    scan_session_directory_with_progress(root, cancellation, |_| {})
+}
+
+fn scan_session_directory_with_progress<F>(
+    root: &Path,
+    cancellation: &DirectoryScanCancellation,
+    progress: F,
+) -> Result<ImportedSessionBundle, PreviewCommandError>
+where
+    F: FnMut(DirectoryScanProgress),
+{
     let started = Instant::now();
     let root_path = root.to_str().ok_or_else(|| {
         PreviewCommandError::new(
@@ -6511,14 +6537,15 @@ fn scan_session_directory_with_cancellation(
         source_analysis_parallelism: interactive_import_parallelism(),
         ..DirectoryManifestOptions::default()
     };
-    let report = generate_manifest_from_directory_with_cancellation(root, options, cancellation)
-        .map_err(|error| match error {
-            DirectoryManifestError::Cancelled => session_import_cancelled_error(),
-            _ => PreviewCommandError::new(
-                "session_scan_failed",
-                "The selected directory could not be scanned into a complete session.",
-            ),
-        })?;
+    let report =
+        generate_manifest_from_directory_with_progress(root, options, cancellation, progress)
+            .map_err(|error| match error {
+                DirectoryManifestError::Cancelled => session_import_cancelled_error(),
+                _ => PreviewCommandError::new(
+                    "session_scan_failed",
+                    "The selected directory could not be scanned into a complete session.",
+                ),
+            })?;
     let fingerprinted_source_bytes = report
         .manifest()
         .files()
@@ -6546,6 +6573,19 @@ fn scan_session_directory_with_cancellation(
             quality_cache_rejections: Vec::new(),
         },
     })
+}
+
+const fn session_import_progress(progress: DirectoryScanProgress) -> SessionImportProgress {
+    SessionImportProgress {
+        stage: match progress.stage {
+            DirectoryScanProgressStage::Discovering => "discovering",
+            DirectoryScanProgressStage::Analyzing => "analyzing",
+            DirectoryScanProgressStage::Assembling => "assembling",
+            DirectoryScanProgressStage::Completed => "completed",
+        },
+        completed_sources: progress.completed_sources,
+        total_sources: progress.total_sources,
+    }
 }
 
 #[cfg(test)]
@@ -9022,6 +9062,24 @@ mod tests {
             scan_session_directory_with_cancellation(directory.path(), &cancellation),
             Err(error) if error.code == "session_import_cancelled"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn session_import_progress_wire_contains_only_aggregate_evidence() -> TestResult {
+        let progress = session_import_progress(DirectoryScanProgress {
+            stage: DirectoryScanProgressStage::Analyzing,
+            completed_sources: 12,
+            total_sources: Some(37),
+        });
+        assert_eq!(
+            serde_json::to_value(progress)?,
+            serde_json::json!({
+                "stage": "analyzing",
+                "completedSources": 12,
+                "totalSources": 37
+            })
+        );
         Ok(())
     }
 

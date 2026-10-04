@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,12 @@ import {
   type ImportedSession,
 } from "./session-bridge.ts";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  Channel: class {
+    onmessage: ((message: unknown) => void) | null = null;
+  },
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   save: vi.fn(),
@@ -52,10 +57,16 @@ describe("native session bridge", () => {
     };
     vi.mocked(invoke).mockResolvedValue(imported);
 
-    await expect(selectAndImportSession()).resolves.toBe(imported);
+    const onProgress = vi.fn();
+    await expect(selectAndImportSession(onProgress)).resolves.toBe(imported);
     expect(invoke).toHaveBeenCalledWith("import_session_directory", {
       path: "/selected/session",
+      onProgress: expect.any(Channel),
     });
+    const invocation = vi.mocked(invoke).mock.calls[0]?.[1] as {
+      onProgress?: Channel<unknown>;
+    };
+    expect(invocation.onProgress?.onmessage).toBe(onProgress);
   });
 
   it("cancels only through the path-free native import slot", async () => {

@@ -23,9 +23,11 @@ pub use directory::{
     DEFAULT_MAX_FITS_FILES, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_MAX_TOTAL_ENTRIES,
     DEFAULT_MAX_TOTAL_SOURCE_BYTES, DirectoryFailureCode, DirectoryFailureReason,
     DirectoryManifestError, DirectoryManifestOptions, DirectoryManifestReport,
-    DirectoryScanCancellation, DirectoryScanFailure, DirectoryScanLimits, DirectoryScanTimings,
-    MAX_SOURCE_ANALYSIS_PARALLELISM, generate_manifest_from_directory,
+    DirectoryScanCancellation, DirectoryScanFailure, DirectoryScanLimits, DirectoryScanProgress,
+    DirectoryScanProgressStage, DirectoryScanTimings, MAX_SOURCE_ANALYSIS_PARALLELISM,
+    MAX_SOURCE_PROGRESS_UPDATES, generate_manifest_from_directory,
     generate_manifest_from_directory_with_cancellation,
+    generate_manifest_from_directory_with_progress,
 };
 pub use fingerprint::{
     FINGERPRINT_BUFFER_BYTES, FingerprintError, fingerprint_reader,

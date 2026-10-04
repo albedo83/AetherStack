@@ -1466,6 +1466,16 @@ safety reasoning. They do not narrate obvious syntax.
      partial-report refusal, exclusive slot reuse, path-free IPC, and visible
      action states. Next, add bounded aggregate progress events without exposing
      source names or weakening parallel import throughput.
+116. Stream bounded aggregate directory-import progress. The session scanner
+     now emits path-private discovery, analysis, assembly, and completion
+     snapshots from its coordinator thread. Analysis updates contain only
+     completed and total source counts, are monotonic, and are capped at 1,024
+     regardless of the configured 100,000-file input bound. Workers never emit
+     UI events, preserving the measured parallel hot path. The desktop forwards
+     snapshots over one typed IPC channel and replaces the generic busy label
+     with exact aggregate counts while the same control remains available for
+     cancellation. Unit tests cover stage order, final completeness, monotonic
+     counts, the update bound, and channel wiring without source paths.
 
 ## 11. Stable-release definition
 

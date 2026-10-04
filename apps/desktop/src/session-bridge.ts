@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
@@ -29,6 +29,12 @@ export interface ImportedFrame {
 export interface ImportedFailure {
   readonly relativePath: string;
   readonly code: string;
+}
+
+export interface SessionImportProgress {
+  readonly stage: "discovering" | "analyzing" | "assembling" | "completed";
+  readonly completedSources: number;
+  readonly totalSources: number | null;
 }
 
 export interface ImportedSession {
@@ -200,14 +206,21 @@ export function importedSessionStatus(
  * bounded, deterministic FITS scan. Cancelling the native dialog is a normal
  * outcome and never clears the current session.
  */
-export async function selectAndImportSession(): Promise<ImportedSession | null> {
+export async function selectAndImportSession(
+  onProgress: (progress: SessionImportProgress) => void = () => {},
+): Promise<ImportedSession | null> {
   const path = await open({
     directory: true,
     multiple: false,
     title: "Import an astrophotography session",
   });
   if (typeof path !== "string") return null;
-  return invoke<ImportedSession>("import_session_directory", { path });
+  const progress = new Channel<SessionImportProgress>();
+  progress.onmessage = onProgress;
+  return invoke<ImportedSession>("import_session_directory", {
+    path,
+    onProgress: progress,
+  });
 }
 
 /** Requests cooperative cancellation of the active native directory import. */

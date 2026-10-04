@@ -33,6 +33,32 @@ pub const DEFAULT_MAX_SOURCE_BYTES: u64 = 1_u64 << 40;
 pub const DEFAULT_MAX_TOTAL_SOURCE_BYTES: u64 = 64_u64 << 40;
 /// Hard upper bound for opt-in concurrent source analysis.
 pub const MAX_SOURCE_ANALYSIS_PARALLELISM: usize = 32;
+/// Maximum number of source-analysis progress updates emitted by one scan.
+pub const MAX_SOURCE_PROGRESS_UPDATES: usize = 1_024;
+
+/// Coarse, path-private stage of a directory scan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryScanProgressStage {
+    /// The bounded filesystem tree is being traversed.
+    Discovering,
+    /// Discovered FITS sources are being opened, verified, and fingerprinted.
+    Analyzing,
+    /// The deterministic session manifest is being assembled.
+    Assembling,
+    /// A complete report is ready to return.
+    Completed,
+}
+
+/// Aggregate directory-scan progress that never contains source paths.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectoryScanProgress {
+    /// Current coarse scan stage.
+    pub stage: DirectoryScanProgressStage,
+    /// Sources completely analyzed or retained as recoverable failures.
+    pub completed_sources: usize,
+    /// Total portable FITS candidates discovered before analysis.
+    pub total_sources: Option<usize>,
+}
 
 /// Shared monotonic cancellation signal for a directory import.
 ///
@@ -781,9 +807,36 @@ pub fn generate_manifest_from_directory_with_cancellation(
     options: DirectoryManifestOptions,
     cancellation: &DirectoryScanCancellation,
 ) -> Result<DirectoryManifestReport, DirectoryManifestError> {
+    generate_manifest_from_directory_with_progress(root, options, cancellation, |_| {})
+}
+
+/// Builds a deterministic manifest and reports bounded, path-private progress.
+///
+/// Progress is emitted from the coordinating thread, never from source workers.
+/// At most [`MAX_SOURCE_PROGRESS_UPDATES`] analysis updates are emitted, plus
+/// the fixed stage transitions, regardless of the number of input files.
+///
+/// # Errors
+///
+/// Returns the same errors as
+/// [`generate_manifest_from_directory_with_cancellation`].
+pub fn generate_manifest_from_directory_with_progress<F>(
+    root: &Path,
+    options: DirectoryManifestOptions,
+    cancellation: &DirectoryScanCancellation,
+    mut progress: F,
+) -> Result<DirectoryManifestReport, DirectoryManifestError>
+where
+    F: FnMut(DirectoryScanProgress),
+{
     let scan_started = Instant::now();
     validate_options(options)?;
     ensure_not_cancelled(cancellation)?;
+    progress(DirectoryScanProgress {
+        stage: DirectoryScanProgressStage::Discovering,
+        completed_sources: 0,
+        total_sources: None,
+    });
     let root_metadata = fs::symlink_metadata(root).map_err(DirectoryManifestError::RootMetadata)?;
     if !root_metadata.file_type().is_dir() {
         return Err(DirectoryManifestError::RootNotDirectory);
@@ -837,11 +890,7 @@ pub fn generate_manifest_from_directory_with_cancellation(
             }
         } else if entry.file_type.is_file() {
             if is_fits_path(&entry.path) {
-                if options.source_analysis_parallelism == 1 {
-                    analyze_file(root, &entry.path, options, cancellation, &mut state)?;
-                } else {
-                    queue_file(root, entry.path, options, &mut state)?;
-                }
+                queue_file(root, entry.path, options, &mut state)?;
             } else {
                 state.skipped_non_fits_files += 1;
             }
@@ -850,11 +899,20 @@ pub fn generate_manifest_from_directory_with_cancellation(
         }
     }
 
-    if options.source_analysis_parallelism > 1 {
-        analyze_queued_files(options, cancellation, &mut state)?;
-    }
+    let total_sources = state.pending_sources.len();
+    progress(DirectoryScanProgress {
+        stage: DirectoryScanProgressStage::Analyzing,
+        completed_sources: 0,
+        total_sources: Some(total_sources),
+    });
+    analyze_queued_files(options, cancellation, &mut state, &mut progress)?;
 
     ensure_not_cancelled(cancellation)?;
+    progress(DirectoryScanProgress {
+        stage: DirectoryScanProgressStage::Assembling,
+        completed_sources: total_sources,
+        total_sources: Some(total_sources),
+    });
 
     let manifest_started = Instant::now();
     let manifest = generate_manifest(
@@ -891,6 +949,11 @@ pub fn generate_manifest_from_directory_with_cancellation(
         manifest_assembly,
     };
     ensure_not_cancelled(cancellation)?;
+    progress(DirectoryScanProgress {
+        stage: DirectoryScanProgressStage::Completed,
+        completed_sources: total_sources,
+        total_sources: Some(total_sources),
+    });
 
     Ok(DirectoryManifestReport {
         manifest,
@@ -1009,27 +1072,6 @@ fn read_children(
     }
     children.sort_by(|left, right| right.path.cmp(&left.path));
     Ok(children)
-}
-
-fn analyze_file(
-    root: &Path,
-    path: &Path,
-    options: DirectoryManifestOptions,
-    cancellation: &DirectoryScanCancellation,
-    state: &mut ScanState,
-) -> Result<(), DirectoryManifestError> {
-    let Some(candidate) = source_candidate(root, path.to_owned(), options, state)? else {
-        return Ok(());
-    };
-    let Some(prepared) = prepare_source(candidate, options, cancellation, state)? else {
-        return Ok(());
-    };
-    let started = Instant::now();
-    let (result, timings) = analyze_prepared_source(prepared, options, cancellation.clone());
-    state.source_analysis_wall = state.source_analysis_wall.saturating_add(started.elapsed());
-    ensure_not_cancelled(cancellation)?;
-    state.source_timings.saturating_add_assign(timings);
-    retain_analysis_result(result, state, options.limits.max_failures)
 }
 
 fn queue_file(
@@ -1188,28 +1230,48 @@ fn retain_analysis_result(
     Ok(())
 }
 
-fn analyze_queued_files(
+fn analyze_queued_files<F>(
     options: DirectoryManifestOptions,
     cancellation: &DirectoryScanCancellation,
     state: &mut ScanState,
-) -> Result<(), DirectoryManifestError> {
+    progress: &mut F,
+) -> Result<(), DirectoryManifestError>
+where
+    F: FnMut(DirectoryScanProgress),
+{
     let pending = std::mem::take(&mut state.pending_sources);
+    let total_sources = pending.len();
+    let progress_interval =
+        total_sources.saturating_add(MAX_SOURCE_PROGRESS_UPDATES - 1) / MAX_SOURCE_PROGRESS_UPDATES;
+    let progress_interval = progress_interval.max(1);
+    let mut completed_sources = 0_usize;
+    let mut last_reported_sources = 0_usize;
     let mut pending = pending.into_iter();
     loop {
         ensure_not_cancelled(cancellation)?;
         let mut prepared = Vec::with_capacity(options.source_analysis_parallelism);
+        let mut consumed_sources = 0_usize;
         for _ in 0..options.source_analysis_parallelism {
             let Some(candidate) = pending.next() else {
                 break;
             };
+            consumed_sources = consumed_sources.saturating_add(1);
             if let Some(source) = prepare_source(candidate, options, cancellation, state)? {
                 prepared.push(source);
             }
         }
         if prepared.is_empty() {
-            if pending.len() == 0 {
+            if consumed_sources == 0 {
                 break;
             }
+            completed_sources = completed_sources.saturating_add(consumed_sources);
+            report_source_progress(
+                progress,
+                completed_sources,
+                total_sources,
+                progress_interval,
+                &mut last_reported_sources,
+            );
             continue;
         }
 
@@ -1237,8 +1299,37 @@ fn analyze_queued_files(
             state.source_timings.saturating_add_assign(timings);
             retain_analysis_result(result, state, options.limits.max_failures)?;
         }
+        completed_sources = completed_sources.saturating_add(consumed_sources);
+        report_source_progress(
+            progress,
+            completed_sources,
+            total_sources,
+            progress_interval,
+            &mut last_reported_sources,
+        );
     }
     Ok(())
+}
+
+fn report_source_progress<F>(
+    progress: &mut F,
+    completed_sources: usize,
+    total_sources: usize,
+    interval: usize,
+    last_reported_sources: &mut usize,
+) where
+    F: FnMut(DirectoryScanProgress),
+{
+    if completed_sources == total_sources
+        || completed_sources.saturating_sub(*last_reported_sources) >= interval
+    {
+        progress(DirectoryScanProgress {
+            stage: DirectoryScanProgressStage::Analyzing,
+            completed_sources,
+            total_sources: Some(total_sources),
+        });
+        *last_reported_sources = completed_sources;
+    }
 }
 
 fn ensure_not_cancelled(
@@ -1496,6 +1587,73 @@ mod tests {
             reader.seek(SeekFrom::Start(0)),
             Err(error) if error.kind() == io::ErrorKind::Other
         ));
+    }
+
+    #[test]
+    fn aggregate_progress_is_monotone_complete_and_path_private() -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new()?;
+        for name in ["light-a.fits", "light-b.fits", "light-c.fits"] {
+            fs::write(
+                directory.path().join(name),
+                fits_source(Some("Light"), true),
+            )?;
+        }
+        let mut events = Vec::new();
+        let report = generate_manifest_from_directory_with_progress(
+            directory.path(),
+            DirectoryManifestOptions {
+                source_analysis_parallelism: 2,
+                ..DirectoryManifestOptions::default()
+            },
+            &DirectoryScanCancellation::new(),
+            |event| events.push(event),
+        )?;
+
+        assert_eq!(report.manifest().files().len(), 3);
+        assert_eq!(
+            events.first().map(|event| event.stage),
+            Some(DirectoryScanProgressStage::Discovering)
+        );
+        assert_eq!(
+            events.last(),
+            Some(&DirectoryScanProgress {
+                stage: DirectoryScanProgressStage::Completed,
+                completed_sources: 3,
+                total_sources: Some(3),
+            })
+        );
+        let analyzed = events
+            .iter()
+            .filter(|event| event.stage == DirectoryScanProgressStage::Analyzing)
+            .collect::<Vec<_>>();
+        assert!(analyzed.windows(2).all(|pair| {
+            pair[0].completed_sources <= pair[1].completed_sources
+                && pair[0].total_sources == pair[1].total_sources
+        }));
+        assert!(events.len() <= 6);
+        Ok(())
+    }
+
+    #[test]
+    fn source_progress_reporting_has_a_hard_update_bound() {
+        let total = MAX_SOURCE_PROGRESS_UPDATES * 4 + 1;
+        let interval = total.div_ceil(MAX_SOURCE_PROGRESS_UPDATES);
+        let mut events = Vec::new();
+        let mut last_reported = 0;
+        for completed in 1..=total {
+            report_source_progress(
+                &mut |event| events.push(event),
+                completed,
+                total,
+                interval,
+                &mut last_reported,
+            );
+        }
+        assert!(events.len() <= MAX_SOURCE_PROGRESS_UPDATES);
+        assert_eq!(
+            events.last().map(|event| event.completed_sources),
+            Some(total)
+        );
     }
 
     #[test]

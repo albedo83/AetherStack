@@ -414,7 +414,18 @@ async function importSession(): Promise<void> {
     sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
   });
   try {
-    const imported = await selectAndImportSession();
+    const imported = await selectAndImportSession((progress) => {
+      if (sessionImportPhase !== "running") return;
+      const label =
+        progress.stage === "discovering"
+          ? "Discovering FITS sources"
+          : progress.stage === "analyzing"
+            ? `Analyzing ${progress.completedSources} / ${progress.totalSources ?? "?"} FITS`
+            : progress.stage === "assembling"
+              ? "Assembling session manifest"
+              : "Finalizing imported session";
+      update({ ...model, sessionStatus: { tone: "busy", label } });
+    });
     if (!imported) {
       update({ ...model, sessionStatus: previousStatus });
       return;

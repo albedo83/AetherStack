@@ -134,6 +134,12 @@ native state, checked at every bounded fingerprint read, and leaves the prior
 session installed because an incomplete scan never reaches presentation state.
 The cancelling state disables repeated requests and restores the preceding
 session status once the native worker confirms termination.
+During an active scan, the status chip advances through discovery, aggregate
+FITS analysis, manifest assembly, and finalization. Only completed and total
+source counts cross the native boundary: directory names and individual source
+names never appear in progress events. The update stream has a fixed upper
+bound and is emitted by the coordinator so UI feedback cannot multiply work in
+the parallel analysis workers.
 Rejected cache evidence has a separate maintenance preview. Its control first
 fingerprints the exact native rejection set and shows removable count, bounded
 bytes, blocked count, and a shortened plan seal. The wording states “preview
