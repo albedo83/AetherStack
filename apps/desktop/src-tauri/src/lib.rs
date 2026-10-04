@@ -56,14 +56,15 @@ use aether_runtime::{
     run_master_plan, run_registered_stack, run_registration_plan,
 };
 use aether_session::{
-    ClassificationPolicy, DirectoryManifestOptions, DirectoryManifestReport,
-    FlatPedestalAssociation, FlatPedestalBlockingReason, FlatPedestalPolicy, LightCalibrationPlan,
+    ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
+    DirectoryManifestReport, DirectoryScanCancellation, FlatPedestalAssociation,
+    FlatPedestalBlockingReason, FlatPedestalPolicy, LightCalibrationPlan,
     LightCalibrationPlanOptions, LightMasterAssociation, LightMasterBlockingReason,
     LightMasterCandidateCompatibility, LightMasterKind, LightMasterMatchField,
     LightMasterMismatchReason, ManifestFile, ManifestGroup, MasterPlan, MasterPlanOptions,
     MasterProductKind, PedestalCandidateCompatibility, PedestalMatchField, PedestalMismatchReason,
     PedestalSourceKind, SessionManifest, TemperatureBasis, fingerprint_reader,
-    fingerprint_reader_with_progress, generate_manifest_from_directory,
+    fingerprint_reader_with_progress, generate_manifest_from_directory_with_cancellation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1500,6 +1501,12 @@ struct DesktopReviewState {
 #[derive(Debug, Default)]
 struct DesktopSessionState {
     session: Mutex<Option<Arc<ImportedNativeSession>>>,
+}
+
+/// Single active directory-import slot with cooperative cancellation.
+#[derive(Debug, Default)]
+struct DesktopSessionImportState {
+    cancellation: Mutex<Option<DirectoryScanCancellation>>,
 }
 
 /// Single active native-work slot for bounded execution and cancellation.
@@ -4363,6 +4370,7 @@ async fn import_session_directory(
     app: tauri::AppHandle,
     review_state: tauri::State<'_, DesktopReviewState>,
     session_state: tauri::State<'_, DesktopSessionState>,
+    import_state: tauri::State<'_, DesktopSessionImportState>,
 ) -> Result<ImportedSession, PreviewCommandError> {
     if !path.is_absolute() {
         return Err(PreviewCommandError::new(
@@ -4371,10 +4379,14 @@ async fn import_session_directory(
         ));
     }
     let cache_root = quality_cache_root(&app)?;
-    let imported = tauri::async_runtime::spawn_blocking(move || {
-        let mut imported = scan_session_directory_sync(&path)?;
+    let cancellation = begin_session_import(&import_state)?;
+    let worker_cancellation = cancellation.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let mut imported = scan_session_directory_with_cancellation(&path, &worker_cancellation)?;
+        ensure_session_import_active(&worker_cancellation)?;
         imported.native.quality_cache_rejections =
             restore_session_quality_evidence(&cache_root, &mut imported.presentation);
+        ensure_session_import_active(&worker_cancellation)?;
         let manifest_sha256 = imported
             .native
             .manifest
@@ -4386,14 +4398,31 @@ async fn import_session_directory(
         ));
         Ok::<_, PreviewCommandError>(imported)
     })
-    .await
-    .map_err(|_| {
+    .await;
+    let was_cancelled = finish_session_import(&import_state)?;
+    if was_cancelled {
+        return Err(session_import_cancelled_error());
+    }
+    let imported = worker.map_err(|_| {
         PreviewCommandError::new(
             "session_import_interrupted",
             "The session import worker stopped before producing a result.",
         )
     })??;
     install_imported_session(&session_state, &review_state, imported)
+}
+
+#[tauri::command]
+fn cancel_session_import(
+    import_state: tauri::State<'_, DesktopSessionImportState>,
+) -> Result<bool, PreviewCommandError> {
+    let active = lock_session_import(&import_state)?;
+    let Some(cancellation) = active.as_ref() else {
+        return Ok(false);
+    };
+    let was_active = !cancellation.is_cancelled();
+    cancellation.cancel();
+    Ok(was_active)
 }
 
 #[tauri::command]
@@ -5071,6 +5100,58 @@ fn lock_session_state(
             "The native session is unavailable after an internal synchronization failure.",
         )
     })
+}
+
+fn lock_session_import(
+    state: &DesktopSessionImportState,
+) -> Result<MutexGuard<'_, Option<DirectoryScanCancellation>>, PreviewCommandError> {
+    state.cancellation.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "session_import_state_unavailable",
+            "Session import is unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
+fn begin_session_import(
+    state: &DesktopSessionImportState,
+) -> Result<DirectoryScanCancellation, PreviewCommandError> {
+    let mut active = lock_session_import(state)?;
+    if active.is_some() {
+        return Err(PreviewCommandError::new(
+            "session_import_busy",
+            "A session import is already running.",
+        ));
+    }
+    let cancellation = DirectoryScanCancellation::new();
+    *active = Some(cancellation.clone());
+    Ok(cancellation)
+}
+
+fn finish_session_import(state: &DesktopSessionImportState) -> Result<bool, PreviewCommandError> {
+    let mut active = lock_session_import(state)?;
+    let was_cancelled = active
+        .as_ref()
+        .is_some_and(DirectoryScanCancellation::is_cancelled);
+    *active = None;
+    Ok(was_cancelled)
+}
+
+fn ensure_session_import_active(
+    cancellation: &DirectoryScanCancellation,
+) -> Result<(), PreviewCommandError> {
+    if cancellation.is_cancelled() {
+        Err(session_import_cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+const fn session_import_cancelled_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "session_import_cancelled",
+        "The session import was cancelled before a complete manifest existed.",
+    )
 }
 
 fn lock_calibration_execution(
@@ -6406,7 +6487,15 @@ const fn review_sort_input_error() -> PreviewCommandError {
     )
 }
 
+#[cfg(test)]
 fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, PreviewCommandError> {
+    scan_session_directory_with_cancellation(root, &DirectoryScanCancellation::new())
+}
+
+fn scan_session_directory_with_cancellation(
+    root: &Path,
+    cancellation: &DirectoryScanCancellation,
+) -> Result<ImportedSessionBundle, PreviewCommandError> {
     let started = Instant::now();
     let root_path = root.to_str().ok_or_else(|| {
         PreviewCommandError::new(
@@ -6422,12 +6511,14 @@ fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, Pre
         source_analysis_parallelism: interactive_import_parallelism(),
         ..DirectoryManifestOptions::default()
     };
-    let report = generate_manifest_from_directory(root, options).map_err(|_| {
-        PreviewCommandError::new(
-            "session_scan_failed",
-            "The selected directory could not be scanned into a complete session.",
-        )
-    })?;
+    let report = generate_manifest_from_directory_with_cancellation(root, options, cancellation)
+        .map_err(|error| match error {
+            DirectoryManifestError::Cancelled => session_import_cancelled_error(),
+            _ => PreviewCommandError::new(
+                "session_scan_failed",
+                "The selected directory could not be scanned into a complete session.",
+            ),
+        })?;
     let fingerprinted_source_bytes = report
         .manifest()
         .files()
@@ -6877,6 +6968,7 @@ pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(DesktopCalibrationExecutionState::default())
+        .manage(DesktopSessionImportState::default())
         .manage(DesktopReviewState::default())
         .manage(DesktopSessionState::default())
         .invoke_handler(tauri::generate_handler![
@@ -6888,6 +6980,7 @@ pub fn run() -> Result<(), tauri::Error> {
             cancel_registration_plan,
             cancel_registered_stack,
             cancel_registered_stack_source_verification,
+            cancel_session_import,
             diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_light_plan,
@@ -8895,6 +8988,40 @@ mod tests {
         assert_eq!(frame.axes, [4, 2]);
         assert_eq!(frame.id.len(), 64);
         assert_eq!(frame.path, source_path.to_string_lossy());
+        Ok(())
+    }
+
+    #[test]
+    fn session_import_slot_is_exclusive_cancellable_and_reusable() -> TestResult {
+        let state = DesktopSessionImportState::default();
+        let first = begin_session_import(&state)?;
+        assert!(!first.is_cancelled());
+        assert!(matches!(
+            begin_session_import(&state),
+            Err(error) if error.code == "session_import_busy"
+        ));
+        first.cancel();
+        assert!(matches!(
+            ensure_session_import_active(&first),
+            Err(error) if error.code == "session_import_cancelled"
+        ));
+        assert!(finish_session_import(&state)?);
+        let second = begin_session_import(&state)?;
+        assert!(!second.is_cancelled());
+        assert!(!finish_session_import(&state)?);
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_directory_scan_never_returns_a_desktop_session() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let cancellation = DirectoryScanCancellation::new();
+        cancellation.cancel();
+
+        assert!(matches!(
+            scan_session_directory_with_cancellation(directory.path(), &cancellation),
+            Err(error) if error.code == "session_import_cancelled"
+        ));
         Ok(())
     }
 

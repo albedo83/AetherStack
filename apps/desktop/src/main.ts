@@ -87,6 +87,7 @@ import {
 } from "./selection-bridge.ts";
 import {
   applyQualityCacheMaintenance,
+  cancelSessionImport,
   exportSessionDiagnostics,
   importedSessionDiagnostics,
   importedSessionStatus,
@@ -116,6 +117,11 @@ const maximumAdjacentPrefetches = 2;
 
 let model = demoReviewModel;
 let importedSession: ImportedSession | null = null;
+let sessionImportPhase: "idle" | "running" | "cancelling" = "idle";
+
+function sessionImportWasCancelled(): boolean {
+  return sessionImportPhase === "cancelling";
+}
 let sharedTransform: {
   readonly role: FrameRole;
   readonly value: EstimatedDisplayTransform;
@@ -368,6 +374,31 @@ window.addEventListener("beforeunload", disposeRuntimeResources, {
 });
 
 async function importSession(): Promise<void> {
+  if (sessionImportPhase === "running") {
+    sessionImportPhase = "cancelling";
+    update({
+      ...model,
+      sessionStatus: { tone: "busy", label: "Cancelling FITS import" },
+    });
+    try {
+      const requested = await cancelSessionImport();
+      if (!requested) {
+        sessionImportPhase = "running";
+        update({
+          ...model,
+          sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
+        });
+      }
+    } catch {
+      sessionImportPhase = "idle";
+      update({
+        ...model,
+        sessionStatus: { tone: "error", label: "Import cancellation failed" },
+      });
+    }
+    return;
+  }
+  if (sessionImportPhase === "cancelling") return;
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
@@ -377,6 +408,7 @@ async function importSession(): Promise<void> {
     return;
   }
   const previousStatus = model.sessionStatus;
+  sessionImportPhase = "running";
   update({
     ...model,
     sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
@@ -389,13 +421,19 @@ async function importSession(): Promise<void> {
     }
     installImportedSession(imported);
   } catch {
-    update({
-      ...model,
-      sessionStatus: {
-        tone: "error",
-        label: "Import failed · open Diagnostics",
-      },
-    });
+    update(
+      sessionImportWasCancelled()
+        ? { ...model, sessionStatus: previousStatus }
+        : {
+            ...model,
+            sessionStatus: {
+              tone: "error",
+              label: "Import failed · open Diagnostics",
+            },
+          },
+    );
+  } finally {
+    sessionImportPhase = "idle";
   }
 }
 

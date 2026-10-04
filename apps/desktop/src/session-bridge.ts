@@ -210,6 +210,11 @@ export async function selectAndImportSession(): Promise<ImportedSession | null> 
   return invoke<ImportedSession>("import_session_directory", { path });
 }
 
+/** Requests cooperative cancellation of the active native directory import. */
+export async function cancelSessionImport(): Promise<boolean> {
+  return invoke<boolean>("cancel_session_import");
+}
+
 /** Requests a new destination, then asks Rust to seal and publish the report. */
 export async function exportSessionDiagnostics(): Promise<SessionDiagnosticsExport | null> {
   const path = await save({

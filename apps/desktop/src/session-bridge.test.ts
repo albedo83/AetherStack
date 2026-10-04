@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyQualityCacheMaintenance,
+  cancelSessionImport,
   importedSessionDiagnostics,
   importedSessionStatus,
   previewQualityCacheMaintenance,
@@ -55,6 +56,13 @@ describe("native session bridge", () => {
     expect(invoke).toHaveBeenCalledWith("import_session_directory", {
       path: "/selected/session",
     });
+  });
+
+  it("cancels only through the path-free native import slot", async () => {
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    await expect(cancelSessionImport()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith("cancel_session_import");
   });
 
   it("exports only after a JSON destination is selected", async () => {

@@ -283,15 +283,28 @@ describe("frame review workspace", () => {
     expect(actions.onImportSession).toHaveBeenCalledOnce();
   });
 
-  it("exposes busy import state without allowing a duplicate scan", () => {
-    const { root } = fixture({
+  it("turns the busy import action into an explicit cancellation", () => {
+    const { root, actions, controller } = fixture({
       ...demoReviewModel,
       sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
     });
 
-    const button = getByRole(root, "button", { name: "Scanning FITS…" });
-    expect(button.hasAttribute("disabled")).toBe(true);
+    const button = getByRole(root, "button", { name: "× Cancel import" });
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.classList.contains("button--danger")).toBe(true);
     expect(root.textContent).toContain("Scanning FITS sources");
+    fireEvent.click(button);
+    expect(actions.onImportSession).toHaveBeenCalledOnce();
+
+    controller.update({
+      ...demoReviewModel,
+      sessionStatus: { tone: "busy", label: "Cancelling FITS import" },
+    });
+    expect(
+      getByRole(root, "button", { name: "Cancelling…" }).hasAttribute(
+        "disabled",
+      ),
+    ).toBe(true);
   });
 
   it("presents FITS and quality-cache diagnostics with explicit severity", () => {

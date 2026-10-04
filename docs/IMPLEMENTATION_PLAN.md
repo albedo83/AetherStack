@@ -1452,6 +1452,20 @@ safety reasoning. They do not narrate obvious syntax.
      debug-mode seconds, down from the prior 32.31-second sequential validation.
      Retain the sequential library default for unmeasured storage and profile
      another device before introducing storage-specific automatic tuning.
+115. Make large directory imports cooperatively cancellable. The session crate
+     now exposes a cloneable monotonic cancellation signal checked during
+     traversal, before source admission, between worker batches, before every
+     64 KiB fingerprint read, and before returning a completed report. A
+     cancelled scan returns no partial manifest. The desktop owns one exclusive
+     import slot, always clears it after worker completion, rejects concurrent
+     imports, and checks cancellation again around quality-cache restoration.
+     The busy import button becomes an explicit high-contrast Cancel action,
+     enters a disabled cancelling state after one request, and restores the
+     prior session status rather than presenting cancellation as a data error.
+     Rust and presenter tests cover monotonic signals, read interruption,
+     partial-report refusal, exclusive slot reuse, path-free IPC, and visible
+     action states. Next, add bounded aggregate progress events without exposing
+     source names or weakening parallel import throughput.
 
 ## 11. Stable-release definition
 

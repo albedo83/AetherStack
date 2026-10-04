@@ -4,6 +4,8 @@ use std::fmt::{Display, Formatter};
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,6 +33,34 @@ pub const DEFAULT_MAX_SOURCE_BYTES: u64 = 1_u64 << 40;
 pub const DEFAULT_MAX_TOTAL_SOURCE_BYTES: u64 = 64_u64 << 40;
 /// Hard upper bound for opt-in concurrent source analysis.
 pub const MAX_SOURCE_ANALYSIS_PARALLELISM: usize = 32;
+
+/// Shared monotonic cancellation signal for a directory import.
+///
+/// Clones refer to the same atomic state. Cancellation is permanent and can be
+/// requested from another thread without locks or allocation during reads.
+#[derive(Clone, Debug, Default)]
+pub struct DirectoryScanCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl DirectoryScanCancellation {
+    /// Creates an active scan signal.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Requests cooperative cancellation. Repeated calls are harmless.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Returns whether cancellation has been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
 
 /// Explicit resource limits for directory-to-manifest ingestion.
 ///
@@ -484,6 +514,8 @@ pub enum DirectoryManifestError {
         /// Maximum accepted source-analysis worker count.
         limit: usize,
     },
+    /// The caller requested cancellation before a complete manifest existed.
+    Cancelled,
 }
 
 impl Display for DirectoryManifestError {
@@ -538,6 +570,7 @@ impl Display for DirectoryManifestError {
                 formatter,
                 "source_analysis_parallelism must not exceed {limit}"
             ),
+            Self::Cancelled => formatter.write_str("directory scan was cancelled"),
         }
     }
 }
@@ -556,7 +589,8 @@ impl Error for DirectoryManifestError {
             | Self::FailureLimitExceeded { .. }
             | Self::TotalSourceBytesLimitExceeded { .. }
             | Self::SourceWorkerPanicked
-            | Self::SourceAnalysisParallelismExceeded { .. } => None,
+            | Self::SourceAnalysisParallelismExceeded { .. }
+            | Self::Cancelled => None,
         }
     }
 }
@@ -656,6 +690,46 @@ impl<R: Read> Read for FixedLengthReader<R> {
     }
 }
 
+/// Rejects every read or seek requested after cooperative cancellation.
+///
+/// This wrapper intentionally sits above buffering so cached bytes cannot
+/// bypass the cancellation checkpoint.
+struct CancellationReader<R> {
+    inner: R,
+    cancellation: DirectoryScanCancellation,
+}
+
+impl<R> CancellationReader<R> {
+    const fn new(inner: R, cancellation: DirectoryScanCancellation) -> Self {
+        Self {
+            inner,
+            cancellation,
+        }
+    }
+
+    fn check(&self) -> io::Result<()> {
+        if self.cancellation.is_cancelled() {
+            Err(io::Error::other("directory scan cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<R: Read> Read for CancellationReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.check()?;
+        self.inner.read(buffer)
+    }
+}
+
+impl<R: Seek> Seek for CancellationReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.check()?;
+        self.inner.seek(position)
+    }
+}
+
 impl<R: Seek> Seek for FixedLengthReader<R> {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         let next = self.inner.seek(position)?;
@@ -685,8 +759,31 @@ pub fn generate_manifest_from_directory(
     root: &Path,
     options: DirectoryManifestOptions,
 ) -> Result<DirectoryManifestReport, DirectoryManifestError> {
+    generate_manifest_from_directory_with_cancellation(
+        root,
+        options,
+        &DirectoryScanCancellation::new(),
+    )
+}
+
+/// Builds a deterministic manifest with cooperative cancellation.
+///
+/// The signal is checked during traversal, before opening each source, between
+/// bounded worker batches, and before every fixed-size fingerprint read. A
+/// cancelled scan returns no manifest or partial report.
+///
+/// # Errors
+///
+/// Returns [`DirectoryManifestError::Cancelled`] after cancellation, or the
+/// same bounded ingestion errors as [`generate_manifest_from_directory`].
+pub fn generate_manifest_from_directory_with_cancellation(
+    root: &Path,
+    options: DirectoryManifestOptions,
+    cancellation: &DirectoryScanCancellation,
+) -> Result<DirectoryManifestReport, DirectoryManifestError> {
     let scan_started = Instant::now();
     validate_options(options)?;
+    ensure_not_cancelled(cancellation)?;
     let root_metadata = fs::symlink_metadata(root).map_err(DirectoryManifestError::RootMetadata)?;
     if !root_metadata.file_type().is_dir() {
         return Err(DirectoryManifestError::RootNotDirectory);
@@ -694,9 +791,18 @@ pub fn generate_manifest_from_directory(
 
     let root_entries = fs::read_dir(root).map_err(DirectoryManifestError::RootRead)?;
     let mut state = ScanState::default();
-    let mut pending = read_children(root, Path::new(""), 0, root_entries, options, &mut state)?;
+    let mut pending = read_children(
+        root,
+        Path::new(""),
+        0,
+        root_entries,
+        options,
+        cancellation,
+        &mut state,
+    )?;
 
     while let Some(entry) = pending.pop() {
+        ensure_not_cancelled(cancellation)?;
         if entry.file_type.is_symlink() {
             state.skipped_symlinks += 1;
         } else if entry.file_type.is_dir() {
@@ -709,8 +815,15 @@ pub fn generate_manifest_from_directory(
             let relative = relative_path(root, &entry.path);
             match fs::read_dir(&entry.path) {
                 Ok(entries) => {
-                    let mut children =
-                        read_children(root, &relative, entry.depth, entries, options, &mut state)?;
+                    let mut children = read_children(
+                        root,
+                        &relative,
+                        entry.depth,
+                        entries,
+                        options,
+                        cancellation,
+                        &mut state,
+                    )?;
                     pending.append(&mut children);
                 }
                 Err(error) => push_failure(
@@ -725,7 +838,7 @@ pub fn generate_manifest_from_directory(
         } else if entry.file_type.is_file() {
             if is_fits_path(&entry.path) {
                 if options.source_analysis_parallelism == 1 {
-                    analyze_file(root, &entry.path, options, &mut state)?;
+                    analyze_file(root, &entry.path, options, cancellation, &mut state)?;
                 } else {
                     queue_file(root, entry.path, options, &mut state)?;
                 }
@@ -738,8 +851,10 @@ pub fn generate_manifest_from_directory(
     }
 
     if options.source_analysis_parallelism > 1 {
-        analyze_queued_files(options, &mut state)?;
+        analyze_queued_files(options, cancellation, &mut state)?;
     }
+
+    ensure_not_cancelled(cancellation)?;
 
     let manifest_started = Instant::now();
     let manifest = generate_manifest(
@@ -775,6 +890,7 @@ pub fn generate_manifest_from_directory(
         source_finalization: state.source_timings.finalize,
         manifest_assembly,
     };
+    ensure_not_cancelled(cancellation)?;
 
     Ok(DirectoryManifestReport {
         manifest,
@@ -833,10 +949,12 @@ fn read_children(
     parent_depth: usize,
     entries: fs::ReadDir,
     options: DirectoryManifestOptions,
+    cancellation: &DirectoryScanCancellation,
     state: &mut ScanState,
 ) -> Result<Vec<PendingEntry>, DirectoryManifestError> {
     let mut children = Vec::new();
     for entry in entries {
+        ensure_not_cancelled(cancellation)?;
         if children.len() >= options.limits.max_entries_per_directory {
             return Err(DirectoryManifestError::DirectoryEntryLimitExceeded {
                 relative_path: relative_directory.to_owned(),
@@ -897,17 +1015,19 @@ fn analyze_file(
     root: &Path,
     path: &Path,
     options: DirectoryManifestOptions,
+    cancellation: &DirectoryScanCancellation,
     state: &mut ScanState,
 ) -> Result<(), DirectoryManifestError> {
     let Some(candidate) = source_candidate(root, path.to_owned(), options, state)? else {
         return Ok(());
     };
-    let Some(prepared) = prepare_source(candidate, options, state)? else {
+    let Some(prepared) = prepare_source(candidate, options, cancellation, state)? else {
         return Ok(());
     };
     let started = Instant::now();
-    let (result, timings) = analyze_prepared_source(prepared, options);
+    let (result, timings) = analyze_prepared_source(prepared, options, cancellation.clone());
     state.source_analysis_wall = state.source_analysis_wall.saturating_add(started.elapsed());
+    ensure_not_cancelled(cancellation)?;
     state.source_timings.saturating_add_assign(timings);
     retain_analysis_result(result, state, options.limits.max_failures)
 }
@@ -959,8 +1079,10 @@ fn source_candidate(
 fn prepare_source(
     candidate: PendingSource,
     options: DirectoryManifestOptions,
+    cancellation: &DirectoryScanCancellation,
     state: &mut ScanState,
 ) -> Result<Option<PreparedSource>, DirectoryManifestError> {
+    ensure_not_cancelled(cancellation)?;
     let file = match File::open(&candidate.path) {
         Ok(file) => file,
         Err(error) => {
@@ -1026,14 +1148,16 @@ fn prepare_source(
 fn analyze_prepared_source(
     prepared: PreparedSource,
     options: DirectoryManifestOptions,
+    cancellation: DirectoryScanCancellation,
 ) -> (
     Result<ManifestFile, DirectoryScanFailure>,
     SourceAnalysisTimings,
 ) {
-    let reader = BufReader::with_capacity(
+    let buffered = BufReader::with_capacity(
         FINGERPRINT_BUFFER_BYTES,
         FixedLengthReader::new(prepared.file, prepared.byte_length),
     );
+    let reader = CancellationReader::new(buffered, cancellation.clone());
     let mut source_timings = SourceAnalysisTimings::default();
     let result = analyze_fits_source_with_timings(
         prepared.portable_path,
@@ -1066,17 +1190,19 @@ fn retain_analysis_result(
 
 fn analyze_queued_files(
     options: DirectoryManifestOptions,
+    cancellation: &DirectoryScanCancellation,
     state: &mut ScanState,
 ) -> Result<(), DirectoryManifestError> {
     let pending = std::mem::take(&mut state.pending_sources);
     let mut pending = pending.into_iter();
     loop {
+        ensure_not_cancelled(cancellation)?;
         let mut prepared = Vec::with_capacity(options.source_analysis_parallelism);
         for _ in 0..options.source_analysis_parallelism {
             let Some(candidate) = pending.next() else {
                 break;
             };
-            if let Some(source) = prepare_source(candidate, options, state)? {
+            if let Some(source) = prepare_source(candidate, options, cancellation, state)? {
                 prepared.push(source);
             }
         }
@@ -1091,7 +1217,10 @@ fn analyze_queued_files(
         let results = thread::scope(|scope| {
             let handles = prepared
                 .into_iter()
-                .map(|source| scope.spawn(move || analyze_prepared_source(source, options)))
+                .map(|source| {
+                    let cancellation = cancellation.clone();
+                    scope.spawn(move || analyze_prepared_source(source, options, cancellation))
+                })
                 .collect::<Vec<_>>();
             handles
                 .into_iter()
@@ -1102,6 +1231,7 @@ fn analyze_queued_files(
                 })
                 .collect::<Result<Vec<_>, _>>()
         })?;
+        ensure_not_cancelled(cancellation)?;
         state.source_analysis_wall = state.source_analysis_wall.saturating_add(started.elapsed());
         for (result, timings) in results {
             state.source_timings.saturating_add_assign(timings);
@@ -1109,6 +1239,16 @@ fn analyze_queued_files(
         }
     }
     Ok(())
+}
+
+fn ensure_not_cancelled(
+    cancellation: &DirectoryScanCancellation,
+) -> Result<(), DirectoryManifestError> {
+    if cancellation.is_cancelled() {
+        Err(DirectoryManifestError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn push_failure(
@@ -1313,6 +1453,49 @@ mod tests {
         assert_eq!(timings.source_finalization(), Duration::ZERO);
         assert_eq!(timings.manifest_assembly(), Duration::ZERO);
         assert_eq!(timings.filesystem_and_overhead(), Duration::from_millis(3));
+    }
+
+    #[test]
+    fn cancellation_is_monotonic_and_blocks_partial_reports() -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new()?;
+        fs::write(
+            directory.path().join("source.fits"),
+            fits_source(Some("Light"), true),
+        )?;
+        let cancellation = DirectoryScanCancellation::new();
+        assert!(!cancellation.is_cancelled());
+        cancellation.cancel();
+        cancellation.cancel();
+        assert!(cancellation.is_cancelled());
+
+        assert!(matches!(
+            generate_manifest_from_directory_with_cancellation(
+                directory.path(),
+                DirectoryManifestOptions::default(),
+                &cancellation,
+            ),
+            Err(DirectoryManifestError::Cancelled)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn cancellation_reader_checks_before_buffered_reads_and_seeks() {
+        let cancellation = DirectoryScanCancellation::new();
+        let buffered = BufReader::with_capacity(3, Cursor::new(vec![1_u8, 2, 3]));
+        let mut reader = CancellationReader::new(buffered, cancellation.clone());
+        let mut first = [0_u8; 1];
+        assert_eq!(reader.read(&mut first).ok(), Some(1));
+        cancellation.cancel();
+        let mut rest = [0_u8; 2];
+        assert!(matches!(
+            reader.read(&mut rest),
+            Err(error) if error.kind() == io::ErrorKind::Other
+        ));
+        assert!(matches!(
+            reader.seek(SeekFrom::Start(0)),
+            Err(error) if error.kind() == io::ErrorKind::Other
+        ));
     }
 
     #[test]

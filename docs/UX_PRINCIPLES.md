@@ -128,6 +128,12 @@ The import bank also reports exact fingerprinted bytes and monotonic native scan
 duration. These are operational measurements, not scientific evidence or an ETA;
 they let users compare sessions and detect unexpectedly slow storage without
 guessing from a spinner.
+While a scan is active, the import action becomes a high-contrast Cancel action
+instead of a disabled duplicate-import control. Cancellation is monotonic in
+native state, checked at every bounded fingerprint read, and leaves the prior
+session installed because an incomplete scan never reaches presentation state.
+The cancelling state disables repeated requests and restores the preceding
+session status once the native worker confirms termination.
 Rejected cache evidence has a separate maintenance preview. Its control first
 fingerprints the exact native rejection set and shows removable count, bounded
 bytes, blocked count, and a shortened plan seal. The wording states “preview

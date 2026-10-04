@@ -1400,6 +1400,8 @@ export function mountReviewScreen(
     elements.sessionStatus.dataset.tone = model.sessionStatus.tone;
     elements.sessionStatusLabel.textContent = model.sessionStatus.label;
     const importing = model.sessionStatus.tone === "busy";
+    const cancellingImport =
+      importing && model.sessionStatus.label === "Cancelling FITS import";
     const masterBusy =
       model.calibration.execution.state === "running" ||
       model.calibration.execution.state === "cancelling" ||
@@ -1436,10 +1438,13 @@ export function mountReviewScreen(
       sourceEvidenceLimit,
     );
     syncStepperStates(root);
-    elements.importSession.disabled = importing || masterBusy;
-    elements.importSession.textContent = importing
-      ? "Scanning FITS…"
-      : "＋ Import session";
+    elements.importSession.disabled = cancellingImport || masterBusy;
+    elements.importSession.classList.toggle("button--danger", importing);
+    elements.importSession.textContent = cancellingImport
+      ? "Cancelling…"
+      : importing
+        ? "× Cancel import"
+        : "＋ Import session";
     renderRoles(elements.roleTabs, model);
     renderRows(elements.tableBody, model);
     renderFrameSelection(elements, model);
