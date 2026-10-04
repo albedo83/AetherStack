@@ -329,6 +329,16 @@ oracle across multiple planes, partial final bands, boundary loss, masks, and
 non-finite source values. File-backed source windows and transactional FITS
 publication remain runtime responsibilities.
 
+`resample_lanczos3_projective` applies the identical complete-image scalar
+oracle to a canonical homography. The inverse is constructed once and every
+reference pixel center undergoes projective division before the unchanged
+Lanczos support calculation. Affine transforms lifted to canonical 3 × 3 form
+agree within a strict binary64 roundoff bound, constant fields remain constant
+on complete support, and a
+projective horizon aborts the operation rather than returning partial output.
+This oracle is not production-selectable until exact projective source-window
+planning and bounded band execution pass their own differential tests.
+
 Before decoding each band, the source-window planner evaluates the exact same
 inverse transform and analytical-zero kernels. It returns the smallest rectangle
 containing every non-zero tap of every complete output kernel. Entirely disjoint

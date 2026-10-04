@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use aether_core::{CompensatedSum, CoreError, Dimensions, PixelFlags, ScientificImage};
 
-use crate::{AffineTransform, CoordinateError, ImagePoint};
+use crate::{AffineTransform, CoordinateError, ImagePoint, ProjectiveTransform};
 
 /// Stable identifier for strict inverse-mapped, normalized Lanczos-3 sampling.
 pub const LANCZOS3_RESAMPLING_ALGORITHM_ID: &str = "lanczos3-normalized-f64-v1";
@@ -75,6 +75,14 @@ impl ResamplingStatistics {
 pub struct ResampledImage {
     image: ScientificImage,
     source_to_reference: AffineTransform,
+    statistics: ResamplingStatistics,
+}
+
+/// Fully materialized projective scalar-oracle result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectivelyResampledImage {
+    image: ScientificImage,
+    source_to_reference: ProjectiveTransform,
     statistics: ResamplingStatistics,
 }
 
@@ -427,6 +435,38 @@ impl ResampledImage {
     }
 }
 
+impl ProjectivelyResampledImage {
+    /// Versioned interpolation and support policy shared with affine sampling.
+    #[must_use]
+    pub const fn algorithm_id(&self) -> &'static str {
+        LANCZOS3_RESAMPLING_ALGORITHM_ID
+    }
+
+    /// Exact homography whose inverse was evaluated at output pixel centers.
+    #[must_use]
+    pub const fn source_to_reference(&self) -> ProjectiveTransform {
+        self.source_to_reference
+    }
+
+    /// Complete output-support accounting.
+    #[must_use]
+    pub const fn statistics(&self) -> ResamplingStatistics {
+        self.statistics
+    }
+
+    /// Immutable output image and conservative mask.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Consumes the report and returns its image storage.
+    #[must_use]
+    pub fn into_image(self) -> ScientificImage {
+        self.image
+    }
+}
+
 /// Failure raised before a complete resampled image can be returned.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResamplingError {
@@ -715,12 +755,58 @@ pub fn resample_lanczos3(
     output_height: usize,
     source_to_reference: AffineTransform,
 ) -> Result<ResampledImage, ResamplingError> {
-    let source_dimensions = source.dimensions();
-    let output_dimensions =
-        Dimensions::new(output_width, output_height, source_dimensions.planes())?;
     let reference_to_source = source_to_reference
         .inverse()
         .map_err(ResamplingError::Coordinate)?;
+    let (image, statistics) =
+        resample_lanczos3_oracle(source, output_width, output_height, |point| {
+            reference_to_source.apply(point)
+        })?;
+    Ok(ResampledImage {
+        image,
+        source_to_reference,
+        statistics,
+    })
+}
+
+/// Resamples through a finite source-to-reference homography.
+///
+/// This uses the identical scalar Lanczos-3 oracle, support policy, masks, and
+/// output accounting as [`resample_lanczos3`]. The homography is inverted once;
+/// a projective horizon at any evaluated output center is an explicit failure.
+/// Production selection and bounded band execution remain separate concerns.
+pub fn resample_lanczos3_projective(
+    source: &ScientificImage,
+    output_width: usize,
+    output_height: usize,
+    source_to_reference: ProjectiveTransform,
+) -> Result<ProjectivelyResampledImage, ResamplingError> {
+    let reference_to_source = source_to_reference
+        .inverse()
+        .map_err(ResamplingError::Coordinate)?;
+    let (image, statistics) =
+        resample_lanczos3_oracle(source, output_width, output_height, |point| {
+            reference_to_source.apply(point)
+        })?;
+    Ok(ProjectivelyResampledImage {
+        image,
+        source_to_reference,
+        statistics,
+    })
+}
+
+fn resample_lanczos3_oracle<F>(
+    source: &ScientificImage,
+    output_width: usize,
+    output_height: usize,
+    reference_to_source: F,
+) -> Result<(ScientificImage, ResamplingStatistics), ResamplingError>
+where
+    F: Fn(ImagePoint) -> Result<ImagePoint, CoordinateError>,
+{
+    let source_dimensions = source.dimensions();
+    let output_dimensions =
+        Dimensions::new(output_width, output_height, source_dimensions.planes())?;
     let mut output = ScientificImage::filled(output_dimensions, f64::NAN)?;
     let output_area = output_width
         .checked_mul(output_height)
@@ -738,9 +824,8 @@ pub fn resample_lanczos3(
         for output_x in 0..output_width {
             let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
                 .map_err(ResamplingError::Coordinate)?;
-            let source_point = reference_to_source
-                .apply(reference_point)
-                .map_err(ResamplingError::Coordinate)?;
+            let source_point =
+                reference_to_source(reference_point).map_err(ResamplingError::Coordinate)?;
             let x_kernel = AxisKernel::new(source_point.x(), source_dimensions.width())?;
             let y_kernel = AxisKernel::new(source_point.y(), source_dimensions.height())?;
             if !x_kernel.complete || !y_kernel.complete {
@@ -812,11 +897,7 @@ pub fn resample_lanczos3(
     if accounted != statistics.total_samples {
         return Err(ResamplingError::CountOverflow);
     }
-    Ok(ResampledImage {
-        image: output,
-        source_to_reference,
-        statistics,
-    })
+    Ok((output, statistics))
 }
 
 fn resample_lanczos3_band(
@@ -1162,6 +1243,89 @@ mod tests {
         assert_eq!(result.statistics().interpolated_samples(), 124);
         assert_eq!(result.statistics().masked_support_samples(), 2);
         assert_eq!(result.statistics().outside_footprint_samples(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn affine_lift_agrees_with_projective_oracle_at_binary64_precision() -> TestResult {
+        let mut source = image(13, 11, 2)?;
+        source.mark(6, 5, 0, PixelFlags::HOT)?;
+        source.pixels_mut()[13 * 11 + 7 * 13 + 8] = f64::NAN;
+        let affine = AffineTransform::new(0.999, -0.012, 0.012, 0.999, 0.37, -0.28)?;
+
+        let expected = resample_lanczos3(&source, 14, 12, affine)?;
+        let actual = resample_lanczos3_projective(
+            &source,
+            14,
+            12,
+            ProjectiveTransform::from_affine(affine)?,
+        )?;
+
+        assert_eq!(actual.algorithm_id(), expected.algorithm_id());
+        assert_eq!(actual.statistics(), expected.statistics());
+        assert_eq!(actual.image().mask(), expected.image().mask());
+        assert_eq!(
+            actual.image().pixels().len(),
+            expected.image().pixels().len()
+        );
+        for (&left, &right) in actual
+            .image()
+            .pixels()
+            .iter()
+            .zip(expected.image().pixels())
+        {
+            let tolerance = 1.0e-11 * right.abs().max(1.0);
+            assert!(
+                (left.is_nan() && right.is_nan()) || (left - right).abs() <= tolerance,
+                "affine lift disagrees beyond binary64 roundoff"
+            );
+        }
+        assert!(actual.source_to_reference().is_affine());
+        Ok(())
+    }
+
+    #[test]
+    fn projective_oracle_preserves_constant_complete_support() -> TestResult {
+        let dimensions = Dimensions::new(31, 29, 1)?;
+        let source = ScientificImage::filled(dimensions, 42.25)?;
+        let transform = ProjectiveTransform::new([
+            [1.0, 0.002, 0.1],
+            [-0.001, 1.0, -0.15],
+            [2.0e-5, -1.0e-5, 1.0],
+        ])?;
+
+        let result = resample_lanczos3_projective(&source, 31, 29, transform)?;
+
+        assert!(!result.source_to_reference().is_affine());
+        assert!(result.statistics().interpolated_samples() > 0);
+        for (&value, &flags) in result
+            .image()
+            .pixels()
+            .iter()
+            .zip(result.image().mask().as_slice())
+        {
+            if flags.is_clear() {
+                assert!((value - 42.25).abs() < 1.0e-12);
+            } else {
+                assert!(flags.contains(PixelFlags::MISSING));
+                assert!(value.is_nan());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn projective_horizon_fails_instead_of_returning_partial_output() -> TestResult {
+        let source = image(8, 8, 1)?;
+        let transform =
+            ProjectiveTransform::new([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.5, 0.0, 1.0]])?;
+
+        assert!(matches!(
+            resample_lanczos3_projective(&source, 8, 8, transform),
+            Err(ResamplingError::Coordinate(
+                CoordinateError::TransformOverflow
+            ))
+        ));
         Ok(())
     }
 

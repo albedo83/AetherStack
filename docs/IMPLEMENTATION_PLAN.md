@@ -1595,6 +1595,15 @@ safety reasoning. They do not narrate obvious syntax.
      from 0.286 to 0.290. Even the best gain is scientifically negligible at
      this sampling scale, reinforcing the non-selection decision while proving
      that the evidence path can expose both improvements and regressions.
+129. Extend the complete-image Lanczos-3 scalar oracle to projective geometry
+     without duplicating interpolation code. Affine and homographic entry points
+     now share the exact inverse-mapped kernel, support, mask, finite-domain, and
+     accounting implementation. A distinct result type preserves the exact 3 ×
+     3 transform. Differential tests bound affine-lift agreement to binary64
+     roundoff despite the homography's independent scale canonicalization;
+     projective constant-field and horizon tests lock flux preservation and
+     fail-closed behavior. Bounded projective band planning remains required
+     before production execution can select this geometry.
 
 ## 11. Stable-release definition
 
