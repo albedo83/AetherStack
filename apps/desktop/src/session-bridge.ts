@@ -36,6 +36,8 @@ export interface ImportedSession {
   readonly rootPath: string;
   readonly frames: readonly ImportedFrame[];
   readonly filesConsidered: number;
+  readonly fingerprintedSourceBytes: number;
+  readonly scanElapsedMilliseconds: number;
   readonly classificationConflicts: number;
   readonly recoverableFailures: readonly ImportedFailure[];
   readonly unassignedSources: readonly string[];
@@ -137,6 +139,8 @@ export function importedSessionDiagnostics(
     session.qualityEvidenceRejected;
   return {
     filesConsidered: session.filesConsidered,
+    fingerprintedSourceBytes: session.fingerprintedSourceBytes,
+    scanElapsedMilliseconds: session.scanElapsedMilliseconds,
     verifiedFrames: session.frames.length,
     classificationConflicts: session.classificationConflicts,
     recoverableFailures: session.recoverableFailures.length,

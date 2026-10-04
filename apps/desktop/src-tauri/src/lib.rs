@@ -13,6 +13,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use aether_cache::{ArtifactFileFingerprint, ArtifactRemovalState, ArtifactStore, CacheKey};
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
@@ -902,6 +903,8 @@ struct ImportedSession {
     root_path: String,
     frames: Vec<ImportedFrame>,
     files_considered: usize,
+    fingerprinted_source_bytes: u64,
+    scan_elapsed_milliseconds: u64,
     classification_conflicts: usize,
     recoverable_failures: Vec<ImportedFailure>,
     unassigned_sources: Vec<String>,
@@ -6402,6 +6405,7 @@ const fn review_sort_input_error() -> PreviewCommandError {
 }
 
 fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, PreviewCommandError> {
+    let started = Instant::now();
     let root_path = root.to_str().ok_or_else(|| {
         PreviewCommandError::new(
             "session_path_not_unicode",
@@ -6421,7 +6425,23 @@ fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, Pre
             "The selected directory could not be scanned into a complete session.",
         )
     })?;
-    let presentation = imported_session_from_report(root, root_path, &report)?;
+    let fingerprinted_source_bytes = report
+        .manifest()
+        .files()
+        .iter()
+        .try_fold(0_u64, |total, file| {
+            total.checked_add(file.fingerprint().byte_length())
+        })
+        .ok_or_else(|| {
+            PreviewCommandError::new(
+                "session_byte_count_overflow",
+                "The imported session byte count exceeds the supported range.",
+            )
+        })?;
+    let mut presentation = imported_session_from_report(root, root_path, &report)?;
+    presentation.fingerprinted_source_bytes = fingerprinted_source_bytes;
+    presentation.scan_elapsed_milliseconds =
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let manifest = Arc::new(report.into_manifest());
     Ok(ImportedSessionBundle {
         presentation,
@@ -6478,6 +6498,8 @@ fn imported_session_from_report(
         root_path: root_path.to_owned(),
         frames,
         files_considered: report.fits_files_considered(),
+        fingerprinted_source_bytes: 0,
+        scan_elapsed_milliseconds: 0,
         classification_conflicts: report
             .manifest()
             .files()
@@ -8845,6 +8867,10 @@ mod tests {
         let imported = import_session_directory_sync(directory.path())?;
 
         assert_eq!(imported.files_considered, 1);
+        assert_eq!(
+            imported.fingerprinted_source_bytes,
+            fs::metadata(&source_path)?.len()
+        );
         assert!(imported.recoverable_failures.is_empty());
         assert_eq!(imported.frames.len(), 1);
         let frame = &imported.frames[0];
@@ -8867,6 +8893,8 @@ mod tests {
                 imported_review_test_frame('b', "second.fits"),
             ],
             files_considered: 2,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -8944,6 +8972,8 @@ mod tests {
                 imported_review_test_frame('b', "second.fits"),
             ],
             files_considered: 2,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9010,6 +9040,8 @@ mod tests {
             root_path: "/runtime-only".to_owned(),
             frames: vec![imported_review_test_frame('a', "first.fits")],
             files_considered: 1,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9073,6 +9105,8 @@ mod tests {
                 imported_review_test_frame('c', "third.fits"),
             ],
             files_considered: 3,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9167,6 +9201,8 @@ mod tests {
             root_path: "/runtime-only".to_owned(),
             frames: vec![imported_review_test_frame('a', "first.fits")],
             files_considered: 1,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9412,6 +9448,8 @@ mod tests {
             root_path: "/runtime-only".to_owned(),
             frames: vec![restored, missing, rejected, ineligible],
             files_considered: 4,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9568,6 +9606,8 @@ mod tests {
             root_path: "/private/acquisition/root".to_owned(),
             frames: vec![frame],
             files_considered: 2,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 1,
             recoverable_failures: vec![ImportedFailure {
                 relative_path: "DARKS/private-dark.fits".to_owned(),
@@ -9640,6 +9680,8 @@ mod tests {
             root_path: "/runtime-only".to_owned(),
             frames: vec![frame],
             files_considered: 1,
+            fingerprinted_source_bytes: 0,
+            scan_elapsed_milliseconds: 0,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9668,6 +9710,8 @@ mod tests {
 
         assert!(imported.files_considered > 0);
         assert!(!imported.frames.is_empty());
+        assert!(imported.fingerprinted_source_bytes > 0);
+        assert!(imported.scan_elapsed_milliseconds > 0);
         for expected_role in ["dark", "flat", "light"] {
             assert!(
                 imported

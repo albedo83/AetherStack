@@ -62,6 +62,11 @@ export function mountReviewScreen(
     diagnosticsDialog: required<HTMLElement>(root, "[data-diagnostics-dialog]"),
     diagnosticsState: required<HTMLElement>(root, "[data-diagnostics-state]"),
     diagnosticsFiles: required<HTMLElement>(root, "[data-diagnostics-files]"),
+    diagnosticsBytes: required<HTMLElement>(root, "[data-diagnostics-bytes]"),
+    diagnosticsScanTime: required<HTMLElement>(
+      root,
+      "[data-diagnostics-scan-time]",
+    ),
     diagnosticsFrames: required<HTMLElement>(root, "[data-diagnostics-frames]"),
     diagnosticsConflicts: required<HTMLElement>(
       root,
@@ -2264,6 +2269,8 @@ function renderSessionDiagnostics(
   elements: {
     diagnosticsState: HTMLElement;
     diagnosticsFiles: HTMLElement;
+    diagnosticsBytes: HTMLElement;
+    diagnosticsScanTime: HTMLElement;
     diagnosticsFrames: HTMLElement;
     diagnosticsConflicts: HTMLElement;
     diagnosticsFailures: HTMLElement;
@@ -2305,6 +2312,12 @@ function renderSessionDiagnostics(
       : "All mandatory FITS checks passed";
   elements.diagnosticsFiles.textContent = formatCount(
     diagnostics.filesConsidered,
+  );
+  elements.diagnosticsBytes.textContent = formatByteCount(
+    diagnostics.fingerprintedSourceBytes,
+  );
+  elements.diagnosticsScanTime.textContent = formatElapsedMilliseconds(
+    diagnostics.scanElapsedMilliseconds,
   );
   elements.diagnosticsFrames.textContent = formatCount(
     diagnostics.verifiedFrames,
@@ -3438,7 +3451,16 @@ function formatRegisteredSourceStatus(
 function formatByteCount(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
+  if (bytes < 1_024 * 1_024 * 1_024) {
+    return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1_024 * 1_024 * 1_024)).toFixed(1)} GiB`;
+}
+
+function formatElapsedMilliseconds(milliseconds: number): string {
+  if (milliseconds < 1) return "<1 ms";
+  if (milliseconds < 1_000) return `${milliseconds} ms`;
+  return `${(milliseconds / 1_000).toFixed(2)} s`;
 }
 
 function calibrationSettings(
@@ -4636,6 +4658,8 @@ function shellMarkup(): string {
           <div class="diagnostics-bank__heading"><span aria-hidden="true">●</span><h3 id="diagnostics-import-heading">FITS import</h3></div>
           <dl class="statistics-grid diagnostics-grid">
             ${statistic("Sources considered", "data-diagnostics-files")}
+            ${statistic("Fingerprinted bytes", "data-diagnostics-bytes")}
+            ${statistic("Native scan time", "data-diagnostics-scan-time")}
             ${statistic("Verified frames", "data-diagnostics-frames")}
             ${statistic("Classification conflicts", "data-diagnostics-conflicts")}
             ${statistic("Recoverable failures", "data-diagnostics-failures")}

@@ -1414,6 +1414,16 @@ safety reasoning. They do not narrate obvious syntax.
      cover stale seals, exact removal, changed-byte retention, cancellation, and
      path-free bridge transport. Next, exercise this workflow against a real
      rejected cache artifact before broadening maintenance beyond quality data.
+112. Revalidate import and CFA quality on the complete priority camera session.
+     The ignored external-corpus tests now pass against all 135 local ASI294MC
+     Pro inputs and one representative RGGB Light, covering structured roles,
+     preview, exact statistics, and native quality measurement without recording
+     private identities. Import diagnostics now retain exact fingerprinted bytes
+     and monotonic native scan duration, exposing both as operational evidence
+     instead of an unreliable ETA. Synthetic fixtures keep deterministic zero
+     values, while the real-corpus gate requires non-zero byte and timing proof.
+     Next, profile release-mode session import stages before optimizing traversal,
+     header parsing, or hashing independently.
 
 ## 11. Stable-release definition
 

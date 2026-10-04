@@ -12,6 +12,8 @@ export const demoReviewModel: ReviewViewModel = {
   sessionStatus: { tone: "ready", label: "Demo ready" },
   sessionDiagnostics: {
     filesConsidered: 271,
+    fingerprintedSourceBytes: 3_158_611_200,
+    scanElapsedMilliseconds: 1_794,
     verifiedFrames: 271,
     classificationConflicts: 0,
     recoverableFailures: 0,

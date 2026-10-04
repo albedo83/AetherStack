@@ -124,6 +124,10 @@ Tactile category controls and case-insensitive search narrow the bounded local
 evidence without dropdowns or a new native query. The panel always reports the
 exact displayed and available counts, so exploration cannot be mistaken for a
 change to the sealed session evidence.
+The import bank also reports exact fingerprinted bytes and monotonic native scan
+duration. These are operational measurements, not scientific evidence or an ETA;
+they let users compare sessions and detect unexpectedly slow storage without
+guessing from a spinner.
 Rejected cache evidence has a separate maintenance preview. Its control first
 fingerprints the exact native rejection set and shows removable count, bounded
 bytes, blocked count, and a shortened plan seal. The wording states “preview

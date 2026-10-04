@@ -1,6 +1,6 @@
 # Anonymized astronomy corpus inventory
 
-Inventory date: September 18, 2026.
+Inventory date: October 4, 2026.
 
 ## Scope and privacy
 
@@ -27,6 +27,12 @@ conflicts. The comparison manifest must record an explicit directory-preference
 override rather than hiding this acquisition-software inconsistency.
 The native structured-directory importer now applies that named policy, exposes
 the retained conflicts in its session summary, and marks affected frame rows.
+On October 4, 2026, the complete 135-file input session again passed the ignored
+external-corpus import test, including role coverage, bounded Light preview,
+exact statistics, and RGGB interpretation. A representative Light independently
+passed the complete native CFA quality-measurement test. Paths, file names,
+target identity, pixel data, and timing tied to the development machine remain
+outside the repository.
 
 Short-exposure calibration frames remain classified as darks. Exposure and the
 other acquisition fields separate them from the long-exposure dark group and
