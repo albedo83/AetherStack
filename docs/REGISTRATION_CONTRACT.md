@@ -272,6 +272,15 @@ These values justify leaving `selectionApplied` false for this session; they do
 not define a production model-selection threshold because both models were
 evaluated on fitting support rather than independent validation points.
 
+`spatial-round-robin-kfold-similarity-projective-v1` supplies the required
+held-out evidence. It sorts correspondences by source position with stable
+tie-breaking, distributes them round-robin across two to sixteen folds, and
+refits both the established reflection-class similarity and the projective
+model on identical complementary support. Every correspondence contributes to
+validation exactly once. The result records aggregate RMS, worst residuals,
+projective fold wins, relative improvement, and the weakest DLT rank separation.
+This remains evidence rather than a selection policy.
+
 ## Strict Lanczos-3 resampling oracle
 
 `lanczos3-normalized-f64-v1` resamples every planar channel in the reference

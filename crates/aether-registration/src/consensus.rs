@@ -931,7 +931,7 @@ fn resolve_feature_pair(
     Ok(RegistrationMatch::new(source.point(), reference.point()))
 }
 
-fn fit_similarity(
+pub(crate) fn fit_similarity(
     matches: &[RegistrationMatch],
     reflected: bool,
 ) -> Result<AffineTransform, SimilarityConsensusError> {

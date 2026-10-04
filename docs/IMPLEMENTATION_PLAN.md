@@ -1573,6 +1573,15 @@ safety reasoning. They do not narrate obvious syntax.
      is not promoted to a universal threshold: the next model-selection gate
      must measure held-out prediction error and include broader camera and sky
      geometries.
+126. Add deterministic held-out model evidence before defining any projective
+     selection threshold. The bounded `cross_validate_similarity_with_projective`
+     API spatially orders robust correspondences, assigns two to sixteen round-
+     robin folds, refits both the consensus reflection class and normalized DLT
+     on identical training complements, and predicts every correspondence once.
+     It reports aggregate and worst residuals, fold wins, relative improvement,
+     and the weakest training-fold rank separation. Tests lock exact-similarity,
+     genuine-projective, invalid-fold, insufficient-support, and finite-domain
+     behavior.
 
 ## 11. Stable-release definition
 

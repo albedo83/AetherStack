@@ -11,6 +11,7 @@ mod footprint;
 mod geometry;
 mod matching;
 mod model_comparison;
+mod model_validation;
 mod plan;
 mod projective;
 mod projective_fit;
@@ -51,6 +52,11 @@ pub use matching::{
 pub use model_comparison::{
     PROJECTIVE_ADEQUACY_ALGORITHM_ID, ProjectiveAdequacyError, ProjectiveAdequacyEvidence,
     compare_similarity_with_projective,
+};
+pub use model_validation::{
+    MAX_PROJECTIVE_VALIDATION_FOLDS, PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID,
+    ProjectiveCrossValidationError, ProjectiveCrossValidationEvidence,
+    cross_validate_similarity_with_projective,
 };
 pub use plan::{
     PlannedRegistrationFrame, REGISTRATION_PLAN_ALGORITHM_ID, RegistrationPlan,
