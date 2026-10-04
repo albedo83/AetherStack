@@ -534,6 +534,17 @@ SHA-256 binds the algorithm identifiers, reference identity and canvas,
 identity-sorted source dimensions, exact binary64 transform bits, coverage, and
 crop without retaining machine paths.
 
+`registration-projective-plan-v1` provides the corresponding immutable
+homographic boundary without altering `registration-plan-v1` or its production
+callers. It enforces the same reviewed-identity ordering, frame-count bound,
+declared reference canvas, exact identity reference, and non-empty crop rules,
+but derives coverage with the projective scanner. Its separate digest domain
+binds every canonical 3 × 3 coefficient bit in addition to identities,
+dimensions, footprint policy, coverage, and crop. Input order cannot change the
+digest; changing one perspective coefficient must. This type is ready for a
+separate runtime transaction but is not accepted by the current affine
+publication command.
+
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from
 that path plus the recorded byte length and content SHA-256, looks up geometry

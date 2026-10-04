@@ -16,6 +16,7 @@ mod model_validation;
 mod plan;
 mod projective;
 mod projective_fit;
+mod projective_plan;
 mod reference;
 mod resampling;
 mod triangles;
@@ -72,6 +73,10 @@ pub use projective::ProjectiveTransform;
 pub use projective_fit::{
     MAX_PROJECTIVE_FIT_MATCHES, PROJECTIVE_FIT_ALGORITHM_ID, ProjectiveFit, ProjectiveFitError,
     fit_projective,
+};
+pub use projective_plan::{
+    PROJECTIVE_REGISTRATION_PLAN_ALGORITHM_ID, ProjectivePlannedRegistrationFrame,
+    ProjectiveRegistrationPlan,
 };
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,

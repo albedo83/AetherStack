@@ -1644,6 +1644,15 @@ safety reasoning. They do not narrate obvious syntax.
      future plan never needs to reinterpret detection coordinates. Tests compare
      mapped physical centers across the sensor and require affine and projective
      lifts to agree within binary64 roundoff.
+135. Add `registration-projective-plan-v1` as an immutable geometry boundary
+     alongside, without changing, the production affine plan. It canonicalizes
+     frame order by reviewed identity, requires the reference to use the exact
+     identity homography and declared canvas, derives the exact projective
+     common footprint, and rejects duplicates or empty overlap. Its domain-
+     separated SHA-256 binds every canonical 3 × 3 binary64 coefficient,
+     dimension, identity, coverage count, and crop. Tests prove order
+     independence, perspective-bit sensitivity, and fail-closed reference and
+     overlap validation. Runtime publication is not yet wired to this plan.
 
 ## 11. Stable-release definition
 
