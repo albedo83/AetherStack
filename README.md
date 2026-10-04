@@ -304,6 +304,15 @@ cargo run --release -p aether-register -- source.fits reference.fits
 cargo run --release -p aether-register -- --compact source.fits reference.fits
 ```
 
+Extract only reference geometry, origin, and the 3 × 3 alignment matrix from a
+PixInsight XDRZ v1 artifact. The bounded JSON output excludes every embedded
+source and destination path:
+
+```shell
+cargo run -p aether-inspect --bin aether-xdrz-inspect -- alignment.xdrz
+cargo run -p aether-inspect --bin aether-xdrz-inspect -- --compact alignment.xdrz
+```
+
 The CLI report is deliberately marked `diagnostic_only`: invoking this command
 never writes an image. An accepted report now includes the full-resolution
 source-to-reference transform and analytical common crop. The separate runtime

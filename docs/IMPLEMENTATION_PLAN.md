@@ -1485,6 +1485,18 @@ safety reasoning. They do not narrate obvious syntax.
      The gauge disappears outside active import work. Presenter tests cover
      exact values, accessible naming, and the cancelling transition, while a
      browser review confirms the idle header remains visually unchanged.
+118. Establish a bounded WBPP alignment-oracle extractor. The new
+     `aether-xdrz-inspect` utility streams at most 8 MiB from one XDRZ v1 XML
+     artifact and emits only its reference dimensions, alignment origin, finite
+     nonsingular 3 × 3 matrix, and whether projective terms are present. It
+     rejects document types, malformed or duplicated required fields, unknown
+     versions, zero dimensions, non-finite coefficients, singular geometry,
+     and input growth. Embedded acquisition and output paths never enter the
+     report. Unit tests cover the accepted wire shape and every fail-closed
+     category. The real ASI294MC Pro WBPP artifact parses successfully and
+     confirms subpixel projective terms are present. Next, define and test the
+     exact XDRZ-to-AetherStack coordinate-convention conversion before comparing
+     transforms numerically; extraction alone is not treated as agreement.
 
 ## 11. Stable-release definition
 

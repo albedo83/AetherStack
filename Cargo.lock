@@ -50,6 +50,9 @@ dependencies = [
  "aether-fits",
  "aether-metadata",
  "aether-session",
+ "quick-xml",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

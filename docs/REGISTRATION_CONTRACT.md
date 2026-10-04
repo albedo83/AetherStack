@@ -329,6 +329,15 @@ Production registration still requires:
 - inspected ASI294MC Pro comparison against an independent implementation and
   equivalent ToupTek 585C validation.
 
+The `aether-xdrz-inspect` development utility provides the first bounded bridge
+to the independent WBPP evidence already present in the local ASI294MC Pro
+corpus. It extracts only XDRZ v1 dimensions, alignment origin, and matrix values
+and never emits the absolute paths embedded in those artifacts. This is an
+oracle-extraction step, not yet a comparison result: the XDRZ matrix convention
+must be converted explicitly to AetherStack's integer-centered
+source-to-reference convention and locked with synthetic fixtures before any
+numerical agreement claim is valid.
+
 The desktop Registration laboratory exposes the native pair diagnostic,
 confidence evidence, accepted source-pixel transform, and exact autocrop. Once
 all non-reference Lights pass, it submits only the selected stable identities

@@ -13,6 +13,9 @@ publish = false
 aether-fits = { path = "../aether-fits" }
 aether-metadata = { path = "../aether-metadata" }
 aether-session = { path = "../aether-session" }
+quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
