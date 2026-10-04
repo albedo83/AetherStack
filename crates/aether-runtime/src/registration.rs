@@ -13,8 +13,9 @@ use aether_fits::{
     SampleStatus, ValidationMode,
 };
 use aether_registration::{
-    AffineTransform, LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandPlan, RegistrationPlan,
-    ResamplingError, ResamplingStatistics,
+    AffineTransform, LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandPlan, Lanczos3SourceWindow,
+    ProjectiveLanczos3BandPlan, ProjectiveRegistrationPlan, ProjectiveTransform, RegistrationPlan,
+    ResampledBand, ResamplingError, ResamplingStatistics,
 };
 use aether_review::FrameId;
 
@@ -37,7 +38,7 @@ pub struct StrictRegistrationRequest {
     source: PipelineSource,
     output: PathBuf,
     provenance: FitsOutputProvenance,
-    source_to_reference: AffineTransform,
+    geometry: RegistrationGeometry,
     output_width: usize,
     output_height: usize,
     band_height: usize,
@@ -47,6 +48,12 @@ pub struct StrictRegistrationRequest {
     plan_source_frame_id: Option<FrameId>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RegistrationGeometry {
+    Affine(AffineTransform),
+    Projective(ProjectiveTransform),
+}
+
 impl StrictRegistrationRequest {
     /// Builds a strict request using 128-row output bands.
     pub fn new(
@@ -54,6 +61,43 @@ impl StrictRegistrationRequest {
         output: PathBuf,
         provenance: FitsOutputProvenance,
         source_to_reference: AffineTransform,
+        output_width: usize,
+        output_height: usize,
+    ) -> Result<Self, RegistrationPipelineError> {
+        Self::new_with_geometry(
+            source,
+            output,
+            provenance,
+            RegistrationGeometry::Affine(source_to_reference),
+            output_width,
+            output_height,
+        )
+    }
+
+    /// Builds a strict request using one canonical projective transform.
+    pub fn new_projective(
+        source: PipelineSource,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        source_to_reference: ProjectiveTransform,
+        output_width: usize,
+        output_height: usize,
+    ) -> Result<Self, RegistrationPipelineError> {
+        Self::new_with_geometry(
+            source,
+            output,
+            provenance,
+            RegistrationGeometry::Projective(source_to_reference),
+            output_width,
+            output_height,
+        )
+    }
+
+    fn new_with_geometry(
+        source: PipelineSource,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        geometry: RegistrationGeometry,
         output_width: usize,
         output_height: usize,
     ) -> Result<Self, RegistrationPipelineError> {
@@ -74,7 +118,7 @@ impl StrictRegistrationRequest {
             source,
             output,
             provenance,
-            source_to_reference,
+            geometry,
             output_width,
             output_height,
             band_height: DEFAULT_BAND_HEIGHT,
@@ -148,6 +192,36 @@ impl StrictRegistrationRequest {
             .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?;
         let expected_dimensions = (planned.source_width(), planned.source_height());
         let mut request = Self::new(
+            source,
+            output,
+            provenance,
+            planned.source_to_reference(),
+            plan.reference_width(),
+            plan.reference_height(),
+        )?;
+        request.plan_source_dimensions = Some(expected_dimensions);
+        request.plan_source_frame_id = Some(reviewed_frame_id);
+        Ok(request)
+    }
+
+    /// Builds a projective request for an identity-bound calibrated artifact.
+    pub fn from_projective_plan_artifact(
+        source: PipelineSource,
+        reviewed_frame_id: FrameId,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        plan: &ProjectiveRegistrationPlan,
+    ) -> Result<Self, RegistrationPipelineError> {
+        if provenance.plan_sha256() != Some(plan.plan_sha256()) {
+            return Err(RegistrationPipelineError::ProvenancePlanMismatch);
+        }
+        let planned = plan
+            .frames()
+            .iter()
+            .find(|frame| frame.frame_id() == &reviewed_frame_id)
+            .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?;
+        let expected_dimensions = (planned.source_width(), planned.source_height());
+        let mut request = Self::new_projective(
             source,
             output,
             provenance,
@@ -1052,6 +1126,75 @@ impl Drop for RegistrationStagingDirectory {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RegistrationBandPlan {
+    Affine(Lanczos3BandPlan),
+    Projective(ProjectiveLanczos3BandPlan),
+}
+
+impl RegistrationBandPlan {
+    fn new(
+        source_dimensions: Dimensions,
+        output_width: usize,
+        output_height: usize,
+        reference_y: usize,
+        band_height: usize,
+        geometry: RegistrationGeometry,
+    ) -> Result<Self, ResamplingError> {
+        match geometry {
+            RegistrationGeometry::Affine(transform) => Ok(Self::Affine(Lanczos3BandPlan::new(
+                source_dimensions,
+                output_width,
+                output_height,
+                reference_y,
+                band_height,
+                transform,
+            )?)),
+            RegistrationGeometry::Projective(transform) => {
+                Ok(Self::Projective(ProjectiveLanczos3BandPlan::new(
+                    source_dimensions,
+                    output_width,
+                    output_height,
+                    reference_y,
+                    band_height,
+                    transform,
+                )?))
+            }
+        }
+    }
+
+    const fn source_window(self) -> Option<Lanczos3SourceWindow> {
+        match self {
+            Self::Affine(plan) => plan.source_window(),
+            Self::Projective(plan) => plan.source_window(),
+        }
+    }
+
+    const fn output_width(self) -> usize {
+        match self {
+            Self::Affine(plan) => plan.output_width(),
+            Self::Projective(plan) => plan.output_width(),
+        }
+    }
+
+    const fn band_height(self) -> usize {
+        match self {
+            Self::Affine(plan) => plan.band_height(),
+            Self::Projective(plan) => plan.band_height(),
+        }
+    }
+
+    fn resample(
+        self,
+        source_window_image: Option<&aether_core::ScientificImage>,
+    ) -> Result<ResampledBand, ResamplingError> {
+        match self {
+            Self::Affine(plan) => plan.resample(source_window_image),
+            Self::Projective(plan) => plan.resample(source_window_image),
+        }
+    }
+}
+
 /// Executes one windowed, cancellable, atomically published registration.
 pub fn run_strict_registration_pipeline<F>(
     request: &StrictRegistrationRequest,
@@ -1199,13 +1342,13 @@ where
                 .checkpoint()
                 .map_err(RegistrationPipelineError::Cancelled)?;
             let height = (request.output_height - reference_y).min(request.band_height);
-            let plan = Lanczos3BandPlan::new(
+            let plan = RegistrationBandPlan::new(
                 plane_dimensions,
                 request.output_width,
                 request.output_height,
                 reference_y,
                 height,
-                request.source_to_reference,
+                request.geometry,
             )
             .map_err(RegistrationPipelineError::Resampling)?;
             let planned_bytes = planned_band_bytes(plan)?;
@@ -1290,7 +1433,7 @@ where
     })
 }
 
-fn planned_band_bytes(plan: Lanczos3BandPlan) -> Result<usize, RegistrationPipelineError> {
+fn planned_band_bytes(plan: RegistrationBandPlan) -> Result<usize, RegistrationPipelineError> {
     let read_samples = plan
         .source_window()
         .map(|window| {
@@ -1371,7 +1514,9 @@ mod tests {
 
     use aether_core::ScientificImage;
     use aether_fits::{write_f64_primary_atomic_new, write_f64_primary_atomic_new_with_provenance};
-    use aether_registration::{PlannedRegistrationFrame, RegistrationPlan, resample_lanczos3};
+    use aether_registration::{
+        PlannedRegistrationFrame, RegistrationPlan, resample_lanczos3, resample_lanczos3_projective,
+    };
     use aether_session::fingerprint_reader;
 
     use super::*;
@@ -1727,7 +1872,7 @@ mod tests {
             bound_provenance,
             &plan,
         )?;
-        assert_eq!(request.source_to_reference, transform);
+        assert_eq!(request.geometry, RegistrationGeometry::Affine(transform));
         assert_eq!((request.output_width, request.output_height), (11, 9));
         assert_eq!(request.plan_source_dimensions, Some((11, 9)));
         Ok(())
@@ -1757,6 +1902,53 @@ mod tests {
             Err(RegistrationPipelineError::PlanSourceDimensionsMismatch)
         ));
         assert!(!output.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn projective_plan_bound_request_uses_only_sealed_geometry() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (source, provenance, _) = source_and_provenance(&directory)?;
+        let source_id = FrameId::new("c".repeat(64))?;
+        let reference_id = FrameId::new("d".repeat(64))?;
+        let transform = ProjectiveTransform::new([
+            [0.998, -0.017, 0.35],
+            [0.019, 1.001, -0.28],
+            [8.0e-5, -5.0e-5, 1.0],
+        ])?;
+        let plan = ProjectiveRegistrationPlan::new(
+            reference_id.clone(),
+            11,
+            9,
+            vec![
+                aether_registration::ProjectivePlannedRegistrationFrame::new(
+                    source_id.clone(),
+                    11,
+                    9,
+                    transform,
+                ),
+                aether_registration::ProjectivePlannedRegistrationFrame::new(
+                    reference_id,
+                    11,
+                    9,
+                    ProjectiveTransform::IDENTITY,
+                ),
+            ],
+        )?;
+        let request = StrictRegistrationRequest::from_projective_plan_artifact(
+            source,
+            source_id.clone(),
+            directory.0.join("projective-plan-bound.fits"),
+            provenance.with_plan_sha256(plan.plan_sha256())?,
+            &plan,
+        )?;
+
+        assert_eq!(
+            request.geometry,
+            RegistrationGeometry::Projective(transform)
+        );
+        assert_eq!(request.plan_source_dimensions, Some((11, 9)));
+        assert_eq!(request.plan_source_frame_id, Some(source_id));
         Ok(())
     }
 
@@ -1926,6 +2118,67 @@ mod tests {
     }
 
     #[test]
+    fn projective_pipeline_matches_oracle_and_is_band_height_independent() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (source, provenance, input) = source_and_provenance(&directory)?;
+        let transform = ProjectiveTransform::new([
+            [0.998, -0.017, 0.35],
+            [0.019, 1.001, -0.28],
+            [8.0e-5, -5.0e-5, 1.0],
+        ])?;
+        let one_row_output = directory.0.join("projective-one-row.fits");
+        let four_row_output = directory.0.join("projective-four-rows.fits");
+        let one_row = StrictRegistrationRequest::new_projective(
+            source.clone(),
+            one_row_output.clone(),
+            provenance.clone(),
+            transform,
+            11,
+            9,
+        )?
+        .with_band_height(1)?;
+        let four_rows = StrictRegistrationRequest::new_projective(
+            source,
+            four_row_output.clone(),
+            provenance,
+            transform,
+            11,
+            9,
+        )?
+        .with_band_height(4)?;
+
+        let result = run_strict_registration_pipeline(
+            &one_row,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        run_strict_registration_pipeline(
+            &four_rows,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+
+        assert_eq!(fs::read(&one_row_output)?, fs::read(&four_row_output)?);
+        let oracle = resample_lanczos3_projective(&input, 11, 9, transform)?;
+        assert_eq!(result.statistics(), oracle.statistics());
+        let mut reader =
+            PrimaryImageReader::open(File::open(one_row_output)?, HeaderReadOptions::default())?;
+        let plane_area = 11 * 9;
+        for plane in 0..3 {
+            let actual = reader.read_region_image(ImageRegion::new(plane, 0, 0, 11, 9))?;
+            for (&actual, &expected) in actual.pixels().iter().zip(
+                &oracle.image().pixels()
+                    [plane as usize * plane_area..(plane as usize + 1) * plane_area],
+            ) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn cancellation_and_memory_failure_publish_nothing() -> TestResult {
         let directory = TestDirectory::new()?;
         let (source, provenance, _) = source_and_provenance(&directory)?;
@@ -2059,30 +2312,30 @@ mod tests {
         let short_dimensions = Dimensions::new(4_144, 128, 1)?;
         let asi_dimensions = Dimensions::new(4_144, 2_822, 1)?;
         let taller_dimensions = Dimensions::new(4_144, 20_000, 1)?;
-        let short = planned_band_bytes(Lanczos3BandPlan::new(
+        let short = planned_band_bytes(RegistrationBandPlan::Affine(Lanczos3BandPlan::new(
             short_dimensions,
             4_144,
             128,
             0,
             64,
             AffineTransform::IDENTITY,
-        )?)?;
-        let asi294 = planned_band_bytes(Lanczos3BandPlan::new(
+        )?))?;
+        let asi294 = planned_band_bytes(RegistrationBandPlan::Affine(Lanczos3BandPlan::new(
             asi_dimensions,
             4_144,
             2_822,
             0,
             64,
             AffineTransform::IDENTITY,
-        )?)?;
-        let taller = planned_band_bytes(Lanczos3BandPlan::new(
+        )?))?;
+        let taller = planned_band_bytes(RegistrationBandPlan::Affine(Lanczos3BandPlan::new(
             taller_dimensions,
             4_144,
             20_000,
             0,
             64,
             AffineTransform::IDENTITY,
-        )?)?;
+        )?))?;
         assert_eq!(short, asi294);
         assert_eq!(asi294, taller);
         assert!(asi294 < 6 * 1_024 * 1_024);

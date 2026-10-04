@@ -1653,6 +1653,16 @@ safety reasoning. They do not narrate obvious syntax.
      dimension, identity, coverage count, and crop. Tests prove order
      independence, perspective-bit sensitivity, and fail-closed reference and
      overlap validation. Runtime publication is not yet wired to this plan.
+136. Extend the strict single-frame FITS registration transaction to consume
+     either sealed affine or sealed projective geometry through one internal
+     band-plan abstraction. Both variants share source verification, exact
+     window decoding, logical memory reservations, cancellation, checksum
+     readback, source revalidation, and atomic create-new publication. A
+     projective plan-bound artifact constructor resolves geometry only by its
+     reviewed identity and exact plan digest. Tests require output bytes to be
+     independent of band height and projective pixels and counters to match the
+     complete scalar oracle bit for bit. Whole-plan projective publication
+     remains the next transaction boundary.
 
 ## 11. Stable-release definition
 

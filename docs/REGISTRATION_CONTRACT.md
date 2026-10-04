@@ -545,6 +545,17 @@ digest; changing one perspective coefficient must. This type is ready for a
 separate runtime transaction but is not accepted by the current affine
 publication command.
 
+The strict single-frame runtime accepts a projective plan entry through a
+separate identity-bound constructor. An internal tagged band plan chooses the
+affine or homographic exact-window implementation; every surrounding guarantee
+is shared: input and embedded reviewed-identity checks, plan-digest provenance,
+bounded source-region decoding, memory accounting, cancellation, streaming
+checksum generation, private readback, late source revalidation, and atomic
+create-new publication. Multiple projective band heights must produce identical
+FITS bytes, and decoded output samples and support counters must match the
+complete projective oracle bit for bit. The all-frame rollback transaction still
+accepts only `registration-plan-v1` at this stage.
+
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from
 that path plus the recorded byte length and content SHA-256, looks up geometry
