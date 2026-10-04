@@ -2900,6 +2900,7 @@ where
         .canonical_sha256()
         .map_err(|_| registered_stack_artifact_error())?;
     let plan_sha256 = plan.plan_sha256().to_owned();
+    let estimator_parameters_sha256 = estimator.parameters_sha256();
     let mut provenance = FitsOutputProvenance::new(
         manifest_sha256.clone(),
         "registered-stack",
@@ -2911,6 +2912,10 @@ where
     if let Some(weights) = weight_set.as_ref() {
         provenance = provenance
             .with_parameters_sha256(weights.sha256())
+            .map_err(|_| registered_stack_configuration_error())?;
+    } else if let Some(parameters_sha256) = estimator_parameters_sha256.as_deref() {
+        provenance = provenance
+            .with_parameters_sha256(parameters_sha256)
             .map_err(|_| registered_stack_configuration_error())?;
     }
     let output_path = request.output_path;
@@ -2967,6 +2972,13 @@ where
             source_count,
         )
         .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
+        .and_then(|value| {
+            if let Some(parameters_sha256) = estimator_parameters_sha256.as_deref() {
+                value.with_parameters_sha256(parameters_sha256)
+            } else {
+                Ok(value)
+            }
+        })
         .map_err(|_| registered_stack_configuration_error())?;
         let high_provenance = FitsOutputProvenance::new(
             manifest_sha256.clone(),
@@ -2975,6 +2987,13 @@ where
             source_count,
         )
         .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
+        .and_then(|value| {
+            if let Some(parameters_sha256) = estimator_parameters_sha256.as_deref() {
+                value.with_parameters_sha256(parameters_sha256)
+            } else {
+                Ok(value)
+            }
+        })
         .map_err(|_| registered_stack_configuration_error())?;
         execution = execution
             .with_rejection_map(RegisteredRejectionMapOutput::new(
@@ -4105,7 +4124,8 @@ fn registered_stack_error(error: RegisteredStackError) -> PreviewCommandError {
         | RegisteredStackError::InvalidWeightAlgorithmId
         | RegisteredStackError::WeightSetMismatch
         | RegisteredStackError::WeightProvenanceMismatch
-        | RegisteredStackError::RejectionMapRequiresPercentileEstimator
+        | RegisteredStackError::EstimatorParameterProvenanceMismatch
+        | RegisteredStackError::RejectionMapRequiresRejectingEstimator
         | RegisteredStackError::RejectionMapProvenanceMismatch
         | RegisteredStackError::DuplicateOutputPath => registered_stack_configuration_error(),
         RegisteredStackError::Memory(_) | RegisteredStackError::AllocationFailed => {

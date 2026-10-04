@@ -84,8 +84,16 @@ retained. A proposed pass is applied in full only when it preserves the explicit
 minimum support; convergence and a positive maximum-iteration bound are both
 deterministic stop conditions. The final mean is overflow-resistant and the
 support record distinguishes masks, non-finite exclusions, low rejects, and
-high rejects exactly. Runtime FITS publication and UI/report wiring are not yet
-part of this contract.
+high rejects exactly.
+
+The registered runtime identity is `registered-sigma-mean-f64-v1`. It executes
+the exact common crop in bounded bands and can publish low/high
+`sigma-rejection-map-v1` companions in the same rollback-safe transaction. A
+domain-separated SHA-256 over the binary64 sigma limits and integer iteration
+and support bounds is required in `AETHPAR` for both the science image and its
+maps. The same enforcement now covers percentile controls. Tests require exact
+pixels, verified checksums, and byte-identical products across band heights.
+Desktop sigma selection and report-schema exposure remain next.
 
 ## Frame-weighted mean
 

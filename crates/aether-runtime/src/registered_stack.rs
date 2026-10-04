@@ -13,12 +13,13 @@ use aether_fits::{
 };
 pub use aether_integration::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
-    PercentileClipParameters, QualityWeightMetrics,
+    PercentileClipParameters, QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    SigmaClipParameters,
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
-    integrate_mean, integrate_median, integrate_percentile_clipped_mean, integrate_weighted_mean,
-    materialize_percentile_rejection_map,
+    integrate_mean, integrate_median, integrate_percentile_clipped_mean,
+    integrate_sigma_clipped_mean, integrate_weighted_mean, materialize_percentile_rejection_map,
 };
 use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
 use aether_review::FrameId;
@@ -39,6 +40,10 @@ pub const REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-pe
 pub const REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID: &str = "registered-weighted-mean-v1";
 /// Versioned deterministic finite-sample median registered stack identity.
 pub const REGISTERED_MEDIAN_ALGORITHM_ID: &str = "registered-median-f64-v1";
+/// Versioned deterministic iterative sigma-clipped registered stack identity.
+pub const REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-sigma-mean-f64-v1";
+/// Plane-major low/high count map emitted by iterative sigma rejection.
+pub const SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "sigma-rejection-map-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -54,6 +59,8 @@ pub enum RegisteredStackEstimator {
     WeightedMean,
     /// Sorted low/high percentile rejection followed by the strict mean.
     PercentileClipped(PercentileClipParameters),
+    /// Iterative asymmetric population-sigma rejection followed by the strict mean.
+    SigmaClipped(SigmaClipParameters),
 }
 
 impl RegisteredStackEstimator {
@@ -65,6 +72,39 @@ impl RegisteredStackEstimator {
             Self::Median => REGISTERED_MEDIAN_ALGORITHM_ID,
             Self::WeightedMean => REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
             Self::PercentileClipped(_) => REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
+            Self::SigmaClipped(_) => REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+        }
+    }
+
+    /// Canonical digest of estimator controls that alter scientific output.
+    #[must_use]
+    pub fn parameters_sha256(self) -> Option<String> {
+        let mut hasher = Sha256::new();
+        hasher.update(b"aetherstack-registered-estimator-parameters-v1\0");
+        match self {
+            Self::PercentileClipped(parameters) => {
+                hasher.update(b"percentile-clipped\0");
+                hasher.update(parameters.low_fraction().to_bits().to_be_bytes());
+                hasher.update(parameters.high_fraction().to_bits().to_be_bytes());
+                hasher.update(parameters.minimum_retained().to_be_bytes());
+            }
+            Self::SigmaClipped(parameters) => {
+                hasher.update(b"sigma-clipped\0");
+                hasher.update(parameters.low_sigma().to_bits().to_be_bytes());
+                hasher.update(parameters.high_sigma().to_bits().to_be_bytes());
+                hasher.update(parameters.maximum_iterations().to_be_bytes());
+                hasher.update(parameters.minimum_retained().to_be_bytes());
+            }
+            Self::StrictMean | Self::Median | Self::WeightedMean => return None,
+        }
+        Some(encode_lower_hex(hasher.finalize().as_slice()))
+    }
+
+    const fn rejection_map_algorithm_id(self) -> Option<&'static str> {
+        match self {
+            Self::PercentileClipped(_) => Some(PERCENTILE_REJECTION_MAP_ALGORITHM_ID),
+            Self::SigmaClipped(_) => Some(SIGMA_REJECTION_MAP_ALGORITHM_ID),
+            Self::StrictMean | Self::Median | Self::WeightedMean => None,
         }
     }
 }
@@ -545,6 +585,11 @@ impl RegisteredStackRequest {
         if provenance.plan_sha256() != Some(plan.plan_sha256()) {
             return Err(RegisteredStackError::ProvenancePlanMismatch);
         }
+        if let Some(parameters_sha256) = estimator.parameters_sha256()
+            && provenance.parameters_sha256() != Some(parameters_sha256.as_str())
+        {
+            return Err(RegisteredStackError::EstimatorParameterProvenanceMismatch);
+        }
         let mut by_id = BTreeMap::new();
         for source in sources {
             if by_id.insert(source.frame_id.clone(), source).is_some() {
@@ -629,17 +674,15 @@ impl RegisteredStackRequest {
         mut self,
         output: RegisteredRejectionMapOutput,
     ) -> Result<Self, RegisteredStackError> {
-        if !matches!(
-            self.estimator,
-            RegisteredStackEstimator::PercentileClipped(_)
-        ) {
-            return Err(RegisteredStackError::RejectionMapRequiresPercentileEstimator);
-        }
+        let Some(map_algorithm_id) = self.estimator.rejection_map_algorithm_id() else {
+            return Err(RegisteredStackError::RejectionMapRequiresRejectingEstimator);
+        };
         let provenances = [&output.low_provenance, &output.high_provenance];
         if provenances.iter().any(|provenance| {
-            provenance.algorithm_id() != PERCENTILE_REJECTION_MAP_ALGORITHM_ID
+            provenance.algorithm_id() != map_algorithm_id
                 || provenance.source_count() != self.provenance.source_count()
                 || provenance.plan_sha256() != Some(self.plan.plan_sha256())
+                || provenance.parameters_sha256() != self.provenance.parameters_sha256()
         }) {
             return Err(RegisteredStackError::RejectionMapProvenanceMismatch);
         }
@@ -729,8 +772,10 @@ pub enum RegisteredStackError {
     WeightSetMismatch,
     /// Output provenance is not bound to the exact canonical weight set.
     WeightProvenanceMismatch,
+    /// Output provenance is not bound to the exact rejecting-estimator controls.
+    EstimatorParameterProvenanceMismatch,
     /// Rejection maps are meaningful only for a rejecting estimator.
-    RejectionMapRequiresPercentileEstimator,
+    RejectionMapRequiresRejectingEstimator,
     /// Rejection-map provenance is inconsistent with the stack request.
     RejectionMapProvenanceMismatch,
     /// Science and companion products cannot target the same path.
@@ -800,7 +845,8 @@ impl RegisteredStackError {
             Self::InvalidWeightAlgorithmId => "registered-stack-weight-algorithm",
             Self::WeightSetMismatch => "registered-stack-weight-set",
             Self::WeightProvenanceMismatch => "registered-stack-weight-provenance",
-            Self::RejectionMapRequiresPercentileEstimator => "registered-stack-map-estimator",
+            Self::EstimatorParameterProvenanceMismatch => "registered-stack-estimator-parameters",
+            Self::RejectionMapRequiresRejectingEstimator => "registered-stack-map-estimator",
             Self::RejectionMapProvenanceMismatch => "registered-stack-map-provenance",
             Self::DuplicateOutputPath => "registered-stack-output-path",
             Self::ZeroBandHeight => "registered-stack-band-height",
@@ -849,8 +895,11 @@ impl Display for RegisteredStackError {
             }
             Self::WeightProvenanceMismatch => formatter
                 .write_str("output provenance does not bind the canonical frame-weight set"),
-            Self::RejectionMapRequiresPercentileEstimator => {
-                formatter.write_str("rejection maps require the percentile-clipped estimator")
+            Self::EstimatorParameterProvenanceMismatch => formatter.write_str(
+                "output provenance does not bind the exact rejecting-estimator controls",
+            ),
+            Self::RejectionMapRequiresRejectingEstimator => {
+                formatter.write_str("rejection maps require a rejecting estimator")
             }
             Self::RejectionMapProvenanceMismatch => {
                 formatter.write_str("rejection-map provenance does not match the stack request")
@@ -1170,6 +1219,27 @@ where
                             .map_err(RegisteredStackError::Publish)?;
                     }
                 }
+                RegisteredStackEstimator::SigmaClipped(parameters) => {
+                    let references = images.iter().collect::<Vec<_>>();
+                    let integrated = integrate_sigma_clipped_mean(&references, parameters)
+                        .map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                    if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
+                        let maps = materialize_percentile_rejection_map(
+                            integrated.image().dimensions(),
+                            integrated.support(),
+                        )
+                        .map_err(RegisteredStackError::Integration)?;
+                        low_writer
+                            .write_image_chunk(maps.low())
+                            .map_err(RegisteredStackError::Publish)?;
+                        high_writer
+                            .write_image_chunk(maps.high())
+                            .map_err(RegisteredStackError::Publish)?;
+                    }
+                }
             }
             *completed = completed
                 .checked_add(1)
@@ -1370,7 +1440,8 @@ fn planned_band_bytes(
         RegisteredStackEstimator::StrictMean
         | RegisteredStackEstimator::Median
         | RegisteredStackEstimator::WeightedMean => size_of::<PixelSupport>(),
-        RegisteredStackEstimator::PercentileClipped(_) => size_of::<ClippedPixelSupport>(),
+        RegisteredStackEstimator::PercentileClipped(_)
+        | RegisteredStackEstimator::SigmaClipped(_) => size_of::<ClippedPixelSupport>(),
     };
     let output = image
         .checked_add(
@@ -1388,21 +1459,21 @@ fn planned_band_bytes(
         }
         RegisteredStackEstimator::StrictMean
         | RegisteredStackEstimator::Median
-        | RegisteredStackEstimator::PercentileClipped(_) => {
-            size_of::<&aether_core::ScientificImage>()
-        }
+        | RegisteredStackEstimator::PercentileClipped(_)
+        | RegisteredStackEstimator::SigmaClipped(_) => size_of::<&aether_core::ScientificImage>(),
     };
     let vector_storage = source_count
         .checked_mul(size_of::<aether_core::ScientificImage>() + integration_input_size)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
-    let estimator_scratch = match estimator {
-        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => 0,
-        RegisteredStackEstimator::Median | RegisteredStackEstimator::PercentileClipped(_) => {
-            source_count
+    let estimator_scratch =
+        match estimator {
+            RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => 0,
+            RegisteredStackEstimator::Median
+            | RegisteredStackEstimator::PercentileClipped(_)
+            | RegisteredStackEstimator::SigmaClipped(_) => source_count
                 .checked_mul(size_of::<f64>())
-                .ok_or(RegisteredStackError::WorkSizeOverflow)?
-        }
-    };
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?,
+        };
     let rejection_map_images = if rejection_maps {
         image
             .checked_mul(2)
@@ -1840,13 +1911,20 @@ mod tests {
             .zip([0.0, 10.0, 11.0, 12.0, 100.0])
             .map(|(frame_id, value)| registered_source(directory, &plan, frame_id, value))
             .collect::<Result<Vec<_>, _>>()?;
+        let estimator = RegisteredStackEstimator::PercentileClipped(PercentileClipParameters::new(
+            0.2, 0.2, 3,
+        )?);
+        let parameters_sha256 = estimator
+            .parameters_sha256()
+            .ok_or("missing percentile parameter digest")?;
         let provenance = FitsOutputProvenance::new(
             "a".repeat(64),
             "registered-stack",
             REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
             5,
         )?
-        .with_plan_sha256(plan.plan_sha256())?;
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
         let low_path = directory.0.join("percentile-low-rejection.fits");
         let high_path = directory.0.join("percentile-high-rejection.fits");
         let low_provenance = FitsOutputProvenance::new(
@@ -1855,22 +1933,22 @@ mod tests {
             PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
             5,
         )?
-        .with_plan_sha256(plan.plan_sha256())?;
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
         let high_provenance = FitsOutputProvenance::new(
             "a".repeat(64),
             "registered-rejection-high",
             PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
             5,
         )?
-        .with_plan_sha256(plan.plan_sha256())?;
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
         let request = RegisteredStackRequest::new_with_estimator(
             plan,
             sources,
             directory.0.join("percentile-stack.fits"),
             provenance,
-            RegisteredStackEstimator::PercentileClipped(PercentileClipParameters::new(
-                0.2, 0.2, 3,
-            )?),
+            estimator,
         )?
         .with_band_height(3)?
         .with_rejection_map(RegisteredRejectionMapOutput::new(
@@ -1880,6 +1958,79 @@ mod tests {
             high_provenance,
         ))?;
         Ok((request, low_path, high_path))
+    }
+
+    fn sigma_stack_request(
+        directory: &TestDirectory,
+        band_height: usize,
+    ) -> Result<(RegisteredStackRequest, PathBuf, PathBuf, String), Box<dyn Error>> {
+        let identities = ['a', 'b', 'c', 'd', 'e', 'f']
+            .into_iter()
+            .map(id)
+            .collect::<Result<Vec<_>, _>>()?;
+        let plan = RegistrationPlan::new(
+            identities[0].clone(),
+            12,
+            10,
+            identities
+                .iter()
+                .cloned()
+                .map(|frame_id| {
+                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
+                })
+                .collect(),
+        )?;
+        let sources = identities
+            .into_iter()
+            .zip([-100.0, 9.0, 10.0, 10.0, 11.0, 100.0])
+            .map(|(frame_id, value)| registered_source(directory, &plan, frame_id, value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let estimator =
+            RegisteredStackEstimator::SigmaClipped(SigmaClipParameters::new(1.4, 1.4, 8, 2)?);
+        let parameters_sha256 = estimator
+            .parameters_sha256()
+            .ok_or("missing sigma parameter digest")?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+            6,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
+        let low_path = directory.0.join("sigma-low-rejection.fits");
+        let high_path = directory.0.join("sigma-high-rejection.fits");
+        let low_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-rejection-low",
+            SIGMA_REJECTION_MAP_ALGORITHM_ID,
+            6,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
+        let high_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-rejection-high",
+            SIGMA_REJECTION_MAP_ALGORITHM_ID,
+            6,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
+        let request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            directory.0.join("sigma-stack.fits"),
+            provenance,
+            estimator,
+        )?
+        .with_band_height(band_height)?
+        .with_rejection_map(RegisteredRejectionMapOutput::new(
+            low_path.clone(),
+            low_provenance,
+            high_path.clone(),
+            high_provenance,
+        ))?;
+        Ok((request, low_path, high_path, parameters_sha256))
     }
 
     fn weighted_stack_request(
@@ -2148,6 +2299,60 @@ mod tests {
     }
 
     #[test]
+    fn sigma_stack_is_parameter_bound_and_band_height_independent() -> TestResult {
+        let first_directory = TestDirectory::new()?;
+        let second_directory = TestDirectory::new()?;
+        let (first, first_low, first_high, parameters_sha256) =
+            sigma_stack_request(&first_directory, 1)?;
+        let (second, second_low, second_high, second_parameters_sha256) =
+            sigma_stack_request(&second_directory, 7)?;
+        assert_eq!(parameters_sha256, second_parameters_sha256);
+        let memory = MemoryBudget::new(16 * 1_024 * 1_024)?;
+
+        let first_result =
+            run_registered_stack(&first, &CancellationToken::new(), &memory, |_| {})?;
+        let _second_result =
+            run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(first_result.dimensions(), Dimensions::new(12, 10, 3)?);
+        assert!(first_result.rejection_map_summary().is_some());
+        assert_eq!(fs::read(first.output())?, fs::read(second.output())?);
+        assert_eq!(fs::read(&first_low)?, fs::read(&second_low)?);
+        assert_eq!(fs::read(&first_high)?, fs::read(&second_high)?);
+
+        let file = File::open(first.output())?;
+        let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+        assert!(reader.verify_checksums()?.is_fully_verified());
+        assert_eq!(
+            reader.report().header().string("AETHPAR"),
+            Some(parameters_sha256.as_str())
+        );
+        let output = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+        assert!(
+            output
+                .pixels()
+                .iter()
+                .all(|value| value.to_bits() == 10.0_f64.to_bits())
+        );
+        for path in [first_low, first_high] {
+            let file = File::open(path)?;
+            let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+            assert!(reader.verify_checksums()?.is_fully_verified());
+            assert_eq!(
+                reader.report().header().string("AETHPAR"),
+                Some(parameters_sha256.as_str())
+            );
+            let map = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+            assert!(
+                map.pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == 2.0_f64.to_bits())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn companion_collision_rolls_back_every_product_created_by_the_run() -> TestResult {
         let directory = TestDirectory::new()?;
         let (request, low_path, high_path) = percentile_stack_request(&directory)?;
@@ -2206,7 +2411,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            RegisteredStackError::RejectionMapRequiresPercentileEstimator
+            RegisteredStackError::RejectionMapRequiresRejectingEstimator
         ));
         Ok(())
     }

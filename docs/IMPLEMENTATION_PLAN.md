@@ -1760,6 +1760,15 @@ safety reasoning. They do not narrate obvious syntax.
      Controlled multi-pass, support-floor, mask, non-finite, dimension, and
      binary64-extreme tests define the `sigma-clipped-mean-f64-v1` contract.
      Bounded FITS runtime publication and desktop controls remain next.
+150. Publish sigma-clipped registered stacks through the bounded runtime. The
+     runtime now executes `registered-sigma-mean-f64-v1` in arbitrary-height
+     bands, reserves its reusable rank scratch, and atomically publishes the
+     science image with optional low/high `sigma-rejection-map-v1` companions.
+     A canonical digest binds every sigma limit, iteration bound, and support
+     floor into all three FITS headers; percentile products now receive the same
+     missing parameter-binding guarantee. Tests prove checksums, exact science
+     and rejection pixels, and byte identity across different band heights.
+     Desktop sigma controls and report-schema exposure remain next.
 
 ## 11. Stable-release definition
 
