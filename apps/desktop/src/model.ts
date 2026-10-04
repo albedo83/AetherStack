@@ -192,6 +192,12 @@ export interface QualityBatchProgress {
   readonly total: number;
 }
 
+export interface SessionImportDisplayProgress {
+  readonly stage: "discovering" | "analyzing" | "assembling" | "completed";
+  readonly completed: number;
+  readonly total: number | null;
+}
+
 export interface FrameSelectionViewModel {
   readonly state: "idle" | "previewing" | "ready" | "error";
   readonly rules: readonly FrameSelectionRule[];
@@ -203,6 +209,7 @@ export interface ReviewViewModel {
   readonly activeWorkspace: WorkspaceView;
   readonly sessionName: string;
   readonly sessionStatus: SessionStatus;
+  readonly sessionImportProgress: SessionImportDisplayProgress | null;
   readonly sessionDiagnostics: SessionDiagnostics;
   readonly roles: readonly RoleSummary[];
   readonly activeRole: FrameRole;

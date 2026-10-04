@@ -567,6 +567,10 @@ export function mountReviewScreen(
       root,
       "[data-session-status-label]",
     ),
+    sessionImportProgress: required<HTMLProgressElement>(
+      root,
+      "[data-session-import-progress]",
+    ),
     importSession: required<HTMLButtonElement>(root, "[data-import-session]"),
     undo: required<HTMLButtonElement>(root, '[data-action="undo"]'),
     roleTabs: required<HTMLElement>(root, "[data-role-tabs]"),
@@ -1400,6 +1404,23 @@ export function mountReviewScreen(
     elements.sessionStatus.dataset.tone = model.sessionStatus.tone;
     elements.sessionStatusLabel.textContent = model.sessionStatus.label;
     const importing = model.sessionStatus.tone === "busy";
+    const importProgress = model.sessionImportProgress;
+    elements.sessionImportProgress.hidden = !importing;
+    if (
+      importing &&
+      importProgress?.stage === "analyzing" &&
+      importProgress.total !== null
+    ) {
+      elements.sessionImportProgress.max = Math.max(importProgress.total, 1);
+      elements.sessionImportProgress.value = importProgress.completed;
+      elements.sessionImportProgress.setAttribute(
+        "aria-valuetext",
+        `${importProgress.completed} of ${importProgress.total} FITS sources analyzed`,
+      );
+    } else {
+      elements.sessionImportProgress.removeAttribute("value");
+      elements.sessionImportProgress.removeAttribute("aria-valuetext");
+    }
     const cancellingImport =
       importing && model.sessionStatus.label === "Cancelling FITS import";
     const masterBusy =
@@ -4122,7 +4143,10 @@ function shellMarkup(): string {
             <h1 data-session-name></h1>
           </div>
           <div class="topbar__actions">
-            <span class="health-chip" data-session-status data-tone="ready"><span aria-hidden="true">●</span><span data-session-status-label>Demo ready</span></span>
+            <div class="session-activity">
+              <span class="health-chip" data-session-status data-tone="ready"><span aria-hidden="true">●</span><span data-session-status-label>Demo ready</span></span>
+              <progress class="session-activity__progress" data-session-import-progress aria-label="Session import progress" max="1" hidden></progress>
+            </div>
             <button class="button button--quiet" type="button" data-action="open-diagnostics">Diagnostics</button>
             <button class="button button--primary" type="button" data-action="open-selection-panel">Review plan</button>
           </div>

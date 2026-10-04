@@ -375,10 +375,12 @@ window.addEventListener("beforeunload", disposeRuntimeResources, {
 
 async function importSession(): Promise<void> {
   if (sessionImportPhase === "running") {
+    const activeProgress = model.sessionImportProgress;
     sessionImportPhase = "cancelling";
     update({
       ...model,
       sessionStatus: { tone: "busy", label: "Cancelling FITS import" },
+      sessionImportProgress: null,
     });
     try {
       const requested = await cancelSessionImport();
@@ -387,6 +389,7 @@ async function importSession(): Promise<void> {
         update({
           ...model,
           sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
+          sessionImportProgress: activeProgress,
         });
       }
     } catch {
@@ -394,6 +397,7 @@ async function importSession(): Promise<void> {
       update({
         ...model,
         sessionStatus: { tone: "error", label: "Import cancellation failed" },
+        sessionImportProgress: null,
       });
     }
     return;
@@ -412,6 +416,11 @@ async function importSession(): Promise<void> {
   update({
     ...model,
     sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
+    sessionImportProgress: {
+      stage: "discovering",
+      completed: 0,
+      total: null,
+    },
   });
   try {
     const imported = await selectAndImportSession((progress) => {
@@ -424,23 +433,40 @@ async function importSession(): Promise<void> {
             : progress.stage === "assembling"
               ? "Assembling session manifest"
               : "Finalizing imported session";
-      update({ ...model, sessionStatus: { tone: "busy", label } });
+      update({
+        ...model,
+        sessionStatus: { tone: "busy", label },
+        sessionImportProgress: {
+          stage: progress.stage,
+          completed: progress.completedSources,
+          total: progress.totalSources,
+        },
+      });
     });
     if (!imported) {
-      update({ ...model, sessionStatus: previousStatus });
+      update({
+        ...model,
+        sessionStatus: previousStatus,
+        sessionImportProgress: null,
+      });
       return;
     }
     installImportedSession(imported);
   } catch {
     update(
       sessionImportWasCancelled()
-        ? { ...model, sessionStatus: previousStatus }
+        ? {
+            ...model,
+            sessionStatus: previousStatus,
+            sessionImportProgress: null,
+          }
         : {
             ...model,
             sessionStatus: {
               tone: "error",
               label: "Import failed · open Diagnostics",
             },
+            sessionImportProgress: null,
           },
     );
   } finally {
@@ -678,6 +704,7 @@ function installImportedSession(session: ImportedSession): void {
     ...model,
     sessionName: session.name,
     sessionStatus: importedSessionStatus(session),
+    sessionImportProgress: null,
     sessionDiagnostics: importedSessionDiagnostics(session),
     roles,
     activeRole,

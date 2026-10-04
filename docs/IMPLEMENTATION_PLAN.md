@@ -1476,6 +1476,15 @@ safety reasoning. They do not narrate obvious syntax.
      with exact aggregate counts while the same control remains available for
      cancellation. Unit tests cover stage order, final completeness, monotonic
      counts, the update bound, and channel wiring without source paths.
+117. Give session-import progress a dedicated accessible instrument. The top
+     session bank now places a slim native progress gauge directly below its
+     status chip without moving Diagnostics or Review plan. Source analysis is
+     determinate and exposes an exact “completed of total” accessibility value;
+     discovery, manifest assembly, finalization, and cancellation remain
+     indeterminate because no false percentage is defensible in those stages.
+     The gauge disappears outside active import work. Presenter tests cover
+     exact values, accessible naming, and the cancelling transition, while a
+     browser review confirms the idle header remains visually unchanged.
 
 ## 11. Stable-release definition
 

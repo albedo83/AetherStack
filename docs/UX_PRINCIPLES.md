@@ -140,6 +140,11 @@ source counts cross the native boundary: directory names and individual source
 names never appear in progress events. The update stream has a fixed upper
 bound and is emitted by the coordinator so UI feedback cannot multiply work in
 the parallel analysis workers.
+The session bank renders those snapshots in a slim progress instrument below
+the status chip. It becomes determinate only when a real source total exists;
+other stages deliberately remain indeterminate rather than presenting a false
+percentage. Its accessible value names analyzed and total FITS sources, and the
+instrument leaves the header geometry unchanged while idle.
 Rejected cache evidence has a separate maintenance preview. Its control first
 fingerprints the exact native rejection set and shows removable count, bounded
 bytes, blocked count, and a shortened plan seal. The wording states “preview

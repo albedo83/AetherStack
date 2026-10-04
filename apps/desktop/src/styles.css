@@ -274,6 +274,32 @@ button:active:not(:disabled) {
   gap: 8px;
 }
 
+.session-activity {
+  display: grid;
+  justify-items: stretch;
+  min-width: 132px;
+  max-width: 260px;
+  gap: 4px;
+}
+
+.session-activity__progress {
+  width: calc(100% - 18px);
+  height: 4px;
+  margin-inline: 9px;
+  overflow: hidden;
+  accent-color: var(--accent-strong);
+  background: #070a0e;
+  border: 0;
+  border-radius: 99px;
+  box-shadow:
+    inset 0 1px 3px #000,
+    0 0 7px #5e96e933;
+}
+
+.session-activity__progress[hidden] {
+  display: none;
+}
+
 .health-chip,
 .state-chip,
 .viewer-chip {

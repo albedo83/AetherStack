@@ -10,6 +10,7 @@ export const demoReviewModel: ReviewViewModel = {
   activeWorkspace: "frames",
   sessionName: "M31 · Session 01",
   sessionStatus: { tone: "ready", label: "Demo ready" },
+  sessionImportProgress: null,
   sessionDiagnostics: {
     filesConsidered: 271,
     fingerprintedSourceBytes: 3_158_611_200,

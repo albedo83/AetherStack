@@ -287,11 +287,24 @@ describe("frame review workspace", () => {
     const { root, actions, controller } = fixture({
       ...demoReviewModel,
       sessionStatus: { tone: "busy", label: "Scanning FITS sources" },
+      sessionImportProgress: {
+        stage: "analyzing",
+        completed: 32,
+        total: 135,
+      },
     });
 
     const button = getByRole(root, "button", { name: "× Cancel import" });
+    const progress = getByRole<HTMLProgressElement>(root, "progressbar", {
+      name: "Session import progress",
+    });
     expect(button.hasAttribute("disabled")).toBe(false);
     expect(button.classList.contains("button--danger")).toBe(true);
+    expect(progress.value).toBe(32);
+    expect(progress.max).toBe(135);
+    expect(progress.getAttribute("aria-valuetext")).toBe(
+      "32 of 135 FITS sources analyzed",
+    );
     expect(root.textContent).toContain("Scanning FITS sources");
     fireEvent.click(button);
     expect(actions.onImportSession).toHaveBeenCalledOnce();
@@ -299,12 +312,14 @@ describe("frame review workspace", () => {
     controller.update({
       ...demoReviewModel,
       sessionStatus: { tone: "busy", label: "Cancelling FITS import" },
+      sessionImportProgress: null,
     });
     expect(
       getByRole(root, "button", { name: "Cancelling…" }).hasAttribute(
         "disabled",
       ),
     ).toBe(true);
+    expect(progress.hasAttribute("value")).toBe(false);
   });
 
   it("presents FITS and quality-cache diagnostics with explicit severity", () => {
