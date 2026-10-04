@@ -1,9 +1,8 @@
 //! Deterministic strict-reference image integration.
 //!
 //! The strict unweighted and weighted means are transparent CPU oracles. A
-//! separately versioned percentile-clipped mean adds deterministic low/high
-//! rank rejection with exact per-pixel evidence; adaptive rejection remains an
-//! explicit future algorithm.
+//! separately versioned percentile- and sigma-clipped means add deterministic
+//! low/high rejection with exact per-pixel evidence.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -18,6 +17,9 @@ pub const WEIGHTED_MEAN_ALGORITHM_ID: &str = "weighted-mean-v1";
 
 /// Stable identifier for exact finite-sample median integration.
 pub const MEDIAN_ALGORITHM_ID: &str = "median-f64-v1";
+
+/// Stable identifier for deterministic iterative sigma-clipped integration.
+pub const SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "sigma-clipped-mean-f64-v1";
 
 /// Stable identifier for the first transparent PSF quality-weight expression.
 pub const BALANCED_PSF_WEIGHT_ALGORITHM_ID: &str = "balanced-psf-weight-v1";
@@ -296,6 +298,65 @@ impl PercentileClipParameters {
     }
 }
 
+/// Validated controls for deterministic iterative sigma rejection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SigmaClipParameters {
+    low_sigma: f64,
+    high_sigma: f64,
+    maximum_iterations: u32,
+    minimum_retained: u32,
+}
+
+impl SigmaClipParameters {
+    /// Validates asymmetric sigma limits and iteration/support bounds.
+    pub fn new(
+        low_sigma: f64,
+        high_sigma: f64,
+        maximum_iterations: u32,
+        minimum_retained: u32,
+    ) -> Result<Self, IntegrationError> {
+        if !low_sigma.is_finite()
+            || low_sigma <= 0.0
+            || !high_sigma.is_finite()
+            || high_sigma <= 0.0
+            || maximum_iterations == 0
+            || minimum_retained == 0
+        {
+            return Err(IntegrationError::InvalidSigmaParameters);
+        }
+        Ok(Self {
+            low_sigma,
+            high_sigma,
+            maximum_iterations,
+            minimum_retained,
+        })
+    }
+
+    /// Lower-tail rejection distance in population standard deviations.
+    #[must_use]
+    pub const fn low_sigma(self) -> f64 {
+        self.low_sigma
+    }
+
+    /// Upper-tail rejection distance in population standard deviations.
+    #[must_use]
+    pub const fn high_sigma(self) -> f64 {
+        self.high_sigma
+    }
+
+    /// Hard bound on deterministic clipping passes.
+    #[must_use]
+    pub const fn maximum_iterations(self) -> u32 {
+        self.maximum_iterations
+    }
+
+    /// Minimum finite support that a clipping pass may retain.
+    #[must_use]
+    pub const fn minimum_retained(self) -> u32 {
+        self.minimum_retained
+    }
+}
+
 impl PixelSupport {
     /// Finite, clear samples included in the mean.
     #[must_use]
@@ -388,6 +449,33 @@ impl WeightedMeanIntegration {
 pub struct PercentileClippedIntegration {
     image: ScientificImage,
     support: Vec<ClippedPixelSupport>,
+}
+
+/// Sigma-clipped image and exact per-pixel rejection accounting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SigmaClippedIntegration {
+    image: ScientificImage,
+    support: Vec<ClippedPixelSupport>,
+}
+
+impl SigmaClippedIntegration {
+    /// Integrated image after iterative population-sigma rejection.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Exact accepted and rejected counts in planar sample order.
+    #[must_use]
+    pub fn support(&self) -> &[ClippedPixelSupport] {
+        &self.support
+    }
+
+    /// Consumes the result into its scientific image and evidence map.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, Vec<ClippedPixelSupport>) {
+        (self.image, self.support)
+    }
 }
 
 impl PercentileClippedIntegration {
@@ -571,6 +659,8 @@ pub enum IntegrationError {
     },
     /// Percentile fractions or the retained-sample floor are invalid.
     InvalidPercentileParameters,
+    /// Sigma limits, iteration bound, or retained-sample floor are invalid.
+    InvalidSigmaParameters,
     /// An input does not match the first image's dimensions.
     DimensionMismatch {
         /// Zero-based input position.
@@ -642,6 +732,9 @@ impl Display for IntegrationError {
             Self::InvalidPercentileParameters => formatter.write_str(
                 "percentile fractions must be finite, nonnegative, total below one, with a positive retained minimum",
             ),
+            Self::InvalidSigmaParameters => formatter.write_str(
+                "sigma limits must be finite and positive, with positive iteration and retained-sample bounds",
+            ),
             Self::DimensionMismatch {
                 input_index,
                 expected,
@@ -707,6 +800,7 @@ impl Error for IntegrationError {
             Self::NoInputImages
             | Self::TooManyInputImages { .. }
             | Self::InvalidPercentileParameters
+            | Self::InvalidSigmaParameters
             | Self::DimensionMismatch { .. }
             | Self::InvalidRegion { .. }
             | Self::RegionOutsideInput { .. }
@@ -1130,6 +1224,154 @@ pub fn integrate_percentile_clipped_mean(
     })
 }
 
+/// Integrates equal-sized images after deterministic iterative sigma rejection.
+///
+/// At each pixel, clear finite samples are sorted once with IEEE total order.
+/// Each pass computes a normalized compensated mean and population standard
+/// deviation over the retained interval, then rejects values strictly outside
+/// the asymmetric sigma limits. Because thresholding a sorted population keeps
+/// a contiguous interval, no per-sample side allocation is required. A pass is
+/// discarded in full if it would violate `minimum_retained`; convergence or the
+/// explicit iteration bound stops the process. The final mean and exact low/high
+/// counts use the same strict arithmetic and evidence semantics as percentile
+/// clipping.
+///
+/// # Errors
+///
+/// Returns a typed error for empty or mismatched input, excessive input count,
+/// invalid controls, invariant failure, or bounded allocation failure.
+pub fn integrate_sigma_clipped_mean(
+    inputs: &[&ScientificImage],
+    parameters: SigmaClipParameters,
+) -> Result<SigmaClippedIntegration, IntegrationError> {
+    let Some(first) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let dimensions = first.dimensions();
+    for (input_index, input) in inputs.iter().enumerate().skip(1) {
+        let actual = input.dimensions();
+        if actual != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual,
+            });
+        }
+    }
+
+    let mut output =
+        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: dimensions.pixel_count(),
+        })?;
+    support.resize(dimensions.pixel_count(), ClippedPixelSupport::default());
+    let mut finite = Vec::new();
+    finite.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+
+    let minimum_retained = usize::try_from(parameters.minimum_retained).unwrap_or(usize::MAX);
+    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
+    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut support)
+        .enumerate()
+    {
+        finite.clear();
+        let mut combined_rejected_flags = PixelFlags::CLEAR;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if !flags.is_clear() {
+                output_support.masked += 1;
+                combined_rejected_flags |= flags;
+            } else if !value.is_finite() {
+                output_support.non_finite += 1;
+            } else {
+                finite.push(value);
+            }
+        }
+
+        if finite.is_empty() {
+            *output = f64::NAN;
+            let mut flags = combined_rejected_flags | PixelFlags::MISSING;
+            if output_support.non_finite > 0 {
+                flags |= PixelFlags::INVALID;
+            }
+            *output_flags = flags;
+        } else {
+            finite.sort_by(f64::total_cmp);
+            let mut low = 0;
+            let mut high = finite.len();
+            for _ in 0..parameters.maximum_iterations {
+                let retained = &finite[low..high];
+                if retained.len() <= minimum_retained {
+                    break;
+                }
+                let (scale, mean, sigma) = normalized_population_statistics(retained);
+                if sigma == 0.0 {
+                    break;
+                }
+                let lower = mean - parameters.low_sigma * sigma;
+                let upper = mean + parameters.high_sigma * sigma;
+                let next_low = low + retained.partition_point(|value| *value / scale < lower);
+                let next_high = low + retained.partition_point(|value| *value / scale <= upper);
+                if next_high.saturating_sub(next_low) < minimum_retained {
+                    break;
+                }
+                if next_low == low && next_high == high {
+                    break;
+                }
+                low = next_low;
+                high = next_high;
+            }
+
+            let retained = &finite[low..high];
+            output_support.low_rejected =
+                u32::try_from(low).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            output_support.high_rejected = u32::try_from(finite.len() - high).map_err(|_| {
+                IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                }
+            })?;
+            output_support.accepted = u32::try_from(retained.len()).map_err(|_| {
+                IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                }
+            })?;
+            *output = stable_mean(retained);
+            *output_flags = PixelFlags::CLEAR;
+        }
+
+        if output_support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: output_support.total(),
+            });
+        }
+    }
+
+    Ok(SigmaClippedIntegration {
+        image: output,
+        support,
+    })
+}
+
 fn fraction_count(count: usize, fraction: f64) -> usize {
     ((count as f64) * fraction).floor() as usize
 }
@@ -1149,6 +1391,30 @@ fn stable_mean(values: &[f64]) -> f64 {
         normalized.add((value / scale) / divisor);
     }
     canonical_zero(normalized.total().max(minimum / scale).min(maximum / scale) * scale)
+}
+
+fn normalized_population_statistics(values: &[f64]) -> (f64, f64, f64) {
+    let scale = values
+        .iter()
+        .fold(0.0_f64, |scale, value| scale.max(value.abs()));
+    if scale == 0.0 {
+        return (1.0, 0.0, 0.0);
+    }
+    let divisor = values.len() as f64;
+    let mut sum = CompensatedSum::new();
+    for value in values {
+        sum.add((*value / scale) / divisor);
+    }
+    let mean = sum
+        .total()
+        .max(values[0] / scale)
+        .min(values[values.len() - 1] / scale);
+    let mut squared_deviations = CompensatedSum::new();
+    for value in values {
+        let deviation = *value / scale - mean;
+        squared_deviations.add((deviation * deviation) / divisor);
+    }
+    (scale, mean, squared_deviations.total().max(0.0).sqrt())
 }
 
 fn exact_median(values: &mut [f64]) -> f64 {
@@ -1761,6 +2027,103 @@ mod tests {
                 Err(IntegrationError::InvalidPercentileParameters)
             );
         }
+    }
+
+    #[test]
+    fn sigma_clipping_iterates_asymmetric_sorted_tails_with_exact_evidence() -> TestResult {
+        let inputs = [-100.0, 9.0, 10.0, 10.0, 11.0, 100.0]
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+        let parameters = SigmaClipParameters::new(1.4, 1.4, 8, 2)?;
+
+        let result = integrate_sigma_clipped_mean(&references, parameters)?;
+
+        assert_eq!(result.image().pixels(), &[10.0]);
+        assert_eq!(
+            result.support(),
+            &[ClippedPixelSupport {
+                accepted: 2,
+                masked: 0,
+                non_finite: 0,
+                low_rejected: 2,
+                high_rejected: 2,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sigma_clipping_discards_a_pass_that_would_cross_the_support_floor() -> TestResult {
+        let inputs = [-100.0, 9.0, 10.0, 10.0, 11.0, 100.0]
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+        let parameters = SigmaClipParameters::new(1.4, 1.4, 8, 5)?;
+
+        let result = integrate_sigma_clipped_mean(&references, parameters)?;
+
+        assert!((result.image().pixels()[0] - (40.0 / 6.0)).abs() <= f64::EPSILON);
+        assert_eq!(result.support()[0].accepted(), 6);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].high_rejected(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn sigma_clipping_handles_extremes_masks_and_non_finite_samples() -> TestResult {
+        let negative = image(vec![-f64::MAX, f64::NAN])?;
+        let first_maximum = image(vec![f64::MAX, f64::INFINITY])?;
+        let second_maximum = image(vec![f64::MAX, 7.0])?;
+        let mut third_maximum = image(vec![f64::MAX, 100.0])?;
+        third_maximum.mask_mut().as_mut_slice()[1] = PixelFlags::HOT;
+        let parameters = SigmaClipParameters::new(1.0, 10.0, 4, 2)?;
+
+        let result = integrate_sigma_clipped_mean(
+            &[&negative, &first_maximum, &second_maximum, &third_maximum],
+            parameters,
+        )?;
+
+        assert_eq!(result.image().pixels()[0].to_bits(), f64::MAX.to_bits());
+        assert_eq!(result.support()[0].low_rejected(), 1);
+        assert_eq!(result.support()[0].accepted(), 3);
+        assert_eq!(result.image().pixels()[1].to_bits(), 7.0_f64.to_bits());
+        assert_eq!(result.support()[1].accepted(), 1);
+        assert_eq!(result.support()[1].masked(), 1);
+        assert_eq!(result.support()[1].non_finite(), 2);
+        assert_eq!(result.support()[1].total(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn sigma_parameters_and_input_shape_fail_closed() -> TestResult {
+        for (low, high, iterations, retained) in [
+            (0.0, 3.0, 1, 1),
+            (-1.0, 3.0, 1, 1),
+            (3.0, f64::NAN, 1, 1),
+            (3.0, 3.0, 0, 1),
+            (3.0, 3.0, 1, 0),
+        ] {
+            assert_eq!(
+                SigmaClipParameters::new(low, high, iterations, retained),
+                Err(IntegrationError::InvalidSigmaParameters)
+            );
+        }
+
+        let parameters = SigmaClipParameters::new(3.0, 3.0, 1, 1)?;
+        assert_eq!(
+            integrate_sigma_clipped_mean(&[], parameters),
+            Err(IntegrationError::NoInputImages)
+        );
+        let first = image(vec![1.0])?;
+        let second = image(vec![1.0, 2.0])?;
+        assert!(matches!(
+            integrate_sigma_clipped_mean(&[&first, &second], parameters),
+            Err(IntegrationError::DimensionMismatch { input_index: 1, .. })
+        ));
+        Ok(())
     }
 
     #[test]

@@ -75,6 +75,18 @@ identity, and seals `registered-median-f64-v1` in FITS and integration reports.
 Existing report schemas remain readable because the estimator enum gains a new
 value without changing prior payloads.
 
+## Iterative sigma-clipped mean
+
+The strict CPU oracle `sigma-clipped-mean-f64-v1` sorts clear finite samples
+once per pixel, then iterates asymmetric low/high thresholds around a normalized
+compensated mean and population standard deviation. Threshold equality is
+retained. A proposed pass is applied in full only when it preserves the explicit
+minimum support; convergence and a positive maximum-iteration bound are both
+deterministic stop conditions. The final mean is overflow-resistant and the
+support record distinguishes masks, non-finite exclusions, low rejects, and
+high rejects exactly. Runtime FITS publication and UI/report wiring are not yet
+part of this contract.
+
 ## Frame-weighted mean
 
 `integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`

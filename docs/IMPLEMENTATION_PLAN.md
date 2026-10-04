@@ -1752,6 +1752,14 @@ safety reasoning. They do not narrate obvious syntax.
      and reports progress without implying rejection. Native input mapping and
      archived report verification bind the value to
      `registered-median-f64-v1`; tests lock both wire and provenance identities.
+149. Add the strict iterative sigma-clipping oracle. The core integration crate
+     now exposes validated asymmetric sigma limits, a bounded iteration count,
+     and a retained-support floor. Each pixel uses normalized compensated
+     population statistics over one sorted finite-sample buffer, applies each
+     clipping pass atomically, and retains exact low/high rejection evidence.
+     Controlled multi-pass, support-floor, mask, non-finite, dimension, and
+     binary64-extreme tests define the `sigma-clipped-mean-f64-v1` contract.
+     Bounded FITS runtime publication and desktop controls remain next.
 
 ## 11. Stable-release definition
 
