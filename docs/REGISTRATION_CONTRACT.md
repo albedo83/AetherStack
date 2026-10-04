@@ -553,8 +553,18 @@ bounded source-region decoding, memory accounting, cancellation, streaming
 checksum generation, private readback, late source revalidation, and atomic
 create-new publication. Multiple projective band heights must produce identical
 FITS bytes, and decoded output samples and support counters must match the
-complete projective oracle bit for bit. The all-frame rollback transaction still
-accepts only `registration-plan-v1` at this stage.
+complete projective oracle bit for bit.
+
+The all-frame runtime has separate affine and projective request types so a
+caller cannot silently change the geometry family. Both enter one internal
+transaction lifecycle. A projective request accepts only a validated
+`registration-projective-plan-v1` and an exact source identity set. Each frame
+is resolved in canonical identity order, its homography and dimensions are read
+only from the sealed plan, and its FITS carries the exact projective plan digest
+and reviewed frame identity. All products remain private until every checksum
+readback and late source revalidation succeeds. Cancellation or failure before
+the complete create-new link set is durable leaves no public product. Changing
+the configured band height must not change any published byte.
 
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from

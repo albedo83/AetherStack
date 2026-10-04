@@ -1663,6 +1663,16 @@ safety reasoning. They do not narrate obvious syntax.
      independent of band height and projective pixels and counters to match the
      complete scalar oracle bit for bit. Whole-plan projective publication
      remains the next transaction boundary.
+137. Add a rollback-safe whole-plan projective registration transaction and
+     keep its lifecycle shared with the affine executor. The public request
+     accepts only a validated `registration-projective-plan-v1`, verifies the
+     exact reviewed identity set, derives every transform and output dimension
+     from that sealed plan, stages checksum-verified FITS privately, rechecks
+     every source, and publishes the canonical set with create-new links. Tests
+     cover exact plan and frame provenance, canonical result order, byte-level
+     independence from band height, and cancellation after one completed frame
+     with no public products. Desktop construction remains gated on an explicit
+     accepted projective recommendation rather than diagnostic availability.
 
 ## 11. Stable-release definition
 

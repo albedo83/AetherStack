@@ -204,6 +204,41 @@ impl StrictRegistrationRequest {
         Ok(request)
     }
 
+    /// Builds a projective request directly from one immutable plan entry.
+    pub fn from_projective_plan(
+        source: PipelineSource,
+        portable_relative_path: &str,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+        plan: &ProjectiveRegistrationPlan,
+    ) -> Result<Self, RegistrationPipelineError> {
+        if provenance.plan_sha256() != Some(plan.plan_sha256()) {
+            return Err(RegistrationPipelineError::ProvenancePlanMismatch);
+        }
+        let frame_id = FrameId::derive(
+            portable_relative_path,
+            source.fingerprint().byte_length(),
+            source.fingerprint().sha256(),
+        )
+        .map_err(|_| RegistrationPipelineError::PlanSourceIdentityMismatch)?;
+        let planned = plan
+            .frames()
+            .iter()
+            .find(|frame| frame.frame_id() == &frame_id)
+            .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?;
+        let expected_dimensions = (planned.source_width(), planned.source_height());
+        let mut request = Self::new_projective(
+            source,
+            output,
+            provenance,
+            planned.source_to_reference(),
+            plan.reference_width(),
+            plan.reference_height(),
+        )?;
+        request.plan_source_dimensions = Some(expected_dimensions);
+        Ok(request)
+    }
+
     /// Builds a projective request for an identity-bound calibrated artifact.
     pub fn from_projective_plan_artifact(
         source: PipelineSource,
@@ -396,7 +431,7 @@ impl RegistrationPlanExecutionRequest {
             1,
         )
         .map_err(RegistrationPlanExecutionError::Provenance)?;
-        validate_plan_source_set(&plan, &sources)?;
+        validate_plan_source_set(RegistrationPlanView::Affine(&plan), &sources)?;
         Ok(Self {
             plan,
             sources,
@@ -439,6 +474,94 @@ impl RegistrationPlanExecutionRequest {
     /// Canonical plan executed by this transaction.
     #[must_use]
     pub const fn plan(&self) -> &RegistrationPlan {
+        &self.plan
+    }
+
+    /// Directory that receives the complete public product set.
+    #[must_use]
+    pub fn output_directory(&self) -> &Path {
+        &self.output_directory
+    }
+}
+
+/// Complete immutable request for a rollback-safe projective registration run.
+#[derive(Clone, Debug)]
+pub struct ProjectiveRegistrationPlanExecutionRequest {
+    plan: ProjectiveRegistrationPlan,
+    sources: Vec<RegistrationPlanSource>,
+    output_directory: PathBuf,
+    manifest_sha256: String,
+    group_id: String,
+    band_height: usize,
+    header_options: HeaderReadOptions,
+    validation_mode: ValidationMode,
+}
+
+impl ProjectiveRegistrationPlanExecutionRequest {
+    /// Creates a request whose public filenames are derived from frame IDs.
+    pub fn new(
+        plan: ProjectiveRegistrationPlan,
+        sources: Vec<RegistrationPlanSource>,
+        output_directory: PathBuf,
+        manifest_sha256: impl Into<String>,
+        group_id: impl Into<String>,
+    ) -> Result<Self, RegistrationPlanExecutionError> {
+        let plan_view = RegistrationPlanView::Projective(&plan);
+        if sources.len() != plan_view.frame_count() {
+            return Err(RegistrationPlanExecutionError::SourceSetMismatch);
+        }
+        let manifest_sha256 = manifest_sha256.into();
+        let group_id = group_id.into();
+        FitsOutputProvenance::new(
+            &manifest_sha256,
+            &group_id,
+            LANCZOS3_RESAMPLING_ALGORITHM_ID,
+            1,
+        )
+        .map_err(RegistrationPlanExecutionError::Provenance)?;
+        validate_plan_source_set(plan_view, &sources)?;
+        Ok(Self {
+            plan,
+            sources,
+            output_directory,
+            manifest_sha256,
+            group_id,
+            band_height: DEFAULT_BAND_HEIGHT,
+            header_options: HeaderReadOptions::default(),
+            validation_mode: ValidationMode::Strict,
+        })
+    }
+
+    /// Replaces the maximum number of output rows held by one frame worker.
+    pub fn with_band_height(
+        mut self,
+        band_height: usize,
+    ) -> Result<Self, RegistrationPlanExecutionError> {
+        if band_height == 0 {
+            return Err(RegistrationPlanExecutionError::FramePipeline {
+                frame_id: self.plan.reference_frame_id().clone(),
+                source: RegistrationPipelineError::ZeroBandHeight,
+            });
+        }
+        self.band_height = band_height;
+        Ok(self)
+    }
+
+    /// Replaces FITS header limits and diagnostic acceptance policy.
+    #[must_use]
+    pub const fn with_header_policy(
+        mut self,
+        options: HeaderReadOptions,
+        mode: ValidationMode,
+    ) -> Self {
+        self.header_options = options;
+        self.validation_mode = mode;
+        self
+    }
+
+    /// Canonical projective plan executed by this transaction.
+    #[must_use]
+    pub const fn plan(&self) -> &ProjectiveRegistrationPlan {
         &self.plan
     }
 
@@ -826,23 +949,190 @@ pub fn run_registration_plan<F>(
     request: &RegistrationPlanExecutionRequest,
     cancellation: &CancellationToken,
     memory: &MemoryBudget,
+    progress: F,
+) -> Result<RegistrationPlanExecutionResult, RegistrationPlanExecutionError>
+where
+    F: FnMut(RegistrationPlanProgressEvent),
+{
+    run_registration_plan_transaction(
+        RegistrationTransactionRequest {
+            plan: RegistrationPlanView::Affine(&request.plan),
+            sources: &request.sources,
+            output_directory: &request.output_directory,
+            manifest_sha256: &request.manifest_sha256,
+            group_id: &request.group_id,
+            band_height: request.band_height,
+            header_options: request.header_options,
+            validation_mode: request.validation_mode,
+        },
+        cancellation,
+        memory,
+        progress,
+    )
+}
+
+/// Executes every reviewed projective transform as one rollback-safe set.
+///
+/// Geometry is accepted only from the immutable projective plan. The shared
+/// transaction validates the complete identity set, stages and verifies every
+/// FITS privately, revalidates all inputs, then publishes the complete set or
+/// rolls back every link created by the run.
+pub fn run_projective_registration_plan<F>(
+    request: &ProjectiveRegistrationPlanExecutionRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    progress: F,
+) -> Result<RegistrationPlanExecutionResult, RegistrationPlanExecutionError>
+where
+    F: FnMut(RegistrationPlanProgressEvent),
+{
+    run_registration_plan_transaction(
+        RegistrationTransactionRequest {
+            plan: RegistrationPlanView::Projective(&request.plan),
+            sources: &request.sources,
+            output_directory: &request.output_directory,
+            manifest_sha256: &request.manifest_sha256,
+            group_id: &request.group_id,
+            band_height: request.band_height,
+            header_options: request.header_options,
+            validation_mode: request.validation_mode,
+        },
+        cancellation,
+        memory,
+        progress,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum RegistrationPlanView<'a> {
+    Affine(&'a RegistrationPlan),
+    Projective(&'a ProjectiveRegistrationPlan),
+}
+
+impl<'a> RegistrationPlanView<'a> {
+    fn frame_count(self) -> usize {
+        match self {
+            Self::Affine(plan) => plan.frames().len(),
+            Self::Projective(plan) => plan.frames().len(),
+        }
+    }
+
+    fn plan_sha256(self) -> &'a str {
+        match self {
+            Self::Affine(plan) => plan.plan_sha256(),
+            Self::Projective(plan) => plan.plan_sha256(),
+        }
+    }
+
+    fn contains_frame(self, frame_id: &FrameId) -> bool {
+        match self {
+            Self::Affine(plan) => plan
+                .frames()
+                .iter()
+                .any(|frame| frame.frame_id() == frame_id),
+            Self::Projective(plan) => plan
+                .frames()
+                .iter()
+                .any(|frame| frame.frame_id() == frame_id),
+        }
+    }
+
+    fn canonical_frame_ids(self) -> Result<Vec<FrameId>, RegistrationPlanExecutionError> {
+        let mut ids = Vec::new();
+        ids.try_reserve_exact(self.frame_count())
+            .map_err(|_| RegistrationPlanExecutionError::AllocationFailed)?;
+        match self {
+            Self::Affine(plan) => {
+                ids.extend(plan.frames().iter().map(|frame| frame.frame_id().clone()));
+            }
+            Self::Projective(plan) => {
+                ids.extend(plan.frames().iter().map(|frame| frame.frame_id().clone()));
+            }
+        }
+        Ok(ids)
+    }
+
+    fn frame_request(
+        self,
+        source: &RegistrationPlanSource,
+        output: PathBuf,
+        provenance: FitsOutputProvenance,
+    ) -> Result<StrictRegistrationRequest, RegistrationPipelineError> {
+        match (self, &source.reviewed_frame_id) {
+            (Self::Affine(plan), Some(reviewed_frame_id)) => {
+                StrictRegistrationRequest::from_plan_artifact(
+                    source.source.clone(),
+                    reviewed_frame_id.clone(),
+                    output,
+                    provenance,
+                    plan,
+                )
+            }
+            (Self::Projective(plan), Some(reviewed_frame_id)) => {
+                StrictRegistrationRequest::from_projective_plan_artifact(
+                    source.source.clone(),
+                    reviewed_frame_id.clone(),
+                    output,
+                    provenance,
+                    plan,
+                )
+            }
+            (Self::Affine(plan), None) => StrictRegistrationRequest::from_plan(
+                source.source.clone(),
+                source
+                    .portable_relative_path
+                    .as_deref()
+                    .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?,
+                output,
+                provenance,
+                plan,
+            ),
+            (Self::Projective(plan), None) => StrictRegistrationRequest::from_projective_plan(
+                source.source.clone(),
+                source
+                    .portable_relative_path
+                    .as_deref()
+                    .ok_or(RegistrationPipelineError::PlanSourceIdentityMismatch)?,
+                output,
+                provenance,
+                plan,
+            ),
+        }
+    }
+}
+
+struct RegistrationTransactionRequest<'a> {
+    plan: RegistrationPlanView<'a>,
+    sources: &'a [RegistrationPlanSource],
+    output_directory: &'a Path,
+    manifest_sha256: &'a str,
+    group_id: &'a str,
+    band_height: usize,
+    header_options: HeaderReadOptions,
+    validation_mode: ValidationMode,
+}
+
+fn run_registration_plan_transaction<F>(
+    request: RegistrationTransactionRequest<'_>,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
     mut progress: F,
 ) -> Result<RegistrationPlanExecutionResult, RegistrationPlanExecutionError>
 where
     F: FnMut(RegistrationPlanProgressEvent),
 {
-    validate_plan_source_set(&request.plan, &request.sources)?;
+    validate_plan_source_set(request.plan, request.sources)?;
     if !request.output_directory.is_dir() {
         return Err(RegistrationPlanExecutionError::InvalidOutputDirectory);
     }
-    let ordered = canonical_plan_sources(&request.plan, &request.sources)?;
-    let destinations = planned_registration_destinations(&request.output_directory, &ordered)?;
+    let ordered = canonical_plan_sources(request.plan, request.sources)?;
+    let destinations = planned_registration_destinations(request.output_directory, &ordered)?;
     preflight_registration_destinations(&destinations)?;
     cancellation
         .checkpoint()
         .map_err(RegistrationPlanExecutionError::Cancelled)?;
 
-    let staging = RegistrationStagingDirectory::create(&request.output_directory)?;
+    let staging = RegistrationStagingDirectory::create(request.output_directory)?;
     let frame_count = ordered.len();
     let mut staged = BTreeMap::new();
     let mut frames = Vec::new();
@@ -856,8 +1146,8 @@ where
             .map_err(RegistrationPlanExecutionError::Cancelled)?;
         let staged_output = staging.path().join(registration_file_name(frame_id));
         let provenance = FitsOutputProvenance::new(
-            &request.manifest_sha256,
-            &request.group_id,
+            request.manifest_sha256,
+            request.group_id,
             LANCZOS3_RESAMPLING_ALGORITHM_ID,
             1,
         )
@@ -865,32 +1155,15 @@ where
         .and_then(|value| value.with_source_sha256(source.source.fingerprint().sha256()))
         .and_then(|value| value.with_frame_id_sha256(frame_id.as_str()))
         .map_err(RegistrationPlanExecutionError::Provenance)?;
-        let pipeline = if let Some(reviewed_frame_id) = &source.reviewed_frame_id {
-            StrictRegistrationRequest::from_plan_artifact(
-                source.source.clone(),
-                reviewed_frame_id.clone(),
-                staged_output.clone(),
-                provenance,
-                &request.plan,
-            )
-        } else {
-            StrictRegistrationRequest::from_plan(
-                source.source.clone(),
-                source
-                    .portable_relative_path
-                    .as_deref()
-                    .ok_or(RegistrationPlanExecutionError::InvalidSourceIdentity)?,
-                staged_output.clone(),
-                provenance,
-                &request.plan,
-            )
-        }
-        .and_then(|value| value.with_band_height(request.band_height))
-        .map(|value| value.with_header_policy(request.header_options, request.validation_mode))
-        .map_err(|source| RegistrationPlanExecutionError::FramePipeline {
-            frame_id: frame_id.clone(),
-            source,
-        })?;
+        let pipeline = request
+            .plan
+            .frame_request(source, staged_output.clone(), provenance)
+            .and_then(|value| value.with_band_height(request.band_height))
+            .map(|value| value.with_header_policy(request.header_options, request.validation_mode))
+            .map_err(|source| RegistrationPlanExecutionError::FramePipeline {
+                frame_id: frame_id.clone(),
+                source,
+            })?;
         let completed =
             run_strict_registration_pipeline(&pipeline, cancellation, memory, |stage| {
                 progress(RegistrationPlanProgressEvent {
@@ -924,7 +1197,7 @@ where
     publish_registration_set(
         &staged,
         &destinations,
-        &request.output_directory,
+        request.output_directory,
         cancellation,
     )?;
     Ok(RegistrationPlanExecutionResult {
@@ -935,10 +1208,10 @@ where
 }
 
 fn validate_plan_source_set(
-    plan: &RegistrationPlan,
+    plan: RegistrationPlanView<'_>,
     sources: &[RegistrationPlanSource],
 ) -> Result<(), RegistrationPlanExecutionError> {
-    if sources.len() != plan.frames().len() {
+    if sources.len() != plan.frame_count() {
         return Err(RegistrationPlanExecutionError::SourceSetMismatch);
     }
     let mut identities = BTreeMap::new();
@@ -948,10 +1221,9 @@ fn validate_plan_source_set(
             return Err(RegistrationPlanExecutionError::SourceSetMismatch);
         }
     }
-    if plan
-        .frames()
-        .iter()
-        .any(|frame| !identities.contains_key(frame.frame_id()))
+    if identities
+        .keys()
+        .any(|frame_id| !plan.contains_frame(frame_id))
     {
         return Err(RegistrationPlanExecutionError::SourceSetMismatch);
     }
@@ -959,7 +1231,7 @@ fn validate_plan_source_set(
 }
 
 fn canonical_plan_sources<'a>(
-    plan: &RegistrationPlan,
+    plan: RegistrationPlanView<'_>,
     sources: &'a [RegistrationPlanSource],
 ) -> Result<Vec<(FrameId, &'a RegistrationPlanSource)>, RegistrationPlanExecutionError> {
     let mut by_id = BTreeMap::new();
@@ -970,13 +1242,13 @@ fn canonical_plan_sources<'a>(
     }
     let mut ordered = Vec::new();
     ordered
-        .try_reserve_exact(plan.frames().len())
+        .try_reserve_exact(plan.frame_count())
         .map_err(|_| RegistrationPlanExecutionError::AllocationFailed)?;
-    for frame in plan.frames() {
+    for frame_id in plan.canonical_frame_ids()? {
         let source = by_id
-            .remove(frame.frame_id())
+            .remove(&frame_id)
             .ok_or(RegistrationPlanExecutionError::SourceSetMismatch)?;
-        ordered.push((frame.frame_id().clone(), source));
+        ordered.push((frame_id, source));
     }
     if !by_id.is_empty() {
         return Err(RegistrationPlanExecutionError::SourceSetMismatch);
@@ -1515,7 +1787,8 @@ mod tests {
     use aether_core::ScientificImage;
     use aether_fits::{write_f64_primary_atomic_new, write_f64_primary_atomic_new_with_provenance};
     use aether_registration::{
-        PlannedRegistrationFrame, RegistrationPlan, resample_lanczos3, resample_lanczos3_projective,
+        PlannedRegistrationFrame, ProjectivePlannedRegistrationFrame, RegistrationPlan,
+        resample_lanczos3, resample_lanczos3_projective,
     };
     use aether_session::fingerprint_reader;
 
@@ -1631,6 +1904,150 @@ mod tests {
         let mut ids = vec![first_id, second_id];
         ids.sort();
         Ok((request, ids))
+    }
+
+    fn two_source_projective_registration_request(
+        directory: &TestDirectory,
+        output_name: &str,
+        band_height: usize,
+    ) -> Result<(ProjectiveRegistrationPlanExecutionRequest, Vec<FrameId>), Box<dyn Error>> {
+        let (first, _, _) = source_and_provenance(directory)?;
+        let second_path = directory.0.join("projective-reference.fits");
+        fs::copy(first.path(), &second_path)?;
+        let second = PipelineSource::new(second_path, first.fingerprint().clone());
+        let first_id = FrameId::derive(
+            "source.fits",
+            first.fingerprint().byte_length(),
+            first.fingerprint().sha256(),
+        )?;
+        let second_id = FrameId::derive(
+            "projective-reference.fits",
+            second.fingerprint().byte_length(),
+            second.fingerprint().sha256(),
+        )?;
+        let transform = ProjectiveTransform::new([
+            [0.998, -0.017, 0.35],
+            [0.019, 1.001, -0.28],
+            [8.0e-5, -5.0e-5, 1.0],
+        ])?;
+        let plan = ProjectiveRegistrationPlan::new(
+            second_id.clone(),
+            11,
+            9,
+            vec![
+                ProjectivePlannedRegistrationFrame::new(first_id.clone(), 11, 9, transform),
+                ProjectivePlannedRegistrationFrame::new(
+                    second_id.clone(),
+                    11,
+                    9,
+                    ProjectiveTransform::IDENTITY,
+                ),
+            ],
+        )?;
+        let output_directory = directory.0.join(output_name);
+        fs::create_dir(&output_directory)?;
+        let request = ProjectiveRegistrationPlanExecutionRequest::new(
+            plan,
+            vec![
+                RegistrationPlanSource::new(second, "projective-reference.fits"),
+                RegistrationPlanSource::new(first, "source.fits"),
+            ],
+            output_directory,
+            "e".repeat(64),
+            "projective-light-group",
+        )?
+        .with_band_height(band_height)?;
+        let mut ids = vec![first_id, second_id];
+        ids.sort();
+        Ok((request, ids))
+    }
+
+    #[test]
+    fn projective_plan_publishes_complete_set_with_exact_plan_binding() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, expected_ids) =
+            two_source_projective_registration_request(&directory, "projective-registered", 2)?;
+        let mut events = Vec::new();
+        let result = run_projective_registration_plan(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |event| events.push(event),
+        )?;
+
+        assert_eq!(result.plan_sha256(), request.plan().plan_sha256());
+        assert_eq!(
+            result
+                .frames()
+                .iter()
+                .map(|frame| frame.frame_id().clone())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        assert!(result.frames().iter().all(|frame| frame.output().is_file()));
+        assert!(events.iter().all(|event| event.frame_count() == 2));
+        for frame in result.frames() {
+            let reader = PrimaryImageReader::open(
+                File::open(frame.output())?,
+                HeaderReadOptions::default(),
+            )?;
+            assert_eq!(
+                reader.report().header().string("AETHPLN"),
+                Some(request.plan().plan_sha256())
+            );
+            assert_eq!(
+                reader.report().header().string("AETHFID"),
+                Some(frame.frame_id().as_str())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn projective_plan_is_band_height_independent_and_rolls_back_on_cancel() -> TestResult {
+        let one_directory = TestDirectory::new()?;
+        let four_directory = TestDirectory::new()?;
+        let (one_row, _) =
+            two_source_projective_registration_request(&one_directory, "registered", 1)?;
+        let (four_rows, _) =
+            two_source_projective_registration_request(&four_directory, "registered", 4)?;
+        let one_result = run_projective_registration_plan(
+            &one_row,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        let four_result = run_projective_registration_plan(
+            &four_rows,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        for (one, four) in one_result.frames().iter().zip(four_result.frames()) {
+            assert_eq!(one.frame_id(), four.frame_id());
+            assert_eq!(fs::read(one.output())?, fs::read(four.output())?);
+        }
+
+        let cancelled_directory = TestDirectory::new()?;
+        let (cancelled_request, _) =
+            two_source_projective_registration_request(&cancelled_directory, "registered", 3)?;
+        let cancellation = CancellationToken::new();
+        let cancelled = run_projective_registration_plan(
+            &cancelled_request,
+            &cancellation,
+            &MemoryBudget::new(2_000_000)?,
+            |event| {
+                if event.frame_index() == 0 && event.stage().state() == ProgressState::Completed {
+                    let _was_first_cancellation = cancellation.cancel();
+                }
+            },
+        );
+        assert!(matches!(
+            cancelled,
+            Err(RegistrationPlanExecutionError::Cancelled(_))
+        ));
+        assert_eq!(cancelled_request.output_directory().read_dir()?.count(), 0);
+        Ok(())
     }
 
     #[test]
@@ -1803,7 +2220,10 @@ mod tests {
     fn source_mutation_after_staging_blocks_the_complete_plan() -> TestResult {
         let directory = TestDirectory::new()?;
         let (request, _) = two_source_registration_request(&directory)?;
-        let first_path = canonical_plan_sources(&request.plan, &request.sources)?[0]
+        let first_path = canonical_plan_sources(
+            RegistrationPlanView::Affine(&request.plan),
+            &request.sources,
+        )?[0]
             .1
             .source
             .path()

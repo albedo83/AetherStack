@@ -52,8 +52,9 @@ pub use registered_stack::{
     run_registered_stack,
 };
 pub use registration::{
-    RegisteredFrameExecutionResult, RegistrationPipelineError, RegistrationPlanExecutionError,
-    RegistrationPlanExecutionRequest, RegistrationPlanExecutionResult,
-    RegistrationPlanProgressEvent, RegistrationPlanSource, StrictRegistrationRequest,
-    StrictRegistrationResult, run_registration_plan, run_strict_registration_pipeline,
+    ProjectiveRegistrationPlanExecutionRequest, RegisteredFrameExecutionResult,
+    RegistrationPipelineError, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
+    RegistrationPlanExecutionResult, RegistrationPlanProgressEvent, RegistrationPlanSource,
+    StrictRegistrationRequest, StrictRegistrationResult, run_projective_registration_plan,
+    run_registration_plan, run_strict_registration_pipeline,
 };
