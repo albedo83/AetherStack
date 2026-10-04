@@ -1563,6 +1563,16 @@ safety reasoning. They do not narrate obvious syntax.
      the established similarity transform. Algorithm identifiers are versioned,
      desktop types expose the evidence, and the WBPP XDRZ comparator accepts
      both historical schema 2 and current schema 3 reports.
+125. Measure projective adequacy across the complete local ASI294MC Pro
+     validation sequence. All nine non-reference pairs remain confidence-
+     accepted with 908 to 1,022 common correspondences. The normalized-DLT fit
+     reduces detection-plane RMS by only 0.00036 to 0.00178 pixels, or 0.16% to
+     0.79%, while maximum similarity/projective field separation is 0.024 to
+     0.077 detection pixels. Rank-separation ratios remain tightly bounded from
+     0.288 to 0.291. This supports retaining similarity for this session, but it
+     is not promoted to a universal threshold: the next model-selection gate
+     must measure held-out prediction error and include broader camera and sky
+     geometries.
 
 ## 11. Stable-release definition
 

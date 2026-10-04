@@ -309,6 +309,8 @@ cargo run --release -p aether-register -- --compact source.fits reference.fits
 The registration report is deliberately marked `diagnostic_only`: invoking
 this command never writes an image. An accepted report includes the
 full-resolution source-to-reference transform and analytical common crop. The
+schema-v3 report also carries explicitly non-selecting projective adequacy
+evidence measured on the same robust correspondences. The
 separate runtime transaction API can consume an accepted transform to publish a
 bounded, checksum-verified registered FITS atomically.
 

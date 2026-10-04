@@ -263,6 +263,15 @@ one detection pixel spans two sensor pixels, that is 0.426–0.465 source pixels
 These measurements validate this camera/session profile only; no private file
 name, digest, target, coordinate, or image data is retained in the repository.
 
+Schema-3 projective adequacy was also measured for all nine comparisons on the
+exact consensus support. Projective RMS is 0.212 to 0.232 detection pixels. Its
+in-sample gain over similarity is only 0.00036 to 0.00178 detection pixels
+(0.16% to 0.79%), and maximum predicted field separation is 0.024 to 0.077
+detection pixels. DLT rank-separation evidence stays between 0.288 and 0.291.
+These values justify leaving `selectionApplied` false for this session; they do
+not define a production model-selection threshold because both models were
+evaluated on fitting support rather than independent validation points.
+
 ## Strict Lanczos-3 resampling oracle
 
 `lanczos3-normalized-f64-v1` resamples every planar channel in the reference
