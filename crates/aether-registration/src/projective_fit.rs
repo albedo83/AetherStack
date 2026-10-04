@@ -6,6 +6,9 @@ use nalgebra::{DMatrix, linalg::SVD};
 
 use crate::{CoordinateError, ImagePoint, ProjectiveTransform, RegistrationMatch};
 
+/// Versioned normalized projective least-squares implementation.
+pub const PROJECTIVE_FIT_ALGORITHM_ID: &str = "hartley-normalized-dlt-svd-v1";
+
 /// Hard bound on correspondences admitted to one projective least-squares fit.
 pub const MAX_PROJECTIVE_FIT_MATCHES: usize = 16_384;
 
@@ -25,6 +28,12 @@ pub struct ProjectiveFit {
 }
 
 impl ProjectiveFit {
+    /// Versioned fitting algorithm used to produce this evidence.
+    #[must_use]
+    pub const fn algorithm_id(self) -> &'static str {
+        PROJECTIVE_FIT_ALGORITHM_ID
+    }
+
     /// Fitted source-to-reference homography.
     #[must_use]
     pub const fn transform(self) -> ProjectiveTransform {

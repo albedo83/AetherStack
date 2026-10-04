@@ -1554,6 +1554,15 @@ safety reasoning. They do not narrate obvious syntax.
      models on the exact robust support without reconstructing or trusting rank
      mappings independently. Unit coverage locks point fidelity and both frame-
      identity failures.
+124. Publish projective adequacy in registration diagnostic schema 3 without
+     changing production geometry. Each report now records the normalized-DLT
+     matrix, common support, similarity and projective residual envelopes, RMS
+     improvement, model separation over the field, and rank evidence. Explicit
+     `selectionApplied: false` prevents consumers from confusing measurement
+     with execution; confidence and `acceptedPlan` remain bound exclusively to
+     the established similarity transform. Algorithm identifiers are versioned,
+     desktop types expose the evidence, and the WBPP XDRZ comparator accepts
+     both historical schema 2 and current schema 3 reports.
 
 ## 11. Stable-release definition
 

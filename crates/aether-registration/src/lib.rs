@@ -49,7 +49,8 @@ pub use matching::{
     ReflectionPolicy, match_triangle_descriptors,
 };
 pub use model_comparison::{
-    ProjectiveAdequacyError, ProjectiveAdequacyEvidence, compare_similarity_with_projective,
+    PROJECTIVE_ADEQUACY_ALGORITHM_ID, ProjectiveAdequacyError, ProjectiveAdequacyEvidence,
+    compare_similarity_with_projective,
 };
 pub use plan::{
     PlannedRegistrationFrame, REGISTRATION_PLAN_ALGORITHM_ID, RegistrationPlan,
@@ -57,7 +58,8 @@ pub use plan::{
 };
 pub use projective::ProjectiveTransform;
 pub use projective_fit::{
-    MAX_PROJECTIVE_FIT_MATCHES, ProjectiveFit, ProjectiveFitError, fit_projective,
+    MAX_PROJECTIVE_FIT_MATCHES, PROJECTIVE_FIT_ALGORITHM_ID, ProjectiveFit, ProjectiveFitError,
+    fit_projective,
 };
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,

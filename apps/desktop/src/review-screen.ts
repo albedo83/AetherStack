@@ -3155,9 +3155,26 @@ function renderRegistration(
       ? "Unique winner"
       : diagnostic.confidence.winnerSupportMargin.toFixed(3)
     : "—";
-  elements.registrationMatrix.textContent = pairPlan
-    ? `[${pairPlan.transformCoefficientsSourcePixels.map((value) => value.toPrecision(10)).join(", ")}]\n${pairPlan.footprintAlgorithmId}`
-    : "Awaiting an accepted solution";
+  const geometryEvidence: string[] = [];
+  if (pairPlan) {
+    geometryEvidence.push(
+      `Accepted affine · source pixels\n[${pairPlan.transformCoefficientsSourcePixels.map((value) => value.toPrecision(10)).join(", ")}]\n${pairPlan.footprintAlgorithmId}`,
+    );
+  }
+  if (diagnostic) {
+    const projective = diagnostic.projectiveAdequacy;
+    geometryEvidence.push(
+      `Diagnostic projective · detection pixels · not selected\n${projective.transformCoefficientsDetectionPixels
+        .map(
+          (row) => `[${row.map((value) => value.toPrecision(10)).join(", ")}]`,
+        )
+        .join(
+          "\n",
+        )}\nRMS ${projective.projectiveRmsResidualDetectionPixels.toFixed(4)} px · gain ${projective.rmsImprovementDetectionPixels.toFixed(4)} px · field Δ ${projective.maximumModelSeparationDetectionPixels.toFixed(4)} px · ${projective.matchCount.toLocaleString("en-US")} matches`,
+    );
+  }
+  elements.registrationMatrix.textContent =
+    geometryEvidence.join("\n\n") || "Awaiting geometric evidence";
 
   const canonicalPlan = registration.plan;
   const crop = canonicalPlan?.autocrop ?? pairPlan?.autocrop ?? null;
@@ -4354,8 +4371,8 @@ function shellMarkup(): string {
                 <span></span><span></span><span></span><span></span><span></span>
               </div>
               <details class="advanced-settings registration-evidence">
-                <summary>Exact affine evidence</summary>
-                <code data-registration-matrix>Awaiting an accepted solution</code>
+                <summary>Exact geometric evidence</summary>
+                <code data-registration-matrix>Awaiting geometric evidence</code>
               </details>
             </aside>
 

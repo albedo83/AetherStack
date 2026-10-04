@@ -11,7 +11,7 @@ const frames = ["a", "b", "c"].map((id) => ({
 
 function diagnostic(accepted: boolean, marker: number): RegistrationDiagnostic {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     profileId: `profile-${marker}`,
     diagnosticOnly: true,
     source: {
@@ -45,6 +45,23 @@ function diagnostic(accepted: boolean, marker: number): RegistrationDiagnostic {
       inlierFeaturePairs: 16,
       rmsResidualDetectionPixels: 0.1,
       maximumResidualDetectionPixels: 0.2,
+    },
+    projectiveAdequacy: {
+      selectionApplied: false,
+      matchCount: 16,
+      transformCoefficientsDetectionPixels: [
+        [1, 0, marker * 0.5],
+        [0, 1, 0],
+        [0, 0, 1],
+      ],
+      similarityRmsResidualDetectionPixels: 0.1,
+      similarityMaximumResidualDetectionPixels: 0.2,
+      projectiveRmsResidualDetectionPixels: 0.09,
+      projectiveMaximumResidualDetectionPixels: 0.18,
+      rmsImprovementDetectionPixels: 0.01,
+      relativeRmsImprovement: 0.1,
+      maximumModelSeparationDetectionPixels: 0.03,
+      rankSeparationRatio: 0.02,
     },
     confidence: {
       accepted,

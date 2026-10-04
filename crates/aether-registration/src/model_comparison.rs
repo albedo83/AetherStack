@@ -6,6 +6,9 @@ use crate::{
     ResidualError, evaluate_residuals, fit_projective,
 };
 
+/// Versioned same-support similarity/projective comparison policy.
+pub const PROJECTIVE_ADEQUACY_ALGORITHM_ID: &str = "similarity-projective-adequacy-v1";
+
 /// Inspectable same-support comparison between similarity and projective fits.
 ///
 /// This is evidence, not an automatic model-selection decision. Both models are
@@ -22,6 +25,12 @@ pub struct ProjectiveAdequacyEvidence {
 }
 
 impl ProjectiveAdequacyEvidence {
+    /// Versioned comparison policy used to produce this evidence.
+    #[must_use]
+    pub const fn algorithm_id(self) -> &'static str {
+        PROJECTIVE_ADEQUACY_ALGORITHM_ID
+    }
+
     /// Exact common support evaluated by both models.
     #[must_use]
     pub const fn match_count(self) -> usize {

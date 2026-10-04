@@ -216,7 +216,7 @@ fn compare_with_aether_report(
 fn parse_aether_report(bytes: &[u8]) -> Result<AetherAcceptedPlan, String> {
     let report: AetherRegistrationReport = serde_json::from_slice(bytes)
         .map_err(|error| format!("invalid Aether registration report: {error}"))?;
-    if report.schema_version != 2 || !report.diagnostic_only {
+    if !matches!(report.schema_version, 2 | 3) || !report.diagnostic_only {
         return Err("unsupported Aether registration report".to_owned());
     }
     report
@@ -772,9 +772,18 @@ mod tests {
         }"#;
         let plan = parse_aether_report(valid)?;
         assert_eq!(plan.reference_width, 4144);
-        let unsupported = String::from_utf8_lossy(valid).replacen(
+        let current = String::from_utf8_lossy(valid).replacen(
             "\"schemaVersion\": 2",
             "\"schemaVersion\": 3",
+            1,
+        );
+        assert_eq!(
+            parse_aether_report(current.as_bytes())?.reference_width,
+            4144
+        );
+        let unsupported = String::from_utf8_lossy(valid).replacen(
+            "\"schemaVersion\": 2",
+            "\"schemaVersion\": 4",
             1,
         );
         assert!(parse_aether_report(unsupported.as_bytes()).is_err());

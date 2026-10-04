@@ -22,11 +22,12 @@ use aether_quality::{
 use aether_registration::{
     AffineTransform, COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID, DESCRIPTOR_MATCH_ALGORITHM_ID,
     DescriptorMatchParameters, FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog,
-    FeatureSelectionParameters, REGISTRATION_CONFIDENCE_ALGORITHM_ID, ReflectionPolicy,
-    RegistrationConfidenceParameters, RegistrationConfidenceRejection, RegistrationFootprint,
-    SIMILARITY_CONSENSUS_ALGORITHM_ID, SimilarityConsensusParameters,
-    TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptorParameters, assess_registration_confidence,
-    build_feature_catalog, build_triangle_descriptors, derive_common_lanczos3_footprint,
+    FeatureSelectionParameters, PROJECTIVE_ADEQUACY_ALGORITHM_ID, PROJECTIVE_FIT_ALGORITHM_ID,
+    REGISTRATION_CONFIDENCE_ALGORITHM_ID, ReflectionPolicy, RegistrationConfidenceParameters,
+    RegistrationConfidenceRejection, RegistrationFootprint, SIMILARITY_CONSENSUS_ALGORITHM_ID,
+    SimilarityConsensusParameters, TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptorParameters,
+    assess_registration_confidence, build_feature_catalog, build_triangle_descriptors,
+    compare_similarity_with_projective, derive_common_lanczos3_footprint,
     estimate_similarity_consensus, match_triangle_descriptors,
 };
 use aether_review::FrameId;
@@ -38,6 +39,9 @@ use serde::Serialize;
 /// This is intentionally named a diagnostic profile: its measurements establish
 /// evidence for later production defaults, rather than silently declaring them.
 pub const PRECISION_DIAGNOSTIC_PROFILE_ID: &str = "raw-cfa-registration-precision-v1";
+
+/// Current JSON schema emitted by registration diagnostics.
+pub const REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION: u32 = 3;
 
 /// Maximum decoded source samples accepted by one diagnostic input.
 pub const MAX_DIAGNOSTIC_SOURCE_SAMPLES: usize = 100_000_000;
@@ -54,6 +58,7 @@ pub struct RegistrationDiagnostic {
     reference: FrameSummary,
     matching: MatchingSummary,
     consensus: ConsensusSummary,
+    projective_adequacy: ProjectiveAdequacySummary,
     confidence: ConfidenceSummary,
     accepted_plan: Option<RegistrationPlanSummary>,
 }
@@ -82,6 +87,8 @@ struct AlgorithmSummary {
     triangles: &'static str,
     descriptor_matching: &'static str,
     consensus: &'static str,
+    projective_fit: &'static str,
+    projective_adequacy: &'static str,
     confidence: &'static str,
 }
 
@@ -128,6 +135,23 @@ struct ConsensusSummary {
     rms_residual_detection_pixels: f64,
     maximum_residual_detection_pixels: f64,
     competing_model_support: Option<usize>,
+}
+
+/// Same-support evidence only; it never changes the accepted affine plan.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectiveAdequacySummary {
+    selection_applied: bool,
+    match_count: usize,
+    transform_coefficients_detection_pixels: [[f64; 3]; 3],
+    similarity_rms_residual_detection_pixels: f64,
+    similarity_maximum_residual_detection_pixels: f64,
+    projective_rms_residual_detection_pixels: f64,
+    projective_maximum_residual_detection_pixels: f64,
+    rms_improvement_detection_pixels: f64,
+    relative_rms_improvement: Option<f64>,
+    maximum_model_separation_detection_pixels: f64,
+    rank_separation_ratio: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -322,6 +346,17 @@ where
         profile.confidence,
     )
     .map_err(|error| RegistrationDiagnosticError::new("confidence", error))?;
+    let inlier_matches = consensus
+        .resolve_inlier_matches(&source.features, &reference.features)
+        .map_err(|error| RegistrationDiagnosticError::new("projective correspondences", error))?;
+    let projective_adequacy = compare_similarity_with_projective(
+        consensus.transform(),
+        &inlier_matches,
+        source.features.width(),
+        source.features.height(),
+    )
+    .map_err(|error| RegistrationDiagnosticError::new("projective adequacy", error))?;
+    let projective_fit = projective_adequacy.projective_fit();
 
     let match_statistics = matches.statistics();
     let consensus_statistics = consensus.statistics();
@@ -376,7 +411,7 @@ where
     };
 
     Ok(RegistrationDiagnostic {
-        schema_version: 2,
+        schema_version: REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION,
         profile_id: PRECISION_DIAGNOSTIC_PROFILE_ID,
         diagnostic_only: true,
         algorithms: AlgorithmSummary {
@@ -387,6 +422,8 @@ where
             triangles: TRIANGLE_DESCRIPTOR_ALGORITHM_ID,
             descriptor_matching: DESCRIPTOR_MATCH_ALGORITHM_ID,
             consensus: SIMILARITY_CONSENSUS_ALGORITHM_ID,
+            projective_fit: PROJECTIVE_FIT_ALGORITHM_ID,
+            projective_adequacy: PROJECTIVE_ADEQUACY_ALGORITHM_ID,
             confidence: REGISTRATION_CONFIDENCE_ALGORITHM_ID,
         },
         source: source.summary,
@@ -412,6 +449,23 @@ where
             competing_model_support: consensus
                 .competing_similarity()
                 .map(|candidate| candidate.inlier_hypotheses()),
+        },
+        projective_adequacy: ProjectiveAdequacySummary {
+            selection_applied: false,
+            match_count: projective_adequacy.match_count(),
+            transform_coefficients_detection_pixels: projective_fit.transform().coefficients(),
+            similarity_rms_residual_detection_pixels: projective_adequacy
+                .similarity_root_mean_square_pixels(),
+            similarity_maximum_residual_detection_pixels: projective_adequacy
+                .similarity_maximum_residual_pixels(),
+            projective_rms_residual_detection_pixels: projective_fit.root_mean_square_pixels(),
+            projective_maximum_residual_detection_pixels: projective_fit.maximum_residual_pixels(),
+            rms_improvement_detection_pixels: projective_adequacy
+                .root_mean_square_improvement_pixels(),
+            relative_rms_improvement: projective_adequacy.relative_root_mean_square_improvement(),
+            maximum_model_separation_detection_pixels: projective_adequacy
+                .maximum_model_separation_pixels(),
+            rank_separation_ratio: projective_fit.rank_separation_ratio(),
         },
         confidence: ConfidenceSummary {
             accepted: confidence.accepted(),
@@ -648,6 +702,9 @@ mod tests {
     fn profile_is_internally_valid_and_versioned() {
         assert!(DiagnosticProfile::precision().is_ok());
         assert!(PRECISION_DIAGNOSTIC_PROFILE_ID.ends_with("-v1"));
+        assert_eq!(REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION, 3);
+        assert!(PROJECTIVE_FIT_ALGORITHM_ID.ends_with("-v1"));
+        assert!(PROJECTIVE_ADEQUACY_ALGORITHM_ID.ends_with("-v1"));
     }
 
     #[test]
@@ -720,6 +777,38 @@ mod tests {
         assert!(json.get("transformCoefficientsSourcePixels").is_some());
         assert!(json.get("referenceWidth").is_some());
         assert!(json.get("footprint_algorithm_id").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn projective_adequacy_serializes_as_non_selecting_evidence() -> Result<(), Box<dyn Error>> {
+        let summary = ProjectiveAdequacySummary {
+            selection_applied: false,
+            match_count: 12,
+            transform_coefficients_detection_pixels: [
+                [1.0, 0.0, 2.0],
+                [0.0, 1.0, -3.0],
+                [1.0e-5, -2.0e-5, 1.0],
+            ],
+            similarity_rms_residual_detection_pixels: 0.45,
+            similarity_maximum_residual_detection_pixels: 0.91,
+            projective_rms_residual_detection_pixels: 0.21,
+            projective_maximum_residual_detection_pixels: 0.5,
+            rms_improvement_detection_pixels: 0.24,
+            relative_rms_improvement: Some(0.5),
+            maximum_model_separation_detection_pixels: 0.72,
+            rank_separation_ratio: 0.01,
+        };
+
+        let json = serde_json::to_value(summary)?;
+        assert_eq!(
+            json.get("selectionApplied"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(json.get("matchCount"), Some(&serde_json::json!(12)));
+        assert!(json.get("transformCoefficientsDetectionPixels").is_some());
+        assert!(json.get("projectiveRmsResidualDetectionPixels").is_some());
+        assert!(json.get("selection_applied").is_none());
         Ok(())
     }
 }

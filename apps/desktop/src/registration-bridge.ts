@@ -67,6 +67,24 @@ export interface RegistrationDiagnostic {
     readonly rmsResidualDetectionPixels: number;
     readonly maximumResidualDetectionPixels: number;
   };
+  readonly projectiveAdequacy: {
+    /** Evidence only: production registration remains the accepted similarity. */
+    readonly selectionApplied: false;
+    readonly matchCount: number;
+    readonly transformCoefficientsDetectionPixels: readonly [
+      readonly [number, number, number],
+      readonly [number, number, number],
+      readonly [number, number, number],
+    ];
+    readonly similarityRmsResidualDetectionPixels: number;
+    readonly similarityMaximumResidualDetectionPixels: number;
+    readonly projectiveRmsResidualDetectionPixels: number;
+    readonly projectiveMaximumResidualDetectionPixels: number;
+    readonly rmsImprovementDetectionPixels: number;
+    readonly relativeRmsImprovement: number | null;
+    readonly maximumModelSeparationDetectionPixels: number;
+    readonly rankSeparationRatio: number;
+  };
   readonly confidence: {
     readonly accepted: boolean;
     readonly inlierRatio: number;

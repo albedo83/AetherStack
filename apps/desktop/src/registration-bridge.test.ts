@@ -39,7 +39,7 @@ afterEach(() => {
 describe("native registration bridge", () => {
   it("passes only the selected source and reference paths", async () => {
     const diagnostic = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       confidence: { accepted: true },
       acceptedPlan: { autocrop: { x: 2, y: 5, width: 4137, height: 2815 } },
     };

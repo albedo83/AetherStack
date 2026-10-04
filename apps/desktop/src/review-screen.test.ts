@@ -647,7 +647,7 @@ describe("frame review workspace", () => {
       stack: demoReviewModel.registration.stack,
       resultReview: demoReviewModel.registration.resultReview,
       diagnostic: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         profileId: "registration-v1",
         diagnosticOnly: true,
         source: {
@@ -681,6 +681,23 @@ describe("frame review workspace", () => {
           inlierFeaturePairs: 302,
           rmsResidualDetectionPixels: 0.12,
           maximumResidualDetectionPixels: 0.4,
+        },
+        projectiveAdequacy: {
+          selectionApplied: false as const,
+          matchCount: 302,
+          transformCoefficientsDetectionPixels: [
+            [0.9999898, -0.00046228, -0.46],
+            [0.00046228, 0.9999898, 0.095],
+            [0.000001, -0.000002, 1],
+          ] as const,
+          similarityRmsResidualDetectionPixels: 0.12,
+          similarityMaximumResidualDetectionPixels: 0.4,
+          projectiveRmsResidualDetectionPixels: 0.08,
+          projectiveMaximumResidualDetectionPixels: 0.29,
+          rmsImprovementDetectionPixels: 0.04,
+          relativeRmsImprovement: 1 / 3,
+          maximumModelSeparationDetectionPixels: 0.21,
+          rankSeparationRatio: 0.015,
         },
         confidence: {
           accepted: true,
@@ -745,6 +762,10 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("302");
     expect(root.textContent).toContain("0.240");
     expect(root.textContent).toContain("lanczos3-common-footprint-v1");
+    expect(root.textContent).toContain(
+      "Diagnostic projective · detection pixels · not selected",
+    );
+    expect(root.textContent).toContain("gain 0.0400 px");
     expect(root.textContent).toContain("2 frames sealed");
     expect(root.textContent).toContain(`SHA-256 ${"f".repeat(64)}`);
     expect(root.textContent).toContain("Reference");

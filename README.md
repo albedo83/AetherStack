@@ -142,8 +142,10 @@ optimized CPU and GPU paths must match.
   inliers, outliers, residuals, support-ranked one-to-one star mappings, work
   budgets, competing transform evidence, and a fail-closed confidence gate for
   support, ambiguity, spatial coverage, residual quality, reflection, and
-  truncated searches, plus a path-free end-to-end diagnostic validated across
-  the local ten-Light ASI294MC Pro session;
+  truncated searches, plus bounded Hartley-normalized projective fitting and
+  same-support adequacy evidence that remains explicitly non-selecting, all in a
+  path-free end-to-end diagnostic validated across the local ten-Light ASI294MC
+  Pro session;
 - a strict normalized `f64` Lanczos-3 registration-resampling oracle with exact
   integer-coordinate sampling, compensated weights, unclipped output,
   conservative non-zero-tap mask propagation, complete footprint accounting,
@@ -319,8 +321,8 @@ cargo run -p aether-inspect --bin aether-xdrz-inspect -- alignment.xdrz
 cargo run -p aether-inspect --bin aether-xdrz-inspect -- --compact alignment.xdrz
 ```
 
-Compare that projective WBPP oracle with an accepted schema-v2 report from the
-raw-CFA registration diagnostic. The comparison inverts the XDRZ
+Compare that projective WBPP oracle with an accepted schema-v2 or schema-v3
+report from the raw-CFA registration diagnostic. The comparison inverts the XDRZ
 reference-to-source sampling homography, converts its half-pixel alignment
 origin to AetherStack's integer-centered coordinates, and reports path-private
 RMS, maximum, and center differences over a fixed 5 × 5 field grid:
