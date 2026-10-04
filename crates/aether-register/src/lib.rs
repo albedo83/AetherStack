@@ -24,12 +24,14 @@ use aether_registration::{
     DescriptorMatchParameters, FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog,
     FeatureSelectionParameters, PROJECTIVE_ADEQUACY_ALGORITHM_ID,
     PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID, PROJECTIVE_FIT_ALGORITHM_ID,
+    PROJECTIVE_SELECTION_ALGORITHM_ID, ProjectiveSelectionPolicy,
     REGISTRATION_CONFIDENCE_ALGORITHM_ID, ReflectionPolicy, RegistrationConfidenceParameters,
     RegistrationConfidenceRejection, RegistrationFootprint, SIMILARITY_CONSENSUS_ALGORITHM_ID,
     SimilarityConsensusParameters, TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptorParameters,
     assess_registration_confidence, build_feature_catalog, build_triangle_descriptors,
     compare_similarity_with_projective, cross_validate_similarity_with_projective,
-    derive_common_lanczos3_footprint, estimate_similarity_consensus, match_triangle_descriptors,
+    derive_common_lanczos3_footprint, estimate_similarity_consensus, evaluate_projective_selection,
+    match_triangle_descriptors,
 };
 use aether_review::FrameId;
 use aether_session::fingerprint_reader;
@@ -42,7 +44,7 @@ use serde::Serialize;
 pub const PRECISION_DIAGNOSTIC_PROFILE_ID: &str = "raw-cfa-registration-precision-v1";
 
 /// Current JSON schema emitted by registration diagnostics.
-pub const REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION: u32 = 3;
+pub const REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION: u32 = 4;
 
 /// Fixed held-out fold count used by the precision diagnostic profile.
 pub const PRECISION_PROJECTIVE_VALIDATION_FOLDS: usize = 5;
@@ -94,6 +96,7 @@ struct AlgorithmSummary {
     projective_fit: &'static str,
     projective_adequacy: &'static str,
     projective_cross_validation: &'static str,
+    projective_selection: &'static str,
     confidence: &'static str,
 }
 
@@ -158,6 +161,7 @@ struct ProjectiveAdequacySummary {
     maximum_model_separation_detection_pixels: f64,
     rank_separation_ratio: f64,
     cross_validation: ProjectiveCrossValidationSummary,
+    recommendation: ProjectiveRecommendationSummary,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -172,6 +176,29 @@ struct ProjectiveCrossValidationSummary {
     rms_improvement_detection_pixels: f64,
     relative_rms_improvement: Option<f64>,
     minimum_rank_separation_ratio: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectiveRecommendationSummary {
+    recommended: bool,
+    minimum_matches: usize,
+    minimum_validation_folds: usize,
+    minimum_projective_better_folds: usize,
+    minimum_rms_improvement_detection_pixels: f64,
+    minimum_relative_rms_improvement: f64,
+    minimum_rank_separation_ratio: f64,
+    maximum_projective_rms_detection_pixels: f64,
+    minimum_model_separation_detection_pixels: f64,
+    support_sufficient: bool,
+    validation_folds_sufficient: bool,
+    fold_wins_sufficient: bool,
+    absolute_gain_sufficient: bool,
+    relative_gain_sufficient: bool,
+    rank_separation_sufficient: bool,
+    projective_rms_acceptable: bool,
+    worst_residual_not_increased: bool,
+    model_separation_sufficient: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -383,6 +410,13 @@ where
         PRECISION_PROJECTIVE_VALIDATION_FOLDS,
     )
     .map_err(|error| RegistrationDiagnosticError::new("projective cross-validation", error))?;
+    let projective_policy = ProjectiveSelectionPolicy::conservative();
+    let projective_recommendation = evaluate_projective_selection(
+        projective_adequacy,
+        projective_cross_validation,
+        projective_policy,
+    )
+    .map_err(|error| RegistrationDiagnosticError::new("projective recommendation", error))?;
 
     let match_statistics = matches.statistics();
     let consensus_statistics = consensus.statistics();
@@ -451,6 +485,7 @@ where
             projective_fit: PROJECTIVE_FIT_ALGORITHM_ID,
             projective_adequacy: PROJECTIVE_ADEQUACY_ALGORITHM_ID,
             projective_cross_validation: PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID,
+            projective_selection: PROJECTIVE_SELECTION_ALGORITHM_ID,
             confidence: REGISTRATION_CONFIDENCE_ALGORITHM_ID,
         },
         source: source.summary,
@@ -510,6 +545,34 @@ where
                     .relative_root_mean_square_improvement(),
                 minimum_rank_separation_ratio: projective_cross_validation
                     .minimum_projective_rank_separation_ratio(),
+            },
+            recommendation: ProjectiveRecommendationSummary {
+                recommended: projective_recommendation.recommends_projective(),
+                minimum_matches: projective_policy.minimum_matches(),
+                minimum_validation_folds: projective_policy.minimum_validation_folds(),
+                minimum_projective_better_folds: projective_policy
+                    .minimum_projective_better_folds(),
+                minimum_rms_improvement_detection_pixels: projective_policy
+                    .minimum_rms_improvement_pixels(),
+                minimum_relative_rms_improvement: projective_policy
+                    .minimum_relative_rms_improvement(),
+                minimum_rank_separation_ratio: projective_policy.minimum_rank_separation_ratio(),
+                maximum_projective_rms_detection_pixels: projective_policy
+                    .maximum_projective_rms_pixels(),
+                minimum_model_separation_detection_pixels: projective_policy
+                    .minimum_model_separation_pixels(),
+                support_sufficient: projective_recommendation.support_sufficient(),
+                validation_folds_sufficient: projective_recommendation
+                    .validation_folds_sufficient(),
+                fold_wins_sufficient: projective_recommendation.fold_wins_sufficient(),
+                absolute_gain_sufficient: projective_recommendation.absolute_gain_sufficient(),
+                relative_gain_sufficient: projective_recommendation.relative_gain_sufficient(),
+                rank_separation_sufficient: projective_recommendation.rank_separation_sufficient(),
+                projective_rms_acceptable: projective_recommendation.projective_rms_acceptable(),
+                worst_residual_not_increased: projective_recommendation
+                    .worst_residual_not_increased(),
+                model_separation_sufficient: projective_recommendation
+                    .model_separation_sufficient(),
             },
         },
         confidence: ConfidenceSummary {
@@ -747,10 +810,11 @@ mod tests {
     fn profile_is_internally_valid_and_versioned() {
         assert!(DiagnosticProfile::precision().is_ok());
         assert!(PRECISION_DIAGNOSTIC_PROFILE_ID.ends_with("-v1"));
-        assert_eq!(REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION, 3);
+        assert_eq!(REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION, 4);
         assert!(PROJECTIVE_FIT_ALGORITHM_ID.ends_with("-v1"));
         assert!(PROJECTIVE_ADEQUACY_ALGORITHM_ID.ends_with("-v1"));
         assert!(PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID.ends_with("-v1"));
+        assert!(PROJECTIVE_SELECTION_ALGORITHM_ID.ends_with("-v1"));
         assert_eq!(PRECISION_PROJECTIVE_VALIDATION_FOLDS, 5);
     }
 
@@ -856,6 +920,26 @@ mod tests {
                 relative_rms_improvement: Some(-0.02),
                 minimum_rank_separation_ratio: 0.009,
             },
+            recommendation: ProjectiveRecommendationSummary {
+                recommended: false,
+                minimum_matches: 20,
+                minimum_validation_folds: 5,
+                minimum_projective_better_folds: 5,
+                minimum_rms_improvement_detection_pixels: 0.05,
+                minimum_relative_rms_improvement: 0.1,
+                minimum_rank_separation_ratio: 0.01,
+                maximum_projective_rms_detection_pixels: 1.0,
+                minimum_model_separation_detection_pixels: 0.25,
+                support_sufficient: false,
+                validation_folds_sufficient: true,
+                fold_wins_sufficient: false,
+                absolute_gain_sufficient: false,
+                relative_gain_sufficient: false,
+                rank_separation_sufficient: false,
+                projective_rms_acceptable: true,
+                worst_residual_not_increased: false,
+                model_separation_sufficient: true,
+            },
         };
 
         let json = serde_json::to_value(summary)?;
@@ -870,6 +954,11 @@ mod tests {
             json.get("crossValidation")
                 .and_then(|value| value.get("projectiveBetterFolds")),
             Some(&serde_json::json!(2))
+        );
+        assert_eq!(
+            json.get("recommendation")
+                .and_then(|value| value.get("recommended")),
+            Some(&serde_json::json!(false))
         );
         assert!(json.get("selection_applied").is_none());
         Ok(())

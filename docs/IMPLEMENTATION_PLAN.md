@@ -1623,6 +1623,13 @@ safety reasoning. They do not narrate obvious syntax.
      inspectable; mismatched fitting and validation support fails closed. Tests
      accept strong synthetic projective geometry and reject unnecessary affine
      complexity. Runtime plan mutation remains a separate release gate.
+132. Publish every projective recommendation gate in registration diagnostic
+     schema 4 while keeping `selectionApplied: false`. The report binds the
+     versioned policy identity, all eight numerical thresholds, nine predicate
+     outcomes, and the aggregate recommendation to the same fitting and held-
+     out evidence. The desktop geometry instrument names failed gates rather
+     than presenting an unexplained boolean. The XDRZ comparison utility keeps
+     schemas 2, 3, and 4 readable, and rejects unknown future schemas.
 
 ## 11. Stable-release definition
 

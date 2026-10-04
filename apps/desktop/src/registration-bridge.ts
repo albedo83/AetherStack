@@ -95,6 +95,27 @@ export interface RegistrationDiagnostic {
       readonly relativeRmsImprovement: number | null;
       readonly minimumRankSeparationRatio: number;
     };
+    /** Advisory only; selectionApplied remains false until plan integration. */
+    readonly recommendation: {
+      readonly recommended: boolean;
+      readonly minimumMatches: number;
+      readonly minimumValidationFolds: number;
+      readonly minimumProjectiveBetterFolds: number;
+      readonly minimumRmsImprovementDetectionPixels: number;
+      readonly minimumRelativeRmsImprovement: number;
+      readonly minimumRankSeparationRatio: number;
+      readonly maximumProjectiveRmsDetectionPixels: number;
+      readonly minimumModelSeparationDetectionPixels: number;
+      readonly supportSufficient: boolean;
+      readonly validationFoldsSufficient: boolean;
+      readonly foldWinsSufficient: boolean;
+      readonly absoluteGainSufficient: boolean;
+      readonly relativeGainSufficient: boolean;
+      readonly rankSeparationSufficient: boolean;
+      readonly projectiveRmsAcceptable: boolean;
+      readonly worstResidualNotIncreased: boolean;
+      readonly modelSeparationSufficient: boolean;
+    };
   };
   readonly confidence: {
     readonly accepted: boolean;

@@ -3164,8 +3164,25 @@ function renderRegistration(
   if (diagnostic) {
     const projective = diagnostic.projectiveAdequacy;
     const validation = projective.crossValidation;
+    const recommendation = projective.recommendation;
+    const failedGates = [
+      [recommendation.supportSufficient, "support"],
+      [recommendation.validationFoldsSufficient, "validation folds"],
+      [recommendation.foldWinsSufficient, "fold wins"],
+      [recommendation.absoluteGainSufficient, "absolute gain"],
+      [recommendation.relativeGainSufficient, "relative gain"],
+      [recommendation.rankSeparationSufficient, "DLT stability"],
+      [recommendation.projectiveRmsAcceptable, "projective RMS"],
+      [recommendation.worstResidualNotIncreased, "worst residual"],
+      [recommendation.modelSeparationSufficient, "field separation"],
+    ]
+      .filter(([passed]) => !passed)
+      .map(([, label]) => label);
+    const recommendationText = recommendation.recommended
+      ? "recommended by every conservative gate"
+      : `not recommended · failed: ${failedGates.join(", ")}`;
     geometryEvidence.push(
-      `Diagnostic projective · detection pixels · not selected\n${projective.transformCoefficientsDetectionPixels
+      `Diagnostic projective · detection pixels · not selected\nAdvisory: ${recommendationText}\n${projective.transformCoefficientsDetectionPixels
         .map(
           (row) => `[${row.map((value) => value.toPrecision(10)).join(", ")}]`,
         )

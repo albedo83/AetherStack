@@ -74,14 +74,15 @@ consensus, then resolves every retained pair against those catalogs. Downstream
 diagnostics must use this bridge rather than treating feature ranks as portable
 coordinates.
 
-Registration diagnostic schema 3 serializes this comparison as
+Registration diagnostic schema 4 serializes this comparison as
 `projectiveAdequacy`. The block carries its canonical detection-plane matrix,
 common-support residuals, RMS improvement, field separation, and DLT rank
-evidence. Its mandatory `selectionApplied` value is `false`. The confidence
-decision and `acceptedPlan` continue to use only the full-resolution lift of the
-similarity consensus; the projective matrix is neither lifted nor resampled by
-the production pipeline at this stage. Schema 2 remains readable by the XDRZ
-comparison utility for already captured validation artifacts.
+evidence, held-out validation, and the complete conservative recommendation.
+Its mandatory `selectionApplied` value is `false`. The confidence decision and
+`acceptedPlan` continue to use only the full-resolution lift of the similarity
+consensus; the projective matrix is neither lifted nor published by the
+production pipeline at this stage. Schemas 2 through 4 remain readable by the
+XDRZ comparison utility for already captured validation artifacts.
 
 ## Residual evidence
 

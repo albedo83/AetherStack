@@ -709,6 +709,26 @@ describe("frame review workspace", () => {
             relativeRmsImprovement: -0.077,
             minimumRankSeparationRatio: 0.014,
           },
+          recommendation: {
+            recommended: false,
+            minimumMatches: 20,
+            minimumValidationFolds: 5,
+            minimumProjectiveBetterFolds: 5,
+            minimumRmsImprovementDetectionPixels: 0.05,
+            minimumRelativeRmsImprovement: 0.1,
+            minimumRankSeparationRatio: 0.01,
+            maximumProjectiveRmsDetectionPixels: 1,
+            minimumModelSeparationDetectionPixels: 0.25,
+            supportSufficient: true,
+            validationFoldsSufficient: true,
+            foldWinsSufficient: false,
+            absoluteGainSufficient: false,
+            relativeGainSufficient: false,
+            rankSeparationSufficient: true,
+            projectiveRmsAcceptable: true,
+            worstResidualNotIncreased: false,
+            modelSeparationSufficient: false,
+          },
         },
         confidence: {
           accepted: true,
@@ -779,6 +799,9 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("gain 0.0400 px");
     expect(root.textContent).toContain("held-out gain -0.0100 px");
     expect(root.textContent).toContain("fold wins 1/5");
+    expect(root.textContent).toContain("Advisory: not recommended");
+    expect(root.textContent).toContain("absolute gain");
+    expect(root.textContent).toContain("field separation");
     expect(root.textContent).toContain("2 frames sealed");
     expect(root.textContent).toContain(`SHA-256 ${"f".repeat(64)}`);
     expect(root.textContent).toContain("Reference");
