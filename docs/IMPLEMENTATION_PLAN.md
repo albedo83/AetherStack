@@ -1769,6 +1769,14 @@ safety reasoning. They do not narrate obvious syntax.
      missing parameter-binding guarantee. Tests prove checksums, exact science
      and rejection pixels, and byte identity across different band heights.
      Desktop sigma controls and report-schema exposure remain next.
+151. Expose iterative sigma clipping through the desktop and sealed reports.
+     The advanced estimator selector now carries the stable `sigma_clipped`
+     wire value and reveals only its asymmetric sigma and pass controls while
+     retaining the shared support floor and rejection-map switch. All controls
+     have explicit accessible names and instrument steppers. Native execution,
+     report decoding, progress copy, and archived product verification use
+     `registered-sigma-mean-f64-v1`; legacy reports default the newly added
+     sigma fields without weakening unknown-field rejection.
 
 ## 11. Stable-release definition
 

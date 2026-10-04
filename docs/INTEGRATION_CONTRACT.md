@@ -93,7 +93,10 @@ domain-separated SHA-256 over the binary64 sigma limits and integer iteration
 and support bounds is required in `AETHPAR` for both the science image and its
 maps. The same enforcement now covers percentile controls. Tests require exact
 pixels, verified checksums, and byte-identical products across band heights.
-Desktop sigma selection and report-schema exposure remain next.
+The desktop exposes the estimator under the stable `sigma_clipped` wire value,
+shows only the controls relevant to the selected rejecting estimator, and seals
+the values into the integration report. Reports written before these controls
+remain readable with the documented 4.0/3.0/eight-pass defaults.
 
 ## Frame-weighted mean
 

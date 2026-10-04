@@ -52,12 +52,14 @@ use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, LightPlanExecutionError,
     LightPlanExecutionRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
-    ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics, RegisteredFrameQuality,
+    ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
+    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
     RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
-    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan, run_master_plan,
-    run_projective_registration_plan, run_registered_stack, run_registration_plan,
+    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters, run_calibrated_light_plan,
+    run_demosaiced_light_plan, run_light_plan, run_master_plan, run_projective_registration_plan,
+    run_registered_stack, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -340,6 +342,7 @@ enum RegisteredStackEstimatorInput {
     Median,
     WeightedMean,
     PercentileClipped,
+    SigmaClipped,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -384,8 +387,26 @@ struct RegisteredStackIntegrationSettings {
     estimator: RegisteredStackEstimatorInput,
     low_fraction: f64,
     high_fraction: f64,
+    #[serde(default = "default_low_sigma")]
+    low_sigma: f64,
+    #[serde(default = "default_high_sigma")]
+    high_sigma: f64,
+    #[serde(default = "default_sigma_iterations")]
+    maximum_iterations: u32,
     minimum_retained_samples: u32,
     generate_rejection_maps: bool,
+}
+
+const fn default_low_sigma() -> f64 {
+    4.0
+}
+
+const fn default_high_sigma() -> f64 {
+    3.0
+}
+
+const fn default_sigma_iterations() -> u32 {
+    8
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2759,11 +2780,10 @@ where
     require_absent_registered_report(&report_path)?;
     let integration = request.integration;
     let geometry_model = request.planning.geometry_model;
-    if matches!(
+    if !matches!(
         integration.estimator,
-        RegisteredStackEstimatorInput::StrictMean
-            | RegisteredStackEstimatorInput::Median
-            | RegisteredStackEstimatorInput::WeightedMean
+        RegisteredStackEstimatorInput::PercentileClipped
+            | RegisteredStackEstimatorInput::SigmaClipped
     ) && integration.generate_rejection_maps
     {
         return Err(registered_stack_configuration_error());
@@ -2782,6 +2802,15 @@ where
                 .map_err(|_| registered_stack_configuration_error())?,
             )
         }
+        RegisteredStackEstimatorInput::SigmaClipped => RegisteredStackEstimator::SigmaClipped(
+            SigmaClipParameters::new(
+                integration.low_sigma,
+                integration.high_sigma,
+                integration.maximum_iterations,
+                integration.minimum_retained_samples,
+            )
+            .map_err(|_| registered_stack_configuration_error())?,
+        ),
     };
     let plan = match request.planning.geometry_model {
         RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
@@ -2965,10 +2994,21 @@ where
         .and_then(|value| value.with_band_height(request.band_height))
         .map_err(registered_stack_error)?;
     if let Some((low_path, high_path)) = rejection_paths.as_ref() {
+        let rejection_map_algorithm_id = match integration.estimator {
+            RegisteredStackEstimatorInput::PercentileClipped => {
+                PERCENTILE_REJECTION_MAP_ALGORITHM_ID
+            }
+            RegisteredStackEstimatorInput::SigmaClipped => SIGMA_REJECTION_MAP_ALGORITHM_ID,
+            RegisteredStackEstimatorInput::StrictMean
+            | RegisteredStackEstimatorInput::Median
+            | RegisteredStackEstimatorInput::WeightedMean => {
+                return Err(registered_stack_configuration_error());
+            }
+        };
         let low_provenance = FitsOutputProvenance::new(
             manifest_sha256.clone(),
             "registered-rejection-low",
-            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            rejection_map_algorithm_id,
             source_count,
         )
         .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
@@ -2983,7 +3023,7 @@ where
         let high_provenance = FitsOutputProvenance::new(
             manifest_sha256.clone(),
             "registered-rejection-high",
-            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            rejection_map_algorithm_id,
             source_count,
         )
         .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
@@ -3797,6 +3837,7 @@ const fn registered_stack_estimator_algorithm_id(
             aether_runtime::REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID
         }
         RegisteredStackEstimatorInput::Median => aether_runtime::REGISTERED_MEDIAN_ALGORITHM_ID,
+        RegisteredStackEstimatorInput::SigmaClipped => REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
     }
 }
 
@@ -7348,7 +7389,7 @@ mod tests {
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn registered_median_has_stable_wire_and_provenance_identities() -> TestResult {
+    fn registered_estimators_have_stable_wire_and_provenance_identities() -> TestResult {
         assert_eq!(
             serde_json::to_string(&RegisteredStackEstimatorInput::Median)?,
             "\"median\""
@@ -7357,6 +7398,20 @@ mod tests {
             registered_stack_estimator_algorithm_id(RegisteredStackEstimatorInput::Median),
             REGISTERED_MEDIAN_ALGORITHM_ID
         );
+        assert_eq!(
+            serde_json::to_string(&RegisteredStackEstimatorInput::SigmaClipped)?,
+            "\"sigma_clipped\""
+        );
+        assert_eq!(
+            registered_stack_estimator_algorithm_id(RegisteredStackEstimatorInput::SigmaClipped),
+            REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+        );
+        let legacy: RegisteredStackIntegrationSettings = serde_json::from_str(
+            r#"{"estimator":"strict_mean","lowFraction":0.1,"highFraction":0.1,"minimumRetainedSamples":3,"generateRejectionMaps":false}"#,
+        )?;
+        assert_eq!(legacy.low_sigma.to_bits(), 4.0_f64.to_bits());
+        assert_eq!(legacy.high_sigma.to_bits(), 3.0_f64.to_bits());
+        assert_eq!(legacy.maximum_iterations, 8);
         Ok(())
     }
 
@@ -8271,6 +8326,9 @@ mod tests {
                     estimator: RegisteredStackEstimatorInput::StrictMean,
                     low_fraction: 0.1,
                     high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
                 },
@@ -8456,6 +8514,9 @@ mod tests {
                     estimator: RegisteredStackEstimatorInput::StrictMean,
                     low_fraction: 0.1,
                     high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
                 },
@@ -8686,7 +8747,7 @@ mod tests {
     }
 
     #[test]
-    fn publishes_advanced_stack_and_both_rejection_maps() -> TestResult {
+    fn publishes_advanced_stacks_and_their_rejection_maps() -> TestResult {
         let directory = TestDirectory::new()?;
         let session_root = directory.path().join("session");
         let artifact_root = directory.path().join("linear-rgb");
@@ -8708,14 +8769,14 @@ mod tests {
         let result = execute_registered_stack_sync(
             &session,
             RegisteredStackCommandRequest {
-                planning,
-                expected_plan_sha256,
+                planning: planning.clone(),
+                expected_plan_sha256: expected_plan_sha256.clone(),
                 artifacts: registered
                     .frames
-                    .into_iter()
+                    .iter()
                     .map(|frame| RegistrationArtifactInput {
-                        frame_id: frame.frame_id,
-                        path: PathBuf::from(frame.output_path),
+                        frame_id: frame.frame_id.clone(),
+                        path: PathBuf::from(&frame.output_path),
                     })
                     .collect(),
                 quality_evidence: Vec::new(),
@@ -8727,6 +8788,9 @@ mod tests {
                     estimator: RegisteredStackEstimatorInput::PercentileClipped,
                     low_fraction: 0.1,
                     high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
                 },
@@ -8753,6 +8817,54 @@ mod tests {
         assert!(stack_path.is_file());
         assert!(low_path.is_file());
         assert!(high_path.is_file());
+
+        let sigma_path = directory.path().join("sigma-stack.fits");
+        let sigma = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256,
+                artifacts: registered
+                    .frames
+                    .into_iter()
+                    .map(|frame| RegistrationArtifactInput {
+                        frame_id: frame.frame_id,
+                        path: PathBuf::from(frame.output_path),
+                    })
+                    .collect(),
+                quality_evidence: Vec::new(),
+                quality_reference_frame_id: None,
+                output_path: sigma_path.clone(),
+                band_height: 17,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::SigmaClipped,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
+                    minimum_retained_samples: 2,
+                    generate_rejection_maps: true,
+                },
+            },
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+        assert_eq!(sigma.estimator, REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID);
+        assert!(sigma_path.is_file());
+        assert!(
+            directory
+                .path()
+                .join("sigma-stack-rejection-low.fits")
+                .is_file()
+        );
+        assert!(
+            directory
+                .path()
+                .join("sigma-stack-rejection-high.fits")
+                .is_file()
+        );
         Ok(())
     }
 
@@ -8821,6 +8933,9 @@ mod tests {
                     estimator: RegisteredStackEstimatorInput::WeightedMean,
                     low_fraction: 0.1,
                     high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
                 },
@@ -8961,6 +9076,9 @@ mod tests {
                     estimator: RegisteredStackEstimatorInput::WeightedMean,
                     low_fraction: 0.1,
                     high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
                 },
@@ -9020,6 +9138,9 @@ mod tests {
                     estimator: RegisteredStackEstimatorInput::StrictMean,
                     low_fraction: 0.1,
                     high_fraction: 0.1,
+                    low_sigma: 4.0,
+                    high_sigma: 3.0,
+                    maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
                 },

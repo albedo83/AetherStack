@@ -1093,6 +1093,9 @@ function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
     weightReferenceFrameId: null,
     lowFraction: 0.1,
     highFraction: 0.1,
+    lowSigma: 4,
+    highSigma: 3,
+    maximumIterations: 8,
     minimumRetainedSamples: 3,
     generateRejectionMaps: false,
   };
@@ -1459,9 +1462,11 @@ async function executeStack(): Promise<void> {
             ? "Integrating the sealed common crop with strict F64 mean…"
             : settings.estimator === "median"
               ? "Integrating the sealed common crop with exact F64 median…"
-              : settings.estimator === "weighted_mean"
-                ? "Integrating with identity-bound balanced PSF weights…"
-                : "Integrating with deterministic percentile rejection…",
+              : settings.estimator === "sigma_clipped"
+                ? "Integrating with deterministic iterative sigma rejection…"
+                : settings.estimator === "weighted_mean"
+                  ? "Integrating with identity-bound balanced PSF weights…"
+                  : "Integrating with deterministic percentile rejection…",
       },
     },
   });

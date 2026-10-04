@@ -179,10 +179,17 @@ export interface RegistrationExecutionSettings {
 
 export interface RegisteredStackIntegrationSettings {
   readonly estimator:
-    "strict_mean" | "median" | "weighted_mean" | "percentile_clipped";
+    | "strict_mean"
+    | "median"
+    | "weighted_mean"
+    | "percentile_clipped"
+    | "sigma_clipped";
   readonly weightReferenceFrameId: string | null;
   readonly lowFraction: number;
   readonly highFraction: number;
+  readonly lowSigma: number;
+  readonly highSigma: number;
+  readonly maximumIterations: number;
   readonly minimumRetainedSamples: number;
   readonly generateRejectionMaps: boolean;
 }
@@ -443,6 +450,9 @@ export function executeRegisteredStack(
     estimator: settings.integration.estimator,
     lowFraction: settings.integration.lowFraction,
     highFraction: settings.integration.highFraction,
+    lowSigma: settings.integration.lowSigma,
+    highSigma: settings.integration.highSigma,
+    maximumIterations: settings.integration.maximumIterations,
     minimumRetainedSamples: settings.integration.minimumRetainedSamples,
     generateRejectionMaps: settings.integration.generateRejectionMaps,
   };

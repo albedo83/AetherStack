@@ -43,6 +43,16 @@
   box-sizing: border-box;
 }
 
+/*
+ * Author rules that assign a layout mode (for example `display: grid`) can
+ * otherwise override the browser's built-in `[hidden]` rule. Keep hidden UI
+ * out of both the visual layout and pointer interaction regardless of the
+ * component's normal display mode.
+ */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #app {

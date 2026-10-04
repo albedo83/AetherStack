@@ -366,6 +366,18 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-high-fraction]",
     ),
+    registeredStackLowSigma: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-low-sigma]",
+    ),
+    registeredStackHighSigma: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-high-sigma]",
+    ),
+    registeredStackMaximumIterations: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-maximum-iterations]",
+    ),
     registeredStackMinimumRetained: required<HTMLInputElement>(
       root,
       "[data-registered-stack-minimum-retained]",
@@ -1216,6 +1228,9 @@ export function mountReviewScreen(
       target === elements.registeredStackEstimator ||
       target === elements.registeredStackLowFraction ||
       target === elements.registeredStackHighFraction ||
+      target === elements.registeredStackLowSigma ||
+      target === elements.registeredStackHighSigma ||
+      target === elements.registeredStackMaximumIterations ||
       target === elements.registeredStackMinimumRetained ||
       target === elements.registeredStackRejectionMaps ||
       target === elements.registeredStackWeightReference
@@ -2575,6 +2590,9 @@ interface RegistrationElements {
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
   readonly registeredStackHighFraction: HTMLInputElement;
+  readonly registeredStackLowSigma: HTMLInputElement;
+  readonly registeredStackHighSigma: HTMLInputElement;
+  readonly registeredStackMaximumIterations: HTMLInputElement;
   readonly registeredStackMinimumRetained: HTMLInputElement;
   readonly registeredStackRejectionMaps: HTMLInputElement;
   readonly registeredStackEstimatorLabel: HTMLElement;
@@ -2936,11 +2954,17 @@ function renderRegistration(
     : "Close archived report";
   const previewResult = reportIsExternal ? null : integrationReport;
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
+  const sigmaEstimator = stackSettings.estimator === "sigma_clipped";
   const medianEstimator = stackSettings.estimator === "median";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
   elements.registeredStackHighFraction.value = String(
     stackSettings.highFraction,
+  );
+  elements.registeredStackLowSigma.value = String(stackSettings.lowSigma);
+  elements.registeredStackHighSigma.value = String(stackSettings.highSigma);
+  elements.registeredStackMaximumIterations.value = String(
+    stackSettings.maximumIterations,
   );
   elements.registeredStackMinimumRetained.value = String(
     stackSettings.minimumRetainedSamples,
@@ -2952,17 +2976,45 @@ function renderRegistration(
     stackBusy || !rejectionEstimator;
   elements.registeredStackHighFraction.disabled =
     stackBusy || !rejectionEstimator;
+  elements.registeredStackLowSigma.disabled = stackBusy || !sigmaEstimator;
+  elements.registeredStackHighSigma.disabled = stackBusy || !sigmaEstimator;
+  elements.registeredStackMaximumIterations.disabled =
+    stackBusy || !sigmaEstimator;
   elements.registeredStackMinimumRetained.disabled =
-    stackBusy || !rejectionEstimator;
+    stackBusy || (!rejectionEstimator && !sigmaEstimator);
   elements.registeredStackRejectionMaps.disabled =
-    stackBusy || !rejectionEstimator;
+    stackBusy || (!rejectionEstimator && !sigmaEstimator);
+  setControlFieldVisibility(
+    elements.registeredStackLowFraction,
+    rejectionEstimator,
+  );
+  setControlFieldVisibility(
+    elements.registeredStackHighFraction,
+    rejectionEstimator,
+  );
+  setControlFieldVisibility(elements.registeredStackLowSigma, sigmaEstimator);
+  setControlFieldVisibility(elements.registeredStackHighSigma, sigmaEstimator);
+  setControlFieldVisibility(
+    elements.registeredStackMaximumIterations,
+    sigmaEstimator,
+  );
+  setControlFieldVisibility(
+    elements.registeredStackMinimumRetained,
+    rejectionEstimator || sigmaEstimator,
+  );
+  const mapToggle = elements.registeredStackRejectionMaps.closest<HTMLElement>(
+    ".registered-stack__map-toggle",
+  );
+  if (mapToggle) mapToggle.hidden = !rejectionEstimator && !sigmaEstimator;
   elements.registeredStackEstimatorLabel.textContent = weightedEstimator
     ? "BALANCED PSF WEIGHT"
     : rejectionEstimator
       ? "PERCENTILE F64"
-      : medianEstimator
-        ? "EXACT F64 MEDIAN"
-        : "STRICT F64 MEAN";
+      : sigmaEstimator
+        ? "ITERATIVE SIGMA F64"
+        : medianEstimator
+          ? "EXACT F64 MEDIAN"
+          : "STRICT F64 MEAN";
   elements.registeredStackWeightPreflight.hidden = !weightedEstimator;
   elements.registeredStackWeightPreflight.dataset.ready = String(
     weightPreflight.ready,
@@ -3411,12 +3463,23 @@ function renderRegisteredResult(
   }
 }
 
+function setControlFieldVisibility(
+  input: HTMLInputElement,
+  visible: boolean,
+): void {
+  const field = input.closest<HTMLElement>(".control-field");
+  if (field) field.hidden = !visible;
+}
+
 function registeredStackSettings(
   elements: Pick<
     RegistrationElements,
     | "registeredStackEstimator"
     | "registeredStackLowFraction"
     | "registeredStackHighFraction"
+    | "registeredStackLowSigma"
+    | "registeredStackHighSigma"
+    | "registeredStackMaximumIterations"
     | "registeredStackMinimumRetained"
     | "registeredStackRejectionMaps"
     | "registeredStackWeightReference"
@@ -3427,12 +3490,17 @@ function registeredStackSettings(
     estimator !== "strict_mean" &&
     estimator !== "median" &&
     estimator !== "weighted_mean" &&
-    estimator !== "percentile_clipped"
+    estimator !== "percentile_clipped" &&
+    estimator !== "sigma_clipped"
   ) {
     return null;
   }
   const lowFraction = elements.registeredStackLowFraction.valueAsNumber;
   const highFraction = elements.registeredStackHighFraction.valueAsNumber;
+  const lowSigma = elements.registeredStackLowSigma.valueAsNumber;
+  const highSigma = elements.registeredStackHighSigma.valueAsNumber;
+  const maximumIterations =
+    elements.registeredStackMaximumIterations.valueAsNumber;
   const minimumRetainedSamples =
     elements.registeredStackMinimumRetained.valueAsNumber;
   if (
@@ -3443,6 +3511,13 @@ function registeredStackSettings(
     highFraction < 0 ||
     highFraction >= 1 ||
     lowFraction + highFraction >= 1 ||
+    !Number.isFinite(lowSigma) ||
+    lowSigma <= 0 ||
+    !Number.isFinite(highSigma) ||
+    highSigma <= 0 ||
+    !Number.isSafeInteger(maximumIterations) ||
+    maximumIterations < 1 ||
+    maximumIterations > 4_294_967_295 ||
     !Number.isSafeInteger(minimumRetainedSamples) ||
     minimumRetainedSamples < 1 ||
     minimumRetainedSamples > 4_294_967_295
@@ -3455,9 +3530,12 @@ function registeredStackSettings(
       elements.registeredStackWeightReference.value || null,
     lowFraction,
     highFraction,
+    lowSigma,
+    highSigma,
+    maximumIterations,
     minimumRetainedSamples,
     generateRejectionMaps:
-      estimator === "percentile_clipped" &&
+      (estimator === "percentile_clipped" || estimator === "sigma_clipped") &&
       elements.registeredStackRejectionMaps.checked,
   };
 }
@@ -3473,7 +3551,12 @@ function formatRelativeWeight(value: number | null): string {
 }
 
 function formatEstimatorName(
-  estimator: "strict_mean" | "median" | "weighted_mean" | "percentile_clipped",
+  estimator:
+    | "strict_mean"
+    | "median"
+    | "weighted_mean"
+    | "percentile_clipped"
+    | "sigma_clipped",
 ): string {
   switch (estimator) {
     case "strict_mean":
@@ -3484,6 +3567,8 @@ function formatEstimatorName(
       return "balanced PSF weight";
     case "percentile_clipped":
       return "percentile clipped";
+    case "sigma_clipped":
+      return "iterative sigma clipped";
   }
 }
 
@@ -4511,13 +4596,14 @@ function shellMarkup(): string {
                           <option value="median">Exact median</option>
                           <option value="weighted_mean">Balanced PSF weighting</option>
                           <option value="percentile_clipped">Percentile-clipped mean</option>
+                          <option value="sigma_clipped">Iterative sigma clipping</option>
                         </select>
                       </label>
                       <label class="control-field">
                         <span>Low-tail fraction</span>
                         <span class="instrument-stepper" data-stepper>
                           <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease low-tail fraction">−</button>
-                          <input data-registered-stack-low-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                          <input data-registered-stack-low-fraction aria-label="Low-tail fraction" type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
                           <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase low-tail fraction">+</button>
                         </span>
                       </label>
@@ -4525,15 +4611,39 @@ function shellMarkup(): string {
                         <span>High-tail fraction</span>
                         <span class="instrument-stepper" data-stepper>
                           <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease high-tail fraction">−</button>
-                          <input data-registered-stack-high-fraction type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
+                          <input data-registered-stack-high-fraction aria-label="High-tail fraction" type="number" min="0" max="0.49" step="0.01" inputmode="decimal" />
                           <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase high-tail fraction">+</button>
+                        </span>
+                      </label>
+                      <label class="control-field">
+                        <span>Low sigma</span>
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease low sigma">−</button>
+                          <input data-registered-stack-low-sigma aria-label="Low sigma" type="number" min="0.1" step="0.1" inputmode="decimal" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase low sigma">+</button>
+                        </span>
+                      </label>
+                      <label class="control-field">
+                        <span>High sigma</span>
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease high sigma">−</button>
+                          <input data-registered-stack-high-sigma aria-label="High sigma" type="number" min="0.1" step="0.1" inputmode="decimal" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase high sigma">+</button>
+                        </span>
+                      </label>
+                      <label class="control-field">
+                        <span>Maximum clipping passes</span>
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease maximum clipping passes">−</button>
+                          <input data-registered-stack-maximum-iterations aria-label="Maximum clipping passes" type="number" min="1" max="4294967295" step="1" inputmode="numeric" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase maximum clipping passes">+</button>
                         </span>
                       </label>
                       <label class="control-field">
                         <span>Minimum retained samples</span>
                         <span class="instrument-stepper" data-stepper>
                           <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease minimum retained samples">−</button>
-                          <input data-registered-stack-minimum-retained type="number" min="1" max="4294967295" step="1" inputmode="numeric" />
+                          <input data-registered-stack-minimum-retained aria-label="Minimum retained samples" type="number" min="1" max="4294967295" step="1" inputmode="numeric" />
                           <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase minimum retained samples">+</button>
                         </span>
                       </label>
@@ -4566,7 +4676,7 @@ function shellMarkup(): string {
                         </table>
                       </div>
                     </section>
-                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights and is recomputed natively. Percentile clipping records masked, non-finite and rejected samples separately.</p>
+                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile and iterative sigma clipping publish exact low/high rejection evidence.</p>
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>

@@ -1229,6 +1229,9 @@ describe("frame review workspace", () => {
             weightReferenceFrameId: null,
             lowFraction: 0.12,
             highFraction: 0.08,
+            lowSigma: 4,
+            highSigma: 3,
+            maximumIterations: 8,
             minimumRetainedSamples: 5,
             generateRejectionMaps: false,
           },
@@ -1254,6 +1257,9 @@ describe("frame review workspace", () => {
       weightReferenceFrameId: null,
       lowFraction: 0.12,
       highFraction: 0.08,
+      lowSigma: 4,
+      highSigma: 3,
+      maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: true,
     });
@@ -1266,6 +1272,9 @@ describe("frame review workspace", () => {
       weightReferenceFrameId: null,
       lowFraction: 0.13,
       highFraction: 0.08,
+      lowSigma: 4,
+      highSigma: 3,
+      maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: true,
     });
@@ -1276,6 +1285,9 @@ describe("frame review workspace", () => {
       weightReferenceFrameId: null,
       lowFraction: 0.13,
       highFraction: 0.08,
+      lowSigma: 4,
+      highSigma: 3,
+      maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: false,
     });
@@ -1294,11 +1306,49 @@ describe("frame review workspace", () => {
       },
     });
     expect(
-      getByRole<HTMLButtonElement>(root, "button", {
-        name: "Increase low-tail fraction",
-      }).disabled,
+      root
+        .querySelector<HTMLInputElement>("[data-registered-stack-low-fraction]")
+        ?.closest<HTMLElement>(".control-field")?.hidden,
     ).toBe(true);
     expect(root.textContent).toContain("EXACT F64 MEDIAN");
+
+    controller.update({
+      ...advanced,
+      registration: {
+        ...advanced.registration,
+        stack: {
+          ...advanced.registration.stack,
+          settings: {
+            ...advanced.registration.stack.settings,
+            estimator: "sigma_clipped",
+          },
+        },
+      },
+    });
+    expect(
+      getByRole<HTMLInputElement>(root, "spinbutton", { name: "Low sigma" })
+        .disabled,
+    ).toBe(false);
+    const hiddenLowFraction = root.querySelector<HTMLInputElement>(
+      "[data-registered-stack-low-fraction]",
+    );
+    expect(hiddenLowFraction?.disabled).toBe(true);
+    expect(
+      hiddenLowFraction?.closest<HTMLElement>(".control-field")?.hidden,
+    ).toBe(true);
+    expect(root.textContent).toContain("ITERATIVE SIGMA F64");
+    fireEvent.click(getByRole(root, "button", { name: "Increase low sigma" }));
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "sigma_clipped",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 4.1,
+      highSigma: 3,
+      maximumIterations: 8,
+      minimumRetainedSamples: 5,
+      generateRejectionMaps: false,
+    });
   });
 
   it("presents a natively verified report without claiming an active stack", () => {
