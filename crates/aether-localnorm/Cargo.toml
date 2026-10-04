@@ -9,5 +9,8 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+aether-core = { path = "../aether-core" }
+
 [lints]
 workspace = true

@@ -1,11 +1,18 @@
 //! Deterministic robust primitives for local photometric normalization.
 //!
-//! This crate starts with the strict per-cell oracle. Spatial sampling,
-//! protected-source masks, surface regularization, and FITS orchestration remain
+//! Deterministic masked grid sampling feeds a strict per-cell oracle. Protected
+//! source detection, surface regularization, and FITS orchestration remain
 //! separate layers so none of them can silently change the fitted statistic.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+
+mod sampling;
+
+pub use sampling::{
+    CELL_SAMPLING_ALGORITHM_ID, CellBounds, CellSamplingEvidence, LocalCellSamples, SamplingError,
+    SamplingGridParameters, SpatialSample, sample_local_grid,
+};
 
 /// Stable identity of the first bounded Theil-Sen local affine fit.
 pub const LOCAL_AFFINE_FIT_ALGORITHM_ID: &str = "local-theil-sen-affine-f64-v1";

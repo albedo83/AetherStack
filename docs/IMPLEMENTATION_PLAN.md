@@ -1797,6 +1797,11 @@ safety reasoning. They do not narrate obvious syntax.
      extreme pair differences, expose median absolute residual evidence, and
      reject degenerate or near-zero-scale cells explicitly. Spatial sampling and
      surface regularization remain separate next-stage contracts.
+155. Add deterministic masked grid sampling for local normalization. Edge-clipped
+     row-major cells retain bounded coordinate-priority samples while classifying
+     every pixel exactly once as protected, source-masked, reference-masked,
+     non-finite, or eligible. Dimension, plane, cell-count, and allocation errors
+     fail closed before returning partial grid evidence.
 
 ## 11. Stable-release definition
 

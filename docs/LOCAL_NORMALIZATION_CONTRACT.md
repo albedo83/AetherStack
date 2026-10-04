@@ -28,6 +28,23 @@ absolute residual. A configured lower bound on `abs(scale)` rejects locally
 flat or ill-conditioned solutions before they can amplify noise. Applying a
 model rejects non-finite input and output instead of clipping either value.
 
+## Masked spatial sampling
+
+`local-cell-priority-sampling-f64-v1` partitions a selected registered plane
+into a row-major grid with edge-clipped cells. Source, reference, and optional
+protected-region masks must have identical dimensions. Every pixel is assigned
+to exactly one category using a fixed precedence: protected region, source
+quality mask, reference quality mask, non-finite pair, or eligible pair. This
+accounting makes sparse or contaminated cells visible instead of silently
+changing their estimator support.
+
+Each cell retains at most the configured number of eligible pairs. Selection
+uses a stable coordinate-derived priority and the retained coordinates are
+returned in canonical row-major order. Repeated runs and different scan timing
+therefore produce identical samples without allocating storage proportional to
+the full cell. The cell count and retained samples per cell both have explicit
+pre-allocation limits.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of
@@ -35,7 +52,7 @@ pairwise slopes. Work that exceeds any bound fails before allocating scratch
 storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
-The current contract is deliberately a per-cell oracle. Grid sampling,
-protected-source masks, surface regularization, interpolation, full-frame
-application, provenance, and bounded FITS publication remain subsequent
-milestones and must not alter this estimator silently.
+The current contract covers sampling and the per-cell oracle. Detection or
+construction of protected-source masks, surface regularization, interpolation,
+full-frame application, provenance, and bounded FITS publication remain
+subsequent milestones and must not alter either algorithm silently.
