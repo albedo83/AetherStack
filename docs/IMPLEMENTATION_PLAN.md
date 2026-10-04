@@ -1613,6 +1613,16 @@ safety reasoning. They do not narrate obvious syntax.
      oracle bit for bit across multiple band heights, planes, masks, boundary
      loss, and non-finite evidence. Automatic projective model selection remains
      disabled pending an explicit scientific acceptance policy.
+131. Encode the first conservative projective recommendation policy as a pure,
+     versioned decision layer without changing executable plans. It requires at
+     least 20 common correspondences, five validation folds all favoring the
+     projective fit, at least 0.05 detection-pixel and 10% held-out RMS gain,
+     weakest-fold DLT rank separation of 0.01, held-out projective RMS no larger
+     than one detection pixel, no increase in worst residual, and at least 0.25
+     detection-pixel full-field model separation. Every gate is individually
+     inspectable; mismatched fitting and validation support fails closed. Tests
+     accept strong synthetic projective geometry and reject unnecessary affine
+     complexity. Runtime plan mutation remains a separate release gate.
 
 ## 11. Stable-release definition
 

@@ -40,7 +40,8 @@ cofactor calculations, and canonicalizes signed zero. A zero denominator at a
 mapped point is an explicit projective-horizon failure. Inversion uses the
 adjugate directly because determinant division is another irrelevant common
 scale and could overflow. The type is not yet admitted to production plans;
-estimation, confidence, footprint, and resampling must adopt it together.
+estimation, validation, bounded resampling, and recommendation are implemented
+as separately testable stages before that final runtime gate.
 
 `fit_projective` is the bounded estimation primitive for that future chain. It
 accepts between four and 16,384 preselected source/reference pairs and performs
@@ -52,8 +53,8 @@ largest; for the exact four-pair case, an explicit zero row obtains the complete
 right-singular basis without adding a constraint. The fit is denormalized,
 canonicalized as `ProjectiveTransform`, and accompanied by uncompromised
 compensated RMS, maximum residual, and rank-separation evidence. No clipping or
-consensus is hidden in this function. Consequently it is not yet eligible for
-registration plans or resampling publication.
+consensus is hidden in this function. Consequently the fit alone is not
+eligible for registration plans or publication.
 
 `compare_similarity_with_projective` keeps model adequacy distinct from model
 selection. On one caller-supplied robust correspondence set, it evaluates the
@@ -295,6 +296,18 @@ wins range from three to five. The weakest training-fold rank separation stays
 between 0.286 and 0.290. This is the expected distinction between descriptive
 fit and predictive evidence and provides no basis to select projective geometry
 for this session.
+
+`projective-selection-conservative-v1` converts the fitting and held-out blocks
+into a non-mutating recommendation. Its fixed defaults require at least 20
+common matches; at least five validation folds with five projective wins; at
+least 0.05 detection-pixel and 10% held-out RMS improvement; weakest-fold DLT
+rank separation of 0.01; projective held-out RMS no greater than one detection
+pixel; no increase in the worst held-out residual; and at least 0.25
+detection-pixel separation between models over the full field. Every predicate
+is exposed independently and fitting/validation support counts must agree.
+These intentionally conservative thresholds reject the complete ASI294MC
+validation session. The result remains advisory until plan geometry, footprint,
+runtime publication, and diagnostics are atomically upgraded together.
 
 ## Strict Lanczos-3 resampling oracle
 

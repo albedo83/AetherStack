@@ -11,6 +11,7 @@ mod footprint;
 mod geometry;
 mod matching;
 mod model_comparison;
+mod model_selection;
 mod model_validation;
 mod plan;
 mod projective;
@@ -52,6 +53,10 @@ pub use matching::{
 pub use model_comparison::{
     PROJECTIVE_ADEQUACY_ALGORITHM_ID, ProjectiveAdequacyError, ProjectiveAdequacyEvidence,
     compare_similarity_with_projective,
+};
+pub use model_selection::{
+    PROJECTIVE_SELECTION_ALGORITHM_ID, ProjectiveSelectionDecision, ProjectiveSelectionError,
+    ProjectiveSelectionPolicy, evaluate_projective_selection,
 };
 pub use model_validation::{
     MAX_PROJECTIVE_VALIDATION_FOLDS, PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID,
