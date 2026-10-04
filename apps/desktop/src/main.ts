@@ -1462,8 +1462,11 @@ async function executeStack(): Promise<void> {
             ? "Integrating the sealed common crop with strict F64 mean…"
             : settings.estimator === "median"
               ? "Integrating the sealed common crop with exact F64 median…"
-              : settings.estimator === "sigma_clipped"
-                ? "Integrating with deterministic iterative sigma rejection…"
+              : settings.estimator === "sigma_clipped" ||
+                  settings.estimator === "winsorized_sigma_clipped"
+                ? settings.estimator === "winsorized_sigma_clipped"
+                  ? "Integrating with deterministic Winsorized sigma rejection…"
+                  : "Integrating with deterministic iterative sigma rejection…"
                 : settings.estimator === "weighted_mean"
                   ? "Integrating with identity-bound balanced PSF weights…"
                   : "Integrating with deterministic percentile rejection…",

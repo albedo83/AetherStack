@@ -114,7 +114,9 @@ The bounded registered runtime publishes this estimator as
 domain tag even when the numeric controls match ordinary sigma clipping. Tests
 prove the less-aggressive retained support, separate parameter identity,
 verified checksums, and byte-identical science and rejection products across
-band heights. Desktop and sealed-report exposure remain the next boundary.
+band heights. The desktop exposes `winsorized_sigma_clipped` beside ordinary
+sigma clipping, reuses the validated asymmetric controls, and seals the
+distinct estimator identity into new and archived integration reports.
 
 ## Frame-weighted mean
 

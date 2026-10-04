@@ -2954,7 +2954,11 @@ function renderRegistration(
     : "Close archived report";
   const previewResult = reportIsExternal ? null : integrationReport;
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
-  const sigmaEstimator = stackSettings.estimator === "sigma_clipped";
+  const sigmaEstimator =
+    stackSettings.estimator === "sigma_clipped" ||
+    stackSettings.estimator === "winsorized_sigma_clipped";
+  const winsorizedSigmaEstimator =
+    stackSettings.estimator === "winsorized_sigma_clipped";
   const medianEstimator = stackSettings.estimator === "median";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
@@ -3010,11 +3014,13 @@ function renderRegistration(
     ? "BALANCED PSF WEIGHT"
     : rejectionEstimator
       ? "PERCENTILE F64"
-      : sigmaEstimator
-        ? "ITERATIVE SIGMA F64"
-        : medianEstimator
-          ? "EXACT F64 MEDIAN"
-          : "STRICT F64 MEAN";
+      : winsorizedSigmaEstimator
+        ? "WINSORIZED SIGMA F64"
+        : sigmaEstimator
+          ? "ITERATIVE SIGMA F64"
+          : medianEstimator
+            ? "EXACT F64 MEDIAN"
+            : "STRICT F64 MEAN";
   elements.registeredStackWeightPreflight.hidden = !weightedEstimator;
   elements.registeredStackWeightPreflight.dataset.ready = String(
     weightPreflight.ready,
@@ -3491,7 +3497,8 @@ function registeredStackSettings(
     estimator !== "median" &&
     estimator !== "weighted_mean" &&
     estimator !== "percentile_clipped" &&
-    estimator !== "sigma_clipped"
+    estimator !== "sigma_clipped" &&
+    estimator !== "winsorized_sigma_clipped"
   ) {
     return null;
   }
@@ -3535,7 +3542,9 @@ function registeredStackSettings(
     maximumIterations,
     minimumRetainedSamples,
     generateRejectionMaps:
-      (estimator === "percentile_clipped" || estimator === "sigma_clipped") &&
+      (estimator === "percentile_clipped" ||
+        estimator === "sigma_clipped" ||
+        estimator === "winsorized_sigma_clipped") &&
       elements.registeredStackRejectionMaps.checked,
   };
 }
@@ -3556,7 +3565,8 @@ function formatEstimatorName(
     | "median"
     | "weighted_mean"
     | "percentile_clipped"
-    | "sigma_clipped",
+    | "sigma_clipped"
+    | "winsorized_sigma_clipped",
 ): string {
   switch (estimator) {
     case "strict_mean":
@@ -3569,6 +3579,8 @@ function formatEstimatorName(
       return "percentile clipped";
     case "sigma_clipped":
       return "iterative sigma clipped";
+    case "winsorized_sigma_clipped":
+      return "Winsorized sigma clipped";
   }
 }
 
@@ -4597,6 +4609,7 @@ function shellMarkup(): string {
                           <option value="weighted_mean">Balanced PSF weighting</option>
                           <option value="percentile_clipped">Percentile-clipped mean</option>
                           <option value="sigma_clipped">Iterative sigma clipping</option>
+                          <option value="winsorized_sigma_clipped">Winsorized sigma</option>
                         </select>
                       </label>
                       <label class="control-field">
@@ -4676,7 +4689,7 @@ function shellMarkup(): string {
                         </table>
                       </div>
                     </section>
-                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile and iterative sigma clipping publish exact low/high rejection evidence.</p>
+                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile, sigma, and Winsorized sigma estimators publish exact low/high rejection evidence.</p>
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>

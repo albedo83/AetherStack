@@ -1349,6 +1349,37 @@ describe("frame review workspace", () => {
       minimumRetainedSamples: 5,
       generateRejectionMaps: false,
     });
+
+    controller.update({
+      ...advanced,
+      registration: {
+        ...advanced.registration,
+        stack: {
+          ...advanced.registration.stack,
+          settings: {
+            ...advanced.registration.stack.settings,
+            estimator: "winsorized_sigma_clipped",
+          },
+        },
+      },
+    });
+    expect(root.textContent).toContain("WINSORIZED SIGMA F64");
+    expect(
+      getByRole<HTMLInputElement>(root, "spinbutton", { name: "Low sigma" })
+        .disabled,
+    ).toBe(false);
+    fireEvent.click(getByRole(root, "button", { name: "Increase high sigma" }));
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "winsorized_sigma_clipped",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 4,
+      highSigma: 3.1,
+      maximumIterations: 8,
+      minimumRetainedSamples: 5,
+      generateRejectionMaps: false,
+    });
   });
 
   it("presents a natively verified report without claiming an active stack", () => {

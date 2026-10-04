@@ -1785,6 +1785,12 @@ safety reasoning. They do not narrate obvious syntax.
      Tests lock retained support, asymmetric evidence, the support floor,
      checksums, and byte identity across band heights. Desktop exposure remains
      next.
+153. Expose Winsorized sigma clipping through the desktop and sealed report
+     contract. The advanced selector reuses the asymmetric sigma, pass, support,
+     and rejection-map controls but displays an unmistakable estimator label.
+     Native mapping preserves the distinct science and map provenance identities;
+     wire-identity and browser interaction tests prevent accidental fallback to
+     ordinary sigma clipping.
 
 ## 11. Stable-release definition
 

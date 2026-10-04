@@ -53,11 +53,13 @@ use aether_runtime::{
     LightPlanExecutionRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
     ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
-    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
+    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
     RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
-    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters, run_calibrated_light_plan,
+    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
+    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, run_calibrated_light_plan,
     run_demosaiced_light_plan, run_light_plan, run_master_plan, run_projective_registration_plan,
     run_registered_stack, run_registration_plan,
 };
@@ -343,6 +345,7 @@ enum RegisteredStackEstimatorInput {
     WeightedMean,
     PercentileClipped,
     SigmaClipped,
+    WinsorizedSigmaClipped,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2784,6 +2787,7 @@ where
         integration.estimator,
         RegisteredStackEstimatorInput::PercentileClipped
             | RegisteredStackEstimatorInput::SigmaClipped
+            | RegisteredStackEstimatorInput::WinsorizedSigmaClipped
     ) && integration.generate_rejection_maps
     {
         return Err(registered_stack_configuration_error());
@@ -2811,6 +2815,17 @@ where
             )
             .map_err(|_| registered_stack_configuration_error())?,
         ),
+        RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
+            RegisteredStackEstimator::WinsorizedSigmaClipped(
+                SigmaClipParameters::new(
+                    integration.low_sigma,
+                    integration.high_sigma,
+                    integration.maximum_iterations,
+                    integration.minimum_retained_samples,
+                )
+                .map_err(|_| registered_stack_configuration_error())?,
+            )
+        }
     };
     let plan = match request.planning.geometry_model {
         RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
@@ -2999,6 +3014,9 @@ where
                 PERCENTILE_REJECTION_MAP_ALGORITHM_ID
             }
             RegisteredStackEstimatorInput::SigmaClipped => SIGMA_REJECTION_MAP_ALGORITHM_ID,
+            RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
+                WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID
+            }
             RegisteredStackEstimatorInput::StrictMean
             | RegisteredStackEstimatorInput::Median
             | RegisteredStackEstimatorInput::WeightedMean => {
@@ -3838,6 +3856,9 @@ const fn registered_stack_estimator_algorithm_id(
         }
         RegisteredStackEstimatorInput::Median => aether_runtime::REGISTERED_MEDIAN_ALGORITHM_ID,
         RegisteredStackEstimatorInput::SigmaClipped => REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+        RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
+            REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+        }
     }
 }
 
@@ -7405,6 +7426,16 @@ mod tests {
         assert_eq!(
             registered_stack_estimator_algorithm_id(RegisteredStackEstimatorInput::SigmaClipped),
             REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+        );
+        assert_eq!(
+            serde_json::to_string(&RegisteredStackEstimatorInput::WinsorizedSigmaClipped)?,
+            "\"winsorized_sigma_clipped\""
+        );
+        assert_eq!(
+            registered_stack_estimator_algorithm_id(
+                RegisteredStackEstimatorInput::WinsorizedSigmaClipped
+            ),
+            REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
         );
         let legacy: RegisteredStackIntegrationSettings = serde_json::from_str(
             r#"{"estimator":"strict_mean","lowFraction":0.1,"highFraction":0.1,"minimumRetainedSamples":3,"generateRejectionMaps":false}"#,

@@ -183,7 +183,8 @@ export interface RegisteredStackIntegrationSettings {
     | "median"
     | "weighted_mean"
     | "percentile_clipped"
-    | "sigma_clipped";
+    | "sigma_clipped"
+    | "winsorized_sigma_clipped";
   readonly weightReferenceFrameId: string | null;
   readonly lowFraction: number;
   readonly highFraction: number;
