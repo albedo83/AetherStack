@@ -3,11 +3,11 @@
 ## Purpose
 
 `aether-registration-bench` measures the strict scalar Lanczos-3 reference
-implementation for both affine and projective geometry. It is an opt-in
-engineering tool for tracking throughput while numerical behavior remains the
-primary contract. It performs no FITS decoding or filesystem I/O, so results
-isolate image allocation, inverse mapping, support evaluation, interpolation,
-and mask production.
+implementation and the bounded band executor for both affine and projective
+geometry. It is an opt-in engineering tool for tracking throughput while
+numerical behavior remains the primary contract. It performs no FITS decoding
+or filesystem I/O, so results isolate image allocation, inverse mapping, support
+evaluation, interpolation, and mask production.
 
 This is not an end-to-end registration benchmark. FITS reads, fingerprinting,
 transaction staging, checksum readback, and publication must be measured
@@ -24,9 +24,12 @@ covering representative astronomy sensors.
 Each reported duration contains only the resampling call. Source generation and
 output sealing occur outside the timed interval. Throughput is reported as
 output megapixels per second, where a pixel in each plane counts as one sample.
-Each geometry performs one untimed, sealed warm-up first, then reports every
-timed pass and their median. The warm-up output is also the comparison baseline,
-so a difference between warm and timed execution fails the run.
+Each complete-image and banded geometry performs one untimed, sealed warm-up
+first, then reports every timed pass and their median. The warm-up output is also
+the comparison baseline, so a difference between warm and timed execution fails
+the run. Band sealing happens outside the timed intervals. Its traversal-order
+seal is stable for a configured band height; bit-level independence across band
+heights remains enforced by the registration differential tests.
 
 ## Usage
 
@@ -34,14 +37,14 @@ Always use an optimized build:
 
 ```shell
 cargo run --release -p aether-inspect --bin aether-registration-bench -- \
-  --width 4144 --height 2822 --planes 3 --passes 5
+  --width 4144 --height 2822 --planes 3 --passes 5 --band-height 64
 ```
 
-Defaults are 1,024 × 768, one plane, and three passes. The affine and projective
-runs use nearly identical transforms; the projective run adds mild finite
-perspective terms. Results are machine-specific evidence, not portable release
-thresholds. Record the CPU, compiler, power mode, dimensions, plane count, and
-per-pass values when comparing revisions.
+Defaults are 1,024 × 768, one plane, three passes, and 64 rows per band. The
+affine and projective runs use nearly identical transforms; the projective run
+adds mild finite perspective terms. Results are machine-specific evidence, not
+portable release thresholds. Record the CPU, compiler, power mode, dimensions,
+plane count, band height, and per-pass values when comparing revisions.
 
 ## Development measurement
 

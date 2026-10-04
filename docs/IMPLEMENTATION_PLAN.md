@@ -1726,6 +1726,12 @@ safety reasoning. They do not narrate obvious syntax.
      noise. Each geometry now performs one untimed sealed warm-up, verifies every
      timed output against that baseline, reports individual passes, and computes
      an order-independent median. Unit tests cover odd and even pass counts.
+145. Extend the registration benchmark to the bounded affine and projective band
+     executors used by streaming workflows. A bounded `--band-height` option
+     drives complete top-to-bottom traversals. Resampling calls alone contribute
+     to elapsed time; output sealing happens between calls and detects drift from
+     the untimed warm-up. The existing differential suite remains responsible for
+     bit-level equivalence across different band heights.
 
 ## 11. Stable-release definition
 
