@@ -1739,6 +1739,13 @@ safety reasoning. They do not narrate obvious syntax.
      estimator retains exact accepted, masked, and non-finite accounting and
      reuses one fallibly reserved per-pixel scratch vector. Bounded FITS runtime
      publication and UI exposure remain the next provenance boundary.
+147. Admit exact median integration to the bounded registered-stack runtime as
+     `registered-median-f64-v1`. Both affine and projective plans use the same
+     sealed common-crop executor, checksum readback, source revalidation, and
+     atomic create-new publication as existing estimators. Logical memory now
+     includes one reusable rank scratch scalar per source. A FITS regression
+     proves exact pixels and byte-identical products across band heights. Desktop
+     selection and sealed report decoding remain next.
 
 ## 11. Stable-release definition
 

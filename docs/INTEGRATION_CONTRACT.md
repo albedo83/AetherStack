@@ -64,8 +64,13 @@ allocation failure is explicit. A pixel with no eligible value follows the same
 NaN, `MISSING`, retained-mask, and `INVALID` policy as mean integration. Tests
 cover odd and even populations, equal `f64::MAX` values, opposite finite
 extremes, masked and non-finite evidence, empty input, and dimension mismatch.
-Runtime FITS orchestration and desktop selection remain a separate transaction
-and provenance boundary.
+The registered-stack runtime exposes this estimator as
+`registered-median-f64-v1`. It processes the exact sealed affine or projective
+common crop in bounded bands, reserves the reusable per-pixel rank scratch, and
+publishes one checksum-verified binary64 FITS product with the distinct
+estimator identity. Tests require exact median pixels and byte-identical output
+across band heights. Desktop selection and report-schema exposure remain the
+next provenance boundary.
 
 ## Frame-weighted mean
 

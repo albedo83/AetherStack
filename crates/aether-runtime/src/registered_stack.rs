@@ -17,7 +17,7 @@ pub use aether_integration::{
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
-    integrate_mean, integrate_percentile_clipped_mean, integrate_weighted_mean,
+    integrate_mean, integrate_median, integrate_percentile_clipped_mean, integrate_weighted_mean,
     materialize_percentile_rejection_map,
 };
 use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
@@ -37,6 +37,8 @@ pub const REGISTERED_CROP_MEAN_ALGORITHM_ID: &str = "registered-crop-mean-v1";
 pub const REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-percentile-mean-v1";
 /// Versioned deterministic frame-weighted registered stack identity.
 pub const REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID: &str = "registered-weighted-mean-v1";
+/// Versioned deterministic finite-sample median registered stack identity.
+pub const REGISTERED_MEDIAN_ALGORITHM_ID: &str = "registered-median-f64-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -46,6 +48,8 @@ const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
 pub enum RegisteredStackEstimator {
     /// Strict unweighted mean of every usable sample.
     StrictMean,
+    /// Exact median of every usable sample.
+    Median,
     /// Strict weighted mean with a separately bound canonical weight set.
     WeightedMean,
     /// Sorted low/high percentile rejection followed by the strict mean.
@@ -58,6 +62,7 @@ impl RegisteredStackEstimator {
     pub const fn algorithm_id(self) -> &'static str {
         match self {
             Self::StrictMean => REGISTERED_CROP_MEAN_ALGORITHM_ID,
+            Self::Median => REGISTERED_MEDIAN_ALGORITHM_ID,
             Self::WeightedMean => REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
             Self::PercentileClipped(_) => REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
         }
@@ -1121,6 +1126,14 @@ where
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
                 }
+                RegisteredStackEstimator::Median => {
+                    let references = images.iter().collect::<Vec<_>>();
+                    let integrated =
+                        integrate_median(&references).map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                }
                 RegisteredStackEstimator::WeightedMean => {
                     let weights = request
                         .weights
@@ -1354,9 +1367,9 @@ fn planned_band_bytes(
         .checked_mul(source_count)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
     let support_size = match estimator {
-        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => {
-            size_of::<PixelSupport>()
-        }
+        RegisteredStackEstimator::StrictMean
+        | RegisteredStackEstimator::Median
+        | RegisteredStackEstimator::WeightedMean => size_of::<PixelSupport>(),
         RegisteredStackEstimator::PercentileClipped(_) => size_of::<ClippedPixelSupport>(),
     };
     let output = image
@@ -1373,7 +1386,9 @@ fn planned_band_bytes(
         RegisteredStackEstimator::WeightedMean => {
             size_of::<(&aether_core::ScientificImage, FrameWeight)>()
         }
-        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::PercentileClipped(_) => {
+        RegisteredStackEstimator::StrictMean
+        | RegisteredStackEstimator::Median
+        | RegisteredStackEstimator::PercentileClipped(_) => {
             size_of::<&aether_core::ScientificImage>()
         }
     };
@@ -1382,9 +1397,11 @@ fn planned_band_bytes(
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
     let estimator_scratch = match estimator {
         RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => 0,
-        RegisteredStackEstimator::PercentileClipped(_) => source_count
-            .checked_mul(size_of::<f64>())
-            .ok_or(RegisteredStackError::WorkSizeOverflow)?,
+        RegisteredStackEstimator::Median | RegisteredStackEstimator::PercentileClipped(_) => {
+            source_count
+                .checked_mul(size_of::<f64>())
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?
+        }
     };
     let rejection_map_images = if rejection_maps {
         image
@@ -1687,6 +1704,91 @@ mod tests {
                     .pixels()
                     .iter()
                     .all(|value| value.to_bits() == 3.0_f64.to_bits())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn median_stack_is_exact_and_band_height_independent() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let identities = ['a', 'b', 'c']
+            .into_iter()
+            .map(id)
+            .collect::<Result<Vec<_>, _>>()?;
+        let plan = RegistrationPlan::new(
+            identities[0].clone(),
+            12,
+            10,
+            identities
+                .iter()
+                .cloned()
+                .map(|frame_id| {
+                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
+                })
+                .collect(),
+        )?;
+        let sources = identities
+            .into_iter()
+            .zip([100.0, 2.0, 7.0])
+            .map(|(frame_id, value)| registered_source(&directory, &plan, frame_id, value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-median-stack",
+            REGISTERED_MEDIAN_ALGORITHM_ID,
+            3,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let one_row_output = directory.0.join("median-one-row.fits");
+        let four_row_output = directory.0.join("median-four-rows.fits");
+        let one_row_request = RegisteredStackRequest::new_with_estimator(
+            plan.clone(),
+            sources.clone(),
+            one_row_output.clone(),
+            provenance.clone(),
+            RegisteredStackEstimator::Median,
+        )?
+        .with_band_height(1)?;
+        let four_row_request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            four_row_output.clone(),
+            provenance,
+            RegisteredStackEstimator::Median,
+        )?
+        .with_band_height(4)?;
+
+        let memory = MemoryBudget::new(2_000_000)?;
+        let result =
+            run_registered_stack(&one_row_request, &CancellationToken::new(), &memory, |_| {})?;
+        run_registered_stack(
+            &four_row_request,
+            &CancellationToken::new(),
+            &memory,
+            |_| {},
+        )?;
+
+        assert_eq!(fs::read(&one_row_output)?, fs::read(&four_row_output)?);
+        assert_eq!(
+            one_row_request.estimator(),
+            RegisteredStackEstimator::Median
+        );
+        let mut reader =
+            PrimaryImageReader::open(File::open(&one_row_output)?, HeaderReadOptions::default())?;
+        for plane in 0..result.dimensions().planes() {
+            let image = reader.read_region_image(ImageRegion::new(
+                u64::try_from(plane)?,
+                0,
+                0,
+                u64::try_from(result.dimensions().width())?,
+                u64::try_from(result.dimensions().height())?,
+            ))?;
+            assert!(
+                image
+                    .pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == 7.0_f64.to_bits())
             );
         }
         Ok(())
