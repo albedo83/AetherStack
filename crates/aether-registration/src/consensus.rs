@@ -315,6 +315,29 @@ impl SimilarityConsensus {
         &self.inlier_feature_pairs
     }
 
+    /// Resolves the retained rank pairs to their measured source/reference points.
+    ///
+    /// Catalog identities are revalidated before any rank is dereferenced. This
+    /// makes the returned correspondences safe to pass to independent model-fit
+    /// diagnostics without duplicating rank-resolution logic in callers.
+    pub fn resolve_inlier_matches(
+        &self,
+        source_features: &FeatureCatalog,
+        reference_features: &FeatureCatalog,
+    ) -> Result<Vec<RegistrationMatch>, SimilarityConsensusError> {
+        if self.source_frame_id() != source_features.frame_id() {
+            return Err(SimilarityConsensusError::SourceFrameMismatch);
+        }
+        if self.reference_frame_id() != reference_features.frame_id() {
+            return Err(SimilarityConsensusError::ReferenceFrameMismatch);
+        }
+        resolve_feature_pairs(
+            source_features,
+            reference_features,
+            self.inlier_feature_pairs(),
+        )
+    }
+
     /// Strict residual summary over distinct inlier star correspondences.
     #[must_use]
     pub const fn residual_statistics(&self) -> ResidualStatistics {
@@ -1272,6 +1295,23 @@ mod tests {
         );
         assert!(consensus.inlier_hypothesis_indices().len() >= 2);
         assert_eq!(consensus.inlier_feature_pairs().len(), source_points.len());
+        let resolved = consensus.resolve_inlier_matches(&source, &reference)?;
+        assert_eq!(resolved.len(), source_points.len());
+        for correspondence in &resolved {
+            let expected = consensus.transform().apply(correspondence.source())?;
+            assert!(
+                (expected.x() - correspondence.reference().x()).abs() < 1.0e-11
+                    && (expected.y() - correspondence.reference().y()).abs() < 1.0e-11
+            );
+        }
+        assert!(matches!(
+            consensus.resolve_inlier_matches(&reference, &reference),
+            Err(SimilarityConsensusError::SourceFrameMismatch)
+        ));
+        assert!(matches!(
+            consensus.resolve_inlier_matches(&source, &source),
+            Err(SimilarityConsensusError::ReferenceFrameMismatch)
+        ));
         assert!(consensus.residual_statistics().maximum_pixels() < 1.0e-11);
         assert_eq!(consensus.statistics().outlier_hypotheses(), 0);
         Ok(())

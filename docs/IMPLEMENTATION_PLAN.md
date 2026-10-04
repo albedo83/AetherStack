@@ -1547,6 +1547,13 @@ safety reasoning. They do not narrate obvious syntax.
      an explicit complexity penalty and validation threshold from evidence
      instead of selecting the more flexible model merely because it fits its
      training points better.
+123. Expose identity-checked consensus correspondences for downstream model
+     diagnostics. `SimilarityConsensus::resolve_inlier_matches` revalidates both
+     feature-catalog identities and resolves the retained rank pairs through the
+     same bounded path used during fitting. Callers can therefore compare richer
+     models on the exact robust support without reconstructing or trusting rank
+     mappings independently. Unit coverage locks point fidelity and both frame-
+     identity failures.
 
 ## 11. Stable-release definition
 

@@ -66,6 +66,13 @@ degrees of freedom on the same points used for estimation will normally reduce
 residuals, so a production selector still requires an explicit complexity
 penalty, independent validation, and confidence thresholds.
 
+`SimilarityConsensus::resolve_inlier_matches` is the supported bridge from the
+rank-based consensus evidence to explicit measured correspondences. It first
+requires the exact source and reference `FrameId` values bound into the
+consensus, then resolves every retained pair against those catalogs. Downstream
+diagnostics must use this bridge rather than treating feature ranks as portable
+coordinates.
+
 ## Residual evidence
 
 A registration correspondence contains one measured source point and its
