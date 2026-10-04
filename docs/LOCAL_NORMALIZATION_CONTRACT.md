@@ -45,6 +45,13 @@ therefore produce identical samples without allocating storage proportional to
 the full cell. The cell count and retained samples per cell both have explicit
 pre-allocation limits.
 
+Grid fitting preserves this canonical cell order and emits one outcome per
+cell. A well-supported cell retains its affine coefficients and residual;
+sparse, degenerate, or unsafe cells retain the exact typed fit failure together
+with their sampling evidence. One rejected cell therefore cannot erase valid
+neighboring evidence or turn a partially supported surface into an apparently
+complete one.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of

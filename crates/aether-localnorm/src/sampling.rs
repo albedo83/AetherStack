@@ -4,7 +4,9 @@ use std::fmt::{Display, Formatter};
 
 use aether_core::{PixelMask, ScientificImage};
 
-use crate::{LocalFitError, NormalizationSample};
+use crate::{
+    LocalAffineFit, LocalFitError, LocalFitParameters, NormalizationSample, fit_local_affine_iter,
+};
 
 /// Stable identity of deterministic bounded spatial sampling.
 pub const CELL_SAMPLING_ALGORITHM_ID: &str = "local-cell-priority-sampling-f64-v1";
@@ -228,6 +230,33 @@ impl LocalCellSamples {
     }
 }
 
+/// Per-cell model or typed rejection in the original canonical grid order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalCellFit {
+    bounds: CellBounds,
+    sampling_evidence: CellSamplingEvidence,
+    result: Result<LocalAffineFit, LocalFitError>,
+}
+
+impl LocalCellFit {
+    /// Image bounds represented by this result.
+    #[must_use]
+    pub const fn bounds(&self) -> CellBounds {
+        self.bounds
+    }
+
+    /// Sampling evidence retained even when fitting fails.
+    #[must_use]
+    pub const fn sampling_evidence(&self) -> CellSamplingEvidence {
+        self.sampling_evidence
+    }
+
+    /// Fitted affine model or the exact cell-local failure.
+    pub const fn result(&self) -> Result<LocalAffineFit, LocalFitError> {
+        self.result
+    }
+}
+
 /// Failure to validate or allocate a local sampling grid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SamplingError {
@@ -339,6 +368,34 @@ pub fn sample_local_grid(
         }
     }
     Ok(cells)
+}
+
+/// Fits every sampled cell without discarding failures from sparse regions.
+///
+/// A result entry is emitted for every input cell in the same order. Only
+/// allocation of the result vector can fail the complete operation; scientific
+/// failures stay attached to their cells for support diagnostics and later
+/// surface-validity decisions.
+pub fn fit_local_grid(
+    cells: &[LocalCellSamples],
+    parameters: LocalFitParameters,
+) -> Result<Vec<LocalCellFit>, LocalFitError> {
+    let mut fits = Vec::new();
+    fits.try_reserve_exact(cells.len())
+        .map_err(|_| LocalFitError::AllocationFailed)?;
+    for cell in cells {
+        let result = fit_local_affine_iter(
+            cell.samples.iter().map(|sample| sample.pair),
+            cell.samples.len(),
+            parameters,
+        );
+        fits.push(LocalCellFit {
+            bounds: cell.bounds,
+            sampling_evidence: cell.evidence,
+            result,
+        });
+    }
+    Ok(fits)
 }
 
 fn sample_cell(
@@ -532,6 +589,32 @@ mod tests {
             sample_local_grid(&source, &source, Some(&wrong_mask), 0, controls),
             Err(SamplingError::ProtectedMaskDimensionsMismatch)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn grid_fitting_preserves_successes_and_cell_local_failures() -> TestResult {
+        let source = image(4, 2, vec![0.0, 1.0, 10.0, 11.0, 2.0, 3.0, 12.0, 13.0])?;
+        let reference = image(4, 2, vec![1.0, 3.0, 21.0, 23.0, 5.0, 7.0, 25.0, 27.0])?;
+        let sampling = SamplingGridParameters::new(2, 2, 4, 2)?;
+        let cells = sample_local_grid(&source, &reference, None, 0, sampling)?;
+        let fit_parameters = LocalFitParameters::new(4, 4, 6, 1.0e-12)?;
+        let fits = fit_local_grid(&cells, fit_parameters)?;
+        assert_eq!(fits.len(), 2);
+        for fit in &fits {
+            let model = fit.result()?;
+            assert_eq!(model.scale().to_bits(), 2.0_f64.to_bits());
+            assert_eq!(model.offset().to_bits(), 1.0_f64.to_bits());
+            assert_eq!(fit.sampling_evidence().retained(), 4);
+        }
+
+        let sparse_sampling = SamplingGridParameters::new(2, 2, 3, 2)?;
+        let sparse_cells = sample_local_grid(&source, &reference, None, 0, sparse_sampling)?;
+        let sparse_fits = fit_local_grid(&sparse_cells, fit_parameters)?;
+        assert!(sparse_fits.iter().all(|fit| {
+            fit.result() == Err(LocalFitError::SampleCountOutsideBounds)
+                && fit.sampling_evidence().retained() == 3
+        }));
         Ok(())
     }
 }

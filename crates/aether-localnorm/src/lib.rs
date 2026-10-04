@@ -10,8 +10,8 @@ use std::fmt::{Display, Formatter};
 mod sampling;
 
 pub use sampling::{
-    CELL_SAMPLING_ALGORITHM_ID, CellBounds, CellSamplingEvidence, LocalCellSamples, SamplingError,
-    SamplingGridParameters, SpatialSample, sample_local_grid,
+    CELL_SAMPLING_ALGORITHM_ID, CellBounds, CellSamplingEvidence, LocalCellFit, LocalCellSamples,
+    SamplingError, SamplingGridParameters, SpatialSample, fit_local_grid, sample_local_grid,
 };
 
 /// Stable identity of the first bounded Theil-Sen local affine fit.
@@ -205,22 +205,32 @@ pub fn fit_local_affine(
     samples: &[NormalizationSample],
     parameters: LocalFitParameters,
 ) -> Result<LocalAffineFit, LocalFitError> {
-    if samples.len() < parameters.minimum_samples || samples.len() > parameters.maximum_samples {
+    fit_local_affine_iter(samples.iter().copied(), samples.len(), parameters)
+}
+
+pub(crate) fn fit_local_affine_iter<I>(
+    samples: I,
+    sample_count: usize,
+    parameters: LocalFitParameters,
+) -> Result<LocalAffineFit, LocalFitError>
+where
+    I: Clone + Iterator<Item = NormalizationSample>,
+{
+    if sample_count < parameters.minimum_samples || sample_count > parameters.maximum_samples {
         return Err(LocalFitError::SampleCountOutsideBounds);
     }
-    let pair_count = samples
-        .len()
-        .checked_mul(samples.len().saturating_sub(1))
+    let pair_count = sample_count
+        .checked_mul(sample_count.saturating_sub(1))
         .and_then(|value| value.checked_div(2))
         .ok_or(LocalFitError::PairwiseWorkLimitExceeded)?;
     if pair_count > parameters.maximum_pairwise_slopes {
         return Err(LocalFitError::PairwiseWorkLimitExceeded);
     }
     let source_scale = samples
-        .iter()
+        .clone()
         .fold(0.0_f64, |scale, sample| scale.max(sample.source.abs()));
     let reference_scale = samples
-        .iter()
+        .clone()
         .fold(0.0_f64, |scale, sample| scale.max(sample.reference.abs()));
     if source_scale == 0.0 {
         return Err(LocalFitError::DegenerateSource);
@@ -235,8 +245,8 @@ pub fn fit_local_affine(
     slopes
         .try_reserve_exact(pair_count)
         .map_err(|_| LocalFitError::AllocationFailed)?;
-    for (left_index, left) in samples.iter().enumerate() {
-        for right in &samples[left_index + 1..] {
+    for (left_index, left) in samples.clone().enumerate() {
+        for right in samples.clone().skip(left_index + 1) {
             let source_difference = right.source / source_scale - left.source / source_scale;
             if source_difference == 0.0 {
                 continue;
@@ -271,9 +281,9 @@ pub fn fit_local_affine(
 
     let mut intercepts = Vec::new();
     intercepts
-        .try_reserve_exact(samples.len())
+        .try_reserve_exact(sample_count)
         .map_err(|_| LocalFitError::AllocationFailed)?;
-    for sample in samples {
+    for sample in samples.clone() {
         let intercept = (-scale).mul_add(sample.source, sample.reference);
         if !intercept.is_finite() {
             return Err(LocalFitError::NonFiniteModel);
@@ -287,7 +297,7 @@ pub fn fit_local_affine(
 
     let mut residuals = Vec::new();
     residuals
-        .try_reserve_exact(samples.len())
+        .try_reserve_exact(sample_count)
         .map_err(|_| LocalFitError::AllocationFailed)?;
     for sample in samples {
         let prediction = scale.mul_add(sample.source, offset);
@@ -301,7 +311,7 @@ pub fn fit_local_affine(
     Ok(LocalAffineFit {
         scale: canonical_zero(scale),
         offset: canonical_zero(offset),
-        sample_count: samples.len(),
+        sample_count,
         slope_count: slopes.len(),
         median_absolute_residual: canonical_zero(median_absolute_residual),
     })

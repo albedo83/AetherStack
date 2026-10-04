@@ -1802,6 +1802,10 @@ safety reasoning. They do not narrate obvious syntax.
      every pixel exactly once as protected, source-masked, reference-masked,
      non-finite, or eligible. Dimension, plane, cell-count, and allocation errors
      fail closed before returning partial grid evidence.
+156. Bind each sampled cell to an explicit affine-fit outcome. Successful models,
+     residuals, support evidence, and typed sparse or degenerate failures retain
+     canonical grid order so later surface construction cannot hide holes or
+     discard neighboring valid evidence.
 
 ## 11. Stable-release definition
 
