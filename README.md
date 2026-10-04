@@ -304,6 +304,12 @@ cargo run --release -p aether-register -- source.fits reference.fits
 cargo run --release -p aether-register -- --compact source.fits reference.fits
 ```
 
+The registration report is deliberately marked `diagnostic_only`: invoking
+this command never writes an image. An accepted report includes the
+full-resolution source-to-reference transform and analytical common crop. The
+separate runtime transaction API can consume an accepted transform to publish a
+bounded, checksum-verified registered FITS atomically.
+
 Extract only reference geometry, origin, and the 3 × 3 alignment matrix from a
 PixInsight XDRZ v1 artifact. The bounded JSON output excludes every embedded
 source and destination path:
@@ -313,11 +319,16 @@ cargo run -p aether-inspect --bin aether-xdrz-inspect -- alignment.xdrz
 cargo run -p aether-inspect --bin aether-xdrz-inspect -- --compact alignment.xdrz
 ```
 
-The CLI report is deliberately marked `diagnostic_only`: invoking this command
-never writes an image. An accepted report now includes the full-resolution
-source-to-reference transform and analytical common crop. The separate runtime
-transaction API can consume an accepted transform to publish a bounded,
-checksum-verified registered FITS atomically.
+Compare that projective WBPP oracle with an accepted schema-v2 report from the
+raw-CFA registration diagnostic. The comparison inverts the XDRZ
+reference-to-source sampling homography, converts its half-pixel alignment
+origin to AetherStack's integer-centered coordinates, and reports path-private
+RMS, maximum, and center differences over a fixed 5 × 5 field grid:
+
+```shell
+cargo run -p aether-inspect --bin aether-xdrz-inspect -- \
+  --aether-report aether-registration.json alignment.xdrz
+```
 
 Full acquisition data must never be committed. Test cases must use small,
 redistributable synthetic fixtures with no private paths, coordinates, object

@@ -1497,6 +1497,20 @@ safety reasoning. They do not narrate obvious syntax.
      confirms subpixel projective terms are present. Next, define and test the
      exact XDRZ-to-AetherStack coordinate-convention conversion before comparing
      transforms numerically; extraction alone is not treated as agreement.
+119. Lock the independent XDRZ comparison convention and exercise the complete
+     ASI294MC Pro sequence. Official PCL semantics define the XDRZ homography as
+     the output-reference to input-source sampling map and define `(0.5, 0.5)`
+     as the top-left pixel-center alignment origin. The comparison utility
+     therefore inverts the scale-normalized 3 × 3 homography, converts about the
+     declared origin, and compares it with AetherStack's accepted
+     source-to-reference affine on a deterministic 5 × 5 full-field grid.
+     Inputs remain bounded, dimensions and schema are cross-checked, compensated
+     accumulation preserves the RMS calculation, and only aggregate geometry is
+     emitted. All nine non-reference ASI294MC Pro lights pass AetherStack's
+     confidence gate. Against their independent WBPP projective solutions, the
+     worst per-frame RMS difference is 0.140 px and the worst sampled difference
+     is 0.376 px. This is strong corpus evidence despite the deliberately simpler
+     similarity model and the raw-CFA versus calibrated/debayered input paths.
 
 ## 11. Stable-release definition
 

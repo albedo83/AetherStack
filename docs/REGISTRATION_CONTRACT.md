@@ -332,11 +332,26 @@ Production registration still requires:
 The `aether-xdrz-inspect` development utility provides the first bounded bridge
 to the independent WBPP evidence already present in the local ASI294MC Pro
 corpus. It extracts only XDRZ v1 dimensions, alignment origin, and matrix values
-and never emits the absolute paths embedded in those artifacts. This is an
-oracle-extraction step, not yet a comparison result: the XDRZ matrix convention
-must be converted explicitly to AetherStack's integer-centered
-source-to-reference convention and locked with synthetic fixtures before any
-numerical agreement claim is valid.
+and never emits the absolute paths embedded in those artifacts. Extraction
+alone is not treated as agreement. The comparison conversion is fixed as
+`xdrz-reference-to-source-inverted-about-alignment-origin-v1`. The official PCL
+`DrizzleData` contract identifies `(0.5, 0.5)` as the top-left pixel center, and
+the official homography consumer evaluates the stored matrix at each output
+coordinate to obtain source coordinates. AetherStack consequently normalizes
+the matrix by its largest absolute coefficient, inverts it, maps the declared
+alignment origin to integer-centered coordinates, and evaluates agreement over
+a deterministic 5 × 5 grid spanning the complete reference field. Comparison
+rejects unsupported diagnostic schemas, absent accepted plans, dimension
+disagreement, singular or non-finite transforms, coordinates beyond exact
+binary64 integer representation, and projective poles on the grid.
+
+The ten-frame ASI294MC Pro session provides nine independent non-reference
+comparisons. Every pair passes AetherStack's confidence gate. Per-frame RMS
+differences from WBPP range from 0.053 px to 0.140 px; the largest difference at
+any sampled field point is 0.376 px. The evidence compares AetherStack's strict
+similarity fit on raw CFA cells with WBPP's projective fit on calibrated and
+debayered data, so it validates direction, coordinate convention, and subpixel
+agreement without pretending the two model families or inputs are identical.
 
 The desktop Registration laboratory exposes the native pair diagnostic,
 confidence evidence, accepted source-pixel transform, and exact autocrop. Once
