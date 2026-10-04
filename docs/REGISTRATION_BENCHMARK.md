@@ -40,6 +40,23 @@ perspective terms. Results are machine-specific evidence, not portable release
 thresholds. Record the CPU, compiler, power mode, dimensions, plane count, and
 per-pass values when comparing revisions.
 
+## Development measurement
+
+The following local release-build measurement records the effect of sharing the
+plane-invariant kernel normalization across RGB planes. It is evidence for this
+specific development machine, not a portable performance promise. Both runs used
+512 × 384 pixels, three planes, three passes, the same deterministic input, and
+the same compiler and power state.
+
+| Geometry | Before, median MP/s | After, median MP/s | Change |
+| --- | ---: | ---: | ---: |
+| Affine | 7.690 | 8.986 | +16.85% |
+| Projective | 7.579 | 8.882 | +17.19% |
+
+Every timed pass produced the same sealed pixel and mask outputs. The existing
+multi-plane differential tests additionally require bit-identical pixels, masks,
+statistics, and band-height behavior against the scalar oracle.
+
 ## Optimization rule
 
 An optimization is admissible only after differential tests prove identical

@@ -845,6 +845,24 @@ impl AxisKernel {
     }
 }
 
+/// Computes geometry-only normalization once for every linked image plane.
+///
+/// The tap order matches the historical per-plane loop exactly, preserving the
+/// binary64 denominator while avoiding redundant work for RGB images.
+fn kernel_weight_sum(x_kernel: &AxisKernel, y_kernel: &AxisKernel) -> Result<f64, ResamplingError> {
+    let mut sum = CompensatedSum::new();
+    for y_tap in y_kernel.active() {
+        for x_tap in x_kernel.active() {
+            let weight = x_tap.weight * y_tap.weight;
+            if !weight.is_finite() {
+                return Err(ResamplingError::NumericalOverflow);
+            }
+            sum.add(weight);
+        }
+    }
+    Ok(sum.total())
+}
+
 /// Plans the exact source rectangle needed to resample one reference band.
 ///
 /// Every discrete output center is inverse-mapped and evaluated with the same
@@ -1084,17 +1102,14 @@ where
                 }
                 continue;
             }
+            let denominator = kernel_weight_sum(&x_kernel, &y_kernel)?;
 
             for plane in 0..source_dimensions.planes() {
                 let mut weighted_sum = CompensatedSum::new();
-                let mut weight_sum = CompensatedSum::new();
                 let mut combined_flags = PixelFlags::CLEAR;
                 for y_tap in y_kernel.active() {
                     for x_tap in x_kernel.active() {
                         let weight = x_tap.weight * y_tap.weight;
-                        if !weight.is_finite() {
-                            return Err(ResamplingError::NumericalOverflow);
-                        }
                         let source_index = linear_index(
                             source_area,
                             source_dimensions.width(),
@@ -1109,7 +1124,6 @@ where
                         } else {
                             combined_flags |= PixelFlags::INVALID;
                         }
-                        weight_sum.add(weight);
                     }
                 }
                 let output_index =
@@ -1120,7 +1134,6 @@ where
                         checked_increment(statistics.masked_support_samples)?;
                     continue;
                 }
-                let denominator = weight_sum.total();
                 if !denominator.is_finite() || denominator.abs() < MINIMUM_WEIGHT_SUM {
                     return Err(ResamplingError::NumericalOverflow);
                 }
@@ -1204,17 +1217,14 @@ where
                 }
                 continue;
             }
+            let denominator = kernel_weight_sum(&x_kernel, &y_kernel)?;
 
             for plane in 0..source_dimensions.planes() {
                 let mut weighted_sum = CompensatedSum::new();
-                let mut weight_sum = CompensatedSum::new();
                 let mut combined_flags = PixelFlags::CLEAR;
                 for y_tap in y_kernel.active() {
                     for x_tap in x_kernel.active() {
                         let weight = x_tap.weight * y_tap.weight;
-                        if !weight.is_finite() {
-                            return Err(ResamplingError::NumericalOverflow);
-                        }
                         let source_index = linear_index(
                             source_area,
                             source_dimensions.width(),
@@ -1229,7 +1239,6 @@ where
                         } else {
                             combined_flags |= PixelFlags::INVALID;
                         }
-                        weight_sum.add(weight);
                     }
                 }
                 let output_index = linear_index(band_area, output_width, output_x, band_y, plane)?;
@@ -1239,7 +1248,6 @@ where
                         checked_increment(statistics.masked_support_samples)?;
                     continue;
                 }
-                let denominator = weight_sum.total();
                 if !denominator.is_finite() || denominator.abs() < MINIMUM_WEIGHT_SUM {
                     return Err(ResamplingError::NumericalOverflow);
                 }
@@ -1332,10 +1340,10 @@ where
                 }
                 continue;
             }
+            let denominator = kernel_weight_sum(&x_kernel, &y_kernel)?;
 
             for plane in 0..source_dimensions.planes() {
                 let mut weighted_sum = CompensatedSum::new();
-                let mut weight_sum = CompensatedSum::new();
                 let mut combined_flags = PixelFlags::CLEAR;
                 for y_tap in y_kernel.active() {
                     let local_y = y_tap
@@ -1350,9 +1358,6 @@ where
                             .filter(|&index| index < window.width)
                             .ok_or(ResamplingError::IncompleteSourceWindow)?;
                         let weight = x_tap.weight * y_tap.weight;
-                        if !weight.is_finite() {
-                            return Err(ResamplingError::NumericalOverflow);
-                        }
                         let source_index =
                             linear_index(source_area, window.width, local_x, local_y, plane)?;
                         let value = source.pixels()[source_index];
@@ -1362,7 +1367,6 @@ where
                         } else {
                             combined_flags |= PixelFlags::INVALID;
                         }
-                        weight_sum.add(weight);
                     }
                 }
                 let output_index =
@@ -1373,7 +1377,6 @@ where
                         checked_increment(statistics.masked_support_samples)?;
                     continue;
                 }
-                let denominator = weight_sum.total();
                 if !denominator.is_finite() || denominator.abs() < MINIMUM_WEIGHT_SUM {
                     return Err(ResamplingError::NumericalOverflow);
                 }

@@ -337,6 +337,11 @@ negative lobes and overshoot remain available to later processing. Tests prove
 constant-field preservation and unit integrated flux for an isolated source
 under a fractional translation.
 
+The normalization denominator depends only on geometry and is therefore shared
+by all planes at one output coordinate. Its tap traversal is unchanged from the
+single-plane oracle, while every plane retains the historical weighted-pixel
+accumulation order. Multi-plane differential tests require bit-identical output.
+
 Every mathematically non-zero tap must lie inside the source and contain a clear,
 finite sample. A footprint crossing the source boundary produces `NaN` with the
 `MISSING` flag. Unusable support produces `NaN` with the union of all source

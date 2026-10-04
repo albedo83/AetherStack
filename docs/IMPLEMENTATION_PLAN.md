@@ -1714,6 +1714,14 @@ safety reasoning. They do not narrate obvious syntax.
      limits cap axes, planes, passes, and total samples. The benchmark documents
      that optimization remains subordinate to bit-level differential tests and
      does not represent FITS I/O or complete transaction latency.
+143. Share the geometry-only Lanczos normalization denominator across linked
+     image planes without changing the numerical contract. The denominator keeps
+     the historical compensated tap order, while each plane keeps its existing
+     weighted-pixel traversal. Multi-plane oracle, band, mask, and projective
+     differential tests remain bit exact. A controlled local RGB benchmark
+     records median throughput gains of 16.85% for affine and 17.19% for
+     projective resampling; these figures are development evidence, not portable
+     release thresholds.
 
 ## 11. Stable-release definition
 
