@@ -1732,6 +1732,13 @@ safety reasoning. They do not narrate obvious syntax.
      to elapsed time; output sealing happens between calls and detects drift from
      the untimed warm-up. The existing differential suite remains responsible for
      bit-level equivalence across different band heights.
+146. Add `median-f64-v1` as an exact integration oracle before admitting it to
+     production plans. Clear finite values use deterministic total-order rank
+     selection; odd support returns the observed middle sample and even support
+     uses an overflow-safe midpoint across the full finite binary64 range. The
+     estimator retains exact accepted, masked, and non-finite accounting and
+     reuses one fallibly reserved per-pixel scratch vector. Bounded FITS runtime
+     publication and UI exposure remain the next provenance boundary.
 
 ## 11. Stable-release definition
 

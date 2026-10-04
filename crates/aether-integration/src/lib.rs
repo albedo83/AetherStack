@@ -16,6 +16,9 @@ pub const PERCENTILE_REJECTION_MAP_ALGORITHM_ID: &str = "percentile-rejection-ma
 /// Stable identifier for the strict, frame-weighted arithmetic mean contract.
 pub const WEIGHTED_MEAN_ALGORITHM_ID: &str = "weighted-mean-v1";
 
+/// Stable identifier for exact finite-sample median integration.
+pub const MEDIAN_ALGORITHM_ID: &str = "median-f64-v1";
+
 /// Stable identifier for the first transparent PSF quality-weight expression.
 pub const BALANCED_PSF_WEIGHT_ALGORITHM_ID: &str = "balanced-psf-weight-v1";
 
@@ -331,6 +334,33 @@ pub struct MeanIntegration {
 pub struct WeightedMeanIntegration {
     image: ScientificImage,
     support: Vec<PixelSupport>,
+}
+
+/// Median image and exact per-pixel contribution accounting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MedianIntegration {
+    image: ScientificImage,
+    support: Vec<PixelSupport>,
+}
+
+impl MedianIntegration {
+    /// Exact finite-sample median image.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Support records in the same planar order as the image samples.
+    #[must_use]
+    pub fn support(&self) -> &[PixelSupport] {
+        &self.support
+    }
+
+    /// Consumes the result and returns its image and support map.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, Vec<PixelSupport>) {
+        (self.image, self.support)
+    }
 }
 
 impl WeightedMeanIntegration {
@@ -742,6 +772,106 @@ pub fn integrate_mean_region(
     integrate_mean_impl(inputs, region)
 }
 
+/// Integrates equal-sized images with an exact finite-sample median.
+///
+/// Clear finite samples are selected with IEEE total ordering. Odd populations
+/// return the middle sample exactly. Even populations use an overflow-safe
+/// midpoint: same-sign values use a bounded difference, while opposite-sign
+/// values are halved before addition. Masked and non-finite samples retain the
+/// same conservative support and output-mask semantics as [`integrate_mean`].
+/// One reusable allocation holds at most one scalar per input frame.
+///
+/// # Errors
+///
+/// Returns a typed error for empty or mismatched input, excessive input count,
+/// invariant failure, or bounded allocation failure.
+pub fn integrate_median(
+    inputs: &[&ScientificImage],
+) -> Result<MedianIntegration, IntegrationError> {
+    let Some(first) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let dimensions = first.dimensions();
+    for (input_index, input) in inputs.iter().enumerate().skip(1) {
+        let actual = input.dimensions();
+        if actual != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual,
+            });
+        }
+    }
+
+    let mut output =
+        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: dimensions.pixel_count(),
+        })?;
+    support.resize(dimensions.pixel_count(), PixelSupport::default());
+    let mut finite = Vec::new();
+    finite.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+
+    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
+    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut support)
+        .enumerate()
+    {
+        finite.clear();
+        let mut combined_rejected_flags = PixelFlags::CLEAR;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if !flags.is_clear() {
+                output_support.masked += 1;
+                combined_rejected_flags |= flags;
+            } else if !value.is_finite() {
+                output_support.non_finite += 1;
+            } else {
+                output_support.accepted += 1;
+                finite.push(value);
+            }
+        }
+
+        if output_support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: output_support.total(),
+            });
+        }
+        if finite.is_empty() {
+            *output = f64::NAN;
+            let mut flags = combined_rejected_flags | PixelFlags::MISSING;
+            if output_support.non_finite > 0 {
+                flags |= PixelFlags::INVALID;
+            }
+            *output_flags = flags;
+            continue;
+        }
+
+        *output = exact_median(&mut finite);
+        *output_flags = PixelFlags::CLEAR;
+    }
+
+    Ok(MedianIntegration {
+        image: output,
+        support,
+    })
+}
+
 /// Integrates equal-sized images with explicit, validated frame weights.
 ///
 /// A frame's weight participates only where that frame contributes a clear,
@@ -1021,6 +1151,26 @@ fn stable_mean(values: &[f64]) -> f64 {
     canonical_zero(normalized.total().max(minimum / scale).min(maximum / scale) * scale)
 }
 
+fn exact_median(values: &mut [f64]) -> f64 {
+    let length = values.len();
+    let middle = length / 2;
+    let (lower, upper, _) = values.select_nth_unstable_by(middle, f64::total_cmp);
+    if !length.is_multiple_of(2) {
+        return canonical_zero(*upper);
+    }
+    let lower = lower
+        .iter()
+        .copied()
+        .max_by(f64::total_cmp)
+        .unwrap_or(*upper);
+    let midpoint = if lower.is_sign_negative() == upper.is_sign_negative() {
+        lower + (*upper - lower) * 0.5
+    } else {
+        lower * 0.5 + *upper * 0.5
+    };
+    canonical_zero(midpoint)
+}
+
 fn integrate_mean_impl(
     inputs: &[&ScientificImage],
     region: IntegrationRegion,
@@ -1232,6 +1382,63 @@ mod tests {
                 },
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn median_selects_odd_middle_and_overflow_safe_even_midpoint() -> TestResult {
+        let low = image(vec![1.0, f64::MAX, -f64::MAX])?;
+        let middle = image(vec![9.0, f64::MAX, f64::MAX])?;
+        let high = image(vec![5.0, 1.0, -1.0])?;
+
+        let odd = integrate_median(&[&low, &middle, &high])?;
+        assert_eq!(odd.image().pixels()[0].to_bits(), 5.0_f64.to_bits());
+        assert_eq!(odd.image().pixels()[1].to_bits(), f64::MAX.to_bits());
+        assert_eq!(odd.image().pixels()[2].to_bits(), (-1.0_f64).to_bits());
+
+        let even = integrate_median(&[&low, &middle])?;
+        assert_eq!(even.image().pixels()[0].to_bits(), 5.0_f64.to_bits());
+        assert_eq!(even.image().pixels()[1].to_bits(), f64::MAX.to_bits());
+        assert_eq!(even.image().pixels()[2].to_bits(), 0.0_f64.to_bits());
+        Ok(())
+    }
+
+    #[test]
+    fn median_excludes_unusable_samples_and_retains_support_evidence() -> TestResult {
+        let usable = image(vec![7.0, f64::NAN])?;
+        let mut masked = image(vec![100.0, 50.0])?;
+        masked.mask_mut().as_mut_slice()[0] = PixelFlags::SATURATED;
+        masked.mask_mut().as_mut_slice()[1] = PixelFlags::HOT;
+        let non_finite = image(vec![f64::INFINITY, f64::NEG_INFINITY])?;
+
+        let result = integrate_median(&[&usable, &masked, &non_finite])?;
+        assert_eq!(result.image().pixels()[0].to_bits(), 7.0_f64.to_bits());
+        assert!(result.image().mask().as_slice()[0].is_clear());
+        assert_eq!(result.support()[0].accepted(), 1);
+        assert_eq!(result.support()[0].masked(), 1);
+        assert_eq!(result.support()[0].non_finite(), 1);
+
+        assert!(result.image().pixels()[1].is_nan());
+        let flags = result.image().mask().as_slice()[1];
+        assert!(flags.contains(PixelFlags::HOT));
+        assert!(flags.contains(PixelFlags::MISSING));
+        assert!(flags.contains(PixelFlags::INVALID));
+        assert_eq!(result.support()[1].total(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn median_rejects_empty_and_mismatched_inputs() -> TestResult {
+        assert!(matches!(
+            integrate_median(&[]),
+            Err(IntegrationError::NoInputImages)
+        ));
+        let first = image(vec![1.0])?;
+        let second = image(vec![1.0, 2.0])?;
+        assert!(matches!(
+            integrate_median(&[&first, &second]),
+            Err(IntegrationError::DimensionMismatch { input_index: 1, .. })
+        ));
         Ok(())
     }
 

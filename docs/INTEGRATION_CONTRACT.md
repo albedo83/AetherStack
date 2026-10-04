@@ -49,6 +49,24 @@ that a full-frame region is bit-identical to `integrate_mean`, that multi-plane
 crop coordinates preserve planar order, and that excluded-sample accounting is
 unchanged inside a crop.
 
+## Exact median
+
+`integrate_median` is the strict `median-f64-v1` CPU oracle. At each planar
+sample position it collects only clear finite values, selects the middle rank
+with IEEE total ordering, and retains the same accepted, masked, and non-finite
+support accounting as the strict mean. Odd populations return an observed
+sample exactly. Even populations use a finite overflow-safe midpoint: a bounded
+difference for same-sign neighbors and half-before-addition for opposite signs.
+The result canonicalizes signed zero.
+
+One reusable scratch vector is reserved for at most one value per input frame;
+allocation failure is explicit. A pixel with no eligible value follows the same
+NaN, `MISSING`, retained-mask, and `INVALID` policy as mean integration. Tests
+cover odd and even populations, equal `f64::MAX` values, opposite finite
+extremes, masked and non-finite evidence, empty input, and dimension mismatch.
+Runtime FITS orchestration and desktop selection remain a separate transaction
+and provenance boundary.
+
 ## Frame-weighted mean
 
 `integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`
