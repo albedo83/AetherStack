@@ -1630,6 +1630,13 @@ safety reasoning. They do not narrate obvious syntax.
      out evidence. The desktop geometry instrument names failed gates rather
      than presenting an unexplained boolean. The XDRZ comparison utility keeps
      schemas 2, 3, and 4 readable, and rejects unknown future schemas.
+133. Generalize exact common-footprint scanning to canonical homographies while
+     retaining the established algorithm identity, evaluation ceiling,
+     deterministic rectangle tie breaks, and width-proportional scratch bound.
+     Affine transforms lifted to projective form produce identical coverage and
+     crops. For genuine projective geometry, covered-pixel counts and every
+     selected crop pixel are checked against independently generated resampler
+     masks. A projective horizon fails the complete request explicitly.
 
 ## 11. Stable-release definition
 

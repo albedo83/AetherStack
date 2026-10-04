@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use aether_core::{CoreError, Dimensions};
 
-use crate::{AffineTransform, CoordinateError, ImagePoint};
+use crate::{AffineTransform, CoordinateError, ImagePoint, ProjectiveTransform};
 
 /// Stable identifier for exact discrete common-support scanning.
 pub const COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID: &str = "common-lanczos3-footprint-v1";
@@ -20,6 +20,14 @@ pub struct RegistrationFootprint {
     source_width: usize,
     source_height: usize,
     source_to_reference: AffineTransform,
+}
+
+/// Source extent and projective source-to-reference transform used for coverage.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectiveRegistrationFootprint {
+    source_width: usize,
+    source_height: usize,
+    source_to_reference: ProjectiveTransform,
 }
 
 impl RegistrationFootprint {
@@ -55,6 +63,57 @@ impl RegistrationFootprint {
     #[must_use]
     pub const fn source_to_reference(self) -> AffineTransform {
         self.source_to_reference
+    }
+}
+
+impl ProjectiveRegistrationFootprint {
+    /// Creates one validated projective geometric footprint.
+    pub fn new(
+        source_width: usize,
+        source_height: usize,
+        source_to_reference: ProjectiveTransform,
+    ) -> Result<Self, CommonFootprintError> {
+        Dimensions::new(source_width, source_height, 1).map_err(CommonFootprintError::Core)?;
+        validate_exact_coordinate_extent(source_width)?;
+        validate_exact_coordinate_extent(source_height)?;
+        Ok(Self {
+            source_width,
+            source_height,
+            source_to_reference,
+        })
+    }
+
+    /// Source width in pixels.
+    #[must_use]
+    pub const fn source_width(self) -> usize {
+        self.source_width
+    }
+
+    /// Source height in pixels.
+    #[must_use]
+    pub const fn source_height(self) -> usize {
+        self.source_height
+    }
+
+    /// Homography mapping this source into common reference coordinates.
+    #[must_use]
+    pub const fn source_to_reference(self) -> ProjectiveTransform {
+        self.source_to_reference
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InverseFootprintTransform {
+    Affine(AffineTransform),
+    Projective(ProjectiveTransform),
+}
+
+impl InverseFootprintTransform {
+    fn apply(self, point: ImagePoint) -> Result<ImagePoint, CoordinateError> {
+        match self {
+            Self::Affine(transform) => transform.apply(point),
+            Self::Projective(transform) => transform.apply(point),
+        }
     }
 }
 
@@ -245,22 +304,86 @@ pub fn derive_common_lanczos3_footprint(
     reference_height: usize,
     frames: &[RegistrationFootprint],
 ) -> Result<CommonFootprintReport, CommonFootprintError> {
+    validate_footprint_request(reference_width, reference_height, frames.len())?;
+    let mut inverse_frames = Vec::new();
+    inverse_frames
+        .try_reserve_exact(frames.len())
+        .map_err(|_| CommonFootprintError::AllocationFailed)?;
+    for frame in frames {
+        inverse_frames.push((
+            InverseFootprintTransform::Affine(
+                frame
+                    .source_to_reference
+                    .inverse()
+                    .map_err(CommonFootprintError::Coordinate)?,
+            ),
+            frame.source_width,
+            frame.source_height,
+        ));
+    }
+    derive_common_lanczos3_footprint_with_inverses(
+        reference_width,
+        reference_height,
+        &inverse_frames,
+    )
+}
+
+/// Finds exact all-frame Lanczos support under projective transforms.
+///
+/// Affine inputs may be lifted with [`ProjectiveTransform::from_affine`] when a
+/// mixed model set is evaluated. Every reference center is mapped explicitly;
+/// projective horizons fail the entire request instead of creating a partial
+/// or topology-dependent crop.
+pub fn derive_common_lanczos3_projective_footprint(
+    reference_width: usize,
+    reference_height: usize,
+    frames: &[ProjectiveRegistrationFootprint],
+) -> Result<CommonFootprintReport, CommonFootprintError> {
+    validate_footprint_request(reference_width, reference_height, frames.len())?;
+    let mut inverse_frames = Vec::new();
+    inverse_frames
+        .try_reserve_exact(frames.len())
+        .map_err(|_| CommonFootprintError::AllocationFailed)?;
+    for frame in frames {
+        inverse_frames.push((
+            InverseFootprintTransform::Projective(
+                frame
+                    .source_to_reference
+                    .inverse()
+                    .map_err(CommonFootprintError::Coordinate)?,
+            ),
+            frame.source_width,
+            frame.source_height,
+        ));
+    }
+    derive_common_lanczos3_footprint_with_inverses(
+        reference_width,
+        reference_height,
+        &inverse_frames,
+    )
+}
+
+fn validate_footprint_request(
+    reference_width: usize,
+    reference_height: usize,
+    frame_count: usize,
+) -> Result<(), CommonFootprintError> {
     let reference_dimensions = Dimensions::new(reference_width, reference_height, 1)
         .map_err(CommonFootprintError::Core)?;
     validate_exact_coordinate_extent(reference_width)?;
     validate_exact_coordinate_extent(reference_height)?;
-    if frames.is_empty() {
+    if frame_count == 0 {
         return Err(CommonFootprintError::NoFrames);
     }
-    if frames.len() > MAX_COMMON_FOOTPRINT_FRAMES {
+    if frame_count > MAX_COMMON_FOOTPRINT_FRAMES {
         return Err(CommonFootprintError::TooManyFrames {
             maximum: MAX_COMMON_FOOTPRINT_FRAMES,
-            actual: frames.len(),
+            actual: frame_count,
         });
     }
     let requested = reference_dimensions
         .pixel_count()
-        .checked_mul(frames.len())
+        .checked_mul(frame_count)
         .ok_or(CommonFootprintError::CountOverflow)?;
     if requested > MAX_COMMON_FOOTPRINT_EVALUATIONS {
         return Err(CommonFootprintError::WorkBoundExceeded {
@@ -268,21 +391,14 @@ pub fn derive_common_lanczos3_footprint(
             requested,
         });
     }
+    Ok(())
+}
 
-    let mut inverse_frames = Vec::new();
-    inverse_frames
-        .try_reserve_exact(frames.len())
-        .map_err(|_| CommonFootprintError::AllocationFailed)?;
-    for frame in frames {
-        inverse_frames.push((
-            frame
-                .source_to_reference
-                .inverse()
-                .map_err(CommonFootprintError::Coordinate)?,
-            frame.source_width,
-            frame.source_height,
-        ));
-    }
+fn derive_common_lanczos3_footprint_with_inverses(
+    reference_width: usize,
+    reference_height: usize,
+    inverse_frames: &[(InverseFootprintTransform, usize, usize)],
+) -> Result<CommonFootprintReport, CommonFootprintError> {
     let mut heights = Vec::new();
     heights
         .try_reserve_exact(reference_width)
@@ -300,7 +416,7 @@ pub fn derive_common_lanczos3_footprint(
             let point = ImagePoint::new(reference_x as f64, reference_y as f64)
                 .map_err(CommonFootprintError::Coordinate)?;
             let mut covered = true;
-            for (inverse, source_width, source_height) in &inverse_frames {
+            for (inverse, source_width, source_height) in inverse_frames {
                 let source = inverse
                     .apply(point)
                     .map_err(CommonFootprintError::Coordinate)?;
@@ -328,7 +444,7 @@ pub fn derive_common_lanczos3_footprint(
     Ok(CommonFootprintReport {
         reference_width,
         reference_height,
-        frame_count: frames.len(),
+        frame_count: inverse_frames.len(),
         covered_pixels,
         crop,
     })
@@ -450,6 +566,16 @@ mod tests {
         Ok(RegistrationFootprint::new(width, height, transform)?)
     }
 
+    fn projective_frame(
+        width: usize,
+        height: usize,
+        transform: ProjectiveTransform,
+    ) -> TestResult<ProjectiveRegistrationFootprint> {
+        Ok(ProjectiveRegistrationFootprint::new(
+            width, height, transform,
+        )?)
+    }
+
     #[test]
     fn identical_frames_retain_the_complete_reference_canvas() -> TestResult {
         let frames = [
@@ -474,6 +600,87 @@ mod tests {
                 height: 6,
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn affine_lifts_produce_identical_projective_footprints() -> TestResult {
+        let transforms = [
+            AffineTransform::IDENTITY,
+            AffineTransform::new(0.999, -0.012, 0.012, 0.999, 0.37, -0.28)?,
+            AffineTransform::new(1.0, 0.0, 0.0, 1.0, 2.0, -1.0)?,
+        ];
+        let affine_frames = transforms
+            .iter()
+            .copied()
+            .map(|transform| RegistrationFootprint::new(31, 29, transform))
+            .collect::<Result<Vec<_>, _>>()?;
+        let projective_frames = transforms
+            .iter()
+            .copied()
+            .map(ProjectiveTransform::from_affine)
+            .map(|transform| projective_frame(31, 29, transform?))
+            .collect::<TestResult<Vec<_>>>()?;
+
+        let affine = derive_common_lanczos3_footprint(31, 29, &affine_frames)?;
+        let projective = derive_common_lanczos3_projective_footprint(31, 29, &projective_frames)?;
+
+        assert_eq!(projective, affine);
+        Ok(())
+    }
+
+    #[test]
+    fn projective_coverage_matches_resampler_support_masks() -> TestResult {
+        let dimensions = Dimensions::new(31, 29, 1)?;
+        let source = aether_core::ScientificImage::filled(dimensions, 1.0)?;
+        let transform = ProjectiveTransform::new([
+            [0.999, -0.012, 0.37],
+            [0.012, 0.999, -0.28],
+            [8.0e-5, -5.0e-5, 1.0],
+        ])?;
+        let frames = [
+            projective_frame(31, 29, transform)?,
+            projective_frame(31, 29, ProjectiveTransform::IDENTITY)?,
+        ];
+
+        let report = derive_common_lanczos3_projective_footprint(31, 29, &frames)?;
+        let transformed = crate::resample_lanczos3_projective(&source, 31, 29, transform)?;
+        let identity =
+            crate::resample_lanczos3_projective(&source, 31, 29, ProjectiveTransform::IDENTITY)?;
+        let clear_count = transformed
+            .image()
+            .mask()
+            .as_slice()
+            .iter()
+            .zip(identity.image().mask().as_slice())
+            .filter(|(left, right)| left.is_clear() && right.is_clear())
+            .count();
+
+        assert_eq!(report.covered_pixels(), clear_count);
+        let crop = report
+            .crop()
+            .ok_or("projective overlap unexpectedly empty")?;
+        for y in crop.y()..crop.y() + crop.height() {
+            for x in crop.x()..crop.x() + crop.width() {
+                assert!(transformed.image().mask().get(x, y, 0)?.is_clear());
+                assert!(identity.image().mask().get(x, y, 0)?.is_clear());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn projective_horizon_aborts_the_complete_footprint() -> TestResult {
+        let transform =
+            ProjectiveTransform::new([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.5, 0.0, 1.0]])?;
+        let frames = [projective_frame(8, 8, transform)?];
+
+        assert!(matches!(
+            derive_common_lanczos3_projective_footprint(8, 8, &frames),
+            Err(CommonFootprintError::Coordinate(
+                CoordinateError::TransformOverflow
+            ))
+        ));
         Ok(())
     }
 

@@ -37,8 +37,9 @@ pub use features::{
 };
 pub use footprint::{
     COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID, CommonFootprintError, CommonFootprintReport,
-    MAX_COMMON_FOOTPRINT_EVALUATIONS, MAX_COMMON_FOOTPRINT_FRAMES, ReferenceRectangle,
-    RegistrationFootprint, derive_common_lanczos3_footprint,
+    MAX_COMMON_FOOTPRINT_EVALUATIONS, MAX_COMMON_FOOTPRINT_FRAMES, ProjectiveRegistrationFootprint,
+    ReferenceRectangle, RegistrationFootprint, derive_common_lanczos3_footprint,
+    derive_common_lanczos3_projective_footprint,
 };
 pub use geometry::{
     AffineTransform, CoordinateError, ImagePoint, RegistrationMatch, ResidualError,

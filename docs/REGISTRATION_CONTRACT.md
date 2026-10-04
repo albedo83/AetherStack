@@ -357,8 +357,8 @@ the projective band executor preserves global reference coordinates. Both
 bounded paths reconstruct the complete-image projective oracle bit for bit
 across alternate band heights, masks, multiple planes, non-finite evidence, and
 boundary loss. These numerical guarantees do not themselves authorize model
-selection: the runtime continues to use affine geometry until a separate,
-documented scientific acceptance policy is implemented.
+selection: the runtime continues to use affine geometry until a recommendation
+is bound into projective plan geometry and transactional publication.
 
 Before decoding each band, the source-window planner evaluates the exact same
 inverse transform and analytical-zero kernels. It returns the smallest rectangle
@@ -405,6 +405,15 @@ Equal-area rectangles prefer smaller top coordinate, smaller left coordinate,
 larger width, then larger height. No overlap is an explicit absent rectangle,
 not an invented zero-sized crop. Frame count and pixel/frame evaluations have
 public hard bounds.
+
+`derive_common_lanczos3_projective_footprint` applies the identical scanner,
+support rule, work bound, tie-breaking policy, and width-proportional scratch
+contract to canonical homographies. Mixed model sets lift affine transforms to
+projective form before the scan. Differential tests require affine lifts to
+produce the exact existing report, while an independent resampler-mask test
+requires genuine projective covered-pixel accounting and every pixel of the
+chosen crop to match actual clear Lanczos support. A horizon aborts the complete
+request instead of carving a misleading discontinuous footprint.
 
 ## Automatic reference selection
 
