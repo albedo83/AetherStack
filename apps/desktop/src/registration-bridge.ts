@@ -264,6 +264,8 @@ export interface RegisteredStackReportInspection {
   readonly schemaVersion: number;
   readonly reportSha256: string;
   readonly planSha256: string;
+  /** Absent only for legacy schema-1 reports created before geometry sealing. */
+  readonly geometryModel?: "affine" | "projective" | null;
   readonly manifestSha256: string;
   readonly estimator: RegisteredStackIntegrationSettings["estimator"];
   readonly width: number;

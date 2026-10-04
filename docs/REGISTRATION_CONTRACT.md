@@ -588,6 +588,13 @@ perspective passes every recommendation gate: it must rebuild schema-2 geometry,
 publish the registered RGB set, integrate the exact sealed crop, and retain the
 projective plan digest through the final FITS and integration report.
 
+Integration-report schema 2 includes `geometryModel` inside the SHA-256-sealed
+report payload. It is exactly `affine` or `projective` and therefore exposes the
+plan family without attempting to infer it from filenames. Native inspection
+accepts historical schema-1 reports only when this field is absent and returns
+an unspecified legacy geometry; schema 2 requires the field. Any other
+schema/field combination is invalid.
+
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from
 that path plus the recorded byte length and content SHA-256, looks up geometry

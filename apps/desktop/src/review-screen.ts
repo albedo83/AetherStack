@@ -2808,7 +2808,7 @@ function renderRegistration(
   elements.registeredStackReport.dataset.state =
     registration.stack.reportInspectionState;
   elements.registeredStackReportSummary.textContent = reportInspection
-    ? `${formatCountedNoun(reportInspection.sourceCount, "source")} · ${formatCountedNoun(reportInspection.productCount, "product")} · ${formatEstimatorName(reportInspection.estimator)} · schema ${reportInspection.schemaVersion} · ${reportInspection.allProductsVerified ? "all FITS verified" : "product evidence incomplete"}`
+    ? `${formatCountedNoun(reportInspection.sourceCount, "source")} · ${formatCountedNoun(reportInspection.productCount, "product")} · ${formatEstimatorName(reportInspection.estimator)} · ${reportInspection.geometryModel ? `${reportInspection.geometryModel} geometry` : "legacy geometry unspecified"} · schema ${reportInspection.schemaVersion} · ${reportInspection.allProductsVerified ? "all FITS verified" : "product evidence incomplete"}`
     : registration.stack.reportInspectionState === "error"
       ? "Native verification failed · report evidence is not trusted"
       : "Verify natively before using this provenance as evidence";

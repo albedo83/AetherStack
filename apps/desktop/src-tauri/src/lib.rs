@@ -87,6 +87,7 @@ const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
 const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
 const MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES: u64 = 128 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
+const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 2;
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
 const QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID: &str = "quality-cache-maintenance-preview-v1";
@@ -424,6 +425,8 @@ struct RegisteredStackResponse {
 struct RegisteredStackReport {
     algorithm_id: String,
     plan_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    geometry_model: Option<RegistrationGeometryModel>,
     manifest_sha256: String,
     integration: RegisteredStackIntegrationSettings,
     band_height: usize,
@@ -500,6 +503,7 @@ struct RegisteredStackReportInspectionResponse {
     schema_version: u32,
     report_sha256: String,
     plan_sha256: String,
+    geometry_model: Option<RegistrationGeometryModel>,
     manifest_sha256: String,
     estimator: RegisteredStackEstimatorInput,
     width: usize,
@@ -2753,6 +2757,7 @@ where
     let report_path = registered_stack_report_path(&request.output_path)?;
     require_absent_registered_report(&report_path)?;
     let integration = request.integration;
+    let geometry_model = request.planning.geometry_model;
     if matches!(
         integration.estimator,
         RegisteredStackEstimatorInput::StrictMean | RegisteredStackEstimatorInput::WeightedMean
@@ -3026,6 +3031,7 @@ where
     let report = RegisteredStackReport {
         algorithm_id: REGISTERED_STACK_REPORT_ALGORITHM_ID.to_owned(),
         plan_sha256: request.expected_plan_sha256.clone(),
+        geometry_model: Some(geometry_model),
         manifest_sha256,
         integration,
         band_height: request.band_height,
@@ -3240,7 +3246,7 @@ fn encode_registered_stack_report(
     let canonical = serde_json::to_vec(&report).map_err(|_| registered_stack_report_error())?;
     let report_sha256 = lowercase_hex(&Sha256::digest(&canonical));
     let envelope = RegisteredStackReportEnvelope {
-        schema_version: 1,
+        schema_version: REGISTERED_STACK_REPORT_SCHEMA_VERSION,
         report_sha256: report_sha256.clone(),
         report,
     };
@@ -3278,7 +3284,11 @@ fn inspect_registered_stack_report_sync_with_products(
     }
     let envelope: RegisteredStackReportEnvelope =
         serde_json::from_slice(&bytes).map_err(|_| registered_stack_report_validation_error())?;
-    if envelope.schema_version != 1
+    let geometry_schema_valid = matches!(
+        (envelope.schema_version, envelope.report.geometry_model),
+        (1, None) | (REGISTERED_STACK_REPORT_SCHEMA_VERSION, Some(_))
+    );
+    if !geometry_schema_valid
         || !is_lower_sha256(&envelope.report_sha256)
         || envelope.report.algorithm_id != REGISTERED_STACK_REPORT_ALGORITHM_ID
         || !is_lower_sha256(&envelope.report.plan_sha256)
@@ -3425,6 +3435,7 @@ fn inspect_registered_stack_report_sync_with_products(
         schema_version: envelope.schema_version,
         report_sha256: envelope.report_sha256,
         plan_sha256: envelope.report.plan_sha256,
+        geometry_model: envelope.report.geometry_model,
         manifest_sha256: envelope.report.manifest_sha256,
         estimator: envelope.report.integration.estimator,
         width: envelope.report.dimensions.width,
@@ -8238,6 +8249,10 @@ mod tests {
         assert!(stack_path.is_file());
         let report = inspect_registered_stack_report_sync(Path::new(&integrated.report_path))?;
         assert_eq!(report.plan_sha256, preview.plan_sha256);
+        assert_eq!(
+            report.geometry_model,
+            Some(RegistrationGeometryModel::Projective)
+        );
         assert!(report.all_products_verified);
         let (_, _, center) = read_pixel_planes(
             File::open(&stack_path)?,
@@ -8433,13 +8448,17 @@ mod tests {
         assert_eq!(result.report_path, report_path.to_string_lossy());
         assert_eq!(result.report_sha256.len(), 64);
         let mut report: serde_json::Value = serde_json::from_slice(&fs::read(&report_path)?)?;
-        assert_eq!(report["schemaVersion"], 1);
+        assert_eq!(
+            report["schemaVersion"],
+            REGISTERED_STACK_REPORT_SCHEMA_VERSION
+        );
         assert_eq!(report["reportSha256"], result.report_sha256);
         assert_eq!(
             report["report"]["algorithmId"],
             REGISTERED_STACK_REPORT_ALGORITHM_ID
         );
         assert_eq!(report["report"]["planSha256"], expected_plan_sha256);
+        assert_eq!(report["report"]["geometryModel"], "affine");
         assert_eq!(report["report"]["integration"]["estimator"], "strict_mean");
         assert_eq!(report["report"]["products"][0]["role"], "science");
         assert_eq!(
@@ -8448,6 +8467,10 @@ mod tests {
         );
         let inspection = inspect_registered_stack_report_sync(&report_path)?;
         assert_eq!(inspection.report_sha256, result.report_sha256);
+        assert_eq!(
+            inspection.geometry_model,
+            Some(RegistrationGeometryModel::Affine)
+        );
         assert_eq!(inspection.source_count, 2);
         assert_eq!(inspection.product_count, 1);
         assert_eq!(inspection.width, result.width);
@@ -8458,6 +8481,21 @@ mod tests {
         assert_eq!(inspection.sources[0].frame_id.len(), 64);
         assert_eq!(inspection.sources[0].sha256.len(), 64);
         assert!(inspection.sources[0].byte_length > 0);
+        let mut legacy_report: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        legacy_report.geometry_model = None;
+        let legacy_digest = lowercase_hex(&Sha256::digest(serde_json::to_vec(&legacy_report)?));
+        let legacy_envelope = RegisteredStackReportEnvelope {
+            schema_version: 1,
+            report_sha256: legacy_digest,
+            report: legacy_report,
+        };
+        let legacy_path = directory.path().join("legacy-integration-report.json");
+        fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy_envelope)?)?;
+        let legacy_inspection = inspect_registered_stack_report_sync(&legacy_path)?;
+        assert_eq!(legacy_inspection.schema_version, 1);
+        assert_eq!(legacy_inspection.geometry_model, None);
+        assert!(legacy_inspection.all_products_verified);
         let mut source_progress = Vec::new();
         let verified_sources = verify_registered_stack_sources_sync(
             &report_path,

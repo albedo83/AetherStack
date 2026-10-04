@@ -1040,9 +1040,10 @@ describe("frame review workspace", () => {
           ...ready.registration.stack,
           reportInspectionState: "ready",
           reportInspection: {
-            schemaVersion: 1,
+            schemaVersion: 2,
             reportSha256: "d".repeat(64),
             planSha256,
+            geometryModel: "affine",
             manifestSha256: "e".repeat(64),
             estimator: "strict_mean",
             width: 4_128,
@@ -1074,7 +1075,7 @@ describe("frame review workspace", () => {
       },
     });
     expect(root.textContent).toContain(
-      "2 sources · 3 products · strict mean · schema 1",
+      "2 sources · 3 products · strict mean · affine geometry · schema 2",
     );
     expect(root.textContent).toContain("all FITS verified");
     expect(root.textContent).toContain("Science · integrated.fits");
@@ -1343,7 +1344,7 @@ describe("frame review workspace", () => {
 
     expect(root.textContent).toContain("/archive/m31-integration-report.json");
     expect(root.textContent).toContain(
-      "18 sources · 1 product · balanced PSF weight · schema 1 · product evidence incomplete",
+      "18 sources · 1 product · balanced PSF weight · legacy geometry unspecified · schema 1 · product evidence incomplete",
     );
     expect(root.textContent).toContain("Science · m31.fits");
     expect(root.textContent).toContain("FITS missing");

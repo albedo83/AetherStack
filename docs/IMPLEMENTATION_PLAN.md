@@ -1700,6 +1700,13 @@ safety reasoning. They do not narrate obvious syntax.
      exact projective crop, and inspects the expected mean at the center pixel.
      A browser-level interaction test also locks the projective integration
      action as available once the matching registered identity set is complete.
+141. Seal the selected geometry family in integration-report schema 2. Every new
+     report now records `affine` or `projective` inside the hashed payload, and
+     native inspection returns that evidence to the UI. Schema-1 reports remain
+     readable only when the field is absent and are displayed as legacy geometry
+     unspecified; mixed schema/field combinations fail closed. Tests cover both
+     current families, legacy compatibility, digest verification, and the visible
+     report summary.
 
 ## 11. Stable-release definition
 
