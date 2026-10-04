@@ -83,6 +83,7 @@ export const demoReviewModel: ReviewViewModel = {
   },
   registration: {
     state: "idle",
+    geometryModel: "affine",
     frames: [
       {
         id: frameId("a"),

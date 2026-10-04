@@ -20,6 +20,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSelectWorkspace: vi.fn(),
     onSelectRegistrationReference: vi.fn(),
     onSelectRegistrationSource: vi.fn(),
+    onSelectRegistrationGeometryModel: vi.fn(),
     onAnalyzeRegistration: vi.fn(),
     onExecuteRegistration: vi.fn(),
     onCancelRegistration: vi.fn(),
@@ -72,6 +73,22 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
 }
 
 describe("frame review workspace", () => {
+  it("offers an explicit projective geometry choice", () => {
+    const { root, actions } = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+    });
+    const affine = getByRole(root, "button", { name: /Affine/ });
+    const projective = getByRole(root, "button", { name: /Projective/ });
+
+    expect(affine.getAttribute("aria-pressed")).toBe("true");
+    expect(projective.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(projective);
+    expect(actions.onSelectRegistrationGeometryModel).toHaveBeenCalledWith(
+      "projective",
+    );
+  });
+
   it("opens the advanced review plan from the primary top-bar action", async () => {
     const { root, actions } = fixture();
     const panel = root.querySelector<HTMLDetailsElement>(
@@ -635,6 +652,7 @@ describe("frame review workspace", () => {
       sourcePath: `/session/light-${index}.fits`,
     }));
     const registration = {
+      geometryModel: "affine" as const,
       state: "accepted" as const,
       frames,
       referenceFrameId: frames[0]?.id ?? null,

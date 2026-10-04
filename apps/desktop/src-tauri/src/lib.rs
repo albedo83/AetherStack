@@ -36,7 +36,10 @@ use aether_quality::{
     measure_frame_quality, prepare_cfa_cell_mean,
 };
 use aether_register::{RegistrationDiagnostic, diagnose_paths};
-use aether_registration::{AffineTransform, PlannedRegistrationFrame, RegistrationPlan};
+use aether_registration::{
+    AffineTransform, PlannedRegistrationFrame, ProjectivePlannedRegistrationFrame,
+    ProjectiveRegistrationPlan, ProjectiveTransform, RegistrationPlan,
+};
 use aether_review::{
     DecisionChange, DecisionDelta, DisplayTransform, FrameId, FrameMetrics,
     FrameSelectionComparator, FrameSelectionMetric, FrameSelectionPlan, FrameSelectionProposal,
@@ -49,11 +52,12 @@ use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, LightPlanExecutionError,
     LightPlanExecutionRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
-    QualityWeightMetrics, RegisteredFrameQuality, RegisteredRejectionMapOutput,
-    RegisteredStackError, RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackSource,
-    RegisteredWeightSet, RegistrationPlanExecutionError, RegistrationPlanExecutionRequest,
-    RegistrationPlanSource, run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
-    run_master_plan, run_registered_stack, run_registration_plan,
+    ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics, RegisteredFrameQuality,
+    RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
+    RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
+    RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
+    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan, run_master_plan,
+    run_projective_registration_plan, run_registered_stack, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -212,12 +216,23 @@ struct RegistrationDiagnosticRequest {
 struct RegistrationPlanPreviewRequest {
     reference_frame_id: String,
     source_frame_ids: Vec<String>,
+    #[serde(default)]
+    geometry_model: RegistrationGeometryModel,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum RegistrationGeometryModel {
+    #[default]
+    Affine,
+    Projective,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RegistrationPlanPreviewResponse {
     schema_version: u32,
+    geometry_model: RegistrationGeometryModel,
     plan_sha256: String,
     reference_frame_id: String,
     reference_width: usize,
@@ -233,7 +248,8 @@ struct RegistrationPlannedFrameResponse {
     frame_id: String,
     source_width: usize,
     source_height: usize,
-    transform_coefficients_source_pixels: [f64; 6],
+    transform_coefficients_source_pixels: Option<[f64; 6]>,
+    projective_transform_coefficients_source_pixels: Option<[[f64; 3]; 3]>,
     reference: bool,
 }
 
@@ -2245,8 +2261,17 @@ fn preview_registration_plan_for_ids_sync(
     request: RegistrationPlanPreviewRequest,
     eligible_ids: &BTreeSet<FrameId>,
 ) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
-    let plan = build_registration_plan_for_ids_sync(session, &request, eligible_ids)?;
-    registration_plan_response(&plan)
+    match request.geometry_model {
+        RegistrationGeometryModel::Affine => {
+            let plan = build_registration_plan_for_ids_sync(session, &request, eligible_ids)?;
+            registration_plan_response(&plan)
+        }
+        RegistrationGeometryModel::Projective => {
+            let plan =
+                build_projective_registration_plan_for_ids_sync(session, &request, eligible_ids)?;
+            projective_registration_plan_response(&plan)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2265,6 +2290,9 @@ fn build_registration_plan_for_ids_sync(
     request: &RegistrationPlanPreviewRequest,
     eligible_ids: &BTreeSet<FrameId>,
 ) -> Result<RegistrationPlan, PreviewCommandError> {
+    if request.geometry_model != RegistrationGeometryModel::Affine {
+        return Err(registration_plan_input_error());
+    }
     let mut sources = registration_native_sources(session)?;
     if !eligible_ids
         .iter()
@@ -2340,6 +2368,78 @@ fn build_registration_plan_for_ids_sync(
     .map_err(|_| registration_plan_geometry_error())
 }
 
+fn build_projective_registration_plan_for_ids_sync(
+    session: &ImportedNativeSession,
+    request: &RegistrationPlanPreviewRequest,
+    eligible_ids: &BTreeSet<FrameId>,
+) -> Result<ProjectiveRegistrationPlan, PreviewCommandError> {
+    if request.geometry_model != RegistrationGeometryModel::Projective {
+        return Err(registration_plan_input_error());
+    }
+    let mut sources = registration_native_sources(session)?;
+    if !eligible_ids
+        .iter()
+        .all(|frame_id| sources.contains_key(frame_id))
+    {
+        return Err(registration_plan_input_error());
+    }
+    sources.retain(|frame_id, _| eligible_ids.contains(frame_id));
+    if sources.len() < 2 {
+        return Err(registration_plan_input_error());
+    }
+    let reference_id = FrameId::new(request.reference_frame_id.clone())
+        .map_err(|_| registration_plan_input_error())?;
+    let reference = sources
+        .get(&reference_id)
+        .ok_or_else(registration_plan_input_error)?;
+    let requested_count = request.source_frame_ids.len();
+    let requested_ids = request
+        .source_frame_ids
+        .iter()
+        .cloned()
+        .map(|value| FrameId::new(value).map_err(|_| registration_plan_input_error()))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let expected_ids = sources
+        .keys()
+        .filter(|frame_id| *frame_id != &reference_id)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if requested_ids.len() != requested_count || requested_ids != expected_ids {
+        return Err(registration_plan_input_error());
+    }
+
+    let mut planned = Vec::new();
+    planned
+        .try_reserve_exact(sources.len())
+        .map_err(|_| registration_plan_allocation_error())?;
+    planned.push(ProjectivePlannedRegistrationFrame::new(
+        reference_id.clone(),
+        reference.width,
+        reference.height,
+        ProjectiveTransform::IDENTITY,
+    ));
+    for frame_id in requested_ids {
+        let source = sources
+            .get(&frame_id)
+            .ok_or_else(registration_plan_input_error)?;
+        let diagnostic = diagnose_paths(&source.path, &reference.path)
+            .map_err(|_| registration_plan_diagnostic_error())?;
+        let coefficients = diagnostic
+            .recommended_projective_coefficients_source_pixels()
+            .ok_or_else(registration_projective_not_recommended_error)?;
+        let transform = ProjectiveTransform::new(coefficients)
+            .map_err(|_| registration_plan_diagnostic_error())?;
+        planned.push(ProjectivePlannedRegistrationFrame::new(
+            frame_id,
+            source.width,
+            source.height,
+            transform,
+        ));
+    }
+    ProjectiveRegistrationPlan::new(reference_id, reference.width, reference.height, planned)
+        .map_err(|_| registration_plan_geometry_error())
+}
+
 fn registration_plan_response(
     plan: &RegistrationPlan,
 ) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
@@ -2354,12 +2454,14 @@ fn registration_plan_response(
             frame_id: frame.frame_id().as_str().to_owned(),
             source_width: frame.source_width(),
             source_height: frame.source_height(),
-            transform_coefficients_source_pixels: frame.source_to_reference().coefficients(),
+            transform_coefficients_source_pixels: Some(frame.source_to_reference().coefficients()),
+            projective_transform_coefficients_source_pixels: None,
             reference: frame.frame_id() == plan.reference_frame_id(),
         })
         .collect();
     Ok(RegistrationPlanPreviewResponse {
-        schema_version: 1,
+        schema_version: 2,
+        geometry_model: RegistrationGeometryModel::Affine,
         plan_sha256: plan.plan_sha256().to_owned(),
         reference_frame_id: plan.reference_frame_id().as_str().to_owned(),
         reference_width: plan.reference_width(),
@@ -2373,6 +2475,81 @@ fn registration_plan_response(
         },
         frames,
     })
+}
+
+fn projective_registration_plan_response(
+    plan: &ProjectiveRegistrationPlan,
+) -> Result<RegistrationPlanPreviewResponse, PreviewCommandError> {
+    let crop = plan
+        .common_footprint()
+        .crop()
+        .ok_or_else(registration_plan_geometry_error)?;
+    let frames = plan
+        .frames()
+        .iter()
+        .map(|frame| RegistrationPlannedFrameResponse {
+            frame_id: frame.frame_id().as_str().to_owned(),
+            source_width: frame.source_width(),
+            source_height: frame.source_height(),
+            transform_coefficients_source_pixels: None,
+            projective_transform_coefficients_source_pixels: Some(
+                frame.source_to_reference().coefficients(),
+            ),
+            reference: frame.frame_id() == plan.reference_frame_id(),
+        })
+        .collect();
+    Ok(RegistrationPlanPreviewResponse {
+        schema_version: 2,
+        geometry_model: RegistrationGeometryModel::Projective,
+        plan_sha256: plan.plan_sha256().to_owned(),
+        reference_frame_id: plan.reference_frame_id().as_str().to_owned(),
+        reference_width: plan.reference_width(),
+        reference_height: plan.reference_height(),
+        covered_pixels: plan.common_footprint().covered_pixels(),
+        autocrop: RegistrationCropResponse {
+            x: crop.x(),
+            y: crop.y(),
+            width: crop.width(),
+            height: crop.height(),
+        },
+        frames,
+    })
+}
+
+enum DesktopRegistrationPlan {
+    Affine(RegistrationPlan),
+    Projective(ProjectiveRegistrationPlan),
+}
+
+impl DesktopRegistrationPlan {
+    fn plan_sha256(&self) -> &str {
+        match self {
+            Self::Affine(plan) => plan.plan_sha256(),
+            Self::Projective(plan) => plan.plan_sha256(),
+        }
+    }
+
+    fn frame_count(&self) -> usize {
+        match self {
+            Self::Affine(plan) => plan.frames().len(),
+            Self::Projective(plan) => plan.frames().len(),
+        }
+    }
+
+    fn frame_ids(&self) -> BTreeSet<FrameId> {
+        match self {
+            Self::Affine(plan) => plan
+                .frames()
+                .iter()
+                .map(|frame| frame.frame_id().clone())
+                .collect(),
+            Self::Projective(plan) => plan
+                .frames()
+                .iter()
+                .map(|frame| frame.frame_id().clone())
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2413,14 +2590,25 @@ where
             "The registration output directory cannot be represented as Unicode.",
         )
     })?;
-    let plan = build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?;
+    let plan = match request.planning.geometry_model {
+        RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
+            build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?,
+        ),
+        RegistrationGeometryModel::Projective => {
+            DesktopRegistrationPlan::Projective(build_projective_registration_plan_for_ids_sync(
+                session,
+                &request.planning,
+                eligible_ids,
+            )?)
+        }
+    };
     if plan.plan_sha256() != request.expected_plan_sha256 {
         return Err(PreviewCommandError::new(
             "registration_plan_stale",
             "The reviewed registration digest no longer matches native evidence.",
         ));
     }
-    if request.artifacts.len() != plan.frames().len() {
+    if request.artifacts.len() != plan.frame_count() {
         return Err(registration_artifact_set_error());
     }
     let mut artifacts = BTreeMap::new();
@@ -2434,11 +2622,7 @@ where
             return Err(registration_artifact_set_error());
         }
     }
-    let expected_ids = plan
-        .frames()
-        .iter()
-        .map(|frame| frame.frame_id().clone())
-        .collect::<BTreeSet<_>>();
+    let expected_ids = plan.frame_ids();
     if artifacts.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
         return Err(registration_artifact_set_error());
     }
@@ -2464,16 +2648,7 @@ where
         .manifest
         .canonical_sha256()
         .map_err(|_| registration_artifact_error())?;
-    let execution = RegistrationPlanExecutionRequest::new(
-        plan,
-        sources,
-        request.output_directory,
-        manifest_sha256,
-        "registration-all-lights",
-    )
-    .and_then(|value| value.with_band_height(request.band_height))
-    .map_err(registration_execution_error)?;
-    let result = run_registration_plan(&execution, cancellation, &memory, |event| {
+    let forward_progress = |event: aether_runtime::RegistrationPlanProgressEvent| {
         let stage = event.stage();
         progress(RegistrationExecutionProgress {
             frame_index: event.frame_index(),
@@ -2486,7 +2661,33 @@ where
             total_units: stage.total_units(),
             code: stage.code().map(str::to_owned),
         });
-    })
+    };
+    let result = match plan {
+        DesktopRegistrationPlan::Affine(plan) => {
+            let execution = RegistrationPlanExecutionRequest::new(
+                plan,
+                sources,
+                request.output_directory,
+                manifest_sha256,
+                "registration-all-lights",
+            )
+            .and_then(|value| value.with_band_height(request.band_height))
+            .map_err(registration_execution_error)?;
+            run_registration_plan(&execution, cancellation, &memory, forward_progress)
+        }
+        DesktopRegistrationPlan::Projective(plan) => {
+            let execution = ProjectiveRegistrationPlanExecutionRequest::new(
+                plan,
+                sources,
+                request.output_directory,
+                manifest_sha256,
+                "registration-all-lights-projective",
+            )
+            .and_then(|value| value.with_band_height(request.band_height))
+            .map_err(registration_execution_error)?;
+            run_projective_registration_plan(&execution, cancellation, &memory, forward_progress)
+        }
+    }
     .map_err(registration_execution_error)?;
     let mut frames = Vec::new();
     frames
@@ -3699,6 +3900,13 @@ const fn registration_plan_rejected_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "registration_plan_pair_rejected",
         "At least one Light pair no longer passes the native confidence gate.",
+    )
+}
+
+const fn registration_projective_not_recommended_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "registration_projective_not_recommended",
+        "Projective geometry did not pass every conservative recommendation gate.",
     )
 }
 
@@ -7418,6 +7626,7 @@ mod tests {
         let planning = RegistrationPlanPreviewRequest {
             reference_frame_id: reference.as_str().to_owned(),
             source_frame_ids: vec![source.as_str().to_owned()],
+            geometry_model: RegistrationGeometryModel::Affine,
         };
         let plan = build_registration_plan_sync(session, &planning)?;
         let image = ScientificImage::from_pixels(
@@ -7751,10 +7960,12 @@ mod tests {
             RegistrationPlanPreviewRequest {
                 reference_frame_id: reference.as_str().to_owned(),
                 source_frame_ids: vec![source.as_str().to_owned()],
+                geometry_model: RegistrationGeometryModel::Affine,
             },
         )?;
 
-        assert_eq!(plan.schema_version, 1);
+        assert_eq!(plan.schema_version, 2);
+        assert_eq!(plan.geometry_model, RegistrationGeometryModel::Affine);
         assert_eq!(plan.reference_frame_id, reference.as_str());
         assert_eq!(plan.reference_width, 256);
         assert_eq!(plan.reference_height, 256);
@@ -7767,6 +7978,30 @@ mod tests {
         assert!(plan.covered_pixels > 0);
         assert!(plan.autocrop.width > 0);
         assert!(plan.autocrop.height > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn projective_plan_requires_every_conservative_recommendation_gate() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = registration_planning_session(directory.path())?;
+        let sources = registration_native_sources(&session)?;
+        let mut frame_ids = sources.keys();
+        let reference = frame_ids.next().ok_or("reference Light missing")?.clone();
+        let source = frame_ids.next().ok_or("source Light missing")?.clone();
+
+        let error = preview_registration_plan_sync(
+            &session,
+            RegistrationPlanPreviewRequest {
+                reference_frame_id: reference.as_str().to_owned(),
+                source_frame_ids: vec![source.as_str().to_owned()],
+                geometry_model: RegistrationGeometryModel::Projective,
+            },
+        )
+        .err()
+        .ok_or("an unrecommended projective plan was accepted")?;
+
+        assert_eq!(error.code, "registration_projective_not_recommended");
         Ok(())
     }
 
@@ -7789,6 +8024,7 @@ mod tests {
                 RegistrationPlanPreviewRequest {
                     reference_frame_id: reference.as_str().to_owned(),
                     source_frame_ids,
+                    geometry_model: RegistrationGeometryModel::Affine,
                 },
             )
             .err()

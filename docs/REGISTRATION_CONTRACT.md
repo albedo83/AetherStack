@@ -566,6 +566,18 @@ readback and late source revalidation succeeds. Cancellation or failure before
 the complete create-new link set is durable leaves no public product. Changing
 the configured band height must not change any published byte.
 
+Desktop plan preview schema 2 requires a visible geometry family. `affine` is
+the backward-compatible default; `projective` is an explicit operator choice,
+never an automatic side effect of diagnostic generation. For every non-reference
+frame, native reconstruction reruns the diagnostic and exposes a homography only
+when the base similarity is confidence-accepted and all conservative projective
+gates recommend it. One failed pair rejects the complete projective plan. Frame
+responses contain either affine coefficients or a projective matrix, never both,
+and execution reconstructs and digest-checks the selected plan again before it
+opens calibrated artifacts. The desktop does not yet offer registered-stack
+integration for projective products; its integration action remains disabled
+until the stack transaction is bound to `registration-projective-plan-v1`.
+
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from
 that path plus the recorded byte length and content SHA-256, looks up geometry

@@ -136,25 +136,28 @@ export interface RegistrationDiagnostic {
 export interface RegistrationPlanPreviewRequest {
   readonly referenceFrameId: string;
   readonly sourceFrameIds: readonly string[];
+  readonly geometryModel?: "affine" | "projective";
 }
 
 export interface RegistrationPlannedFrame {
   readonly frameId: string;
   readonly sourceWidth: number;
   readonly sourceHeight: number;
-  readonly transformCoefficientsSourcePixels: readonly [
-    number,
-    number,
-    number,
-    number,
-    number,
-    number,
-  ];
+  readonly transformCoefficientsSourcePixels:
+    readonly [number, number, number, number, number, number] | null;
+  readonly projectiveTransformCoefficientsSourcePixels?:
+    | readonly [
+        readonly [number, number, number],
+        readonly [number, number, number],
+        readonly [number, number, number],
+      ]
+    | null;
   readonly reference: boolean;
 }
 
 export interface RegistrationPlanPreview {
   readonly schemaVersion: number;
+  readonly geometryModel?: "affine" | "projective";
   readonly planSha256: string;
   readonly referenceFrameId: string;
   readonly referenceWidth: number;

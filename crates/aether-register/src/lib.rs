@@ -81,6 +81,25 @@ impl RegistrationDiagnostic {
     pub const fn accepted_plan(&self) -> Option<&RegistrationPlanSummary> {
         self.accepted_plan.as_ref()
     }
+
+    /// Full-resolution homography recommended by every conservative gate.
+    ///
+    /// A recommendation is exposed only when the underlying similarity result
+    /// is itself confidence-accepted. Returning the coefficients does not apply
+    /// the model; a plan-building caller must still record an explicit geometry
+    /// choice and seal the complete multi-frame plan.
+    #[must_use]
+    pub fn recommended_projective_coefficients_source_pixels(&self) -> Option<[[f64; 3]; 3]> {
+        eligible_projective_coefficients(self.accepted(), &self.projective_adequacy)
+    }
+}
+
+fn eligible_projective_coefficients(
+    similarity_accepted: bool,
+    evidence: &ProjectiveAdequacySummary,
+) -> Option<[[f64; 3]; 3]> {
+    (similarity_accepted && evidence.recommendation.recommended)
+        .then_some(evidence.recommendation.transform_coefficients_source_pixels)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1015,6 +1034,19 @@ mod tests {
                 model_separation_sufficient: true,
             },
         };
+
+        assert_eq!(eligible_projective_coefficients(true, &summary), None);
+        let mut recommended = summary.clone();
+        recommended.recommendation.recommended = true;
+        assert_eq!(eligible_projective_coefficients(false, &recommended), None);
+        assert_eq!(
+            eligible_projective_coefficients(true, &recommended),
+            Some(
+                recommended
+                    .recommendation
+                    .transform_coefficients_source_pixels
+            )
+        );
 
         let json = serde_json::to_value(summary)?;
         assert_eq!(

@@ -182,6 +182,9 @@ const screen = mountReviewScreen(root, model, {
   onSelectRegistrationSource(frameId) {
     selectRegistrationFrame("source", frameId);
   },
+  onSelectRegistrationGeometryModel(geometryModel) {
+    selectRegistrationGeometryModel(geometryModel);
+  },
   onAnalyzeRegistration() {
     void analyzeRegistration();
   },
@@ -723,6 +726,7 @@ function installImportedSession(session: ImportedSession): void {
     statisticsPanel: closedStatisticsPanel(),
     registration: {
       state: "idle",
+      geometryModel: "affine",
       frames: registrationFrames,
       referenceFrameId: registrationFrames[0]?.id ?? null,
       sourceFrameId: registrationFrames[1]?.id ?? null,
@@ -835,6 +839,47 @@ function selectRegistrationFrame(
       message: "Pair changed · run the native geometric solver",
     },
   });
+}
+
+function selectRegistrationGeometryModel(
+  geometryModel: "affine" | "projective",
+): void {
+  if (
+    geometryModel === model.registration.geometryModel ||
+    model.registration.planState === "building" ||
+    model.registration.execution.state === "running" ||
+    model.registration.execution.state === "cancelling"
+  ) {
+    return;
+  }
+  registrationTicket += 1;
+  const referenceFrameId = model.registration.referenceFrameId;
+  const solutions = model.registration.solutions;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      geometryModel,
+      planState: "idle",
+      plan: null,
+      execution: idleRegistrationExecution(
+        "Geometry model changed · seal a fresh registration plan",
+      ),
+      stack: idleRegisteredStack(
+        "Geometry model changed · register a fresh source set",
+      ),
+      resultReview: idleRegistrationResultReview(
+        "Geometry model changed · register a fresh source set",
+      ),
+      message:
+        geometryModel === "projective"
+          ? "Projective mode selected · every pair must pass all conservative gates"
+          : "Affine mode selected · accepted similarity transforms will be sealed",
+    },
+  });
+  if (referenceFrameId) {
+    void rebuildRegistrationPlan(referenceFrameId, solutions);
+  }
 }
 
 async function analyzeRegistration(): Promise<void> {
@@ -969,6 +1014,7 @@ async function rebuildRegistrationPlan(
     const plan = await previewRegistrationPlan({
       referenceFrameId,
       sourceFrameIds: required.map((frame) => frame.id),
+      geometryModel: model.registration.geometryModel,
     });
     if (
       ticket !== registrationTicket ||
@@ -1165,6 +1211,7 @@ async function executeRegistration(): Promise<void> {
         sourceFrameIds: plan.frames
           .filter((frame) => !frame.reference)
           .map((frame) => frame.frameId),
+        geometryModel: plan.geometryModel ?? "affine",
       },
       plan.planSha256,
       artifacts.filter((artifact) => artifact !== null),

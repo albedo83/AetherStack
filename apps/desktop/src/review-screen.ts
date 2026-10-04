@@ -178,6 +178,10 @@ export function mountReviewScreen(
       root,
       "[data-registration-source]",
     ),
+    registrationGeometryModels: requiredAll<HTMLButtonElement>(
+      root,
+      "[data-registration-geometry-model]",
+    ),
     analyzeRegistration: required<HTMLButtonElement>(
       root,
       '[data-action="analyze-registration"]',
@@ -881,6 +885,13 @@ export function mountReviewScreen(
     }
     if (action === "analyze-registration") {
       actions.onAnalyzeRegistration();
+      return;
+    }
+    if (action === "select-registration-geometry") {
+      const geometryModel = actionElement.dataset.registrationGeometryModel;
+      if (geometryModel === "affine" || geometryModel === "projective") {
+        actions.onSelectRegistrationGeometryModel(geometryModel);
+      }
       return;
     }
     if (action === "execute-registration") {
@@ -2514,6 +2525,7 @@ interface CalibrationElements {
 interface RegistrationElements {
   readonly registrationReference: HTMLSelectElement;
   readonly registrationSource: HTMLSelectElement;
+  readonly registrationGeometryModels: readonly HTMLButtonElement[];
   readonly analyzeRegistration: HTMLButtonElement;
   readonly executeRegistration: HTMLButtonElement;
   readonly cancelRegistration: HTMLButtonElement;
@@ -2646,6 +2658,12 @@ function renderRegistration(
   elements.registrationSource.replaceChildren(...options);
   elements.registrationReference.value = registration.referenceFrameId ?? "";
   elements.registrationSource.value = registration.sourceFrameId ?? "";
+  for (const button of elements.registrationGeometryModels) {
+    const selected =
+      button.dataset.registrationGeometryModel === registration.geometryModel;
+    button.setAttribute("aria-pressed", String(selected));
+    button.dataset.selected = String(selected);
+  }
 
   const reference = registration.frames.find(
     (frame) => frame.id === registration.referenceFrameId,
@@ -2672,6 +2690,9 @@ function renderRegistration(
     running || registration.frames.length === 0;
   elements.registrationSource.disabled =
     running || registration.frames.length === 0;
+  for (const button of elements.registrationGeometryModels) {
+    button.disabled = running;
+  }
   elements.analyzeRegistration.disabled = running || !pairReady;
   elements.analyzeRegistration.textContent = running
     ? "Solving geometry…"
@@ -2745,6 +2766,7 @@ function renderRegistration(
   elements.executeRegisteredStack.disabled =
     !registeredSetReady ||
     stackBusy ||
+    registration.plan?.geometryModel === "projective" ||
     (weightedEstimator && !weightPreflight.ready);
   elements.executeRegisteredStack.hidden = stackBusy;
   elements.cancelRegisteredStack.hidden = !stackBusy;
@@ -2754,9 +2776,11 @@ function renderRegistration(
   elements.registeredStackMessage.textContent = registration.stack.message;
   elements.registeredStackOutput.textContent =
     registration.stack.outputPath ??
-    (registeredSetReady
-      ? "Registered identity set verified"
-      : "Published registered artifacts required");
+    (registration.plan?.geometryModel === "projective"
+      ? "Projective crop integration is not enabled in this build"
+      : registeredSetReady
+        ? "Registered identity set verified"
+        : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
   const integrationReport = registration.stack.result;
   const reportInspection = registration.stack.reportInspection;
@@ -4349,6 +4373,17 @@ function shellMarkup(): string {
                 </div>
                 <span class="hardware-light" aria-hidden="true"></span>
               </div>
+              <fieldset class="geometry-model" aria-label="Registration geometry model">
+                <legend>Geometry model</legend>
+                <div class="geometry-model__choices">
+                  <button class="geometry-model__choice" type="button" data-action="select-registration-geometry" data-registration-geometry-model="affine" aria-pressed="true">
+                    <strong>Affine</strong><span>Stable default</span>
+                  </button>
+                  <button class="geometry-model__choice" type="button" data-action="select-registration-geometry" data-registration-geometry-model="projective" aria-pressed="false">
+                    <strong>Projective</strong><span>Only when recommended</span>
+                  </button>
+                </div>
+              </fieldset>
               <label class="control-field">
                 <span>Reference frame</span>
                 <select class="instrument-select" data-registration-reference></select>

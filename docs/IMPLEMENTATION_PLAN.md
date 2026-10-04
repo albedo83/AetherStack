@@ -1673,6 +1673,17 @@ safety reasoning. They do not narrate obvious syntax.
      independence from band height, and cancellation after one completed frame
      with no public products. Desktop construction remains gated on an explicit
      accepted projective recommendation rather than diagnostic availability.
+138. Expose projective planning through an explicit desktop geometry choice.
+     Affine remains the default. Selecting Projective reconstructs every pair
+     natively and refuses the plan unless the similarity solution is accepted
+     and every conservative projective recommendation gate passes. Preview
+     schema 2 identifies the geometry family and carries exactly one affine or
+     projective coefficient representation per frame. Execution dispatches to
+     the corresponding immutable runtime plan and retains the same atomic
+     progress and publication contract. The dark skeuomorphic segmented control
+     makes this scientific choice visible and keyboard accessible. Common-crop
+     integration stays disabled for projective output until its stack request
+     accepts the projective plan type explicitly.
 
 ## 11. Stable-release definition
 

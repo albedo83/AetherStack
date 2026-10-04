@@ -264,6 +264,7 @@ export interface AcceptedRegistrationSolution {
 /** UI state for reviewed pair evidence that will form one multi-Light plan. */
 export interface RegistrationViewModel {
   readonly state: "idle" | "running" | "accepted" | "rejected" | "error";
+  readonly geometryModel: "affine" | "projective";
   readonly frames: readonly RegistrationFrameOption[];
   readonly referenceFrameId: string | null;
   readonly sourceFrameId: string | null;
@@ -350,6 +351,9 @@ export interface ReviewActions {
   readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
   readonly onSelectRegistrationReference: (frameId: string) => void;
   readonly onSelectRegistrationSource: (frameId: string) => void;
+  readonly onSelectRegistrationGeometryModel: (
+    model: "affine" | "projective",
+  ) => void;
   readonly onAnalyzeRegistration: () => void;
   readonly onExecuteRegistration: () => void;
   readonly onCancelRegistration: () => void;
