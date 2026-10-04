@@ -7541,6 +7541,33 @@ mod tests {
         })
     }
 
+    const REGISTRATION_TEST_STARS: [(f64, f64); 24] = [
+        (20.0, 20.0),
+        (50.0, 25.0),
+        (83.0, 18.0),
+        (125.0, 29.0),
+        (170.0, 22.0),
+        (215.0, 35.0),
+        (30.0, 65.0),
+        (72.0, 78.0),
+        (110.0, 60.0),
+        (152.0, 82.0),
+        (205.0, 69.0),
+        (18.0, 115.0),
+        (58.0, 128.0),
+        (98.0, 110.0),
+        (142.0, 132.0),
+        (190.0, 118.0),
+        (225.0, 145.0),
+        (35.0, 175.0),
+        (80.0, 160.0),
+        (120.0, 190.0),
+        (165.0, 170.0),
+        (210.0, 205.0),
+        (65.0, 220.0),
+        (145.0, 225.0),
+    ];
+
     fn registration_planning_file(
         root: &Path,
         relative_path: &str,
@@ -7548,32 +7575,6 @@ mod tests {
     ) -> TestResult<ManifestFile> {
         const WIDTH: usize = 256;
         const HEIGHT: usize = 256;
-        const STARS: [(f64, f64); 24] = [
-            (20.0, 20.0),
-            (50.0, 25.0),
-            (83.0, 18.0),
-            (125.0, 29.0),
-            (170.0, 22.0),
-            (215.0, 35.0),
-            (30.0, 65.0),
-            (72.0, 78.0),
-            (110.0, 60.0),
-            (152.0, 82.0),
-            (205.0, 69.0),
-            (18.0, 115.0),
-            (58.0, 128.0),
-            (98.0, 110.0),
-            (142.0, 132.0),
-            (190.0, 118.0),
-            (225.0, 145.0),
-            (35.0, 175.0),
-            (80.0, 160.0),
-            (120.0, 190.0),
-            (165.0, 170.0),
-            (210.0, 205.0),
-            (65.0, 220.0),
-            (145.0, 225.0),
-        ];
         let path = root.join(relative_path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -7583,7 +7584,8 @@ mod tests {
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let mut sample = 1_000.0 + f64::from(((x + 3 * y) % 5) as u8) - 2.0;
-                for (index, (star_x, star_y)) in STARS.iter().copied().enumerate() {
+                for (index, (star_x, star_y)) in REGISTRATION_TEST_STARS.iter().copied().enumerate()
+                {
                     let dx = x as f64 - (star_x + translation.0);
                     let dy = y as f64 - (star_y + translation.1);
                     let amplitude = 500.0 + index as f64 * 17.0;
@@ -7609,6 +7611,99 @@ mod tests {
             classification,
             ClassificationPolicy::RequireAgreement,
         )?)
+    }
+
+    fn projective_registration_planning_file(
+        root: &Path,
+        relative_path: &str,
+        source_to_reference: ProjectiveTransform,
+    ) -> TestResult<ManifestFile> {
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 256;
+        let reference_to_source = source_to_reference.inverse()?;
+        let mut source_stars = Vec::new();
+        source_stars.try_reserve_exact(REGISTRATION_TEST_STARS.len())?;
+        for (x, y) in REGISTRATION_TEST_STARS {
+            let mapped = reference_to_source.apply(aether_registration::ImagePoint::new(x, y)?)?;
+            source_stars.push((mapped.x(), mapped.y()));
+        }
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(WIDTH * HEIGHT)?;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let mut sample = 1_000.0 + f64::from(((x + 3 * y) % 5) as u8) - 2.0;
+                for (index, (star_x, star_y)) in source_stars.iter().copied().enumerate() {
+                    let dx = x as f64 - star_x;
+                    let dy = y as f64 - star_y;
+                    let amplitude = 500.0 + index as f64 * 17.0;
+                    sample += amplitude * (-(dx * dx + dy * dy) / (2.0 * 3.5 * 3.5)).exp();
+                }
+                pixels.push(sample);
+            }
+        }
+        let image = ScientificImage::from_pixels(Dimensions::new(WIDTH, HEIGHT, 1)?, pixels)?;
+        let mut output = File::create(&path)?;
+        write_f64_primary(&mut output, &image)?;
+        drop(output);
+        let mut source = File::open(path)?;
+        let fingerprint = fingerprint_reader(&mut source)?;
+        let metadata = planning_metadata(FrameType::Light);
+        let classification = classify_frame(Path::new(relative_path), &metadata);
+        Ok(ManifestFile::from_analysis(
+            relative_path,
+            fingerprint,
+            vec![WIDTH as u64, HEIGHT as u64],
+            metadata,
+            Vec::new(),
+            classification,
+            ClassificationPolicy::RequireAgreement,
+        )?)
+    }
+
+    fn projective_registration_planning_session(root: &Path) -> TestResult<ImportedNativeSession> {
+        let reference = projective_registration_planning_file(
+            root,
+            "LIGHTS/reference.fits",
+            ProjectiveTransform::IDENTITY,
+        )?;
+        let source = projective_registration_planning_file(
+            root,
+            "LIGHTS/source.fits",
+            ProjectiveTransform::new([
+                [1.0, 0.01, 3.0],
+                [-0.005, 0.99, -2.0],
+                [8.0e-5, -6.0e-5, 1.0],
+            ])?,
+        )?;
+        let key = StrictGroupingKey::from_metadata(
+            FrameType::Light,
+            reference.metadata(),
+            reference.axes(),
+        )?;
+        let group = ManifestGroup::new(
+            "light-uvir-projective",
+            key,
+            vec![
+                reference.relative_path().to_owned(),
+                source.relative_path().to_owned(),
+            ],
+            Vec::new(),
+            None,
+        )?;
+        Ok(ImportedNativeSession {
+            root: root.to_owned(),
+            manifest: Arc::new(SessionManifest::new(
+                ClassificationPolicy::RequireAgreement,
+                vec![reference, source],
+                vec![group],
+            )?),
+            diagnostics_report: None,
+            quality_cache_rejections: Vec::new(),
+        })
     }
 
     fn registration_planning_session(root: &Path) -> TestResult<ImportedNativeSession> {
@@ -8031,6 +8126,132 @@ mod tests {
         .ok_or("an unrecommended projective plan was accepted")?;
 
         assert_eq!(error.code, "registration_projective_not_recommended");
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_clear_projective_geometry_from_native_pixels() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = projective_registration_planning_session(directory.path())?;
+        let sources = registration_native_sources(&session)?;
+        let mut frame_ids = sources.keys();
+        let reference = frame_ids.next().ok_or("reference Light missing")?.clone();
+        let source = frame_ids.next().ok_or("source Light missing")?.clone();
+        let planning = RegistrationPlanPreviewRequest {
+            reference_frame_id: reference.as_str().to_owned(),
+            source_frame_ids: vec![source.as_str().to_owned()],
+            geometry_model: RegistrationGeometryModel::Projective,
+        };
+        let preview = preview_registration_plan_sync(&session, planning.clone())?;
+
+        assert_eq!(preview.schema_version, 2);
+        assert_eq!(
+            preview.geometry_model,
+            RegistrationGeometryModel::Projective
+        );
+        assert_eq!(preview.frames.len(), 2);
+        assert!(
+            preview
+                .frames
+                .iter()
+                .all(|frame| frame.transform_coefficients_source_pixels.is_none())
+        );
+        assert!(preview.frames.iter().all(|frame| {
+            frame
+                .projective_transform_coefficients_source_pixels
+                .is_some()
+        }));
+        assert!(preview.autocrop.width > 0 && preview.autocrop.width < 256);
+        assert!(preview.autocrop.height > 0 && preview.autocrop.height < 256);
+
+        let artifact_root = directory.path().join("linear-rgb-projective");
+        let registered_root = directory.path().join("registered-projective");
+        fs::create_dir(&artifact_root)?;
+        fs::create_dir(&registered_root)?;
+        let mut artifacts = Vec::new();
+        for (index, frame_id) in [reference, source].into_iter().enumerate() {
+            let value = 2.0 + index as f64 * 2.0;
+            let image = ScientificImage::filled(Dimensions::new(256, 256, 3)?, value)?;
+            let path = artifact_root.join(format!("linear-projective-{index}.fits"));
+            let provenance = FitsOutputProvenance::new(
+                "a".repeat(64),
+                "light-uvir-projective",
+                "linear-rgb-v1",
+                1,
+            )?
+            .with_frame_id_sha256(frame_id.as_str())?;
+            write_f64_primary_atomic_new_with_provenance(&path, &image, &provenance)?;
+            artifacts.push(RegistrationArtifactInput {
+                frame_id: frame_id.as_str().to_owned(),
+                path,
+            });
+        }
+        let registered = execute_registration_plan_sync(
+            &session,
+            RegistrationPlanExecutionCommandRequest {
+                planning: planning.clone(),
+                expected_plan_sha256: preview.plan_sha256.clone(),
+                artifacts,
+                output_directory: registered_root,
+                band_height: 17,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+            },
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+        let stack_path = directory.path().join("integrated-projective.fits");
+        let integrated = execute_registered_stack_sync(
+            &session,
+            RegisteredStackCommandRequest {
+                planning,
+                expected_plan_sha256: preview.plan_sha256.clone(),
+                artifacts: registered
+                    .frames
+                    .into_iter()
+                    .map(|frame| RegistrationArtifactInput {
+                        frame_id: frame.frame_id,
+                        path: PathBuf::from(frame.output_path),
+                    })
+                    .collect(),
+                quality_evidence: Vec::new(),
+                quality_reference_frame_id: None,
+                output_path: stack_path.clone(),
+                band_height: 19,
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+                integration: RegisteredStackIntegrationSettings {
+                    estimator: RegisteredStackEstimatorInput::StrictMean,
+                    low_fraction: 0.1,
+                    high_fraction: 0.1,
+                    minimum_retained_samples: 2,
+                    generate_rejection_maps: false,
+                },
+            },
+            &CancellationToken::new(),
+            |_| {},
+        )?;
+
+        assert_eq!(integrated.plan_sha256, preview.plan_sha256);
+        assert_eq!(integrated.width, preview.autocrop.width);
+        assert_eq!(integrated.height, preview.autocrop.height);
+        assert_eq!(integrated.planes, 3);
+        assert_eq!(integrated.estimator, REGISTERED_CROP_MEAN_ALGORITHM_ID);
+        assert!(stack_path.is_file());
+        let report = inspect_registered_stack_report_sync(Path::new(&integrated.report_path))?;
+        assert_eq!(report.plan_sha256, preview.plan_sha256);
+        assert!(report.all_products_verified);
+        let (_, _, center) = read_pixel_planes(
+            File::open(&stack_path)?,
+            u64::try_from(integrated.width / 2)?,
+            u64::try_from(integrated.height / 2)?,
+            Some((
+                u64::try_from(integrated.width)?,
+                u64::try_from(integrated.height)?,
+                3,
+            )),
+        )?;
+        assert!(center.into_iter().all(|value| {
+            value.is_some_and(|sample| (sample - 3.0).abs() <= 16.0 * f64::EPSILON)
+        }));
         Ok(())
     }
 

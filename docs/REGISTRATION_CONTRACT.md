@@ -583,6 +583,10 @@ that exact plan; a projective digest cannot be substituted for an affine one or
 vice versa. Every existing estimator and rejection-map publication path shares
 the same bounded executor. Projective common-crop integration must produce the
 same FITS bytes for every valid band height, just as affine integration does.
+The desktop boundary is covered by a deterministic native-pixel corpus whose
+perspective passes every recommendation gate: it must rebuild schema-2 geometry,
+publish the registered RGB set, integrate the exact sealed crop, and retain the
+projective plan digest through the final FITS and integration report.
 
 The strict runtime's plan-bound constructor accepts a local source only with
 its portable session-relative path. It re-derives the reviewed `FrameId` from

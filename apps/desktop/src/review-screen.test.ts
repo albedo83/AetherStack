@@ -1099,6 +1099,34 @@ describe("frame review workspace", () => {
     expect(actions.onSelectRegisteredFrame).toHaveBeenCalledWith(frameB.id);
     fireEvent.click(getByRole(root, "button", { name: "Integrate crop" }));
     expect(actions.onExecuteRegisteredStack).toHaveBeenCalledOnce();
+    vi.mocked(actions.onExecuteRegisteredStack).mockClear();
+    controller.update({
+      ...ready,
+      registration: {
+        ...ready.registration,
+        geometryModel: "projective",
+        plan: {
+          ...ready.registration.plan,
+          schemaVersion: 2,
+          geometryModel: "projective",
+          frames: ready.registration.plan.frames.map((frame) => ({
+            ...frame,
+            transformCoefficientsSourcePixels: null,
+            projectiveTransformCoefficientsSourcePixels: [
+              [1, 0, 0],
+              [0, 1, 0],
+              [0.00001, -0.00001, 1],
+            ] as const,
+          })),
+        },
+      },
+    });
+    const projectiveIntegration = getByRole<HTMLButtonElement>(root, "button", {
+      name: "Integrate crop",
+    });
+    expect(projectiveIntegration.disabled).toBe(false);
+    fireEvent.click(projectiveIntegration);
+    expect(actions.onExecuteRegisteredStack).toHaveBeenCalledOnce();
     fireEvent.click(getByRole(root, "tab", { name: "Low reject" }));
     expect(actions.onSelectRegisteredStackProduct).toHaveBeenCalledWith(
       "rejection_low",

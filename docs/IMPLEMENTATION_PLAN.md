@@ -1692,6 +1692,14 @@ safety reasoning. They do not narrate obvious syntax.
      existing executor. A projective regression proves exact crop dimensions,
      expected F64 pixels, and byte-identical output across band heights. The
      desktop now dispatches integration by its explicit geometry selection.
+140. Exercise the projective desktop path from native pixels to the final stack.
+     A deterministic synthetic star field carries enough mild perspective to
+     pass every conservative recommendation gate while remaining within the
+     similarity matcher capture range. The regression rebuilds the schema-2
+     projective plan, publishes the complete registered RGB set, integrates its
+     exact projective crop, and inspects the expected mean at the center pixel.
+     A browser-level interaction test also locks the projective integration
+     action as available once the matching registered identity set is complete.
 
 ## 11. Stable-release definition
 
