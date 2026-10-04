@@ -310,6 +310,15 @@ These intentionally conservative thresholds reject the complete ASI294MC
 validation session. The result remains advisory until plan geometry, footprint,
 runtime publication, and diagnostics are atomically upgraded together.
 
+The CFA diagnostic evaluates geometry on a 2 × 2 cell-mean plane. A detection
+center `(u, v)` represents physical sensor center `(2u + 0.5, 2v + 0.5)`.
+Projective geometry is therefore lifted as `S * H * inverse(S)`, where `S`
+performs that scale and center offset. Schema 4 publishes the resulting
+canonical source-pixel matrix inside the recommendation block regardless of the
+recommendation outcome. Direct point-mapping tests span the sensor field, and
+affine homographies must agree with the established affine lift within binary64
+roundoff.
+
 ## Strict Lanczos-3 resampling oracle
 
 `lanczos3-normalized-f64-v1` resamples every planar channel in the reference

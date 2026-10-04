@@ -711,6 +711,11 @@ describe("frame review workspace", () => {
           },
           recommendation: {
             recommended: false,
+            transformCoefficientsSourcePixels: [
+              [0.9999898, -0.00046228, -0.92],
+              [0.00046228, 0.9999898, 0.19],
+              [0.0000005, -0.000001, 1],
+            ] as const,
             minimumMatches: 20,
             minimumValidationFolds: 5,
             minimumProjectiveBetterFolds: 5,

@@ -75,6 +75,11 @@ function diagnostic(accepted: boolean, marker: number): RegistrationDiagnostic {
       },
       recommendation: {
         recommended: false,
+        transformCoefficientsSourcePixels: [
+          [1, 0, marker],
+          [0, 1, 0],
+          [0, 0, 1],
+        ],
         minimumMatches: 20,
         minimumValidationFolds: 5,
         minimumProjectiveBetterFolds: 5,

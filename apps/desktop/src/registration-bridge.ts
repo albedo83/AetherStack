@@ -98,6 +98,11 @@ export interface RegistrationDiagnostic {
     /** Advisory only; selectionApplied remains false until plan integration. */
     readonly recommendation: {
       readonly recommended: boolean;
+      readonly transformCoefficientsSourcePixels: readonly [
+        readonly [number, number, number],
+        readonly [number, number, number],
+        readonly [number, number, number],
+      ];
       readonly minimumMatches: number;
       readonly minimumValidationFolds: number;
       readonly minimumProjectiveBetterFolds: number;

@@ -1637,6 +1637,13 @@ safety reasoning. They do not narrate obvious syntax.
      crops. For genuine projective geometry, covered-pixel counts and every
      selected crop pixel are checked against independently generated resampler
      masks. A projective horizon fails the complete request explicitly.
+134. Lift diagnostic projective geometry from the 2 × 2 CFA cell-mean plane to
+     physical sensor pixels by exact homographic conjugation around cell
+     centers. Schema 4 now publishes this canonical source-pixel matrix inside
+     the advisory recommendation, even when the recommendation fails, so a
+     future plan never needs to reinterpret detection coordinates. Tests compare
+     mapped physical centers across the sensor and require affine and projective
+     lifts to agree within binary64 roundoff.
 
 ## 11. Stable-release definition
 

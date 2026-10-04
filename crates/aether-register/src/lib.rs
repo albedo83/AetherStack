@@ -24,7 +24,7 @@ use aether_registration::{
     DescriptorMatchParameters, FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog,
     FeatureSelectionParameters, PROJECTIVE_ADEQUACY_ALGORITHM_ID,
     PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID, PROJECTIVE_FIT_ALGORITHM_ID,
-    PROJECTIVE_SELECTION_ALGORITHM_ID, ProjectiveSelectionPolicy,
+    PROJECTIVE_SELECTION_ALGORITHM_ID, ProjectiveSelectionPolicy, ProjectiveTransform,
     REGISTRATION_CONFIDENCE_ALGORITHM_ID, ReflectionPolicy, RegistrationConfidenceParameters,
     RegistrationConfidenceRejection, RegistrationFootprint, SIMILARITY_CONSENSUS_ALGORITHM_ID,
     SimilarityConsensusParameters, TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptorParameters,
@@ -182,6 +182,7 @@ struct ProjectiveCrossValidationSummary {
 #[serde(rename_all = "camelCase")]
 struct ProjectiveRecommendationSummary {
     recommended: bool,
+    transform_coefficients_source_pixels: [[f64; 3]; 3],
     minimum_matches: usize,
     minimum_validation_folds: usize,
     minimum_projective_better_folds: usize,
@@ -417,6 +418,8 @@ where
         projective_policy,
     )
     .map_err(|error| RegistrationDiagnosticError::new("projective recommendation", error))?;
+    let projective_source_transform =
+        lift_cell_mean_projective_transform(projective_fit.transform())?;
 
     let match_statistics = matches.statistics();
     let consensus_statistics = consensus.statistics();
@@ -548,6 +551,7 @@ where
             },
             recommendation: ProjectiveRecommendationSummary {
                 recommended: projective_recommendation.recommends_projective(),
+                transform_coefficients_source_pixels: projective_source_transform.coefficients(),
                 minimum_matches: projective_policy.minimum_matches(),
                 minimum_validation_folds: projective_policy.minimum_validation_folds(),
                 minimum_projective_better_folds: projective_policy
@@ -602,6 +606,26 @@ fn lift_cell_mean_transform(
     let source_ty = (2.0 * ty) + cell_center - cell_center * (m10 + m11);
     AffineTransform::new(m00, m01, m10, m11, source_tx, source_ty)
         .map_err(|error| RegistrationDiagnosticError::new("source-pixel transform", error))
+}
+
+fn lift_cell_mean_projective_transform(
+    detection_transform: ProjectiveTransform,
+) -> Result<ProjectiveTransform, RegistrationDiagnosticError> {
+    // A detection center (u, v) represents the physical sensor center
+    // (2u + 0.5, 2v + 0.5). Conjugation preserves that convention for the
+    // complete homography, including perspective terms.
+    let detection_to_source = ProjectiveTransform::from_affine(
+        AffineTransform::new(2.0, 0.0, 0.0, 2.0, 0.5, 0.5)
+            .map_err(|error| RegistrationDiagnosticError::new("cell transform", error))?,
+    )
+    .map_err(|error| RegistrationDiagnosticError::new("cell transform", error))?;
+    detection_to_source
+        .inverse()
+        .and_then(|source_to_detection| source_to_detection.then(detection_transform))
+        .and_then(|transform| transform.then(detection_to_source))
+        .map_err(|error| {
+            RegistrationDiagnosticError::new("source-pixel projective transform", error)
+        })
 }
 
 fn prepare_frame<R: Read + Seek>(
@@ -868,6 +892,51 @@ mod tests {
     }
 
     #[test]
+    fn projective_cell_mean_lift_preserves_physical_centers() -> Result<(), Box<dyn Error>> {
+        let detection = ProjectiveTransform::new([
+            [0.999, -0.012, 0.37],
+            [0.012, 0.999, -0.28],
+            [8.0e-5, -5.0e-5, 1.0],
+        ])?;
+        let lifted = lift_cell_mean_projective_transform(detection)?;
+
+        for (x, y) in [(0.5, 0.5), (8.5, 12.5), (4_100.5, 2_800.5)] {
+            let source_pixel = ImagePoint::new(x, y)?;
+            let source_detection = ImagePoint::new((x - 0.5) * 0.5, (y - 0.5) * 0.5)?;
+            let mapped_detection = detection.apply(source_detection)?;
+            let expected = ImagePoint::new(
+                mapped_detection.x() * 2.0 + 0.5,
+                mapped_detection.y() * 2.0 + 0.5,
+            )?;
+            let actual = lifted.apply(source_pixel)?;
+            assert!((actual.x() - expected.x()).abs() < 1.0e-11);
+            assert!((actual.y() - expected.y()).abs() < 1.0e-11);
+        }
+
+        assert_eq!(
+            lift_cell_mean_projective_transform(ProjectiveTransform::IDENTITY)?,
+            ProjectiveTransform::IDENTITY
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn affine_and_projective_cell_mean_lifts_agree() -> Result<(), Box<dyn Error>> {
+        let detection = AffineTransform::new(0.999, -0.012, 0.012, 0.999, 0.37, -0.28)?;
+        let affine = lift_cell_mean_transform(detection)?;
+        let projective =
+            lift_cell_mean_projective_transform(ProjectiveTransform::from_affine(detection)?)?;
+        for (x, y) in [(0.0, 0.0), (17.25, 11.75), (4_143.0, 2_821.0)] {
+            let point = ImagePoint::new(x, y)?;
+            let expected = affine.apply(point)?;
+            let actual = projective.apply(point)?;
+            assert!((actual.x() - expected.x()).abs() < 1.0e-11);
+            assert!((actual.y() - expected.y()).abs() < 1.0e-11);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn accepted_plan_serializes_with_desktop_safe_field_names() -> Result<(), Box<dyn Error>> {
         let plan = RegistrationPlanSummary {
             footprint_algorithm_id: COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID,
@@ -922,6 +991,11 @@ mod tests {
             },
             recommendation: ProjectiveRecommendationSummary {
                 recommended: false,
+                transform_coefficients_source_pixels: [
+                    [1.0, 0.0, 4.0],
+                    [0.0, 1.0, -6.0],
+                    [2.0e-5, -4.0e-5, 1.0],
+                ],
                 minimum_matches: 20,
                 minimum_validation_folds: 5,
                 minimum_projective_better_folds: 5,
@@ -959,6 +1033,11 @@ mod tests {
             json.get("recommendation")
                 .and_then(|value| value.get("recommended")),
             Some(&serde_json::json!(false))
+        );
+        assert!(
+            json.get("recommendation")
+                .and_then(|value| value.get("transformCoefficientsSourcePixels"))
+                .is_some()
         );
         assert!(json.get("selection_applied").is_none());
         Ok(())
