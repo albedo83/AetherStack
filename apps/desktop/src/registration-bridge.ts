@@ -178,7 +178,8 @@ export interface RegistrationExecutionSettings {
 }
 
 export interface RegisteredStackIntegrationSettings {
-  readonly estimator: "strict_mean" | "weighted_mean" | "percentile_clipped";
+  readonly estimator:
+    "strict_mean" | "median" | "weighted_mean" | "percentile_clipped";
   readonly weightReferenceFrameId: string | null;
   readonly lowFraction: number;
   readonly highFraction: number;

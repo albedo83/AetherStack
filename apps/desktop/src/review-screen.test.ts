@@ -1270,6 +1270,16 @@ describe("frame review workspace", () => {
       generateRejectionMaps: true,
     });
 
+    fireEvent.change(estimator, { target: { value: "median" } });
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "median",
+      weightReferenceFrameId: null,
+      lowFraction: 0.13,
+      highFraction: 0.08,
+      minimumRetainedSamples: 5,
+      generateRejectionMaps: false,
+    });
+
     controller.update({
       ...advanced,
       registration: {
@@ -1278,7 +1288,7 @@ describe("frame review workspace", () => {
           ...advanced.registration.stack,
           settings: {
             ...advanced.registration.stack.settings,
-            estimator: "strict_mean",
+            estimator: "median",
           },
         },
       },
@@ -1288,6 +1298,7 @@ describe("frame review workspace", () => {
         name: "Increase low-tail fraction",
       }).disabled,
     ).toBe(true);
+    expect(root.textContent).toContain("EXACT F64 MEDIAN");
   });
 
   it("presents a natively verified report without claiming an active stack", () => {

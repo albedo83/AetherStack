@@ -2936,6 +2936,7 @@ function renderRegistration(
     : "Close archived report";
   const previewResult = reportIsExternal ? null : integrationReport;
   const rejectionEstimator = stackSettings.estimator === "percentile_clipped";
+  const medianEstimator = stackSettings.estimator === "median";
   elements.registeredStackEstimator.value = stackSettings.estimator;
   elements.registeredStackLowFraction.value = String(stackSettings.lowFraction);
   elements.registeredStackHighFraction.value = String(
@@ -2959,7 +2960,9 @@ function renderRegistration(
     ? "BALANCED PSF WEIGHT"
     : rejectionEstimator
       ? "PERCENTILE F64"
-      : "STRICT F64 MEAN";
+      : medianEstimator
+        ? "EXACT F64 MEDIAN"
+        : "STRICT F64 MEAN";
   elements.registeredStackWeightPreflight.hidden = !weightedEstimator;
   elements.registeredStackWeightPreflight.dataset.ready = String(
     weightPreflight.ready,
@@ -3422,6 +3425,7 @@ function registeredStackSettings(
   const estimator = elements.registeredStackEstimator.value;
   if (
     estimator !== "strict_mean" &&
+    estimator !== "median" &&
     estimator !== "weighted_mean" &&
     estimator !== "percentile_clipped"
   ) {
@@ -3469,11 +3473,13 @@ function formatRelativeWeight(value: number | null): string {
 }
 
 function formatEstimatorName(
-  estimator: "strict_mean" | "weighted_mean" | "percentile_clipped",
+  estimator: "strict_mean" | "median" | "weighted_mean" | "percentile_clipped",
 ): string {
   switch (estimator) {
     case "strict_mean":
       return "strict mean";
+    case "median":
+      return "exact median";
     case "weighted_mean":
       return "balanced PSF weight";
     case "percentile_clipped":
@@ -4502,6 +4508,7 @@ function shellMarkup(): string {
                         <span>Estimator</span>
                         <select class="instrument-select" data-registered-stack-estimator>
                           <option value="strict_mean">Strict compensated mean</option>
+                          <option value="median">Exact median</option>
                           <option value="weighted_mean">Balanced PSF weighting</option>
                           <option value="percentile_clipped">Percentile-clipped mean</option>
                         </select>

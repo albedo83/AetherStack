@@ -1746,6 +1746,12 @@ safety reasoning. They do not narrate obvious syntax.
      includes one reusable rank scratch scalar per source. A FITS regression
      proves exact pixels and byte-identical products across band heights. Desktop
      selection and sealed report decoding remain next.
+148. Expose exact median through the desktop and sealed integration-report path.
+     The advanced estimator selector uses the stable `median` wire value, shows
+     an explicit F64 median instrument label, disables percentile-only controls,
+     and reports progress without implying rejection. Native input mapping and
+     archived report verification bind the value to
+     `registered-median-f64-v1`; tests lock both wire and provenance identities.
 
 ## 11. Stable-release definition
 

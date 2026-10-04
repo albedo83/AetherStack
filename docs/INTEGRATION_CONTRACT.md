@@ -69,8 +69,11 @@ The registered-stack runtime exposes this estimator as
 common crop in bounded bands, reserves the reusable per-pixel rank scratch, and
 publishes one checksum-verified binary64 FITS product with the distinct
 estimator identity. Tests require exact median pixels and byte-identical output
-across band heights. Desktop selection and report-schema exposure remain the
-next provenance boundary.
+across band heights. The desktop exposes “Exact median” as an explicit advanced
+estimator, disables rejection-only controls, sends the stable `median` wire
+identity, and seals `registered-median-f64-v1` in FITS and integration reports.
+Existing report schemas remain readable because the estimator enum gains a new
+value without changing prior payloads.
 
 ## Frame-weighted mean
 

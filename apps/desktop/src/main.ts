@@ -1457,9 +1457,11 @@ async function executeStack(): Promise<void> {
         message:
           settings.estimator === "strict_mean"
             ? "Integrating the sealed common crop with strict F64 mean…"
-            : settings.estimator === "weighted_mean"
-              ? "Integrating with identity-bound balanced PSF weights…"
-              : "Integrating with deterministic percentile rejection…",
+            : settings.estimator === "median"
+              ? "Integrating the sealed common crop with exact F64 median…"
+              : settings.estimator === "weighted_mean"
+                ? "Integrating with identity-bound balanced PSF weights…"
+                : "Integrating with deterministic percentile rejection…",
       },
     },
   });

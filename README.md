@@ -171,7 +171,9 @@ optimized CPU and GPU paths must match.
 - strict unweighted mean integration with compensated normalized accumulation,
   exact per-pixel support accounting, and direct multi-plane region integration
   for a sealed common crop without full-frame crop copies, plus an independently
-  versioned percentile-clipped mean with exact low/high rejection evidence and
+  versioned exact finite-sample median with overflow-safe even support, bounded
+  rank scratch, atomic FITS publication, and explicit desktop/report identity,
+  plus a versioned percentile-clipped mean with exact low/high rejection evidence and
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
   expert UI while strict mean remains the default, with linked native previews

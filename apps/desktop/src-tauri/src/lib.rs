@@ -337,6 +337,7 @@ struct RegisteredStackCommandRequest {
 #[serde(rename_all = "snake_case")]
 enum RegisteredStackEstimatorInput {
     StrictMean,
+    Median,
     WeightedMean,
     PercentileClipped,
 }
@@ -2760,13 +2761,16 @@ where
     let geometry_model = request.planning.geometry_model;
     if matches!(
         integration.estimator,
-        RegisteredStackEstimatorInput::StrictMean | RegisteredStackEstimatorInput::WeightedMean
+        RegisteredStackEstimatorInput::StrictMean
+            | RegisteredStackEstimatorInput::Median
+            | RegisteredStackEstimatorInput::WeightedMean
     ) && integration.generate_rejection_maps
     {
         return Err(registered_stack_configuration_error());
     }
     let estimator = match integration.estimator {
         RegisteredStackEstimatorInput::StrictMean => RegisteredStackEstimator::StrictMean,
+        RegisteredStackEstimatorInput::Median => RegisteredStackEstimator::Median,
         RegisteredStackEstimatorInput::WeightedMean => RegisteredStackEstimator::WeightedMean,
         RegisteredStackEstimatorInput::PercentileClipped => {
             RegisteredStackEstimator::PercentileClipped(
@@ -3773,6 +3777,7 @@ const fn registered_stack_estimator_algorithm_id(
         RegisteredStackEstimatorInput::PercentileClipped => {
             aether_runtime::REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID
         }
+        RegisteredStackEstimatorInput::Median => aether_runtime::REGISTERED_MEDIAN_ALGORITHM_ID,
     }
 }
 
@@ -7311,8 +7316,8 @@ mod tests {
     };
     use aether_metadata::{Binning, CameraModel, CanonicalMetadata, CanonicalValue, Confidence};
     use aether_runtime::{
-        REGISTERED_CROP_MEAN_ALGORITHM_ID, REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
-        REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
+        REGISTERED_CROP_MEAN_ALGORITHM_ID, REGISTERED_MEDIAN_ALGORITHM_ID,
+        REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID, REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
     };
     use aether_session::{ManifestGroup, StrictGroupingKey, classify_frame, fingerprint_reader};
 
@@ -7321,6 +7326,19 @@ mod tests {
     type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
     static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn registered_median_has_stable_wire_and_provenance_identities() -> TestResult {
+        assert_eq!(
+            serde_json::to_string(&RegisteredStackEstimatorInput::Median)?,
+            "\"median\""
+        );
+        assert_eq!(
+            registered_stack_estimator_algorithm_id(RegisteredStackEstimatorInput::Median),
+            REGISTERED_MEDIAN_ALGORITHM_ID
+        );
+        Ok(())
+    }
 
     struct TestDirectory {
         path: PathBuf,
