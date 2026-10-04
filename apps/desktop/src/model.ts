@@ -117,6 +117,7 @@ export interface SessionDiagnostics {
   readonly filesConsidered: number;
   readonly fingerprintedSourceBytes: number;
   readonly scanElapsedMilliseconds: number;
+  readonly sourceAnalysisParallelism: number;
   readonly verifiedFrames: number;
   readonly classificationConflicts: number;
   readonly recoverableFailures: number;

@@ -85,6 +85,7 @@ const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
 const QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID: &str = "quality-cache-maintenance-preview-v1";
 const SOURCE_VERIFICATION_PROGRESS_BYTES: u64 = 8 * 1_024 * 1_024;
+const MAX_INTERACTIVE_IMPORT_PARALLELISM: usize = 8;
 static REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
@@ -905,6 +906,7 @@ struct ImportedSession {
     files_considered: usize,
     fingerprinted_source_bytes: u64,
     scan_elapsed_milliseconds: u64,
+    source_analysis_parallelism: usize,
     classification_conflicts: usize,
     recoverable_failures: Vec<ImportedFailure>,
     unassigned_sources: Vec<String>,
@@ -6417,6 +6419,7 @@ fn scan_session_directory_sync(root: &Path) -> Result<ImportedSessionBundle, Pre
         // operation. Prefer its nearest recognized role when a capture program
         // wrote a contradictory IMAGETYP, while retaining the conflict below.
         classification_policy: ClassificationPolicy::PreferDirectory,
+        source_analysis_parallelism: interactive_import_parallelism(),
         ..DirectoryManifestOptions::default()
     };
     let report = generate_manifest_from_directory(root, options).map_err(|_| {
@@ -6500,6 +6503,7 @@ fn imported_session_from_report(
         files_considered: report.fits_files_considered(),
         fingerprinted_source_bytes: 0,
         scan_elapsed_milliseconds: 0,
+        source_analysis_parallelism: report.source_analysis_parallelism(),
         classification_conflicts: report
             .manifest()
             .files()
@@ -6513,6 +6517,13 @@ fn imported_session_from_report(
         quality_evidence_rejected: 0,
         quality_evidence_rejections: Vec::new(),
     })
+}
+
+fn interactive_import_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(NonZeroUsize::get)
+        .unwrap_or(1)
+        .min(MAX_INTERACTIVE_IMPORT_PARALLELISM)
 }
 
 fn imported_frame(
@@ -8868,6 +8879,10 @@ mod tests {
 
         assert_eq!(imported.files_considered, 1);
         assert_eq!(
+            imported.source_analysis_parallelism,
+            interactive_import_parallelism()
+        );
+        assert_eq!(
             imported.fingerprinted_source_bytes,
             fs::metadata(&source_path)?.len()
         );
@@ -8895,6 +8910,7 @@ mod tests {
             files_considered: 2,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -8974,6 +8990,7 @@ mod tests {
             files_considered: 2,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9042,6 +9059,7 @@ mod tests {
             files_considered: 1,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9107,6 +9125,7 @@ mod tests {
             files_considered: 3,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9203,6 +9222,7 @@ mod tests {
             files_considered: 1,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9450,6 +9470,7 @@ mod tests {
             files_considered: 4,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9608,6 +9629,7 @@ mod tests {
             files_considered: 2,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 1,
             recoverable_failures: vec![ImportedFailure {
                 relative_path: "DARKS/private-dark.fits".to_owned(),
@@ -9682,6 +9704,7 @@ mod tests {
             files_considered: 1,
             fingerprinted_source_bytes: 0,
             scan_elapsed_milliseconds: 0,
+            source_analysis_parallelism: 1,
             classification_conflicts: 0,
             recoverable_failures: Vec::new(),
             unassigned_sources: Vec::new(),
@@ -9712,6 +9735,10 @@ mod tests {
         assert!(!imported.frames.is_empty());
         assert!(imported.fingerprinted_source_bytes > 0);
         assert!(imported.scan_elapsed_milliseconds > 0);
+        assert_eq!(
+            imported.source_analysis_parallelism,
+            interactive_import_parallelism()
+        );
         for expected_role in ["dark", "flat", "light"] {
             assert!(
                 imported

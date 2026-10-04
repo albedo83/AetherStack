@@ -11,17 +11,18 @@ use std::time::Duration;
 
 use aether_session::{
     ClassificationPolicy, DirectoryManifestOptions, DirectoryScanTimings,
-    generate_manifest_from_directory,
+    MAX_SOURCE_ANALYSIS_PARALLELISM, generate_manifest_from_directory,
 };
 
 const DEFAULT_PASSES: usize = 3;
 const MAX_PASSES: usize = 20;
-const USAGE: &str = "Usage: aether-import-bench [--passes N] <corpus-directory>";
+const USAGE: &str = "Usage: aether-import-bench [--passes N] [--jobs N] <corpus-directory>";
 
 #[derive(Debug, Eq, PartialEq)]
 struct Config {
     root: PathBuf,
     passes: usize,
+    jobs: usize,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -55,12 +56,14 @@ fn main() -> ExitCode {
 fn run(config: &Config) -> Result<(), String> {
     println!("AetherStack session import benchmark");
     println!("passes: {}", config.passes);
+    println!("jobs: {}", config.jobs);
     println!("classification_policy: prefer_directory");
 
     let mut reference = None;
     for pass in 1..=config.passes {
         let options = DirectoryManifestOptions {
             classification_policy: ClassificationPolicy::PreferDirectory,
+            source_analysis_parallelism: config.jobs,
             ..DirectoryManifestOptions::default()
         };
         let report = generate_manifest_from_directory(&config.root, options)
@@ -98,23 +101,27 @@ fn run(config: &Config) -> Result<(), String> {
 fn print_timings(pass: usize, timings: DirectoryScanTimings) {
     println!("pass_{pass}_total_seconds: {:.6}", seconds(timings.total()));
     println!(
+        "pass_{pass}_source_analysis_wall_seconds: {:.6}",
+        seconds(timings.source_analysis_wall())
+    );
+    println!(
         "pass_{pass}_filesystem_and_overhead_seconds: {:.6}",
         seconds(timings.filesystem_and_overhead())
     );
     println!(
-        "pass_{pass}_initial_headers_seconds: {:.6}",
+        "pass_{pass}_aggregate_initial_headers_seconds: {:.6}",
         seconds(timings.initial_headers())
     );
     println!(
-        "pass_{pass}_fingerprints_seconds: {:.6}",
+        "pass_{pass}_aggregate_fingerprints_seconds: {:.6}",
         seconds(timings.fingerprints())
     );
     println!(
-        "pass_{pass}_verification_headers_seconds: {:.6}",
+        "pass_{pass}_aggregate_verification_headers_seconds: {:.6}",
         seconds(timings.verification_headers())
     );
     println!(
-        "pass_{pass}_source_finalization_seconds: {:.6}",
+        "pass_{pass}_aggregate_source_finalization_seconds: {:.6}",
         seconds(timings.source_finalization())
     );
     println!(
@@ -130,6 +137,7 @@ fn seconds(duration: Duration) -> f64 {
 fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Config, String> {
     let mut root = None;
     let mut passes = DEFAULT_PASSES;
+    let mut jobs = 1;
     let mut arguments = arguments.into_iter();
 
     while let Some(argument) = arguments.next() {
@@ -137,6 +145,13 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Config, S
             passes = parse_positive_usize(arguments.next(), "--passes")?;
             if passes > MAX_PASSES {
                 return Err(format!("--passes must not exceed {MAX_PASSES}"));
+            }
+        } else if argument == "--jobs" {
+            jobs = parse_positive_usize(arguments.next(), "--jobs")?;
+            if jobs > MAX_SOURCE_ANALYSIS_PARALLELISM {
+                return Err(format!(
+                    "--jobs must not exceed {MAX_SOURCE_ANALYSIS_PARALLELISM}"
+                ));
             }
         } else if argument.to_string_lossy().starts_with('-') {
             return Err(format!("unknown option: {}", argument.to_string_lossy()));
@@ -148,6 +163,7 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Config, S
     Ok(Config {
         root: root.ok_or_else(|| "a corpus directory is required".to_owned())?,
         passes,
+        jobs,
     })
 }
 
@@ -175,11 +191,14 @@ mod tests {
             parse_args([
                 OsString::from("--passes"),
                 OsString::from("5"),
+                OsString::from("--jobs"),
+                OsString::from("3"),
                 OsString::from("corpus"),
             ]),
             Ok(Config {
                 root: PathBuf::from("corpus"),
                 passes: 5,
+                jobs: 3,
             })
         );
     }
@@ -193,6 +212,14 @@ mod tests {
             parse_args([
                 OsString::from("--passes"),
                 OsString::from("21"),
+                OsString::from("corpus"),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_args([
+                OsString::from("--jobs"),
+                OsString::from("33"),
                 OsString::from("corpus"),
             ])
             .is_err()

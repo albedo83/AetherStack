@@ -67,6 +67,10 @@ export function mountReviewScreen(
       root,
       "[data-diagnostics-scan-time]",
     ),
+    diagnosticsWorkers: required<HTMLElement>(
+      root,
+      "[data-diagnostics-workers]",
+    ),
     diagnosticsFrames: required<HTMLElement>(root, "[data-diagnostics-frames]"),
     diagnosticsConflicts: required<HTMLElement>(
       root,
@@ -2271,6 +2275,7 @@ function renderSessionDiagnostics(
     diagnosticsFiles: HTMLElement;
     diagnosticsBytes: HTMLElement;
     diagnosticsScanTime: HTMLElement;
+    diagnosticsWorkers: HTMLElement;
     diagnosticsFrames: HTMLElement;
     diagnosticsConflicts: HTMLElement;
     diagnosticsFailures: HTMLElement;
@@ -2318,6 +2323,9 @@ function renderSessionDiagnostics(
   );
   elements.diagnosticsScanTime.textContent = formatElapsedMilliseconds(
     diagnostics.scanElapsedMilliseconds,
+  );
+  elements.diagnosticsWorkers.textContent = formatCount(
+    diagnostics.sourceAnalysisParallelism,
   );
   elements.diagnosticsFrames.textContent = formatCount(
     diagnostics.verifiedFrames,
@@ -4660,6 +4668,7 @@ function shellMarkup(): string {
             ${statistic("Sources considered", "data-diagnostics-files")}
             ${statistic("Fingerprinted bytes", "data-diagnostics-bytes")}
             ${statistic("Native scan time", "data-diagnostics-scan-time")}
+            ${statistic("Import worker limit", "data-diagnostics-workers")}
             ${statistic("Verified frames", "data-diagnostics-frames")}
             ${statistic("Classification conflicts", "data-diagnostics-conflicts")}
             ${statistic("Recoverable failures", "data-diagnostics-failures")}

@@ -14,6 +14,7 @@ export const demoReviewModel: ReviewViewModel = {
     filesConsidered: 271,
     fingerprintedSourceBytes: 3_158_611_200,
     scanElapsedMilliseconds: 1_794,
+    sourceAnalysisParallelism: 8,
     verifiedFrames: 271,
     classificationConflicts: 0,
     recoverableFailures: 0,

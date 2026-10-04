@@ -24,7 +24,7 @@ pub use directory::{
     DEFAULT_MAX_TOTAL_SOURCE_BYTES, DirectoryFailureCode, DirectoryFailureReason,
     DirectoryManifestError, DirectoryManifestOptions, DirectoryManifestReport,
     DirectoryScanFailure, DirectoryScanLimits, DirectoryScanTimings,
-    generate_manifest_from_directory,
+    MAX_SOURCE_ANALYSIS_PARALLELISM, generate_manifest_from_directory,
 };
 pub use fingerprint::{
     FINGERPRINT_BUFFER_BYTES, FingerprintError, fingerprint_reader,

@@ -286,7 +286,7 @@ stage timings:
 
 ```shell
 cargo run --release -p aether-inspect --bin aether-import-bench -- \
-  --passes 3 /path/to/fits-corpus
+  --passes 3 --jobs 1 /path/to/fits-corpus
 ```
 
 Calculate strict pixel statistics without loading complete images:

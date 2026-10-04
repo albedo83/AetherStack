@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use aether_fits::{HeaderReadOptions, ValidationMode};
@@ -28,6 +29,8 @@ pub const DEFAULT_MAX_DEPTH: usize = 64;
 pub const DEFAULT_MAX_SOURCE_BYTES: u64 = 1_u64 << 40;
 /// Default maximum source bytes hashed by one scan (64 tebibytes).
 pub const DEFAULT_MAX_TOTAL_SOURCE_BYTES: u64 = 64_u64 << 40;
+/// Hard upper bound for opt-in concurrent source analysis.
+pub const MAX_SOURCE_ANALYSIS_PARALLELISM: usize = 32;
 
 /// Explicit resource limits for directory-to-manifest ingestion.
 ///
@@ -77,6 +80,12 @@ pub struct DirectoryManifestOptions {
     pub classification_policy: ClassificationPolicy,
     /// Filesystem and hashing limits.
     pub limits: DirectoryScanLimits,
+    /// Maximum FITS sources analyzed concurrently.
+    ///
+    /// The default is one to retain conservative sequential storage access.
+    /// Callers may opt into a measured value up to
+    /// [`MAX_SOURCE_ANALYSIS_PARALLELISM`].
+    pub source_analysis_parallelism: usize,
 }
 
 impl Default for DirectoryManifestOptions {
@@ -86,6 +95,7 @@ impl Default for DirectoryManifestOptions {
             fits_validation_mode: ValidationMode::Strict,
             classification_policy: ClassificationPolicy::RequireAgreement,
             limits: DirectoryScanLimits::default(),
+            source_analysis_parallelism: 1,
         }
     }
 }
@@ -267,6 +277,7 @@ pub struct DirectoryManifestReport {
     skipped_non_fits_files: usize,
     skipped_special_entries: usize,
     timings: DirectoryScanTimings,
+    source_analysis_parallelism: usize,
 }
 
 /// Aggregate monotonic timings for one completed directory import.
@@ -277,6 +288,7 @@ pub struct DirectoryManifestReport {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DirectoryScanTimings {
     total: Duration,
+    source_analysis_wall: Duration,
     initial_headers: Duration,
     fingerprints: Duration,
     verification_headers: Duration,
@@ -291,26 +303,33 @@ impl DirectoryScanTimings {
         self.total
     }
 
-    /// Time spent parsing and validating source headers before hashing.
+    /// Wall-clock time occupied by source analysis, including all concurrent
+    /// workers but excluding file preparation performed by the coordinator.
+    #[must_use]
+    pub const fn source_analysis_wall(&self) -> Duration {
+        self.source_analysis_wall
+    }
+
+    /// Aggregate worker time parsing and validating headers before hashing.
     #[must_use]
     pub const fn initial_headers(&self) -> Duration {
         self.initial_headers
     }
 
-    /// Time spent streaming complete sources through SHA-256.
+    /// Aggregate worker time streaming complete sources through SHA-256.
     #[must_use]
     pub const fn fingerprints(&self) -> Duration {
         self.fingerprints
     }
 
-    /// Time spent reparsing headers after hashing to detect source mutation.
+    /// Aggregate worker time reparsing headers after hashing.
     #[must_use]
     pub const fn verification_headers(&self) -> Duration {
         self.verification_headers
     }
 
-    /// Time spent normalizing metadata, classifying frames, and validating
-    /// per-source manifest records.
+    /// Aggregate worker time normalizing metadata, classifying frames, and
+    /// validating per-source manifest records.
     #[must_use]
     pub const fn source_finalization(&self) -> Duration {
         self.source_finalization
@@ -327,10 +346,7 @@ impl DirectoryScanTimings {
     #[must_use]
     pub fn filesystem_and_overhead(&self) -> Duration {
         self.total.saturating_sub(
-            self.initial_headers
-                .saturating_add(self.fingerprints)
-                .saturating_add(self.verification_headers)
-                .saturating_add(self.source_finalization)
+            self.source_analysis_wall
                 .saturating_add(self.manifest_assembly),
         )
     }
@@ -406,6 +422,12 @@ impl DirectoryManifestReport {
     pub const fn timings(&self) -> DirectoryScanTimings {
         self.timings
     }
+
+    /// Maximum number of source-analysis workers requested for this scan.
+    #[must_use]
+    pub const fn source_analysis_parallelism(&self) -> usize {
+        self.source_analysis_parallelism
+    }
 }
 
 /// Fatal error that prevents a complete, non-truncated directory scan.
@@ -455,6 +477,13 @@ pub enum DirectoryManifestError {
     },
     /// Successfully analyzed records could not form a valid manifest.
     Generate(ManifestGenerationError),
+    /// One bounded source-analysis worker terminated unexpectedly.
+    SourceWorkerPanicked,
+    /// Requested source concurrency exceeded the hard worker bound.
+    SourceAnalysisParallelismExceeded {
+        /// Maximum accepted source-analysis worker count.
+        limit: usize,
+    },
 }
 
 impl Display for DirectoryManifestError {
@@ -502,6 +531,13 @@ impl Display for DirectoryManifestError {
                 "directory scan exceeds the aggregate source limit of {limit} bytes"
             ),
             Self::Generate(error) => Display::fmt(error, formatter),
+            Self::SourceWorkerPanicked => {
+                formatter.write_str("a source-analysis worker terminated unexpectedly")
+            }
+            Self::SourceAnalysisParallelismExceeded { limit } => write!(
+                formatter,
+                "source_analysis_parallelism must not exceed {limit}"
+            ),
         }
     }
 }
@@ -518,7 +554,9 @@ impl Error for DirectoryManifestError {
             | Self::DepthLimitExceeded { .. }
             | Self::FitsFileLimitExceeded { .. }
             | Self::FailureLimitExceeded { .. }
-            | Self::TotalSourceBytesLimitExceeded { .. } => None,
+            | Self::TotalSourceBytesLimitExceeded { .. }
+            | Self::SourceWorkerPanicked
+            | Self::SourceAnalysisParallelismExceeded { .. } => None,
         }
     }
 }
@@ -528,6 +566,21 @@ struct PendingEntry {
     path: PathBuf,
     file_type: fs::FileType,
     depth: usize,
+}
+
+#[derive(Debug)]
+struct PendingSource {
+    path: PathBuf,
+    relative: PathBuf,
+    portable_path: String,
+}
+
+#[derive(Debug)]
+struct PreparedSource {
+    relative: PathBuf,
+    portable_path: String,
+    file: File,
+    byte_length: u64,
 }
 
 #[derive(Default)]
@@ -541,6 +594,8 @@ struct ScanState {
     skipped_non_fits_files: usize,
     skipped_special_entries: usize,
     source_timings: SourceAnalysisTimings,
+    source_analysis_wall: Duration,
+    pending_sources: Vec<PendingSource>,
 }
 
 /// Pins reads to the length observed immediately after opening the file.
@@ -669,13 +724,21 @@ pub fn generate_manifest_from_directory(
             }
         } else if entry.file_type.is_file() {
             if is_fits_path(&entry.path) {
-                analyze_file(root, &entry.path, options, &mut state)?;
+                if options.source_analysis_parallelism == 1 {
+                    analyze_file(root, &entry.path, options, &mut state)?;
+                } else {
+                    queue_file(root, entry.path, options, &mut state)?;
+                }
             } else {
                 state.skipped_non_fits_files += 1;
             }
         } else {
             state.skipped_special_entries += 1;
         }
+    }
+
+    if options.source_analysis_parallelism > 1 {
+        analyze_queued_files(options, &mut state)?;
     }
 
     let manifest_started = Instant::now();
@@ -705,6 +768,7 @@ pub fn generate_manifest_from_directory(
     let manifest_assembly = manifest_started.elapsed();
     let timings = DirectoryScanTimings {
         total: scan_started.elapsed(),
+        source_analysis_wall: state.source_analysis_wall,
         initial_headers: state.source_timings.initial_header,
         fingerprints: state.source_timings.fingerprint,
         verification_headers: state.source_timings.verification_header,
@@ -723,6 +787,7 @@ pub fn generate_manifest_from_directory(
         skipped_non_fits_files: state.skipped_non_fits_files,
         skipped_special_entries: state.skipped_special_entries,
         timings,
+        source_analysis_parallelism: options.source_analysis_parallelism,
     })
 }
 
@@ -737,6 +802,10 @@ fn validate_options(options: DirectoryManifestOptions) -> Result<(), DirectoryMa
         ("max_fits_files", limits.max_fits_files),
         ("max_failures", limits.max_failures),
         ("max_header_blocks", options.header.max_blocks),
+        (
+            "source_analysis_parallelism",
+            options.source_analysis_parallelism,
+        ),
     ] {
         if value == 0 {
             return Err(DirectoryManifestError::InvalidLimit(name));
@@ -749,6 +818,11 @@ fn validate_options(options: DirectoryManifestOptions) -> Result<(), DirectoryMa
         return Err(DirectoryManifestError::InvalidLimit(
             "max_total_source_bytes",
         ));
+    }
+    if options.source_analysis_parallelism > MAX_SOURCE_ANALYSIS_PARALLELISM {
+        return Err(DirectoryManifestError::SourceAnalysisParallelismExceeded {
+            limit: MAX_SOURCE_ANALYSIS_PARALLELISM,
+        });
     }
     Ok(())
 }
@@ -825,6 +899,37 @@ fn analyze_file(
     options: DirectoryManifestOptions,
     state: &mut ScanState,
 ) -> Result<(), DirectoryManifestError> {
+    let Some(candidate) = source_candidate(root, path.to_owned(), options, state)? else {
+        return Ok(());
+    };
+    let Some(prepared) = prepare_source(candidate, options, state)? else {
+        return Ok(());
+    };
+    let started = Instant::now();
+    let (result, timings) = analyze_prepared_source(prepared, options);
+    state.source_analysis_wall = state.source_analysis_wall.saturating_add(started.elapsed());
+    state.source_timings.saturating_add_assign(timings);
+    retain_analysis_result(result, state, options.limits.max_failures)
+}
+
+fn queue_file(
+    root: &Path,
+    path: PathBuf,
+    options: DirectoryManifestOptions,
+    state: &mut ScanState,
+) -> Result<(), DirectoryManifestError> {
+    if let Some(candidate) = source_candidate(root, path, options, state)? {
+        state.pending_sources.push(candidate);
+    }
+    Ok(())
+}
+
+fn source_candidate(
+    root: &Path,
+    path: PathBuf,
+    options: DirectoryManifestOptions,
+    state: &mut ScanState,
+) -> Result<Option<PendingSource>, DirectoryManifestError> {
     state.fits_files_considered = state.fits_files_considered.checked_add(1).ok_or(
         DirectoryManifestError::FitsFileLimitExceeded {
             limit: options.limits.max_fits_files,
@@ -835,49 +940,68 @@ fn analyze_file(
             limit: options.limits.max_fits_files,
         });
     }
-    let relative = relative_path(root, path);
+    let relative = relative_path(root, &path);
     let Some(portable_path) = portable_path(&relative) else {
-        return push_failure(
+        push_failure(
             state,
             options.limits.max_failures,
             DirectoryScanFailure::new(relative, DirectoryFailureReason::NonPortablePath),
-        );
+        )?;
+        return Ok(None);
     };
-    let file = match File::open(path) {
+    Ok(Some(PendingSource {
+        path,
+        relative,
+        portable_path,
+    }))
+}
+
+fn prepare_source(
+    candidate: PendingSource,
+    options: DirectoryManifestOptions,
+    state: &mut ScanState,
+) -> Result<Option<PreparedSource>, DirectoryManifestError> {
+    let file = match File::open(&candidate.path) {
         Ok(file) => file,
         Err(error) => {
-            return push_failure(
+            push_failure(
                 state,
                 options.limits.max_failures,
-                DirectoryScanFailure::new(relative, DirectoryFailureReason::OpenFile(error)),
-            );
+                DirectoryScanFailure::new(
+                    candidate.relative,
+                    DirectoryFailureReason::OpenFile(error),
+                ),
+            )?;
+            return Ok(None);
         }
     };
     let byte_length = match file.metadata() {
         Ok(metadata) => metadata.len(),
         Err(error) => {
-            return push_failure(
+            push_failure(
                 state,
                 options.limits.max_failures,
                 DirectoryScanFailure::new(
-                    relative,
+                    candidate.relative,
                     DirectoryFailureReason::ReadFileMetadata(error),
                 ),
-            );
+            )?;
+            return Ok(None);
         }
     };
     if byte_length > options.limits.max_source_bytes {
-        return push_failure(
+        push_failure(
             state,
             options.limits.max_failures,
             DirectoryScanFailure::new(
-                relative,
+                candidate.relative,
                 DirectoryFailureReason::SourceTooLarge {
                     actual: byte_length,
                     limit: options.limits.max_source_bytes,
                 },
             ),
-        );
+        )?;
+        return Ok(None);
     }
     let total_source_bytes = state.total_source_bytes.checked_add(byte_length).ok_or(
         DirectoryManifestError::TotalSourceBytesLimitExceeded {
@@ -891,27 +1015,98 @@ fn analyze_file(
     }
     state.total_source_bytes = total_source_bytes;
 
+    Ok(Some(PreparedSource {
+        relative: candidate.relative,
+        portable_path: candidate.portable_path,
+        file,
+        byte_length,
+    }))
+}
+
+fn analyze_prepared_source(
+    prepared: PreparedSource,
+    options: DirectoryManifestOptions,
+) -> (
+    Result<ManifestFile, DirectoryScanFailure>,
+    SourceAnalysisTimings,
+) {
     let reader = BufReader::with_capacity(
         FINGERPRINT_BUFFER_BYTES,
-        FixedLengthReader::new(file, byte_length),
+        FixedLengthReader::new(prepared.file, prepared.byte_length),
     );
     let mut source_timings = SourceAnalysisTimings::default();
     let result = analyze_fits_source_with_timings(
-        portable_path,
+        prepared.portable_path,
         reader,
         options.header,
         options.fits_validation_mode,
         options.classification_policy,
         &mut source_timings,
-    );
-    state.source_timings.saturating_add_assign(source_timings);
+    )
+    .map_err(|error| {
+        DirectoryScanFailure::new(
+            prepared.relative,
+            DirectoryFailureReason::AnalyzeSource(error),
+        )
+    });
+    (result, source_timings)
+}
+
+fn retain_analysis_result(
+    result: Result<ManifestFile, DirectoryScanFailure>,
+    state: &mut ScanState,
+    failure_limit: usize,
+) -> Result<(), DirectoryManifestError> {
     match result {
         Ok(file) => state.files.push(file),
-        Err(error) => push_failure(
-            state,
-            options.limits.max_failures,
-            DirectoryScanFailure::new(relative, DirectoryFailureReason::AnalyzeSource(error)),
-        )?,
+        Err(failure) => push_failure(state, failure_limit, failure)?,
+    }
+    Ok(())
+}
+
+fn analyze_queued_files(
+    options: DirectoryManifestOptions,
+    state: &mut ScanState,
+) -> Result<(), DirectoryManifestError> {
+    let pending = std::mem::take(&mut state.pending_sources);
+    let mut pending = pending.into_iter();
+    loop {
+        let mut prepared = Vec::with_capacity(options.source_analysis_parallelism);
+        for _ in 0..options.source_analysis_parallelism {
+            let Some(candidate) = pending.next() else {
+                break;
+            };
+            if let Some(source) = prepare_source(candidate, options, state)? {
+                prepared.push(source);
+            }
+        }
+        if prepared.is_empty() {
+            if pending.len() == 0 {
+                break;
+            }
+            continue;
+        }
+
+        let started = Instant::now();
+        let results = thread::scope(|scope| {
+            let handles = prepared
+                .into_iter()
+                .map(|source| scope.spawn(move || analyze_prepared_source(source, options)))
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| DirectoryManifestError::SourceWorkerPanicked)
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        state.source_analysis_wall = state.source_analysis_wall.saturating_add(started.elapsed());
+        for (result, timings) in results {
+            state.source_timings.saturating_add_assign(timings);
+            retain_analysis_result(result, state, options.limits.max_failures)?;
+        }
     }
     Ok(())
 }
@@ -1088,6 +1283,7 @@ mod tests {
         );
         assert_eq!(report.skipped_non_fits_files(), 1);
         let timings = report.timings();
+        assert!(timings.source_analysis_wall() <= timings.total());
         assert!(timings.initial_headers() <= timings.total());
         assert!(timings.fingerprints() <= timings.total());
         assert!(timings.verification_headers() <= timings.total());
@@ -1098,9 +1294,10 @@ mod tests {
     }
 
     #[test]
-    fn timing_overhead_saturates_when_individual_samples_exceed_total() {
+    fn timing_overhead_uses_wall_stages_not_aggregate_worker_samples() {
         let timings = DirectoryScanTimings {
             total: Duration::from_millis(10),
+            source_analysis_wall: Duration::from_millis(7),
             initial_headers: Duration::from_millis(3),
             fingerprints: Duration::from_millis(7),
             verification_headers: Duration::from_millis(5),
@@ -1109,12 +1306,13 @@ mod tests {
         };
 
         assert_eq!(timings.total(), Duration::from_millis(10));
+        assert_eq!(timings.source_analysis_wall(), Duration::from_millis(7));
         assert_eq!(timings.initial_headers(), Duration::from_millis(3));
         assert_eq!(timings.fingerprints(), Duration::from_millis(7));
         assert_eq!(timings.verification_headers(), Duration::from_millis(5));
         assert_eq!(timings.source_finalization(), Duration::ZERO);
         assert_eq!(timings.manifest_assembly(), Duration::ZERO);
-        assert_eq!(timings.filesystem_and_overhead(), Duration::ZERO);
+        assert_eq!(timings.filesystem_and_overhead(), Duration::from_millis(3));
     }
 
     #[test]
@@ -1140,6 +1338,55 @@ mod tests {
         assert_eq!(
             first_report.manifest().to_json_pretty()?,
             second_report.manifest().to_json_pretty()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_parallel_analysis_matches_sequential_evidence() -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new()?;
+        for index in 0..7 {
+            fs::write(
+                directory.path().join(format!("light_{index:02}.fits")),
+                fits_source(Some("Light"), true),
+            )?;
+        }
+        fs::write(directory.path().join("broken.fits"), b"not FITS")?;
+
+        let sequential = generate_manifest_from_directory(
+            directory.path(),
+            DirectoryManifestOptions::default(),
+        )?;
+        let parallel = generate_manifest_from_directory(
+            directory.path(),
+            DirectoryManifestOptions {
+                source_analysis_parallelism: 3,
+                ..DirectoryManifestOptions::default()
+            },
+        )?;
+
+        assert_eq!(sequential.source_analysis_parallelism(), 1);
+        assert_eq!(parallel.source_analysis_parallelism(), 3);
+        assert_eq!(
+            parallel.manifest().to_json_pretty()?,
+            sequential.manifest().to_json_pretty()?
+        );
+        assert_eq!(
+            parallel.total_source_bytes(),
+            sequential.total_source_bytes()
+        );
+        assert_eq!(parallel.failures().len(), sequential.failures().len());
+        assert_eq!(
+            parallel.failures()[0].code(),
+            sequential.failures()[0].code()
+        );
+        assert_eq!(
+            parallel.failures()[0].relative_path(),
+            sequential.failures()[0].relative_path()
+        );
+        assert_eq!(
+            parallel.unassigned_sources(),
+            sequential.unassigned_sources()
         );
         Ok(())
     }
@@ -1278,6 +1525,26 @@ mod tests {
         assert!(matches!(
             generate_manifest_from_directory(directory.path(), options),
             Err(DirectoryManifestError::InvalidLimit("max_failures"))
+        ));
+        let zero_parallelism = DirectoryManifestOptions {
+            source_analysis_parallelism: 0,
+            ..DirectoryManifestOptions::default()
+        };
+        assert!(matches!(
+            generate_manifest_from_directory(directory.path(), zero_parallelism),
+            Err(DirectoryManifestError::InvalidLimit(
+                "source_analysis_parallelism"
+            ))
+        ));
+        let excessive_parallelism = DirectoryManifestOptions {
+            source_analysis_parallelism: MAX_SOURCE_ANALYSIS_PARALLELISM + 1,
+            ..DirectoryManifestOptions::default()
+        };
+        assert!(matches!(
+            generate_manifest_from_directory(directory.path(), excessive_parallelism),
+            Err(DirectoryManifestError::SourceAnalysisParallelismExceeded {
+                limit: MAX_SOURCE_ANALYSIS_PARALLELISM
+            })
         ));
         assert!(matches!(
             generate_manifest_from_directory(&file, DirectoryManifestOptions::default()),

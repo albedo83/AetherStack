@@ -302,6 +302,7 @@ describe("frame review workspace", () => {
         filesConsidered: 42,
         fingerprintedSourceBytes: 3_158_611_200,
         scanElapsedMilliseconds: 2_500,
+        sourceAnalysisParallelism: 8,
         verifiedFrames: 40,
         classificationConflicts: 1,
         recoverableFailures: 2,
@@ -337,6 +338,7 @@ describe("frame review workspace", () => {
     expect(dialog.textContent).toContain("Sources considered42");
     expect(dialog.textContent).toContain("Fingerprinted bytes2.9 GiB");
     expect(dialog.textContent).toContain("Native scan time2.50 s");
+    expect(dialog.textContent).toContain("Import worker limit8");
     expect(dialog.textContent).toContain("Verified frames40");
     expect(dialog.textContent).toContain("Restored18");
     expect(dialog.textContent).toContain("Missing4");

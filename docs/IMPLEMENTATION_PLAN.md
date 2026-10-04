@@ -1438,6 +1438,20 @@ safety reasoning. They do not narrate obvious syntax.
      and grouping do not justify optimization. Next, add bounded opt-in parallel
      source analysis and require identical canonical output plus measured gains
      before considering it for the interactive profile.
+114. Parallelize the measured import bottleneck without relaxing evidence.
+     The session library now offers one-to-32-worker source analysis while
+     retaining sequential traversal, bounded byte admission, at most one open
+     batch, deterministic result order, explicit worker-failure handling, and a
+     sequential default. Parallel and sequential unit fixtures produce identical
+     manifests, failures, bytes, and unassigned records. On the complete
+     ASI294MC corpus, alternating six-pass medians improve from 1.807751 seconds
+     at one worker to 0.732811 seconds at eight workers (2.47×), with identical
+     canonical evidence on every pass. The interactive desktop profile now uses
+     available host parallelism capped at eight and reports that limit in
+     Diagnostics. The full ignored desktop corpus gate also passes in 10.54
+     debug-mode seconds, down from the prior 32.31-second sequential validation.
+     Retain the sequential library default for unmeasured storage and profile
+     another device before introducing storage-specific automatic tuning.
 
 ## 11. Stable-release definition
 

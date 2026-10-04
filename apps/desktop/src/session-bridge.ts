@@ -38,6 +38,7 @@ export interface ImportedSession {
   readonly filesConsidered: number;
   readonly fingerprintedSourceBytes: number;
   readonly scanElapsedMilliseconds: number;
+  readonly sourceAnalysisParallelism: number;
   readonly classificationConflicts: number;
   readonly recoverableFailures: readonly ImportedFailure[];
   readonly unassignedSources: readonly string[];
@@ -141,6 +142,7 @@ export function importedSessionDiagnostics(
     filesConsidered: session.filesConsidered,
     fingerprintedSourceBytes: session.fingerprintedSourceBytes,
     scanElapsedMilliseconds: session.scanElapsedMilliseconds,
+    sourceAnalysisParallelism: session.sourceAnalysisParallelism,
     verifiedFrames: session.frames.length,
     classificationConflicts: session.classificationConflicts,
     recoverableFailures: session.recoverableFailures.length,
