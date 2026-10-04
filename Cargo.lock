@@ -65,6 +65,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-localnorm"
+version = "0.1.0"
+
+[[package]]
 name = "aether-metadata"
 version = "0.1.0"
 dependencies = [

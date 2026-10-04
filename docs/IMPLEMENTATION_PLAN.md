@@ -1791,6 +1791,12 @@ safety reasoning. They do not narrate obvious syntax.
      Native mapping preserves the distinct science and map provenance identities;
      wire-identity and browser interaction tests prevent accidental fallback to
      ordinary sigma clipping.
+154. Establish the strict local-normalization cell-fit oracle in the dedicated
+     `aether-localnorm` crate. A bounded Theil-Sen scale and median intercept
+     resist isolated outliers, retain duplicate-coordinate accounting, normalize
+     extreme pair differences, expose median absolute residual evidence, and
+     reject degenerate or near-zero-scale cells explicitly. Spatial sampling and
+     surface regularization remain separate next-stage contracts.
 
 ## 11. Stable-release definition
 
