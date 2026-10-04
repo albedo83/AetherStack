@@ -11,6 +11,7 @@ mod footprint;
 mod geometry;
 mod matching;
 mod plan;
+mod projective;
 mod reference;
 mod resampling;
 mod triangles;
@@ -49,6 +50,7 @@ pub use plan::{
     PlannedRegistrationFrame, REGISTRATION_PLAN_ALGORITHM_ID, RegistrationPlan,
     RegistrationPlanError,
 };
+pub use projective::ProjectiveTransform;
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,
     ReferenceSelectionError, ReferenceSelectionEvidence, select_reference,

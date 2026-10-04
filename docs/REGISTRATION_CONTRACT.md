@@ -29,6 +29,19 @@ defined in execution order: `source_to_intermediate.then(intermediate_to_ref)`
 returns `source_to_ref`. This direction must remain explicit in serialized plans
 and user diagnostics.
 
+`ProjectiveTransform` establishes the corresponding 3 × 3 homography primitive
+for future model selection. It uses homogeneous column vectors in the same
+source-to-reference direction and the same integer-centered coordinates.
+Because a homography is unchanged by a common nonzero coefficient scale, its
+constructor divides all coefficients by the first maximum-magnitude
+coefficient and makes that coefficient positive. This gives equivalent inputs
+one deterministic representation, bounds coefficients before determinant and
+cofactor calculations, and canonicalizes signed zero. A zero denominator at a
+mapped point is an explicit projective-horizon failure. Inversion uses the
+adjugate directly because determinant division is another irrelevant common
+scale and could overflow. The type is not yet admitted to production plans;
+estimation, confidence, footprint, and resampling must adopt it together.
+
 ## Residual evidence
 
 A registration correspondence contains one measured source point and its

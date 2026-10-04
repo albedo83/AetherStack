@@ -121,14 +121,14 @@ impl AffineTransform {
     }
 }
 
-/// Coordinate or affine-map validation failure.
+/// Coordinate or geometric-transform validation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoordinateError {
     /// A point contained NaN or infinity.
     NonFinitePoint,
     /// A transform coefficient contained NaN or infinity.
     NonFiniteTransform,
-    /// The two-dimensional linear part has zero determinant.
+    /// The affine or homogeneous matrix has zero determinant.
     SingularTransform,
     /// Application, inversion, or composition left the finite numerical domain.
     TransformOverflow,
@@ -138,9 +138,11 @@ impl Display for CoordinateError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::NonFinitePoint => "image point is not finite",
-            Self::NonFiniteTransform => "affine transform is not finite",
-            Self::SingularTransform => "affine transform is singular",
-            Self::TransformOverflow => "affine operation exceeded the finite numerical domain",
+            Self::NonFiniteTransform => "geometric transform is not finite",
+            Self::SingularTransform => "geometric transform is singular",
+            Self::TransformOverflow => {
+                "geometric transform operation exceeded the finite numerical domain"
+            }
         })
     }
 }

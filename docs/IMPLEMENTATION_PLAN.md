@@ -1511,6 +1511,17 @@ safety reasoning. They do not narrate obvious syntax.
      worst per-frame RMS difference is 0.140 px and the worst sampled difference
      is 0.376 px. This is strong corpus evidence despite the deliberately simpler
      similarity model and the raw-CFA versus calibrated/debayered input paths.
+120. Introduce the projective geometry primitive without changing production
+     model selection. `ProjectiveTransform` stores a finite nonsingular 3 × 3
+     source-to-reference homography in one scale-canonical representation. It
+     applies the same integer-centered pixel convention as affine registration,
+     rejects projective horizons, lifts affine maps, composes in execution
+     order, and inverts through the adjugate without a potentially overflowing
+     determinant division. Unit tests lock global-scale and signed-zero
+     canonicalization, affine equivalence, projective round trips, composition,
+     invalid matrices, and horizon failure. Similarity remains the only
+     production-selected model until robust projective estimation, confidence,
+     footprint, and bounded resampling are complete as one reviewed chain.
 
 ## 11. Stable-release definition
 
