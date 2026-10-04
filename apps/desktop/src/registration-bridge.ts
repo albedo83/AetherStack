@@ -84,6 +84,17 @@ export interface RegistrationDiagnostic {
     readonly relativeRmsImprovement: number | null;
     readonly maximumModelSeparationDetectionPixels: number;
     readonly rankSeparationRatio: number;
+    readonly crossValidation: {
+      readonly foldCount: number;
+      readonly projectiveBetterFolds: number;
+      readonly similarityRmsResidualDetectionPixels: number;
+      readonly similarityMaximumResidualDetectionPixels: number;
+      readonly projectiveRmsResidualDetectionPixels: number;
+      readonly projectiveMaximumResidualDetectionPixels: number;
+      readonly rmsImprovementDetectionPixels: number;
+      readonly relativeRmsImprovement: number | null;
+      readonly minimumRankSeparationRatio: number;
+    };
   };
   readonly confidence: {
     readonly accepted: boolean;

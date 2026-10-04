@@ -698,6 +698,17 @@ describe("frame review workspace", () => {
           relativeRmsImprovement: 1 / 3,
           maximumModelSeparationDetectionPixels: 0.21,
           rankSeparationRatio: 0.015,
+          crossValidation: {
+            foldCount: 5,
+            projectiveBetterFolds: 1,
+            similarityRmsResidualDetectionPixels: 0.13,
+            similarityMaximumResidualDetectionPixels: 0.43,
+            projectiveRmsResidualDetectionPixels: 0.14,
+            projectiveMaximumResidualDetectionPixels: 0.48,
+            rmsImprovementDetectionPixels: -0.01,
+            relativeRmsImprovement: -0.077,
+            minimumRankSeparationRatio: 0.014,
+          },
         },
         confidence: {
           accepted: true,
@@ -766,6 +777,8 @@ describe("frame review workspace", () => {
       "Diagnostic projective · detection pixels · not selected",
     );
     expect(root.textContent).toContain("gain 0.0400 px");
+    expect(root.textContent).toContain("held-out gain -0.0100 px");
+    expect(root.textContent).toContain("fold wins 1/5");
     expect(root.textContent).toContain("2 frames sealed");
     expect(root.textContent).toContain(`SHA-256 ${"f".repeat(64)}`);
     expect(root.textContent).toContain("Reference");

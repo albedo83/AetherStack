@@ -22,13 +22,14 @@ use aether_quality::{
 use aether_registration::{
     AffineTransform, COMMON_LANCZOS3_FOOTPRINT_ALGORITHM_ID, DESCRIPTOR_MATCH_ALGORITHM_ID,
     DescriptorMatchParameters, FEATURE_CATALOG_ALGORITHM_ID, FeatureCatalog,
-    FeatureSelectionParameters, PROJECTIVE_ADEQUACY_ALGORITHM_ID, PROJECTIVE_FIT_ALGORITHM_ID,
+    FeatureSelectionParameters, PROJECTIVE_ADEQUACY_ALGORITHM_ID,
+    PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID, PROJECTIVE_FIT_ALGORITHM_ID,
     REGISTRATION_CONFIDENCE_ALGORITHM_ID, ReflectionPolicy, RegistrationConfidenceParameters,
     RegistrationConfidenceRejection, RegistrationFootprint, SIMILARITY_CONSENSUS_ALGORITHM_ID,
     SimilarityConsensusParameters, TRIANGLE_DESCRIPTOR_ALGORITHM_ID, TriangleDescriptorParameters,
     assess_registration_confidence, build_feature_catalog, build_triangle_descriptors,
-    compare_similarity_with_projective, derive_common_lanczos3_footprint,
-    estimate_similarity_consensus, match_triangle_descriptors,
+    compare_similarity_with_projective, cross_validate_similarity_with_projective,
+    derive_common_lanczos3_footprint, estimate_similarity_consensus, match_triangle_descriptors,
 };
 use aether_review::FrameId;
 use aether_session::fingerprint_reader;
@@ -42,6 +43,9 @@ pub const PRECISION_DIAGNOSTIC_PROFILE_ID: &str = "raw-cfa-registration-precisio
 
 /// Current JSON schema emitted by registration diagnostics.
 pub const REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION: u32 = 3;
+
+/// Fixed held-out fold count used by the precision diagnostic profile.
+pub const PRECISION_PROJECTIVE_VALIDATION_FOLDS: usize = 5;
 
 /// Maximum decoded source samples accepted by one diagnostic input.
 pub const MAX_DIAGNOSTIC_SOURCE_SAMPLES: usize = 100_000_000;
@@ -89,6 +93,7 @@ struct AlgorithmSummary {
     consensus: &'static str,
     projective_fit: &'static str,
     projective_adequacy: &'static str,
+    projective_cross_validation: &'static str,
     confidence: &'static str,
 }
 
@@ -152,6 +157,21 @@ struct ProjectiveAdequacySummary {
     relative_rms_improvement: Option<f64>,
     maximum_model_separation_detection_pixels: f64,
     rank_separation_ratio: f64,
+    cross_validation: ProjectiveCrossValidationSummary,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectiveCrossValidationSummary {
+    fold_count: usize,
+    projective_better_folds: usize,
+    similarity_rms_residual_detection_pixels: f64,
+    similarity_maximum_residual_detection_pixels: f64,
+    projective_rms_residual_detection_pixels: f64,
+    projective_maximum_residual_detection_pixels: f64,
+    rms_improvement_detection_pixels: f64,
+    relative_rms_improvement: Option<f64>,
+    minimum_rank_separation_ratio: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -357,6 +377,12 @@ where
     )
     .map_err(|error| RegistrationDiagnosticError::new("projective adequacy", error))?;
     let projective_fit = projective_adequacy.projective_fit();
+    let projective_cross_validation = cross_validate_similarity_with_projective(
+        &inlier_matches,
+        consensus.reflected(),
+        PRECISION_PROJECTIVE_VALIDATION_FOLDS,
+    )
+    .map_err(|error| RegistrationDiagnosticError::new("projective cross-validation", error))?;
 
     let match_statistics = matches.statistics();
     let consensus_statistics = consensus.statistics();
@@ -424,6 +450,7 @@ where
             consensus: SIMILARITY_CONSENSUS_ALGORITHM_ID,
             projective_fit: PROJECTIVE_FIT_ALGORITHM_ID,
             projective_adequacy: PROJECTIVE_ADEQUACY_ALGORITHM_ID,
+            projective_cross_validation: PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID,
             confidence: REGISTRATION_CONFIDENCE_ALGORITHM_ID,
         },
         source: source.summary,
@@ -466,6 +493,24 @@ where
             maximum_model_separation_detection_pixels: projective_adequacy
                 .maximum_model_separation_pixels(),
             rank_separation_ratio: projective_fit.rank_separation_ratio(),
+            cross_validation: ProjectiveCrossValidationSummary {
+                fold_count: projective_cross_validation.fold_count(),
+                projective_better_folds: projective_cross_validation.projective_better_folds(),
+                similarity_rms_residual_detection_pixels: projective_cross_validation
+                    .similarity_root_mean_square_pixels(),
+                similarity_maximum_residual_detection_pixels: projective_cross_validation
+                    .similarity_maximum_residual_pixels(),
+                projective_rms_residual_detection_pixels: projective_cross_validation
+                    .projective_root_mean_square_pixels(),
+                projective_maximum_residual_detection_pixels: projective_cross_validation
+                    .projective_maximum_residual_pixels(),
+                rms_improvement_detection_pixels: projective_cross_validation
+                    .root_mean_square_improvement_pixels(),
+                relative_rms_improvement: projective_cross_validation
+                    .relative_root_mean_square_improvement(),
+                minimum_rank_separation_ratio: projective_cross_validation
+                    .minimum_projective_rank_separation_ratio(),
+            },
         },
         confidence: ConfidenceSummary {
             accepted: confidence.accepted(),
@@ -705,6 +750,8 @@ mod tests {
         assert_eq!(REGISTRATION_DIAGNOSTIC_SCHEMA_VERSION, 3);
         assert!(PROJECTIVE_FIT_ALGORITHM_ID.ends_with("-v1"));
         assert!(PROJECTIVE_ADEQUACY_ALGORITHM_ID.ends_with("-v1"));
+        assert!(PROJECTIVE_CROSS_VALIDATION_ALGORITHM_ID.ends_with("-v1"));
+        assert_eq!(PRECISION_PROJECTIVE_VALIDATION_FOLDS, 5);
     }
 
     #[test]
@@ -798,6 +845,17 @@ mod tests {
             relative_rms_improvement: Some(0.5),
             maximum_model_separation_detection_pixels: 0.72,
             rank_separation_ratio: 0.01,
+            cross_validation: ProjectiveCrossValidationSummary {
+                fold_count: 5,
+                projective_better_folds: 2,
+                similarity_rms_residual_detection_pixels: 0.47,
+                similarity_maximum_residual_detection_pixels: 0.95,
+                projective_rms_residual_detection_pixels: 0.48,
+                projective_maximum_residual_detection_pixels: 1.01,
+                rms_improvement_detection_pixels: -0.01,
+                relative_rms_improvement: Some(-0.02),
+                minimum_rank_separation_ratio: 0.009,
+            },
         };
 
         let json = serde_json::to_value(summary)?;
@@ -808,6 +866,11 @@ mod tests {
         assert_eq!(json.get("matchCount"), Some(&serde_json::json!(12)));
         assert!(json.get("transformCoefficientsDetectionPixels").is_some());
         assert!(json.get("projectiveRmsResidualDetectionPixels").is_some());
+        assert_eq!(
+            json.get("crossValidation")
+                .and_then(|value| value.get("projectiveBetterFolds")),
+            Some(&serde_json::json!(2))
+        );
         assert!(json.get("selection_applied").is_none());
         Ok(())
     }

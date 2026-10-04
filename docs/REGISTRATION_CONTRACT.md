@@ -281,6 +281,21 @@ validation exactly once. The result records aggregate RMS, worst residuals,
 projective fold wins, relative improvement, and the weakest DLT rank separation.
 This remains evidence rather than a selection policy.
 
+The precision diagnostic fixes this policy at five folds and serializes the
+result under `projectiveAdequacy.crossValidation`. Its algorithm identifier is
+published separately from the full-support DLT and adequacy identifiers. The
+desktop presents fitting gain and held-out gain with distinct labels, including
+the number of folds won by the projective model; neither value changes the
+accepted affine plan.
+
+Across the nine ASI294MC Pro pairs, five-fold held-out RMS improvement spans
+-0.00015 to +0.00149 detection pixels (-0.070% to +0.656%). Two comparisons
+regress out of sample despite improving on fitting support, and projective fold
+wins range from three to five. The weakest training-fold rank separation stays
+between 0.286 and 0.290. This is the expected distinction between descriptive
+fit and predictive evidence and provides no basis to select projective geometry
+for this session.
+
 ## Strict Lanczos-3 resampling oracle
 
 `lanczos3-normalized-f64-v1` resamples every planar channel in the reference

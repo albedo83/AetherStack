@@ -3163,6 +3163,7 @@ function renderRegistration(
   }
   if (diagnostic) {
     const projective = diagnostic.projectiveAdequacy;
+    const validation = projective.crossValidation;
     geometryEvidence.push(
       `Diagnostic projective · detection pixels · not selected\n${projective.transformCoefficientsDetectionPixels
         .map(
@@ -3170,7 +3171,7 @@ function renderRegistration(
         )
         .join(
           "\n",
-        )}\nRMS ${projective.projectiveRmsResidualDetectionPixels.toFixed(4)} px · gain ${projective.rmsImprovementDetectionPixels.toFixed(4)} px · field Δ ${projective.maximumModelSeparationDetectionPixels.toFixed(4)} px · ${projective.matchCount.toLocaleString("en-US")} matches`,
+        )}\nFit RMS ${projective.projectiveRmsResidualDetectionPixels.toFixed(4)} px · fit gain ${projective.rmsImprovementDetectionPixels.toFixed(4)} px · held-out gain ${validation.rmsImprovementDetectionPixels.toFixed(4)} px · fold wins ${validation.projectiveBetterFolds}/${validation.foldCount} · field Δ ${projective.maximumModelSeparationDetectionPixels.toFixed(4)} px · ${projective.matchCount.toLocaleString("en-US")} matches`,
     );
   }
   elements.registrationMatrix.textContent =

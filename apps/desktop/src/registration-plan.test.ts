@@ -62,6 +62,17 @@ function diagnostic(accepted: boolean, marker: number): RegistrationDiagnostic {
       relativeRmsImprovement: 0.1,
       maximumModelSeparationDetectionPixels: 0.03,
       rankSeparationRatio: 0.02,
+      crossValidation: {
+        foldCount: 5,
+        projectiveBetterFolds: 2,
+        similarityRmsResidualDetectionPixels: 0.11,
+        similarityMaximumResidualDetectionPixels: 0.22,
+        projectiveRmsResidualDetectionPixels: 0.12,
+        projectiveMaximumResidualDetectionPixels: 0.24,
+        rmsImprovementDetectionPixels: -0.01,
+        relativeRmsImprovement: -0.09,
+        minimumRankSeparationRatio: 0.018,
+      },
     },
     confidence: {
       accepted,

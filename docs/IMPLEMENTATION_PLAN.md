@@ -1582,6 +1582,19 @@ safety reasoning. They do not narrate obvious syntax.
      and the weakest training-fold rank separation. Tests lock exact-similarity,
      genuine-projective, invalid-fold, insufficient-support, and finite-domain
      behavior.
+127. Carry five-fold held-out evidence through registration diagnostic schema 3
+     and the advanced desktop geometry panel. The report records validation RMS
+     and worst residuals for both models, projective fold wins, relative gain,
+     and minimum training-rank evidence under its own versioned algorithm ID.
+     The UI labels in-sample and held-out gains separately and continues to mark
+     the projective model as not selected.
+128. Re-run all nine ASI294MC Pro comparisons with five-fold validation. Held-
+     out projective RMS improvement ranges from -0.00015 to +0.00149 detection
+     pixels (-0.070% to +0.656%); two pairs regress, and fold wins range from
+     three to five of five. Minimum training-fold rank separation remains stable
+     from 0.286 to 0.290. Even the best gain is scientifically negligible at
+     this sampling scale, reinforcing the non-selection decision while proving
+     that the evidence path can expose both improvements and regressions.
 
 ## 11. Stable-release definition
 
