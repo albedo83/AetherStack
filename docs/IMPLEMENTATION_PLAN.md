@@ -1522,6 +1522,19 @@ safety reasoning. They do not narrate obvious syntax.
      invalid matrices, and horizon failure. Similarity remains the only
      production-selected model until robust projective estimation, confidence,
      footprint, and bounded resampling are complete as one reviewed chain.
+121. Add bounded, normalized projective least-squares estimation. The public
+     `fit_projective` entry point accepts four to 16,384 already selected
+     correspondences, independently centers and scales source and reference
+     coordinates to mean distance `sqrt(2)`, and solves the homogeneous DLT
+     system with a bounded-iteration SVD. It verifies that eight design
+     directions remain independently constrained, denormalizes into the fixed
+     source-to-reference convention, and returns compensated RMS, maximum
+     residual, and rank-separation evidence. Tests recover four-point and
+     overdetermined projective ground truth, retain accuracy with billion-pixel
+     coordinate offsets, measure deterministic noisy least squares, and reject
+     insufficient, oversized, and collinear inputs. This remains a fitting
+     primitive rather than a production selector: robust consensus and model
+     adequacy still gate any replacement of the similarity solution.
 
 ## 11. Stable-release definition
 

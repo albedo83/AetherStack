@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 aether-core = { path = "../aether-core" }
 aether-quality = { path = "../aether-quality" }
+nalgebra.workspace = true
 aether-review = { path = "../aether-review" }
 sha2.workspace = true
 

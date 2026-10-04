@@ -42,6 +42,19 @@ adjugate directly because determinant division is another irrelevant common
 scale and could overflow. The type is not yet admitted to production plans;
 estimation, confidence, footprint, and resampling must adopt it together.
 
+`fit_projective` is the bounded estimation primitive for that future chain. It
+accepts between four and 16,384 preselected source/reference pairs and performs
+Hartley normalization independently on both coordinate sets: compensated
+centroids are removed and mean point distance is scaled to `sqrt(2)`. The
+homogeneous DLT design is solved by SVD with a 10,000-iteration ceiling. The
+second-smallest singular direction must remain greater than `1e-10` of the
+largest; for the exact four-pair case, an explicit zero row obtains the complete
+right-singular basis without adding a constraint. The fit is denormalized,
+canonicalized as `ProjectiveTransform`, and accompanied by uncompromised
+compensated RMS, maximum residual, and rank-separation evidence. No clipping or
+consensus is hidden in this function. Consequently it is not yet eligible for
+registration plans or resampling publication.
+
 ## Residual evidence
 
 A registration correspondence contains one measured source point and its

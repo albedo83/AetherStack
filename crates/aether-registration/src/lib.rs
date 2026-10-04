@@ -12,6 +12,7 @@ mod geometry;
 mod matching;
 mod plan;
 mod projective;
+mod projective_fit;
 mod reference;
 mod resampling;
 mod triangles;
@@ -51,6 +52,9 @@ pub use plan::{
     RegistrationPlanError,
 };
 pub use projective::ProjectiveTransform;
+pub use projective_fit::{
+    MAX_PROJECTIVE_FIT_MATCHES, ProjectiveFit, ProjectiveFitError, fit_projective,
+};
 pub use reference::{
     CandidateRanks, ReferenceCandidate, ReferenceMetrics, ReferenceSelection,
     ReferenceSelectionError, ReferenceSelectionEvidence, select_reference,
