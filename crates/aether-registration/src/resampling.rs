@@ -142,6 +142,19 @@ pub struct Lanczos3BandPlan {
     source_window: Option<Lanczos3SourceWindow>,
 }
 
+/// Immutable, validated projective geometry for one window-backed band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectiveLanczos3BandPlan {
+    source_dimensions: Dimensions,
+    output_width: usize,
+    output_height: usize,
+    reference_y: usize,
+    band_height: usize,
+    source_to_reference: ProjectiveTransform,
+    reference_to_source: ProjectiveTransform,
+    source_window: Option<Lanczos3SourceWindow>,
+}
+
 impl Lanczos3BandPlan {
     /// Plans one band and its exact source read rectangle.
     pub fn new(
@@ -228,46 +241,125 @@ impl Lanczos3BandPlan {
         source_window_image: Option<&ScientificImage>,
     ) -> Result<ResampledBand, ResamplingError> {
         match (self.source_window, source_window_image) {
-            (None, None) => self.missing_band(),
+            (None, None) => missing_band(
+                self.output_width,
+                self.band_height,
+                self.reference_y,
+                self.source_dimensions.planes(),
+            ),
             (None, Some(_)) => Err(ResamplingError::UnexpectedSourceWindow),
             (Some(_), None) => Err(ResamplingError::MissingSourceWindow),
             (Some(window), Some(image)) => {
-                let actual = image.dimensions();
-                if actual.width() != window.width
-                    || actual.height() != window.height
-                    || actual.planes() != self.source_dimensions.planes()
-                {
-                    return Err(ResamplingError::SourceWindowDimensions {
-                        expected_width: window.width,
-                        expected_height: window.height,
-                        expected_planes: self.source_dimensions.planes(),
-                        actual_width: actual.width(),
-                        actual_height: actual.height(),
-                        actual_planes: actual.planes(),
-                    });
-                }
+                validate_source_window(image, window, self.source_dimensions.planes())?;
                 resample_lanczos3_planned_band(image, window, self)
             }
         }
     }
+}
 
-    fn missing_band(self) -> Result<ResampledBand, ResamplingError> {
-        let dimensions = Dimensions::new(
-            self.output_width,
-            self.band_height,
-            self.source_dimensions.planes(),
+impl ProjectiveLanczos3BandPlan {
+    /// Plans one projective band and its exact source read rectangle.
+    pub fn new(
+        source_dimensions: Dimensions,
+        output_width: usize,
+        output_height: usize,
+        reference_y: usize,
+        band_height: usize,
+        source_to_reference: ProjectiveTransform,
+    ) -> Result<Self, ResamplingError> {
+        let source_window = plan_lanczos3_projective_source_window(
+            source_dimensions.width(),
+            source_dimensions.height(),
+            output_width,
+            output_height,
+            reference_y,
+            band_height,
+            source_to_reference,
         )?;
-        let mut image = ScientificImage::filled(dimensions, f64::NAN)?;
-        image.mask_mut().as_mut_slice().fill(PixelFlags::MISSING);
-        Ok(ResampledBand {
-            reference_y: self.reference_y,
-            image,
-            statistics: ResamplingStatistics {
-                total_samples: dimensions.pixel_count(),
-                outside_footprint_samples: dimensions.pixel_count(),
-                ..ResamplingStatistics::default()
-            },
+        let reference_to_source = source_to_reference
+            .inverse()
+            .map_err(ResamplingError::Coordinate)?;
+        Ok(Self {
+            source_dimensions,
+            output_width,
+            output_height,
+            reference_y,
+            band_height,
+            source_to_reference,
+            reference_to_source,
+            source_window,
         })
+    }
+
+    /// Complete source dimensions represented by the eventual window.
+    #[must_use]
+    pub const fn source_dimensions(self) -> Dimensions {
+        self.source_dimensions
+    }
+
+    /// Complete reference-canvas width.
+    #[must_use]
+    pub const fn output_width(self) -> usize {
+        self.output_width
+    }
+
+    /// Complete reference-canvas height.
+    #[must_use]
+    pub const fn output_height(self) -> usize {
+        self.output_height
+    }
+
+    /// First output row produced by this plan.
+    #[must_use]
+    pub const fn reference_y(self) -> usize {
+        self.reference_y
+    }
+
+    /// Number of output rows produced by this plan.
+    #[must_use]
+    pub const fn band_height(self) -> usize {
+        self.band_height
+    }
+
+    /// Exact source-to-reference homography applied by this plan.
+    #[must_use]
+    pub const fn source_to_reference(self) -> ProjectiveTransform {
+        self.source_to_reference
+    }
+
+    /// Exact rectangular read required, or `None` for a fully disjoint band.
+    #[must_use]
+    pub const fn source_window(self) -> Option<Lanczos3SourceWindow> {
+        self.source_window
+    }
+
+    /// Resamples this band from exactly the planned source window.
+    pub fn resample(
+        self,
+        source_window_image: Option<&ScientificImage>,
+    ) -> Result<ResampledBand, ResamplingError> {
+        match (self.source_window, source_window_image) {
+            (None, None) => missing_band(
+                self.output_width,
+                self.band_height,
+                self.reference_y,
+                self.source_dimensions.planes(),
+            ),
+            (None, Some(_)) => Err(ResamplingError::UnexpectedSourceWindow),
+            (Some(_), None) => Err(ResamplingError::MissingSourceWindow),
+            (Some(window), Some(image)) => {
+                validate_source_window(image, window, self.source_dimensions.planes())?;
+                resample_lanczos3_planned_band_with(
+                    image,
+                    window,
+                    self.source_dimensions,
+                    self.output_width,
+                    self.reference_y,
+                    self.band_height,
+                    |point| self.reference_to_source.apply(point),
+                )
+            }
+        }
     }
 }
 
@@ -304,6 +396,18 @@ pub struct Lanczos3BandExecutor<'a> {
     output_dimensions: Dimensions,
     source_to_reference: AffineTransform,
     reference_to_source: AffineTransform,
+    band_height: usize,
+    next_reference_y: usize,
+    statistics: ResamplingStatistics,
+}
+
+/// Stateful bounded-memory projective traversal of a reference canvas.
+#[derive(Debug)]
+pub struct ProjectiveLanczos3BandExecutor<'a> {
+    source: &'a ScientificImage,
+    output_dimensions: Dimensions,
+    source_to_reference: ProjectiveTransform,
+    reference_to_source: ProjectiveTransform,
     band_height: usize,
     next_reference_y: usize,
     statistics: ResamplingStatistics,
@@ -393,6 +497,97 @@ impl<'a> Lanczos3BandExecutor<'a> {
             self.next_reference_y,
             height,
             self.reference_to_source,
+        )?;
+        self.statistics = self.statistics.checked_add(band.statistics)?;
+        self.next_reference_y = self
+            .next_reference_y
+            .checked_add(height)
+            .ok_or(ResamplingError::CountOverflow)?;
+        Ok(Some(band))
+    }
+}
+
+impl<'a> ProjectiveLanczos3BandExecutor<'a> {
+    /// Validates a deterministic top-to-bottom projective traversal.
+    pub fn new(
+        source: &'a ScientificImage,
+        output_width: usize,
+        output_height: usize,
+        band_height: usize,
+        source_to_reference: ProjectiveTransform,
+    ) -> Result<Self, ResamplingError> {
+        if band_height == 0 {
+            return Err(ResamplingError::ZeroBandHeight);
+        }
+        let output_dimensions =
+            Dimensions::new(output_width, output_height, source.dimensions().planes())?;
+        let reference_to_source = source_to_reference
+            .inverse()
+            .map_err(ResamplingError::Coordinate)?;
+        Ok(Self {
+            source,
+            output_dimensions,
+            source_to_reference,
+            reference_to_source,
+            band_height,
+            next_reference_y: 0,
+            statistics: ResamplingStatistics::default(),
+        })
+    }
+
+    /// Versioned interpolation and support policy shared with the scalar oracle.
+    #[must_use]
+    pub const fn algorithm_id(&self) -> &'static str {
+        LANCZOS3_RESAMPLING_ALGORITHM_ID
+    }
+
+    /// Exact source-to-reference homography used by every band.
+    #[must_use]
+    pub const fn source_to_reference(&self) -> ProjectiveTransform {
+        self.source_to_reference
+    }
+
+    /// Complete output dimensions, independent of the chosen band height.
+    #[must_use]
+    pub const fn output_dimensions(&self) -> Dimensions {
+        self.output_dimensions
+    }
+
+    /// Requested maximum number of output rows held by one returned band.
+    #[must_use]
+    pub const fn band_height(&self) -> usize {
+        self.band_height
+    }
+
+    /// Support accounting for all bands returned so far.
+    #[must_use]
+    pub const fn statistics(&self) -> ResamplingStatistics {
+        self.statistics
+    }
+
+    /// Returns whether every output row has been produced successfully.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.next_reference_y == self.output_dimensions.height()
+    }
+
+    /// Produces the next projective band using global reference coordinates.
+    pub fn next_band(&mut self) -> Result<Option<ResampledBand>, ResamplingError> {
+        if self.is_complete() {
+            return Ok(None);
+        }
+        let remaining = self
+            .output_dimensions
+            .height()
+            .checked_sub(self.next_reference_y)
+            .ok_or(ResamplingError::CountOverflow)?;
+        let height = remaining.min(self.band_height);
+        let band = resample_lanczos3_band_with(
+            self.source,
+            self.output_dimensions.width(),
+            self.next_reference_y,
+            height,
+            |point| self.reference_to_source.apply(point),
         )?;
         self.statistics = self.statistics.checked_add(band.statistics)?;
         self.next_reference_y = self
@@ -666,6 +861,61 @@ pub fn plan_lanczos3_source_window(
     band_height: usize,
     source_to_reference: AffineTransform,
 ) -> Result<Option<Lanczos3SourceWindow>, ResamplingError> {
+    let reference_to_source = source_to_reference
+        .inverse()
+        .map_err(ResamplingError::Coordinate)?;
+    plan_lanczos3_source_window_with(
+        source_width,
+        source_height,
+        output_width,
+        output_height,
+        reference_y,
+        band_height,
+        |point| reference_to_source.apply(point),
+    )
+}
+
+/// Plans the exact source rectangle needed for one projective reference band.
+///
+/// Unlike a corner-only approximation, this evaluates every discrete output
+/// center and its exact non-zero Lanczos support. That is deliberately more
+/// conservative computationally and guarantees that a curved projective path
+/// cannot escape the planned read rectangle between sampled corners.
+pub fn plan_lanczos3_projective_source_window(
+    source_width: usize,
+    source_height: usize,
+    output_width: usize,
+    output_height: usize,
+    reference_y: usize,
+    band_height: usize,
+    source_to_reference: ProjectiveTransform,
+) -> Result<Option<Lanczos3SourceWindow>, ResamplingError> {
+    let reference_to_source = source_to_reference
+        .inverse()
+        .map_err(ResamplingError::Coordinate)?;
+    plan_lanczos3_source_window_with(
+        source_width,
+        source_height,
+        output_width,
+        output_height,
+        reference_y,
+        band_height,
+        |point| reference_to_source.apply(point),
+    )
+}
+
+fn plan_lanczos3_source_window_with<F>(
+    source_width: usize,
+    source_height: usize,
+    output_width: usize,
+    output_height: usize,
+    reference_y: usize,
+    band_height: usize,
+    reference_to_source: F,
+) -> Result<Option<Lanczos3SourceWindow>, ResamplingError>
+where
+    F: Fn(ImagePoint) -> Result<ImagePoint, CoordinateError>,
+{
     if band_height == 0 {
         return Err(ResamplingError::ZeroBandHeight);
     }
@@ -681,9 +931,6 @@ pub fn plan_lanczos3_source_window(
             output_height,
         });
     }
-    let reference_to_source = source_to_reference
-        .inverse()
-        .map_err(ResamplingError::Coordinate)?;
     let mut minimum_x = usize::MAX;
     let mut minimum_y = usize::MAX;
     let mut maximum_x = 0_usize;
@@ -694,9 +941,8 @@ pub fn plan_lanczos3_source_window(
         for output_x in 0..output_width {
             let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
                 .map_err(ResamplingError::Coordinate)?;
-            let source_point = reference_to_source
-                .apply(reference_point)
-                .map_err(ResamplingError::Coordinate)?;
+            let source_point =
+                reference_to_source(reference_point).map_err(ResamplingError::Coordinate)?;
             let x_kernel = AxisKernel::new(source_point.x(), source_width)?;
             let y_kernel = AxisKernel::new(source_point.y(), source_height)?;
             if !x_kernel.complete || !y_kernel.complete {
@@ -907,6 +1153,21 @@ fn resample_lanczos3_band(
     band_height: usize,
     reference_to_source: AffineTransform,
 ) -> Result<ResampledBand, ResamplingError> {
+    resample_lanczos3_band_with(source, output_width, reference_y, band_height, |point| {
+        reference_to_source.apply(point)
+    })
+}
+
+fn resample_lanczos3_band_with<F>(
+    source: &ScientificImage,
+    output_width: usize,
+    reference_y: usize,
+    band_height: usize,
+    reference_to_source: F,
+) -> Result<ResampledBand, ResamplingError>
+where
+    F: Fn(ImagePoint) -> Result<ImagePoint, CoordinateError>,
+{
     let source_dimensions = source.dimensions();
     let band_dimensions = Dimensions::new(output_width, band_height, source_dimensions.planes())?;
     let mut output = ScientificImage::filled(band_dimensions, f64::NAN)?;
@@ -929,9 +1190,8 @@ fn resample_lanczos3_band(
         for output_x in 0..output_width {
             let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
                 .map_err(ResamplingError::Coordinate)?;
-            let source_point = reference_to_source
-                .apply(reference_point)
-                .map_err(ResamplingError::Coordinate)?;
+            let source_point =
+                reference_to_source(reference_point).map_err(ResamplingError::Coordinate)?;
             let x_kernel = AxisKernel::new(source_point.x(), source_dimensions.width())?;
             let y_kernel = AxisKernel::new(source_point.y(), source_dimensions.height())?;
             if !x_kernel.complete || !y_kernel.complete {
@@ -1014,15 +1274,33 @@ fn resample_lanczos3_planned_band(
     window: Lanczos3SourceWindow,
     plan: Lanczos3BandPlan,
 ) -> Result<ResampledBand, ResamplingError> {
-    let output_dimensions = Dimensions::new(
+    resample_lanczos3_planned_band_with(
+        source,
+        window,
+        plan.source_dimensions,
         plan.output_width,
+        plan.reference_y,
         plan.band_height,
-        plan.source_dimensions.planes(),
-    )?;
+        |point| plan.reference_to_source.apply(point),
+    )
+}
+
+fn resample_lanczos3_planned_band_with<F>(
+    source: &ScientificImage,
+    window: Lanczos3SourceWindow,
+    source_dimensions: Dimensions,
+    output_width: usize,
+    reference_y: usize,
+    band_height: usize,
+    reference_to_source: F,
+) -> Result<ResampledBand, ResamplingError>
+where
+    F: Fn(ImagePoint) -> Result<ImagePoint, CoordinateError>,
+{
+    let output_dimensions = Dimensions::new(output_width, band_height, source_dimensions.planes())?;
     let mut output = ScientificImage::filled(output_dimensions, f64::NAN)?;
-    let output_area = plan
-        .output_width
-        .checked_mul(plan.band_height)
+    let output_area = output_width
+        .checked_mul(band_height)
         .ok_or(ResamplingError::CountOverflow)?;
     let source_area = window
         .width
@@ -1033,24 +1311,21 @@ fn resample_lanczos3_planned_band(
         ..ResamplingStatistics::default()
     };
 
-    for band_y in 0..plan.band_height {
-        let output_y = plan
-            .reference_y
+    for band_y in 0..band_height {
+        let output_y = reference_y
             .checked_add(band_y)
             .ok_or(ResamplingError::CountOverflow)?;
-        for output_x in 0..plan.output_width {
+        for output_x in 0..output_width {
             let reference_point = ImagePoint::new(output_x as f64, output_y as f64)
                 .map_err(ResamplingError::Coordinate)?;
-            let source_point = plan
-                .reference_to_source
-                .apply(reference_point)
-                .map_err(ResamplingError::Coordinate)?;
-            let x_kernel = AxisKernel::new(source_point.x(), plan.source_dimensions.width())?;
-            let y_kernel = AxisKernel::new(source_point.y(), plan.source_dimensions.height())?;
+            let source_point =
+                reference_to_source(reference_point).map_err(ResamplingError::Coordinate)?;
+            let x_kernel = AxisKernel::new(source_point.x(), source_dimensions.width())?;
+            let y_kernel = AxisKernel::new(source_point.y(), source_dimensions.height())?;
             if !x_kernel.complete || !y_kernel.complete {
-                for plane in 0..plan.source_dimensions.planes() {
+                for plane in 0..source_dimensions.planes() {
                     let output_index =
-                        linear_index(output_area, plan.output_width, output_x, band_y, plane)?;
+                        linear_index(output_area, output_width, output_x, band_y, plane)?;
                     output.mask_mut().as_mut_slice()[output_index] = PixelFlags::MISSING;
                     statistics.outside_footprint_samples =
                         checked_increment(statistics.outside_footprint_samples)?;
@@ -1058,7 +1333,7 @@ fn resample_lanczos3_planned_band(
                 continue;
             }
 
-            for plane in 0..plan.source_dimensions.planes() {
+            for plane in 0..source_dimensions.planes() {
                 let mut weighted_sum = CompensatedSum::new();
                 let mut weight_sum = CompensatedSum::new();
                 let mut combined_flags = PixelFlags::CLEAR;
@@ -1091,7 +1366,7 @@ fn resample_lanczos3_planned_band(
                     }
                 }
                 let output_index =
-                    linear_index(output_area, plan.output_width, output_x, band_y, plane)?;
+                    linear_index(output_area, output_width, output_x, band_y, plane)?;
                 if !combined_flags.is_clear() {
                     output.mask_mut().as_mut_slice()[output_index] = combined_flags;
                     statistics.masked_support_samples =
@@ -1122,9 +1397,51 @@ fn resample_lanczos3_planned_band(
         return Err(ResamplingError::CountOverflow);
     }
     Ok(ResampledBand {
-        reference_y: plan.reference_y,
+        reference_y,
         image: output,
         statistics,
+    })
+}
+
+fn validate_source_window(
+    image: &ScientificImage,
+    window: Lanczos3SourceWindow,
+    expected_planes: usize,
+) -> Result<(), ResamplingError> {
+    let actual = image.dimensions();
+    if actual.width() != window.width
+        || actual.height() != window.height
+        || actual.planes() != expected_planes
+    {
+        return Err(ResamplingError::SourceWindowDimensions {
+            expected_width: window.width,
+            expected_height: window.height,
+            expected_planes,
+            actual_width: actual.width(),
+            actual_height: actual.height(),
+            actual_planes: actual.planes(),
+        });
+    }
+    Ok(())
+}
+
+fn missing_band(
+    output_width: usize,
+    band_height: usize,
+    reference_y: usize,
+    planes: usize,
+) -> Result<ResampledBand, ResamplingError> {
+    let dimensions = Dimensions::new(output_width, band_height, planes)?;
+    let mut image = ScientificImage::filled(dimensions, f64::NAN)?;
+    image.mask_mut().as_mut_slice().fill(PixelFlags::MISSING);
+    Ok(ResampledBand {
+        reference_y,
+        image,
+        statistics: ResamplingStatistics {
+            total_samples: dimensions.pixel_count(),
+            outside_footprint_samples: dimensions.pixel_count(),
+            ..ResamplingStatistics::default()
+        },
     })
 }
 
@@ -1217,6 +1534,27 @@ mod tests {
             }
         }
         Ok(output)
+    }
+
+    fn copy_band_into(target: &mut ScientificImage, band: &ResampledBand) -> TestResult {
+        let target_dimensions = target.dimensions();
+        let band_dimensions = band.image().dimensions();
+        let band_area = band_dimensions.width() * band_dimensions.height();
+        let target_area = target_dimensions.width() * target_dimensions.height();
+        for plane in 0..target_dimensions.planes() {
+            for local_y in 0..band_dimensions.height() {
+                let source_start = plane * band_area + local_y * band_dimensions.width();
+                let target_start = plane * target_area
+                    + (band.reference_y() + local_y) * target_dimensions.width();
+                let source_range = source_start..source_start + band_dimensions.width();
+                let target_range = target_start..target_start + target_dimensions.width();
+                target.pixels_mut()[target_range.clone()]
+                    .copy_from_slice(&band.image().pixels()[source_range.clone()]);
+                target.mask_mut().as_mut_slice()[target_range]
+                    .copy_from_slice(&band.image().mask().as_slice()[source_range]);
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -1537,6 +1875,42 @@ mod tests {
     }
 
     #[test]
+    fn projective_bands_are_bit_exact_against_the_complete_image_oracle() -> TestResult {
+        let mut source = image(19, 17, 2)?;
+        source.mark(8, 7, 0, PixelFlags::HOT)?;
+        source.pixels_mut()[19 * 17 + 9 * 19 + 10] = f64::NAN;
+        let transform = ProjectiveTransform::new([
+            [0.999, -0.014, 0.31],
+            [0.017, 1.001, -0.27],
+            [7.0e-5, -4.0e-5, 1.0],
+        ])?;
+        let oracle = resample_lanczos3_projective(&source, 16, 15, transform)?;
+        let output_dimensions = Dimensions::new(16, 15, 2)?;
+
+        for band_height in [1, 4, 15, 32] {
+            let mut assembled = ScientificImage::filled(output_dimensions, f64::NAN)?;
+            let mut executor =
+                ProjectiveLanczos3BandExecutor::new(&source, 16, 15, band_height, transform)?;
+            while let Some(band) = executor.next_band()? {
+                copy_band_into(&mut assembled, &band)?;
+            }
+
+            assert!(executor.is_complete());
+            assert_eq!(executor.next_band()?, None);
+            assert_eq!(executor.statistics(), oracle.statistics());
+            assert_eq!(executor.algorithm_id(), oracle.algorithm_id());
+            assert_eq!(executor.source_to_reference(), transform);
+            assert_eq!(executor.output_dimensions(), output_dimensions);
+            assert_eq!(executor.band_height(), band_height);
+            assert_eq!(assembled.mask(), oracle.image().mask());
+            for (&actual, &expected) in assembled.pixels().iter().zip(oracle.image().pixels()) {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn band_executor_rejects_zero_height_and_invalid_output_dimensions() -> TestResult {
         let source = image(4, 4, 1)?;
 
@@ -1654,6 +2028,55 @@ mod tests {
                         .copy_from_slice(&band.image().mask().as_slice()[source_range]);
                 }
             }
+        }
+
+        assert_eq!(statistics, oracle.statistics());
+        assert_eq!(assembled.mask(), oracle.image().mask());
+        for (&actual, &expected) in assembled.pixels().iter().zip(oracle.image().pixels()) {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn exact_projective_windows_reconstruct_the_complete_image_oracle() -> TestResult {
+        let mut source = image(19, 17, 2)?;
+        source.mark(8, 7, 0, PixelFlags::HOT)?;
+        source.mark(10, 9, 1, PixelFlags::SATURATED)?;
+        source.pixels_mut()[19 * 17 + 6 * 19 + 7] = f64::NAN;
+        let transform = ProjectiveTransform::new([
+            [0.999, -0.014, 0.31],
+            [0.017, 1.001, -0.27],
+            [7.0e-5, -4.0e-5, 1.0],
+        ])?;
+        let oracle = resample_lanczos3_projective(&source, 16, 15, transform)?;
+        let output_dimensions = Dimensions::new(16, 15, 2)?;
+        let mut assembled = ScientificImage::filled(output_dimensions, f64::NAN)?;
+        let mut statistics = ResamplingStatistics::default();
+
+        for reference_y in (0..15).step_by(4) {
+            let height = (15 - reference_y).min(4);
+            let plan = ProjectiveLanczos3BandPlan::new(
+                source.dimensions(),
+                16,
+                15,
+                reference_y,
+                height,
+                transform,
+            )?;
+            assert_eq!(plan.source_dimensions(), source.dimensions());
+            assert_eq!(plan.output_width(), 16);
+            assert_eq!(plan.output_height(), 15);
+            assert_eq!(plan.reference_y(), reference_y);
+            assert_eq!(plan.band_height(), height);
+            assert_eq!(plan.source_to_reference(), transform);
+            let window_image = plan
+                .source_window()
+                .map(|window| extract_window(&source, window))
+                .transpose()?;
+            let band = plan.resample(window_image.as_ref())?;
+            statistics = statistics.checked_add(band.statistics())?;
+            copy_band_into(&mut assembled, &band)?;
         }
 
         assert_eq!(statistics, oracle.statistics());

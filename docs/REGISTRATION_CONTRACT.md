@@ -336,8 +336,15 @@ Lanczos support calculation. Affine transforms lifted to canonical 3 × 3 form
 agree within a strict binary64 roundoff bound, constant fields remain constant
 on complete support, and a
 projective horizon aborts the operation rather than returning partial output.
-This oracle is not production-selectable until exact projective source-window
-planning and bounded band execution pass their own differential tests.
+Exact projective source-window planning evaluates every discrete output center;
+it never assumes that transformed corners bound a homographic path. The
+window-backed projective plan validates decoded dimensions before sampling, and
+the projective band executor preserves global reference coordinates. Both
+bounded paths reconstruct the complete-image projective oracle bit for bit
+across alternate band heights, masks, multiple planes, non-finite evidence, and
+boundary loss. These numerical guarantees do not themselves authorize model
+selection: the runtime continues to use affine geometry until a separate,
+documented scientific acceptance policy is implemented.
 
 Before decoding each band, the source-window planner evaluates the exact same
 inverse transform and analytical-zero kernels. It returns the smallest rectangle

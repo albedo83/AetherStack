@@ -1604,6 +1604,15 @@ safety reasoning. They do not narrate obvious syntax.
      projective constant-field and horizon tests lock flux preservation and
      fail-closed behavior. Bounded projective band planning remains required
      before production execution can select this geometry.
+130. Add exact bounded-memory projective resampling without weakening the
+     affine path. The planner evaluates every output center with the canonical
+     inverse homography and records only mathematically non-zero Lanczos taps;
+     the window-backed plan then rejects absent, surplus, or misshaped decoded
+     storage. A top-to-bottom in-memory executor exposes the same deterministic
+     band contract. Both execution paths reconstruct the complete projective
+     oracle bit for bit across multiple band heights, planes, masks, boundary
+     loss, and non-finite evidence. Automatic projective model selection remains
+     disabled pending an explicit scientific acceptance policy.
 
 ## 11. Stable-release definition
 

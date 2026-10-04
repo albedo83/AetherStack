@@ -73,8 +73,9 @@ pub use reference::{
 };
 pub use resampling::{
     LANCZOS3_RESAMPLING_ALGORITHM_ID, Lanczos3BandExecutor, Lanczos3BandPlan, Lanczos3SourceWindow,
-    ProjectivelyResampledImage, ResampledBand, ResampledImage, ResamplingError,
-    ResamplingStatistics, plan_lanczos3_source_window, resample_lanczos3,
+    ProjectiveLanczos3BandExecutor, ProjectiveLanczos3BandPlan, ProjectivelyResampledImage,
+    ResampledBand, ResampledImage, ResamplingError, ResamplingStatistics,
+    plan_lanczos3_projective_source_window, plan_lanczos3_source_window, resample_lanczos3,
     resample_lanczos3_projective,
 };
 pub use triangles::{
