@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use aether_fits::{
     HeaderReadOptions, ImageReadError, PrimaryImageReader, Severity, ValidationMode,
@@ -33,6 +34,31 @@ pub enum SourceAnalysisError {
     SourceChanged,
     /// The analyzed values violate a manifest invariant.
     Manifest(ManifestValidationError),
+}
+
+/// Monotonic wall-clock time spent in the independently measurable source
+/// analysis stages.
+///
+/// This type remains crate-private because directory import is the stable
+/// profiling boundary. Keeping the per-source samples internal also prevents
+/// callers from treating noisy individual timings as scientific evidence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SourceAnalysisTimings {
+    pub(crate) initial_header: Duration,
+    pub(crate) fingerprint: Duration,
+    pub(crate) verification_header: Duration,
+    pub(crate) finalize: Duration,
+}
+
+impl SourceAnalysisTimings {
+    pub(crate) fn saturating_add_assign(&mut self, other: Self) {
+        self.initial_header = self.initial_header.saturating_add(other.initial_header);
+        self.fingerprint = self.fingerprint.saturating_add(other.fingerprint);
+        self.verification_header = self
+            .verification_header
+            .saturating_add(other.verification_header);
+        self.finalize = self.finalize.saturating_add(other.finalize);
+    }
 }
 
 impl Display for SourceAnalysisError {
@@ -92,9 +118,30 @@ pub fn analyze_fits_source<R: Read + Seek>(
     fits_validation_mode: ValidationMode,
     classification_policy: ClassificationPolicy,
 ) -> Result<ManifestFile, SourceAnalysisError> {
+    let mut timings = SourceAnalysisTimings::default();
+    analyze_fits_source_with_timings(
+        relative_path,
+        reader,
+        header_options,
+        fits_validation_mode,
+        classification_policy,
+        &mut timings,
+    )
+}
+
+pub(crate) fn analyze_fits_source_with_timings<R: Read + Seek>(
+    relative_path: impl Into<String>,
+    reader: R,
+    header_options: HeaderReadOptions,
+    fits_validation_mode: ValidationMode,
+    classification_policy: ClassificationPolicy,
+    timings: &mut SourceAnalysisTimings,
+) -> Result<ManifestFile, SourceAnalysisError> {
     let relative_path = relative_path.into();
-    let image_reader =
-        PrimaryImageReader::open(reader, header_options).map_err(SourceAnalysisError::Image)?;
+    let started = Instant::now();
+    let image_reader = PrimaryImageReader::open(reader, header_options);
+    timings.initial_header = started.elapsed();
+    let image_reader = image_reader.map_err(SourceAnalysisError::Image)?;
     let error_count = image_reader
         .report()
         .diagnostics()
@@ -112,22 +159,28 @@ pub fn analyze_fits_source<R: Read + Seek>(
     reader
         .seek(SeekFrom::Start(0))
         .map_err(SourceAnalysisError::Rewind)?;
-    let fingerprint = fingerprint_reader(&mut reader).map_err(SourceAnalysisError::Fingerprint)?;
+    let started = Instant::now();
+    let fingerprint = fingerprint_reader(&mut reader);
+    timings.fingerprint = started.elapsed();
+    let fingerprint = fingerprint.map_err(SourceAnalysisError::Fingerprint)?;
     reader
         .seek(SeekFrom::Start(0))
         .map_err(SourceAnalysisError::Rewind)?;
-    let verified = PrimaryImageReader::open(reader, header_options)
-        .map_err(SourceAnalysisError::Verification)?;
+    let started = Instant::now();
+    let verified = PrimaryImageReader::open(reader, header_options);
+    timings.verification_header = started.elapsed();
+    let verified = verified.map_err(SourceAnalysisError::Verification)?;
     if verified.report() != &original_report || verified.descriptor() != &original_descriptor {
         return Err(SourceAnalysisError::SourceChanged);
     }
 
+    let started = Instant::now();
     let axes = original_descriptor.axes().to_vec();
     let metadata = normalize_header(original_report.header());
     let diagnostics = original_report.diagnostics().to_vec();
     let classification = classify_frame(Path::new(&relative_path), &metadata);
 
-    ManifestFile::from_analysis(
+    let result = ManifestFile::from_analysis(
         relative_path,
         fingerprint,
         axes,
@@ -136,7 +189,9 @@ pub fn analyze_fits_source<R: Read + Seek>(
         classification,
         classification_policy,
     )
-    .map_err(SourceAnalysisError::Manifest)
+    .map_err(SourceAnalysisError::Manifest);
+    timings.finalize = started.elapsed();
+    result
 }
 
 #[cfg(test)]

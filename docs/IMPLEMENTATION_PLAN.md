@@ -1424,6 +1424,20 @@ safety reasoning. They do not narrate obvious syntax.
      values, while the real-corpus gate requires non-zero byte and timing proof.
      Next, profile release-mode session import stages before optimizing traversal,
      header parsing, or hashing independently.
+113. Add path-private release profiling for the complete production importer.
+     Directory reports now retain aggregate monotonic durations for initial FITS
+     headers, full-source SHA-256, post-hash mutation-detection headers, source
+     finalization, manifest assembly, and filesystem/orchestration remainder.
+     These measurements never enter manifest identity or scientific decisions.
+     A bounded opt-in release command verifies stable canonical evidence across
+     passes and prints only aggregate counts and timings, never paths, names,
+     digests, metadata, or pixels. Unit tests cover option bounds, stage access,
+     and saturating remainder accounting. Three stable passes over the complete
+     135-file, 3,158,611,200-byte ASI294MC input show SHA-256 consuming 97.44% of
+     the median 1.765804-second import. Traversal, header parsing, classification,
+     and grouping do not justify optimization. Next, add bounded opt-in parallel
+     source analysis and require identical canonical output plus measured gains
+     before considering it for the interactive profile.
 
 ## 11. Stable-release definition
 

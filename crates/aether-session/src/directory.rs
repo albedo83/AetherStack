@@ -4,12 +4,14 @@ use std::fmt::{Display, Formatter};
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use aether_fits::{HeaderReadOptions, ValidationMode};
 
+use crate::source::{SourceAnalysisTimings, analyze_fits_source_with_timings};
 use crate::{
     ClassificationPolicy, FINGERPRINT_BUFFER_BYTES, ManifestFile, ManifestGenerationError,
-    SessionManifest, SourceAnalysisError, analyze_fits_source, generate_manifest,
+    SessionManifest, SourceAnalysisError, generate_manifest,
 };
 
 /// Default maximum number of entries accepted from one directory.
@@ -264,6 +266,74 @@ pub struct DirectoryManifestReport {
     skipped_symlinks: usize,
     skipped_non_fits_files: usize,
     skipped_special_entries: usize,
+    timings: DirectoryScanTimings,
+}
+
+/// Aggregate monotonic timings for one completed directory import.
+///
+/// Durations are operational evidence only. They help identify whether storage
+/// hashing, FITS parsing, or manifest assembly dominates a particular import;
+/// they never participate in manifest identity or scientific decisions.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectoryScanTimings {
+    total: Duration,
+    initial_headers: Duration,
+    fingerprints: Duration,
+    verification_headers: Duration,
+    source_finalization: Duration,
+    manifest_assembly: Duration,
+}
+
+impl DirectoryScanTimings {
+    /// Complete elapsed import duration.
+    #[must_use]
+    pub const fn total(&self) -> Duration {
+        self.total
+    }
+
+    /// Time spent parsing and validating source headers before hashing.
+    #[must_use]
+    pub const fn initial_headers(&self) -> Duration {
+        self.initial_headers
+    }
+
+    /// Time spent streaming complete sources through SHA-256.
+    #[must_use]
+    pub const fn fingerprints(&self) -> Duration {
+        self.fingerprints
+    }
+
+    /// Time spent reparsing headers after hashing to detect source mutation.
+    #[must_use]
+    pub const fn verification_headers(&self) -> Duration {
+        self.verification_headers
+    }
+
+    /// Time spent normalizing metadata, classifying frames, and validating
+    /// per-source manifest records.
+    #[must_use]
+    pub const fn source_finalization(&self) -> Duration {
+        self.source_finalization
+    }
+
+    /// Time spent grouping analyzed sources and constructing the manifest.
+    #[must_use]
+    pub const fn manifest_assembly(&self) -> Duration {
+        self.manifest_assembly
+    }
+
+    /// Remaining time spent traversing directories, opening sources, reading
+    /// metadata, sorting records, and moving between measured stages.
+    #[must_use]
+    pub fn filesystem_and_overhead(&self) -> Duration {
+        self.total.saturating_sub(
+            self.initial_headers
+                .saturating_add(self.fingerprints)
+                .saturating_add(self.verification_headers)
+                .saturating_add(self.source_finalization)
+                .saturating_add(self.manifest_assembly),
+        )
+    }
 }
 
 impl DirectoryManifestReport {
@@ -329,6 +399,12 @@ impl DirectoryManifestReport {
     #[must_use]
     pub const fn skipped_special_entries(&self) -> usize {
         self.skipped_special_entries
+    }
+
+    /// Aggregate import-stage timings excluded from manifest identity.
+    #[must_use]
+    pub const fn timings(&self) -> DirectoryScanTimings {
+        self.timings
     }
 }
 
@@ -464,6 +540,7 @@ struct ScanState {
     skipped_symlinks: usize,
     skipped_non_fits_files: usize,
     skipped_special_entries: usize,
+    source_timings: SourceAnalysisTimings,
 }
 
 /// Pins reads to the length observed immediately after opening the file.
@@ -553,6 +630,7 @@ pub fn generate_manifest_from_directory(
     root: &Path,
     options: DirectoryManifestOptions,
 ) -> Result<DirectoryManifestReport, DirectoryManifestError> {
+    let scan_started = Instant::now();
     validate_options(options)?;
     let root_metadata = fs::symlink_metadata(root).map_err(DirectoryManifestError::RootMetadata)?;
     if !root_metadata.file_type().is_dir() {
@@ -600,6 +678,7 @@ pub fn generate_manifest_from_directory(
         }
     }
 
+    let manifest_started = Instant::now();
     let manifest = generate_manifest(
         options.fits_validation_mode,
         options.classification_policy,
@@ -623,6 +702,16 @@ pub fn generate_manifest_from_directory(
             .then_with(|| left.code().cmp(&right.code()))
     });
 
+    let manifest_assembly = manifest_started.elapsed();
+    let timings = DirectoryScanTimings {
+        total: scan_started.elapsed(),
+        initial_headers: state.source_timings.initial_header,
+        fingerprints: state.source_timings.fingerprint,
+        verification_headers: state.source_timings.verification_header,
+        source_finalization: state.source_timings.finalize,
+        manifest_assembly,
+    };
+
     Ok(DirectoryManifestReport {
         manifest,
         failures: state.failures,
@@ -633,6 +722,7 @@ pub fn generate_manifest_from_directory(
         skipped_symlinks: state.skipped_symlinks,
         skipped_non_fits_files: state.skipped_non_fits_files,
         skipped_special_entries: state.skipped_special_entries,
+        timings,
     })
 }
 
@@ -805,13 +895,17 @@ fn analyze_file(
         FINGERPRINT_BUFFER_BYTES,
         FixedLengthReader::new(file, byte_length),
     );
-    match analyze_fits_source(
+    let mut source_timings = SourceAnalysisTimings::default();
+    let result = analyze_fits_source_with_timings(
         portable_path,
         reader,
         options.header,
         options.fits_validation_mode,
         options.classification_policy,
-    ) {
+        &mut source_timings,
+    );
+    state.source_timings.saturating_add_assign(source_timings);
+    match result {
         Ok(file) => state.files.push(file),
         Err(error) => push_failure(
             state,
@@ -993,7 +1087,34 @@ mod tests {
             DirectoryFailureCode::AnalyzeSource
         );
         assert_eq!(report.skipped_non_fits_files(), 1);
+        let timings = report.timings();
+        assert!(timings.initial_headers() <= timings.total());
+        assert!(timings.fingerprints() <= timings.total());
+        assert!(timings.verification_headers() <= timings.total());
+        assert!(timings.source_finalization() <= timings.total());
+        assert!(timings.manifest_assembly() <= timings.total());
+        assert!(timings.filesystem_and_overhead() <= timings.total());
         Ok(())
+    }
+
+    #[test]
+    fn timing_overhead_saturates_when_individual_samples_exceed_total() {
+        let timings = DirectoryScanTimings {
+            total: Duration::from_millis(10),
+            initial_headers: Duration::from_millis(3),
+            fingerprints: Duration::from_millis(7),
+            verification_headers: Duration::from_millis(5),
+            source_finalization: Duration::ZERO,
+            manifest_assembly: Duration::ZERO,
+        };
+
+        assert_eq!(timings.total(), Duration::from_millis(10));
+        assert_eq!(timings.initial_headers(), Duration::from_millis(3));
+        assert_eq!(timings.fingerprints(), Duration::from_millis(7));
+        assert_eq!(timings.verification_headers(), Duration::from_millis(5));
+        assert_eq!(timings.source_finalization(), Duration::ZERO);
+        assert_eq!(timings.manifest_assembly(), Duration::ZERO);
+        assert_eq!(timings.filesystem_and_overhead(), Duration::ZERO);
     }
 
     #[test]

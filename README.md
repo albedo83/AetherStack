@@ -240,6 +240,9 @@ The [preview contract](docs/PREVIEW_CONTRACT.md) separates bounded display
 artifacts from scientific pixels and records the remaining viewer release gates.
 The [fingerprint benchmark](docs/FINGERPRINT_BENCHMARK.md) documents the
 path-private throughput method used to evaluate large-session evidence checks.
+The [session import benchmark](docs/SESSION_IMPORT_BENCHMARK.md) separates
+directory, FITS-header, fingerprint, verification, and manifest costs without
+disclosing private corpus identities.
 
 ## Build and test
 
@@ -275,6 +278,14 @@ without printing paths, file names, digests, or image content:
 
 ```shell
 cargo run --release -p aether-inspect --bin aether-fingerprint-bench -- \
+  --passes 3 /path/to/fits-corpus
+```
+
+Profile the complete production session importer with aggregate, path-private
+stage timings:
+
+```shell
+cargo run --release -p aether-inspect --bin aether-import-bench -- \
   --passes 3 /path/to/fits-corpus
 ```
 
