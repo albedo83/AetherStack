@@ -1777,6 +1777,14 @@ safety reasoning. They do not narrate obvious syntax.
      report decoding, progress copy, and archived product verification use
      `registered-sigma-mean-f64-v1`; legacy reports default the newly added
      sigma fields without weakening unknown-field rejection.
+152. Add Winsorized iterative sigma clipping as a separate robust oracle and
+     bounded runtime estimator. Rejected tails are clamped to their nearest
+     retained boundary only for subsequent population-statistics passes; the
+     science mean still uses original retained samples. A distinct parameter
+     domain and FITS identities prevent collision with ordinary sigma output.
+     Tests lock retained support, asymmetric evidence, the support floor,
+     checksums, and byte identity across band heights. Desktop exposure remains
+     next.
 
 ## 11. Stable-release definition
 

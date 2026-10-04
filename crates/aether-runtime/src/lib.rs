@@ -47,10 +47,12 @@ pub use registered_stack::{
     PercentileClipParameters, QualityWeightMetrics, REGISTERED_CROP_MEAN_ALGORITHM_ID,
     REGISTERED_MEDIAN_ALGORITHM_ID, REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
     REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
-    RegisteredFrameQuality, RegisteredFrameWeight, RegisteredRejectionMapOutput,
-    RegisteredRejectionMapSummary, RegisteredStackError, RegisteredStackEstimator,
-    RegisteredStackRequest, RegisteredStackResult, RegisteredStackSource, RegisteredWeightSet,
-    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
+    REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
+    RegisteredFrameWeight, RegisteredRejectionMapOutput, RegisteredRejectionMapSummary,
+    RegisteredStackError, RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackResult,
+    RegisteredStackSource, RegisteredWeightSet, SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
+    WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID,
     run_registered_stack,
 };
 pub use registration::{

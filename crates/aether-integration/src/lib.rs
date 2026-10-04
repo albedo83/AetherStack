@@ -1,8 +1,8 @@
 //! Deterministic strict-reference image integration.
 //!
-//! The strict unweighted and weighted means are transparent CPU oracles. A
-//! separately versioned percentile- and sigma-clipped means add deterministic
-//! low/high rejection with exact per-pixel evidence.
+//! The strict unweighted and weighted means are transparent CPU oracles.
+//! Separately versioned percentile, sigma, and Winsorized-sigma means add
+//! deterministic low/high rejection with exact per-pixel evidence.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -20,6 +20,9 @@ pub const MEDIAN_ALGORITHM_ID: &str = "median-f64-v1";
 
 /// Stable identifier for deterministic iterative sigma-clipped integration.
 pub const SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "sigma-clipped-mean-f64-v1";
+
+/// Stable identifier for sigma clipping with Winsorized population statistics.
+pub const WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "winsorized-sigma-clipped-mean-v1";
 
 /// Stable identifier for the first transparent PSF quality-weight expression.
 pub const BALANCED_PSF_WEIGHT_ALGORITHM_ID: &str = "balanced-psf-weight-v1";
@@ -1244,6 +1247,35 @@ pub fn integrate_sigma_clipped_mean(
     inputs: &[&ScientificImage],
     parameters: SigmaClipParameters,
 ) -> Result<SigmaClippedIntegration, IntegrationError> {
+    integrate_iterative_sigma_clipped_mean(inputs, parameters, false)
+}
+
+/// Integrates equal-sized images with iterative Winsorized sigma rejection.
+///
+/// Rejection limits are applied to the original sorted samples. After the
+/// first pass, population statistics are recomputed over the original sample
+/// count with rejected tails replaced by their nearest retained boundary.
+/// This bounds each outlier's influence without letting successive passes
+/// shrink the distribution as aggressively as ordinary sigma clipping. The
+/// final science value remains the strict mean of original retained samples;
+/// substituted values are used only to estimate the next rejection limits.
+///
+/// # Errors
+///
+/// Returns the same bounded validation, allocation, shape, and accounting
+/// errors as [`integrate_sigma_clipped_mean`].
+pub fn integrate_winsorized_sigma_clipped_mean(
+    inputs: &[&ScientificImage],
+    parameters: SigmaClipParameters,
+) -> Result<SigmaClippedIntegration, IntegrationError> {
+    integrate_iterative_sigma_clipped_mean(inputs, parameters, true)
+}
+
+fn integrate_iterative_sigma_clipped_mean(
+    inputs: &[&ScientificImage],
+    parameters: SigmaClipParameters,
+    winsorized: bool,
+) -> Result<SigmaClippedIntegration, IntegrationError> {
     let Some(first) = inputs.first().copied() else {
         return Err(IntegrationError::NoInputImages);
     };
@@ -1318,7 +1350,11 @@ pub fn integrate_sigma_clipped_mean(
                 if retained.len() <= minimum_retained {
                     break;
                 }
-                let (scale, mean, sigma) = normalized_population_statistics(retained);
+                let (scale, mean, sigma) = if winsorized {
+                    normalized_winsorized_population_statistics(&finite, low, high)
+                } else {
+                    normalized_population_statistics(retained)
+                };
                 if sigma == 0.0 {
                     break;
                 }
@@ -1412,6 +1448,31 @@ fn normalized_population_statistics(values: &[f64]) -> (f64, f64, f64) {
     let mut squared_deviations = CompensatedSum::new();
     for value in values {
         let deviation = *value / scale - mean;
+        squared_deviations.add((deviation * deviation) / divisor);
+    }
+    (scale, mean, squared_deviations.total().max(0.0).sqrt())
+}
+
+fn normalized_winsorized_population_statistics(
+    sorted_values: &[f64],
+    low: usize,
+    high: usize,
+) -> (f64, f64, f64) {
+    let lower = sorted_values[low];
+    let upper = sorted_values[high - 1];
+    let scale = lower.abs().max(upper.abs());
+    if scale == 0.0 {
+        return (1.0, 0.0, 0.0);
+    }
+    let divisor = sorted_values.len() as f64;
+    let mut sum = CompensatedSum::new();
+    for value in sorted_values {
+        sum.add((value.clamp(lower, upper) / scale) / divisor);
+    }
+    let mean = sum.total().max(lower / scale).min(upper / scale);
+    let mut squared_deviations = CompensatedSum::new();
+    for value in sorted_values {
+        let deviation = value.clamp(lower, upper) / scale - mean;
         squared_deviations.add((deviation * deviation) / divisor);
     }
     (scale, mean, squared_deviations.total().max(0.0).sqrt())
@@ -2055,6 +2116,59 @@ mod tests {
     }
 
     #[test]
+    fn winsorized_sigma_limits_tail_influence_without_over_clipping() -> TestResult {
+        let inputs = [-100.0, 9.0, 10.0, 10.0, 11.0, 100.0]
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+        let parameters = SigmaClipParameters::new(1.4, 1.4, 8, 2)?;
+
+        let ordinary = integrate_sigma_clipped_mean(&references, parameters)?;
+        let winsorized = integrate_winsorized_sigma_clipped_mean(&references, parameters)?;
+
+        assert_eq!(ordinary.support()[0].accepted(), 2);
+        assert_eq!(winsorized.image().pixels(), &[10.0]);
+        assert_eq!(
+            winsorized.support(),
+            &[ClippedPixelSupport {
+                accepted: 4,
+                masked: 0,
+                non_finite: 0,
+                low_rejected: 1,
+                high_rejected: 1,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn winsorized_sigma_preserves_asymmetric_evidence_and_support_floor() -> TestResult {
+        let inputs = [-100.0, 9.0, 10.0, 10.0, 11.0, 12.0, 1000.0]
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+
+        let asymmetric = integrate_winsorized_sigma_clipped_mean(
+            &references,
+            SigmaClipParameters::new(10.0, 1.5, 8, 2)?,
+        )?;
+        assert_eq!(asymmetric.support()[0].low_rejected(), 0);
+        assert_eq!(asymmetric.support()[0].high_rejected(), 1);
+        assert_eq!(asymmetric.support()[0].total(), 7);
+
+        let floored = integrate_winsorized_sigma_clipped_mean(
+            &references,
+            SigmaClipParameters::new(1.5, 1.5, 8, 7)?,
+        )?;
+        assert_eq!(floored.support()[0].accepted(), 7);
+        assert_eq!(floored.support()[0].low_rejected(), 0);
+        assert_eq!(floored.support()[0].high_rejected(), 0);
+        Ok(())
+    }
+
+    #[test]
     fn sigma_clipping_discards_a_pass_that_would_cross_the_support_floor() -> TestResult {
         let inputs = [-100.0, 9.0, 10.0, 10.0, 11.0, 100.0]
             .into_iter()
@@ -2085,6 +2199,10 @@ mod tests {
             &[&negative, &first_maximum, &second_maximum, &third_maximum],
             parameters,
         )?;
+        let winsorized = integrate_winsorized_sigma_clipped_mean(
+            &[&negative, &first_maximum, &second_maximum, &third_maximum],
+            parameters,
+        )?;
 
         assert_eq!(result.image().pixels()[0].to_bits(), f64::MAX.to_bits());
         assert_eq!(result.support()[0].low_rejected(), 1);
@@ -2094,6 +2212,8 @@ mod tests {
         assert_eq!(result.support()[1].masked(), 1);
         assert_eq!(result.support()[1].non_finite(), 2);
         assert_eq!(result.support()[1].total(), 4);
+        assert_eq!(winsorized.image().pixels(), result.image().pixels());
+        assert_eq!(winsorized.support(), result.support());
         Ok(())
     }
 

@@ -14,12 +14,13 @@ use aether_fits::{
 pub use aether_integration::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
     PercentileClipParameters, QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
-    SigmaClipParameters,
+    SigmaClipParameters, WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
     integrate_mean, integrate_median, integrate_percentile_clipped_mean,
-    integrate_sigma_clipped_mean, integrate_weighted_mean, materialize_percentile_rejection_map,
+    integrate_sigma_clipped_mean, integrate_weighted_mean, integrate_winsorized_sigma_clipped_mean,
+    materialize_percentile_rejection_map,
 };
 use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
 use aether_review::FrameId;
@@ -42,8 +43,13 @@ pub const REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID: &str = "registered-weighted-mea
 pub const REGISTERED_MEDIAN_ALGORITHM_ID: &str = "registered-median-f64-v1";
 /// Versioned deterministic iterative sigma-clipped registered stack identity.
 pub const REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-sigma-mean-f64-v1";
+/// Versioned Winsorized iterative sigma-clipped registered stack identity.
+pub const REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str =
+    "registered-win-sigma-mean-f64-v1";
 /// Plane-major low/high count map emitted by iterative sigma rejection.
 pub const SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "sigma-rejection-map-v1";
+/// Plane-major low/high count map emitted by Winsorized sigma rejection.
+pub const WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "win-sigma-rejection-map-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -61,6 +67,8 @@ pub enum RegisteredStackEstimator {
     PercentileClipped(PercentileClipParameters),
     /// Iterative asymmetric population-sigma rejection followed by the strict mean.
     SigmaClipped(SigmaClipParameters),
+    /// Iterative sigma rejection with Winsorized population statistics.
+    WinsorizedSigmaClipped(SigmaClipParameters),
 }
 
 impl RegisteredStackEstimator {
@@ -73,6 +81,9 @@ impl RegisteredStackEstimator {
             Self::WeightedMean => REGISTERED_WEIGHTED_MEAN_ALGORITHM_ID,
             Self::PercentileClipped(_) => REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID,
             Self::SigmaClipped(_) => REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+            Self::WinsorizedSigmaClipped(_) => {
+                REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+            }
         }
     }
 
@@ -95,6 +106,13 @@ impl RegisteredStackEstimator {
                 hasher.update(parameters.maximum_iterations().to_be_bytes());
                 hasher.update(parameters.minimum_retained().to_be_bytes());
             }
+            Self::WinsorizedSigmaClipped(parameters) => {
+                hasher.update(b"winsorized-sigma-clipped\0");
+                hasher.update(parameters.low_sigma().to_bits().to_be_bytes());
+                hasher.update(parameters.high_sigma().to_bits().to_be_bytes());
+                hasher.update(parameters.maximum_iterations().to_be_bytes());
+                hasher.update(parameters.minimum_retained().to_be_bytes());
+            }
             Self::StrictMean | Self::Median | Self::WeightedMean => return None,
         }
         Some(encode_lower_hex(hasher.finalize().as_slice()))
@@ -104,6 +122,7 @@ impl RegisteredStackEstimator {
         match self {
             Self::PercentileClipped(_) => Some(PERCENTILE_REJECTION_MAP_ALGORITHM_ID),
             Self::SigmaClipped(_) => Some(SIGMA_REJECTION_MAP_ALGORITHM_ID),
+            Self::WinsorizedSigmaClipped(_) => Some(WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID),
             Self::StrictMean | Self::Median | Self::WeightedMean => None,
         }
     }
@@ -1240,6 +1259,28 @@ where
                             .map_err(RegisteredStackError::Publish)?;
                     }
                 }
+                RegisteredStackEstimator::WinsorizedSigmaClipped(parameters) => {
+                    let references = images.iter().collect::<Vec<_>>();
+                    let integrated =
+                        integrate_winsorized_sigma_clipped_mean(&references, parameters)
+                            .map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                    if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
+                        let maps = materialize_percentile_rejection_map(
+                            integrated.image().dimensions(),
+                            integrated.support(),
+                        )
+                        .map_err(RegisteredStackError::Integration)?;
+                        low_writer
+                            .write_image_chunk(maps.low())
+                            .map_err(RegisteredStackError::Publish)?;
+                        high_writer
+                            .write_image_chunk(maps.high())
+                            .map_err(RegisteredStackError::Publish)?;
+                    }
+                }
             }
             *completed = completed
                 .checked_add(1)
@@ -1441,7 +1482,8 @@ fn planned_band_bytes(
         | RegisteredStackEstimator::Median
         | RegisteredStackEstimator::WeightedMean => size_of::<PixelSupport>(),
         RegisteredStackEstimator::PercentileClipped(_)
-        | RegisteredStackEstimator::SigmaClipped(_) => size_of::<ClippedPixelSupport>(),
+        | RegisteredStackEstimator::SigmaClipped(_)
+        | RegisteredStackEstimator::WinsorizedSigmaClipped(_) => size_of::<ClippedPixelSupport>(),
     };
     let output = image
         .checked_add(
@@ -1460,20 +1502,23 @@ fn planned_band_bytes(
         RegisteredStackEstimator::StrictMean
         | RegisteredStackEstimator::Median
         | RegisteredStackEstimator::PercentileClipped(_)
-        | RegisteredStackEstimator::SigmaClipped(_) => size_of::<&aether_core::ScientificImage>(),
+        | RegisteredStackEstimator::SigmaClipped(_)
+        | RegisteredStackEstimator::WinsorizedSigmaClipped(_) => {
+            size_of::<&aether_core::ScientificImage>()
+        }
     };
     let vector_storage = source_count
         .checked_mul(size_of::<aether_core::ScientificImage>() + integration_input_size)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
-    let estimator_scratch =
-        match estimator {
-            RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => 0,
-            RegisteredStackEstimator::Median
-            | RegisteredStackEstimator::PercentileClipped(_)
-            | RegisteredStackEstimator::SigmaClipped(_) => source_count
-                .checked_mul(size_of::<f64>())
-                .ok_or(RegisteredStackError::WorkSizeOverflow)?,
-        };
+    let estimator_scratch = match estimator {
+        RegisteredStackEstimator::StrictMean | RegisteredStackEstimator::WeightedMean => 0,
+        RegisteredStackEstimator::Median
+        | RegisteredStackEstimator::PercentileClipped(_)
+        | RegisteredStackEstimator::SigmaClipped(_)
+        | RegisteredStackEstimator::WinsorizedSigmaClipped(_) => source_count
+            .checked_mul(size_of::<f64>())
+            .ok_or(RegisteredStackError::WorkSizeOverflow)?,
+    };
     let rejection_map_images = if rejection_maps {
         image
             .checked_mul(2)
@@ -1963,6 +2008,7 @@ mod tests {
     fn sigma_stack_request(
         directory: &TestDirectory,
         band_height: usize,
+        winsorized: bool,
     ) -> Result<(RegisteredStackRequest, PathBuf, PathBuf, String), Box<dyn Error>> {
         let identities = ['a', 'b', 'c', 'd', 'e', 'f']
             .into_iter()
@@ -1985,25 +2031,30 @@ mod tests {
             .zip([-100.0, 9.0, 10.0, 10.0, 11.0, 100.0])
             .map(|(frame_id, value)| registered_source(directory, &plan, frame_id, value))
             .collect::<Result<Vec<_>, _>>()?;
-        let estimator =
-            RegisteredStackEstimator::SigmaClipped(SigmaClipParameters::new(1.4, 1.4, 8, 2)?);
+        let parameters = SigmaClipParameters::new(1.4, 1.4, 8, 2)?;
+        let estimator = if winsorized {
+            RegisteredStackEstimator::WinsorizedSigmaClipped(parameters)
+        } else {
+            RegisteredStackEstimator::SigmaClipped(parameters)
+        };
         let parameters_sha256 = estimator
             .parameters_sha256()
             .ok_or("missing sigma parameter digest")?;
-        let provenance = FitsOutputProvenance::new(
-            "a".repeat(64),
-            "registered-stack",
-            REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
-            6,
-        )?
-        .with_plan_sha256(plan.plan_sha256())?
-        .with_parameters_sha256(&parameters_sha256)?;
-        let low_path = directory.0.join("sigma-low-rejection.fits");
-        let high_path = directory.0.join("sigma-high-rejection.fits");
+        let science_algorithm = estimator.algorithm_id();
+        let map_algorithm = estimator
+            .rejection_map_algorithm_id()
+            .ok_or("missing sigma rejection-map identity")?;
+        let name = if winsorized { "winsorized" } else { "sigma" };
+        let provenance =
+            FitsOutputProvenance::new("a".repeat(64), "registered-stack", science_algorithm, 6)?
+                .with_plan_sha256(plan.plan_sha256())?
+                .with_parameters_sha256(&parameters_sha256)?;
+        let low_path = directory.0.join(format!("{name}-low-rejection.fits"));
+        let high_path = directory.0.join(format!("{name}-high-rejection.fits"));
         let low_provenance = FitsOutputProvenance::new(
             "a".repeat(64),
             "registered-rejection-low",
-            SIGMA_REJECTION_MAP_ALGORITHM_ID,
+            map_algorithm,
             6,
         )?
         .with_plan_sha256(plan.plan_sha256())?
@@ -2011,7 +2062,7 @@ mod tests {
         let high_provenance = FitsOutputProvenance::new(
             "a".repeat(64),
             "registered-rejection-high",
-            SIGMA_REJECTION_MAP_ALGORITHM_ID,
+            map_algorithm,
             6,
         )?
         .with_plan_sha256(plan.plan_sha256())?
@@ -2019,7 +2070,7 @@ mod tests {
         let request = RegisteredStackRequest::new_with_estimator(
             plan,
             sources,
-            directory.0.join("sigma-stack.fits"),
+            directory.0.join(format!("{name}-stack.fits")),
             provenance,
             estimator,
         )?
@@ -2303,9 +2354,9 @@ mod tests {
         let first_directory = TestDirectory::new()?;
         let second_directory = TestDirectory::new()?;
         let (first, first_low, first_high, parameters_sha256) =
-            sigma_stack_request(&first_directory, 1)?;
+            sigma_stack_request(&first_directory, 1, false)?;
         let (second, second_low, second_high, second_parameters_sha256) =
-            sigma_stack_request(&second_directory, 7)?;
+            sigma_stack_request(&second_directory, 7, false)?;
         assert_eq!(parameters_sha256, second_parameters_sha256);
         let memory = MemoryBudget::new(16 * 1_024 * 1_024)?;
 
@@ -2347,6 +2398,50 @@ mod tests {
                 map.pixels()
                     .iter()
                     .all(|value| value.to_bits() == 2.0_f64.to_bits())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn winsorized_sigma_stack_is_distinct_and_band_height_independent() -> TestResult {
+        let first_directory = TestDirectory::new()?;
+        let second_directory = TestDirectory::new()?;
+        let (first, first_low, first_high, parameters_sha256) =
+            sigma_stack_request(&first_directory, 1, true)?;
+        let (second, second_low, second_high, second_parameters_sha256) =
+            sigma_stack_request(&second_directory, 7, true)?;
+        assert_eq!(parameters_sha256, second_parameters_sha256);
+        assert_eq!(
+            first.estimator().algorithm_id(),
+            REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+        );
+        assert_ne!(
+            first.estimator().parameters_sha256(),
+            RegisteredStackEstimator::SigmaClipped(SigmaClipParameters::new(1.4, 1.4, 8, 2)?)
+                .parameters_sha256()
+        );
+        let memory = MemoryBudget::new(16 * 1_024 * 1_024)?;
+
+        run_registered_stack(&first, &CancellationToken::new(), &memory, |_| {})?;
+        run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(fs::read(first.output())?, fs::read(second.output())?);
+        assert_eq!(fs::read(&first_low)?, fs::read(&second_low)?);
+        assert_eq!(fs::read(&first_high)?, fs::read(&second_high)?);
+        for path in [first_low, first_high] {
+            let file = File::open(path)?;
+            let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+            assert!(reader.verify_checksums()?.is_fully_verified());
+            assert_eq!(
+                reader.report().header().string("AETHPAR"),
+                Some(parameters_sha256.as_str())
+            );
+            let map = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+            assert!(
+                map.pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == 1.0_f64.to_bits())
             );
         }
         Ok(())

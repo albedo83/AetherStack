@@ -98,6 +98,24 @@ shows only the controls relevant to the selected rejecting estimator, and seals
 the values into the integration report. Reports written before these controls
 remain readable with the documented 4.0/3.0/eight-pass defaults.
 
+## Winsorized sigma-clipped mean
+
+`winsorized-sigma-clipped-mean-v1` uses the same validated asymmetric limits,
+iteration bound, support floor, and exact rejection accounting as ordinary
+sigma clipping. After the first pass, each rejected tail is replaced by its
+nearest retained boundary only while estimating the next population mean and
+standard deviation. This bounds outlier influence without feeding substituted
+values into the final science mean and avoids the distribution collapse that
+can make ordinary iterative clipping reject valid near-tail samples.
+
+The bounded registered runtime publishes this estimator as
+`registered-win-sigma-mean-f64-v1` with optional
+`win-sigma-rejection-map-v1` companions. Its parameter digest uses a distinct
+domain tag even when the numeric controls match ordinary sigma clipping. Tests
+prove the less-aggressive retained support, separate parameter identity,
+verified checksums, and byte-identical science and rejection products across
+band heights. Desktop and sealed-report exposure remain the next boundary.
+
 ## Frame-weighted mean
 
 `integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`
