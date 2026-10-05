@@ -252,6 +252,8 @@ affine and projective resampling throughput while verifying stable output bits.
 The [local-normalization memory baseline](docs/LOCAL_NORMALIZATION_MEMORY.md)
 records the deterministic quality-profile reservation for the ASI294MC Pro and
 ToupTek ATR585C priority geometries.
+The [Drizzle footprint contract](docs/DRIZZLE_CONTRACT.md) fixes detector-drop
+coordinates, projective safety, normalized overlap, and flux conservation.
 
 ## Build and test
 

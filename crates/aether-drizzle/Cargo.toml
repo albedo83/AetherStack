@@ -1,0 +1,17 @@
+[package]
+name = "aether-drizzle"
+description = "Flux-conserving detector-pixel footprint projection for AetherStack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+aether-registration = { path = "../aether-registration" }
+
+[lints]
+workspace = true

@@ -1935,6 +1935,13 @@ safety reasoning. They do not narrate obvious syntax.
      headroom and sufficiency, and preserves an already published comparison.
      Raising the 294MC ceiling to the recommended 512 MiB therefore unlocks the
      run immediately without redundant FITS header I/O.
+180. Establish the strict Drizzle detector-footprint core. The new dedicated
+     crate maps shrunken source-pixel quadrilaterals through accepted projective
+     geometry onto scales 1 through 8, rejects homography poles through a drop,
+     clips with fixed scratch storage, and emits stable row-major normalized
+     contributions under an explicit work ceiling. Exact identity, shrink,
+     rotation, boundary-loss, pole, and weighted-flux oracles fix the contract
+     before CFA routing and tiled accumulation are introduced.
 
 ## 11. Stable-release definition
 

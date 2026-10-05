@@ -36,6 +36,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-drizzle"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-registration",
+]
+
+[[package]]
 name = "aether-fits"
 version = "0.1.0"
 dependencies = [
