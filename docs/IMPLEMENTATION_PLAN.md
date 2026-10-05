@@ -1916,6 +1916,12 @@ safety reasoning. They do not narrate obvious syntax.
      both, enforce sublinear planar-RGB growth, and cross-check every published
      breakdown component against the reserved total. The documented figures are
      deterministic reservation evidence rather than machine-specific RSS claims.
+177. Turn insufficient local-normalization memory into a recoverable desktop
+     state. The memory breakdown now exposes a focused warning and proposes the
+     next 256 MiB ceiling that covers the native estimate; adopting it follows
+     the same validated action path as a manual ceiling change. The execution
+     control remains unavailable while the displayed preflight is insufficient,
+     and desktop tests cover the 294MC recommendation and accessible action.
 
 ## 11. Stable-release definition
 

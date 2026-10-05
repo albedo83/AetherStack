@@ -302,6 +302,10 @@ export function localNormalizationMarkup(): string {
             ${evidence("Diagnostics", "data-localnorm-memory-diagnostics", "—")}
             ${evidence("FITS I/O", "data-localnorm-memory-io", "—")}
           </dl>
+          <div class="normalization-memory-remedy" data-localnorm-memory-remedy hidden>
+            <div><strong>Memory ceiling too low</strong><span>The estimate is authoritative for these headers and controls.</span></div>
+            <button class="button button--quiet" type="button" data-localnorm-action="adopt-memory">Use safe ceiling</button>
+          </div>
         </section>
 
         <section class="normalization-instrument" aria-labelledby="normalization-profile-heading">
@@ -426,6 +430,13 @@ export function mountLocalNormalizationPanel(
       case "preflight":
         actions.onPreflightLocalNormalization();
         break;
+      case "adopt-memory":
+        if (current.preflight?.fitsMemoryLimit === false) {
+          actions.onUpdateLocalNormalizationMemoryLimit(
+            suggestedMemoryLimitBytes(current.preflight.requiredBytes),
+          );
+        }
+        break;
       case "cancel":
         actions.onCancelLocalNormalization();
         break;
@@ -546,6 +557,7 @@ export function mountLocalNormalizationPanel(
       ).dataset.state = model.state;
       renderEvidence(root, model);
       renderMemoryBreakdown(root, model);
+      renderMemoryRemedy(root, model, busy);
       renderPreview(root, model);
       renderControlOverlay(root, model, overlay.checked);
       renderStatistics(root, model);
@@ -555,6 +567,32 @@ export function mountLocalNormalizationPanel(
       root.removeEventListener("change", onChange);
     },
   };
+}
+
+const MEMORY_STEP_BYTES = 256 * 1_024 * 1_024;
+
+function suggestedMemoryLimitBytes(requiredBytes: number): number {
+  return Math.ceil(requiredBytes / MEMORY_STEP_BYTES) * MEMORY_STEP_BYTES;
+}
+
+function renderMemoryRemedy(
+  root: HTMLElement,
+  model: LocalNormalizationViewModel,
+  busy: boolean,
+): void {
+  const remedy = required<HTMLElement>(root, "[data-localnorm-memory-remedy]");
+  const button = required<HTMLButtonElement>(
+    remedy,
+    '[data-localnorm-action="adopt-memory"]',
+  );
+  const requiredBytes = model.preflight?.requiredBytes;
+  const visible =
+    requiredBytes !== undefined && model.preflight?.fitsMemoryLimit === false;
+  remedy.hidden = !visible;
+  button.disabled = busy || !visible;
+  button.textContent = visible
+    ? `Use ${formatMemoryCeiling(suggestedMemoryLimitBytes(requiredBytes))}`
+    : "Use safe ceiling";
 }
 
 function renderMemoryBreakdown(
@@ -944,6 +982,10 @@ function formatBytes(bytes: number): string {
   if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KiB`;
   if (bytes < 1_073_741_824) return `${(bytes / 1_048_576).toFixed(1)} MiB`;
   return `${(bytes / 1_073_741_824).toFixed(2)} GiB`;
+}
+
+function formatMemoryCeiling(bytes: number): string {
+  return `${bytes / 1_048_576} MiB`;
 }
 
 function text(root: HTMLElement, selector: string, value: string): void {

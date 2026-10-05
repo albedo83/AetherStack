@@ -160,6 +160,40 @@ describe("frame review workspace", () => {
     ).toContain("449.1 MiB");
     fireEvent.click(execute);
     expect(actions.onExecuteLocalNormalization).toHaveBeenCalledOnce();
+
+    controller.update({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+      localNormalization: {
+        ...demoReviewModel.localNormalization,
+        sourcePath: "/session/source.fits",
+        referencePath: "/session/reference.fits",
+        outputPath: "/session/normalized.fits",
+        preflightState: "ready",
+        preflight: {
+          width: 4_144,
+          height: 2_822,
+          planes: 1,
+          requiredBytes: 440_485_472,
+          memoryLimitBytes: 268_435_456,
+          headroomBytes: 0,
+          fitsMemoryLimit: false,
+          planeImagesBytes: 234_000_000,
+          applicationBandBytes: 6_300_000,
+          decodeStatusBytes: 23_400_000,
+          retainedSamplesBytes: 145_000_000,
+          diagnosticsBytes: 300_000,
+          qualityBytes: 23_000_000,
+          slopeBytes: 8_419_936,
+          writerBufferBytes: 65_536,
+        },
+      },
+    });
+    expect(execute.disabled).toBe(true);
+    fireEvent.click(getByRole(workspace!, "button", { name: "Use 512 MiB" }));
+    expect(actions.onUpdateLocalNormalizationMemoryLimit).toHaveBeenCalledWith(
+      536_870_912,
+    );
   });
 
   it("routes the Normalize workflow navigation", () => {
