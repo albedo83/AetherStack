@@ -20,6 +20,7 @@ import {
 import {
   cancelLocalNormalization,
   executeLocalNormalization,
+  localNormalizationFailureMessage,
   selectLocalNormalizationOutput,
   selectLocalNormalizationReference,
   selectLocalNormalizationSource,
@@ -1122,7 +1123,7 @@ async function runLocalNormalization(): Promise<void> {
       },
     });
     void loadLocalNormalizationPreview("output");
-  } catch {
+  } catch (error) {
     if (ticket !== localNormalizationTicket) return;
     const cancelled = model.localNormalization.state === "cancelling";
     update({
@@ -1137,7 +1138,7 @@ async function runLocalNormalization(): Promise<void> {
         sharedStretchLabel: "Reference stretch · unavailable",
         message: cancelled
           ? "Normalization cancelled · no output was published"
-          : "Normalization failed native validation · inputs remain unchanged",
+          : localNormalizationFailureMessage(error),
       },
     });
   }

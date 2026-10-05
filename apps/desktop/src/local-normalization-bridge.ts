@@ -157,3 +157,33 @@ export function executeLocalNormalization(
 export function cancelLocalNormalization(): Promise<boolean> {
   return invoke<boolean>("cancel_local_normalization");
 }
+
+/** Converts the stable native failure code into concise, actionable UI copy. */
+export function localNormalizationFailureMessage(error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { readonly code?: unknown }).code
+      : null;
+  switch (code) {
+    case "local_normalization_memory_insufficient":
+      return "Memory ceiling is too low for this image pair · increase it and retry";
+    case "local_normalization_dimensions_mismatch":
+      return "Source and reference dimensions differ · choose a matching registered pair";
+    case "local_normalization_destination_exists":
+      return "Output already exists · choose a new create-only destination";
+    case "local_normalization_source_changed":
+      return "A source changed after fingerprinting · review both inputs and retry";
+    case "local_normalization_publication_failed":
+      return "Atomic FITS publication failed · no partial destination was accepted";
+    case "local_normalization_configuration_invalid":
+      return "A path, identifier, scientific control, or memory limit is invalid";
+    case "local_normalization_input_invalid":
+      return "A FITS input could not be opened or fingerprinted";
+    case "local_normalization_interrupted":
+      return "The native worker stopped before producing a validated result";
+    case "local_normalization_cancelled":
+      return "Normalization cancelled · no output was published";
+    default:
+      return "Normalization failed native validation · inputs remain unchanged";
+  }
+}

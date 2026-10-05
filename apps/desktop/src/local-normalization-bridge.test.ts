@@ -6,6 +6,7 @@ import {
   cancelLocalNormalization,
   defaultLocalNormalizationSettings,
   executeLocalNormalization,
+  localNormalizationFailureMessage,
   selectLocalNormalizationOutput,
   selectLocalNormalizationReference,
   selectLocalNormalizationSource,
@@ -104,5 +105,28 @@ describe("native local-normalization bridge", () => {
     );
     await expect(cancelLocalNormalization()).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith("cancel_local_normalization");
+  });
+
+  it.each([
+    ["local_normalization_memory_insufficient", "Memory ceiling"],
+    ["local_normalization_dimensions_mismatch", "dimensions differ"],
+    ["local_normalization_destination_exists", "already exists"],
+    ["local_normalization_source_changed", "changed after fingerprinting"],
+    ["local_normalization_publication_failed", "Atomic FITS publication"],
+    ["local_normalization_configuration_invalid", "scientific control"],
+    ["local_normalization_input_invalid", "opened or fingerprinted"],
+    ["local_normalization_interrupted", "native worker stopped"],
+    ["local_normalization_cancelled", "cancelled"],
+  ])("maps native failure %s to actionable copy", (code, expected) => {
+    expect(localNormalizationFailureMessage({ code })).toContain(expected);
+  });
+
+  it("fails closed for malformed or unknown errors", () => {
+    expect(localNormalizationFailureMessage(null)).toContain(
+      "failed native validation",
+    );
+    expect(localNormalizationFailureMessage({ code: 17 })).toContain(
+      "failed native validation",
+    );
   });
 });
