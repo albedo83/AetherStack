@@ -52,6 +52,21 @@ with their sampling evidence. One rejected cell therefore cannot erase valid
 neighboring evidence or turn a partially supported surface into an apparently
 complete one.
 
+## Guarded coefficient surface
+
+`local-coefficient-idw2-f64-v1` constructs immutable control points only from
+successful cell fits. Scale and offset are interpolated independently from a
+bounded number of nearest controls using inverse squared distance. Distances
+are normalized by the nearest neighbor and both weighted sums use compensated
+binary64 accumulation, avoiding unnecessary overflow and loss of small terms.
+
+An exact control-point coordinate returns that measured model without dilution.
+Every other coordinate requires a configured minimum number of controls inside
+an inclusive maximum radius. Coordinates outside the sampled domain, holes with
+insufficient local support, non-finite inputs, allocation failures, and
+non-finite results are distinct failures. Each evaluation reports its support
+count, furthest contributing distance, and whether it was an exact control.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of
@@ -59,7 +74,8 @@ pairwise slopes. Work that exceeds any bound fails before allocating scratch
 storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
-The current contract covers sampling and the per-cell oracle. Detection or
-construction of protected-source masks, surface regularization, interpolation,
-full-frame application, provenance, and bounded FITS publication remain
-subsequent milestones and must not alter either algorithm silently.
+The current contract covers sampling, per-cell fitting, and guarded coefficient
+interpolation. Detection or construction of protected-source masks, optional
+surface regularization, full-frame application, provenance, and bounded FITS
+publication remain subsequent milestones and must not alter these algorithms
+silently.

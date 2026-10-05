@@ -1806,6 +1806,11 @@ safety reasoning. They do not narrate obvious syntax.
      residuals, support evidence, and typed sparse or degenerate failures retain
      canonical grid order so later surface construction cannot hide holes or
      discard neighboring valid evidence.
+157. Construct a guarded coefficient surface from successful cells only.
+     Deterministic nearest-control inverse-distance interpolation uses normalized
+     weights and compensated sums, retains exact controls, reports local support,
+     and rejects out-of-domain or under-supported evaluations without
+     extrapolating through grid holes.
 
 ## 11. Stable-release definition
 
