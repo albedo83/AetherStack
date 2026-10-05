@@ -49,5 +49,16 @@ work ceilings fail with typed errors.
 
 The initial unit oracles cover exact 2× edge mapping, drop shrink, rotated
 footprints, boundary loss, projective poles, work limits, stable ordering, and
-weighted-flux conservation. CFA phase routing, masks, tile ownership,
-accumulation maps, and atomic FITS publication remain subsequent milestones.
+weighted-flux conservation.
+
+## CFA routing
+
+CFA Drizzle selects red, green, or blue exclusively from the original detector
+coordinate and the declared RGGB, BGGR, GRBG, or GBRG phase. Routing happens
+before geometric projection, so a rotation, reflection, translation, or scale
+cannot change the physical filter that measured a sample. The two green phases
+share the canonical green output plane. Unknown mosaics fail explicitly, and no
+missing chromatic sample is interpolated during deposition.
+
+Input masks, tile ownership, accumulation maps, and atomic FITS publication
+remain subsequent milestones.

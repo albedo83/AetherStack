@@ -1942,6 +1942,11 @@ safety reasoning. They do not narrate obvious syntax.
      contributions under an explicit work ceiling. Exact identity, shrink,
      rotation, boundary-loss, pole, and weighted-flux oracles fix the contract
      before CFA routing and tiled accumulation are introduced.
+181. Route CFA Drizzle from physical detector phase before projection. RGGB,
+     BGGR, GRBG, and GBRG photosites map exclusively to canonical red, green,
+     or blue planes; unsupported mosaics fail explicitly and no chromatic value
+     is interpolated. Tests cover every 2 × 2 phase and prove that a rotated and
+     translated footprint retains its original measured channel and flux.
 
 ## 11. Stable-release definition
 

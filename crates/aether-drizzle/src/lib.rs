@@ -10,6 +10,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use aether_core::CompensatedSum;
+use aether_metadata::BayerPattern;
 use aether_registration::{CoordinateError, ImagePoint, ProjectiveTransform};
 
 /// Stable identity of the strict detector-footprint projection contract.
@@ -142,6 +143,56 @@ pub struct DrizzleDeposition {
     deposited_fraction: f64,
 }
 
+/// Canonical planar destination for one original Bayer photosite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CfaChannel {
+    /// Red detector samples.
+    Red,
+    /// Either green detector phase, accumulated into one green plane.
+    Green,
+    /// Blue detector samples.
+    Blue,
+}
+
+impl CfaChannel {
+    /// Canonical planar RGB index.
+    #[must_use]
+    pub const fn plane(self) -> usize {
+        match self {
+            Self::Red => 0,
+            Self::Green => 1,
+            Self::Blue => 2,
+        }
+    }
+}
+
+/// One CFA-routed deposition that never invents interpolated colors.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CfaDrizzleDeposition {
+    channel: CfaChannel,
+    deposition: DrizzleDeposition,
+}
+
+impl CfaDrizzleDeposition {
+    /// Destination color plane selected from the original detector coordinate.
+    #[must_use]
+    pub const fn channel(&self) -> CfaChannel {
+        self.channel
+    }
+
+    /// Geometric contributions shared with monochrome Drizzle.
+    #[must_use]
+    pub const fn deposition(&self) -> &DrizzleDeposition {
+        &self.deposition
+    }
+
+    /// Returns the routed deposition as owned parts.
+    #[must_use]
+    pub fn into_parts(self) -> (CfaChannel, DrizzleDeposition) {
+        (self.channel, self.deposition)
+    }
+}
+
 impl DrizzleDeposition {
     /// Contributions in stable row-major output order.
     #[must_use]
@@ -173,6 +224,8 @@ pub enum DrizzleError {
     GeometryComplexityExceeded,
     /// Contribution storage could not be reserved.
     AllocationFailed,
+    /// The declared CFA pattern is not one of the four supported Bayer phases.
+    UnsupportedCfaPattern,
 }
 
 impl Display for DrizzleError {
@@ -185,6 +238,7 @@ impl Display for DrizzleError {
             Self::ContributionLimitExceeded => "Drizzle contribution ceiling would be exceeded",
             Self::GeometryComplexityExceeded => "clipped detector footprint is too complex",
             Self::AllocationFailed => "Drizzle contribution allocation failed",
+            Self::UnsupportedCfaPattern => "CFA Drizzle requires a supported Bayer pattern",
         })
     }
 }
@@ -323,6 +377,77 @@ pub fn deposit_detector_footprint(
     Ok(DrizzleDeposition {
         contributions,
         deposited_fraction,
+    })
+}
+
+/// Returns the measured color at one original detector coordinate.
+///
+/// Routing deliberately uses source parity before any transform. Geometric
+/// shifts, rotations, reflections, and output scaling therefore cannot change
+/// the physical filter that measured the sample.
+pub fn cfa_channel(
+    pattern: &BayerPattern,
+    source_x: u32,
+    source_y: u32,
+) -> Result<CfaChannel, DrizzleError> {
+    let phase = ((source_y & 1) << 1) | (source_x & 1);
+    let channels = match pattern {
+        BayerPattern::Rggb => [
+            CfaChannel::Red,
+            CfaChannel::Green,
+            CfaChannel::Green,
+            CfaChannel::Blue,
+        ],
+        BayerPattern::Bggr => [
+            CfaChannel::Blue,
+            CfaChannel::Green,
+            CfaChannel::Green,
+            CfaChannel::Red,
+        ],
+        BayerPattern::Grbg => [
+            CfaChannel::Green,
+            CfaChannel::Red,
+            CfaChannel::Blue,
+            CfaChannel::Green,
+        ],
+        BayerPattern::Gbrg => [
+            CfaChannel::Green,
+            CfaChannel::Blue,
+            CfaChannel::Red,
+            CfaChannel::Green,
+        ],
+        BayerPattern::Other(_) => return Err(DrizzleError::UnsupportedCfaPattern),
+    };
+    Ok(channels[phase as usize])
+}
+
+/// Projects and deposits one original CFA photosite into exactly one RGB plane.
+#[allow(clippy::too_many_arguments)]
+pub fn deposit_cfa_detector_pixel(
+    source_x: u32,
+    source_y: u32,
+    transform: ProjectiveTransform,
+    parameters: DrizzleParameters,
+    pattern: &BayerPattern,
+    value: f64,
+    frame_weight: f64,
+    output_width: u32,
+    output_height: u32,
+    maximum_contributions: usize,
+) -> Result<CfaDrizzleDeposition, DrizzleError> {
+    let channel = cfa_channel(pattern, source_x, source_y)?;
+    let footprint = project_detector_footprint(source_x, source_y, transform, parameters)?;
+    let deposition = deposit_detector_footprint(
+        footprint,
+        value,
+        frame_weight,
+        output_width,
+        output_height,
+        maximum_contributions,
+    )?;
+    Ok(CfaDrizzleDeposition {
+        channel,
+        deposition,
     })
 }
 
@@ -667,6 +792,84 @@ mod tests {
             project_detector_footprint(0, 0, transform, DrizzleParameters::new(2, 1.0)?),
             Err(DrizzleError::TransformFailed)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn every_bayer_phase_routes_source_photosites_without_demosaicing() -> TestResult {
+        let cases = [
+            (
+                BayerPattern::Rggb,
+                [
+                    CfaChannel::Red,
+                    CfaChannel::Green,
+                    CfaChannel::Green,
+                    CfaChannel::Blue,
+                ],
+            ),
+            (
+                BayerPattern::Bggr,
+                [
+                    CfaChannel::Blue,
+                    CfaChannel::Green,
+                    CfaChannel::Green,
+                    CfaChannel::Red,
+                ],
+            ),
+            (
+                BayerPattern::Grbg,
+                [
+                    CfaChannel::Green,
+                    CfaChannel::Red,
+                    CfaChannel::Blue,
+                    CfaChannel::Green,
+                ],
+            ),
+            (
+                BayerPattern::Gbrg,
+                [
+                    CfaChannel::Green,
+                    CfaChannel::Blue,
+                    CfaChannel::Red,
+                    CfaChannel::Green,
+                ],
+            ),
+        ];
+        for (pattern, expected) in cases {
+            assert_eq!(cfa_channel(&pattern, 0, 0)?, expected[0]);
+            assert_eq!(cfa_channel(&pattern, 1, 0)?, expected[1]);
+            assert_eq!(cfa_channel(&pattern, 0, 1)?, expected[2]);
+            assert_eq!(cfa_channel(&pattern, 1, 1)?, expected[3]);
+        }
+        assert_eq!(
+            cfa_channel(&BayerPattern::Other("CYGM".to_owned()), 0, 0),
+            Err(DrizzleError::UnsupportedCfaPattern)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cfa_channel_is_bound_before_geometric_projection() -> TestResult {
+        let transform =
+            ProjectiveTransform::from_affine(AffineTransform::new(0.0, -1.0, 1.0, 0.0, 8.0, 4.0)?)?;
+        let routed = deposit_cfa_detector_pixel(
+            0,
+            0,
+            transform,
+            DrizzleParameters::new(2, 0.8)?,
+            &BayerPattern::Rggb,
+            120.0,
+            0.75,
+            32,
+            32,
+            16,
+        )?;
+        assert_eq!(routed.channel(), CfaChannel::Red);
+        let (fraction, flux, weight) = sum(routed.deposition());
+        assert_close(fraction, 1.0, 8.0 * f64::EPSILON);
+        assert_close(flux, 90.0, 64.0 * f64::EPSILON);
+        assert_close(weight, 0.75, 8.0 * f64::EPSILON);
+        assert_eq!(routed.channel().plane(), 0);
         Ok(())
     }
 }

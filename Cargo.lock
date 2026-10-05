@@ -40,6 +40,7 @@ name = "aether-drizzle"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-metadata",
  "aether-registration",
 ]
 
