@@ -166,6 +166,7 @@ let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
 let localNormalizationTicket = 0;
 let localNormalizationPreviewTicket = 0;
+let localNormalizationStatisticsTicket = 0;
 let registeredStackPreviewTicket = 0;
 let stackPixelTicket = 0;
 let stackReportTicket = 0;
@@ -260,6 +261,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onSelectLocalNormalizationPreview(view) {
     void loadLocalNormalizationPreview(view);
+  },
+  onInspectLocalNormalizationStatistics() {
+    void inspectLocalNormalizationStatistics();
   },
   onSelectRegistrationReference(frameId) {
     selectRegistrationFrame("reference", frameId);
@@ -825,6 +829,10 @@ function installImportedSession(session: ImportedSession): void {
       previewView: "output",
       previewMessage: "Choose products from the newly imported session",
       sharedStretchLabel: "Reference stretch · awaiting publication",
+      statisticsState: "idle",
+      statisticsView: null,
+      statistics: null,
+      statisticsMessage: "Select a published product for exact statistics",
       message: "Choose a calibrated source and a stable reference image",
     },
     registration: {
@@ -916,9 +924,68 @@ function isLocalNormalizationCancelling(): boolean {
 
 function clearLocalNormalizationPreview(): void {
   localNormalizationPreviewTicket += 1;
+  localNormalizationStatisticsTicket += 1;
   localNormalizationPreviewResource?.revoke();
   localNormalizationPreviewResource = null;
   localNormalizationSharedTransform = null;
+}
+
+async function inspectLocalNormalizationStatistics(): Promise<void> {
+  const normalization = model.localNormalization;
+  const result = normalization.result;
+  const view = normalization.previewView;
+  const path =
+    view === "source"
+      ? normalization.sourcePath
+      : view === "reference"
+        ? normalization.referencePath
+        : result?.outputPath;
+  if (!result || !path || normalization.statisticsState === "loading") return;
+  const planSha256 = result.planSha256;
+  const ticket = ++localNormalizationStatisticsTicket;
+  update({
+    ...model,
+    localNormalization: {
+      ...normalization,
+      statisticsState: "loading",
+      statisticsView: view,
+      statistics: null,
+      statisticsMessage:
+        "Reading the complete FITS primary array in three deterministic passes…",
+    },
+  });
+  try {
+    const statistics = await inspectFitsStatistics(path);
+    if (
+      ticket !== localNormalizationStatisticsTicket ||
+      model.localNormalization.result?.planSha256 !== planSha256 ||
+      model.localNormalization.previewView !== view
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        statisticsState: "ready",
+        statisticsView: view,
+        statistics,
+        statisticsMessage: `${view === "output" ? "Normalized result" : view === "reference" ? "Reference" : "Source"} · ${statistics.algorithmId}`,
+      },
+    });
+  } catch {
+    if (ticket !== localNormalizationStatisticsTicket) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        statisticsState: "error",
+        statisticsView: view,
+        statistics: null,
+        statisticsMessage: "Exact FITS statistics could not be validated",
+      },
+    });
+  }
 }
 
 async function loadLocalNormalizationPreview(
@@ -945,6 +1012,10 @@ async function loadLocalNormalizationPreview(
       preview: null,
       previewView: view,
       previewMessage: `Rendering ${view === "output" ? "normalized result" : view}…`,
+      statisticsState: "idle",
+      statisticsView: null,
+      statistics: null,
+      statisticsMessage: "Calculate exact statistics for this product",
     },
   });
   try {

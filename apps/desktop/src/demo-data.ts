@@ -97,6 +97,10 @@ export const demoReviewModel: ReviewViewModel = {
     previewView: "output",
     previewMessage: "The normalized result will appear after publication",
     sharedStretchLabel: "Reference stretch · awaiting publication",
+    statisticsState: "idle",
+    statisticsView: null,
+    statistics: null,
+    statisticsMessage: "Select a published product for exact statistics",
     message: "Choose a calibrated source and a stable reference image",
   },
   registration: {

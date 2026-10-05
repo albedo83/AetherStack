@@ -5065,6 +5065,72 @@ tr[data-state="blocked"] .association-state {
   animation: normalization-spin 800ms linear infinite;
 }
 
+.normalization-statistics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border-top: 1px solid #2d3946;
+}
+
+.normalization-statistics > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.normalization-statistics > div:first-child span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.normalization-statistics > div:first-child strong {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.normalization-statistics dl {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: #283542;
+  border: 1px solid #283542;
+  border-radius: 8px;
+}
+
+.normalization-statistics dl > div {
+  min-width: 0;
+  padding: 8px 10px;
+  background: #0d141c;
+}
+
+.normalization-statistics dt {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.normalization-statistics dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.normalization-statistics[data-state="error"] {
+  border-color: var(--danger-soft);
+}
+
 @keyframes normalization-spin {
   to {
     transform: rotate(360deg);
@@ -5166,6 +5232,10 @@ tr[data-state="blocked"] .association-state {
 
   .normalization-control-groups {
     grid-template-columns: 1fr;
+  }
+
+  .normalization-statistics dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

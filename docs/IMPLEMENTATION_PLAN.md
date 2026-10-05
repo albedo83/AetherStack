@@ -1865,6 +1865,12 @@ safety reasoning. They do not narrate obvious syntax.
      plan, input, session, or view change; stale asynchronous renders cannot
      replace the active result. Spatial control-point and residual overlays remain
      separate from this pixel-product comparison.
+169. Extend the matched comparison with opt-in exact FITS statistics. Source,
+     reference, and normalized products reuse the bounded native three-pass
+     binary64 statistics engine and report usable support, extrema, mean, and
+     population deviation without materializing pixels in the webview. Reads are
+     explicit rather than automatic so large 294MC data sets do not pay three
+     additional full-image passes unless the user requests quantitative evidence.
 
 ## 11. Stable-release definition
 

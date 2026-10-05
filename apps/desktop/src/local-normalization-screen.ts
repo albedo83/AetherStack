@@ -246,6 +246,7 @@ type PanelActions = Pick<
   | "onExecuteLocalNormalization"
   | "onCancelLocalNormalization"
   | "onSelectLocalNormalizationPreview"
+  | "onInspectLocalNormalizationStatistics"
 >;
 
 /** Returns the static semantic shell mounted inside the main workflow. */
@@ -329,6 +330,17 @@ export function localNormalizationMarkup(): string {
               <img data-localnorm-preview-image alt="" hidden />
               <div data-localnorm-preview-placeholder>The normalized result will appear after publication</div>
             </div>
+            <div class="normalization-statistics" data-localnorm-statistics data-state="idle">
+              <div><span>Exact primary-array statistics</span><strong data-localnorm-statistics-message>Select a published product</strong></div>
+              <dl aria-label="Selected normalization product statistics">
+                ${evidence("Usable", "data-localnorm-stat-usable", "—")}
+                ${evidence("Minimum", "data-localnorm-stat-minimum", "—")}
+                ${evidence("Maximum", "data-localnorm-stat-maximum", "—")}
+                ${evidence("Mean", "data-localnorm-stat-mean", "—")}
+                ${evidence("σ population", "data-localnorm-stat-deviation", "—")}
+              </dl>
+              <button class="button button--quiet" type="button" data-localnorm-action="statistics" disabled>Calculate exact statistics</button>
+            </div>
           </section>
 
           <details class="advanced-settings normalization-advanced">
@@ -407,6 +419,9 @@ export function mountLocalNormalizationPanel(
         break;
       case "preview-output":
         actions.onSelectLocalNormalizationPreview("output");
+        break;
+      case "statistics":
+        actions.onInspectLocalNormalizationStatistics();
         break;
     }
   };
@@ -497,6 +512,7 @@ export function mountLocalNormalizationPanel(
       ).dataset.state = model.state;
       renderEvidence(root, model);
       renderPreview(root, model);
+      renderStatistics(root, model);
     },
     destroy() {
       root.removeEventListener("click", onClick);
@@ -632,6 +648,68 @@ function previewLabel(
   if (view === "source") return "Source";
   if (view === "reference") return "Reference";
   return "Normalized result";
+}
+
+function renderStatistics(
+  root: HTMLElement,
+  model: LocalNormalizationViewModel,
+): void {
+  const panel = required<HTMLElement>(root, "[data-localnorm-statistics]");
+  panel.dataset.state = model.statisticsState;
+  const button = required<HTMLButtonElement>(
+    root,
+    '[data-localnorm-action="statistics"]',
+  );
+  button.disabled =
+    model.result === null || model.statisticsState === "loading";
+  button.textContent =
+    model.statisticsState === "loading"
+      ? "Calculating…"
+      : model.statisticsView === model.previewView && model.statistics
+        ? "Recalculate exact statistics"
+        : "Calculate exact statistics";
+  text(root, "[data-localnorm-statistics-message]", model.statisticsMessage);
+  const statistics =
+    model.result !== null && model.statisticsView === model.previewView
+      ? model.statistics
+      : null;
+  text(
+    root,
+    "[data-localnorm-stat-usable]",
+    statistics
+      ? `${statistics.usableSamples.toLocaleString()} / ${statistics.totalSamples.toLocaleString()}`
+      : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-stat-minimum]",
+    statistics ? formatScientificNumber(statistics.minimum) : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-stat-maximum]",
+    statistics ? formatScientificNumber(statistics.maximum) : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-stat-mean]",
+    statistics ? formatScientificNumber(statistics.mean) : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-stat-deviation]",
+    statistics
+      ? formatScientificNumber(statistics.populationStandardDeviation)
+      : "—",
+  );
+}
+
+function formatScientificNumber(value: number): string {
+  const magnitude = Math.abs(value);
+  if ((magnitude !== 0 && magnitude < 0.001) || magnitude >= 1_000_000) {
+    return value.toExponential(6);
+  }
+  return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
 
 function setPath(root: HTMLElement, kind: string, path: string | null): void {

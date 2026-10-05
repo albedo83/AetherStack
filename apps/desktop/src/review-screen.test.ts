@@ -27,6 +27,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onExecuteLocalNormalization: vi.fn(),
     onCancelLocalNormalization: vi.fn(),
     onSelectLocalNormalizationPreview: vi.fn(),
+    onInspectLocalNormalizationStatistics: vi.fn(),
     onSelectRegistrationReference: vi.fn(),
     onSelectRegistrationSource: vi.fn(),
     onSelectRegistrationGeometryModel: vi.fn(),
@@ -238,6 +239,69 @@ describe("frame review workspace", () => {
     expect(image.hidden).toBe(false);
     expect(image.alt).toBe("Source local-normalization preview");
     expect(sourceTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(
+      getByRole(workspace, "button", { name: "Calculate exact statistics" }),
+    );
+    expect(
+      actions.onInspectLocalNormalizationStatistics,
+    ).toHaveBeenCalledOnce();
+    controller.update({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+      localNormalization: {
+        ...demoReviewModel.localNormalization,
+        state: "completed",
+        result: {
+          planSha256: "a".repeat(64),
+          parametersSha256: "b".repeat(64),
+          outputPath: "/session/normalized.fits",
+          width: 4_144,
+          height: 2_822,
+          planes: 3,
+          memoryLimitBytes: 2_147_483_648,
+          peakReservedBytes: 1_073_741_824,
+          samplesWritten: 35_087_124,
+          substitutedSamples: 0,
+          bytesWritten: 280_700_000,
+          transformedSamples: 35_087_124,
+          inheritedMaskedSamples: 0,
+          nonFiniteInputSamples: 0,
+          unsupportedSurfaceSamples: 0,
+          nonFiniteResultSamples: 0,
+          measuredSources: 12_000,
+          protectedPixels: 900_000,
+          validControlPoints: 759,
+          rejectedCells: 4,
+        },
+        previewView: "source",
+        statisticsState: "ready",
+        statisticsView: "source",
+        statistics: {
+          algorithmId: "fits-primary-statistics-f64-v1",
+          axes: [4_144, 2_822, 3],
+          storedFormat: "f64",
+          headerConformant: true,
+          headerDiagnostics: 0,
+          totalSamples: 35_087_124,
+          usableSamples: 35_087_120,
+          undefinedSamples: 4,
+          nonFiniteSamples: 0,
+          minimum: -12.5,
+          maximum: 65_535,
+          mean: 1_234.5,
+          populationStandardDeviation: 42.25,
+          sampleStandardDeviation: 42.250001,
+        },
+        statisticsMessage: "Source · fits-primary-statistics-f64-v1",
+        message: "Published atomically",
+      },
+    });
+    expect(
+      workspace.querySelector("[data-localnorm-stat-mean]")?.textContent,
+    ).toBe("1,234.5");
+    expect(
+      workspace.querySelector("[data-localnorm-stat-usable]")?.textContent,
+    ).toContain("35,087,120");
   });
 
   it("offers an explicit projective geometry choice", () => {
