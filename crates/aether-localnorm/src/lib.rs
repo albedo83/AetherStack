@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 mod application;
+mod plan;
 mod protection;
 mod sampling;
 mod surface;
@@ -16,6 +17,7 @@ pub use application::{
     ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplication, LocalApplicationEvidence,
     apply_local_surfaces,
 };
+pub use plan::{LocalNormalizationParameters, LocalNormalizationPlan, PlanError};
 pub use protection::{
     PROTECTED_SOURCE_MASK_ALGORITHM_ID, ProtectedSource, ProtectionError, ProtectionMask,
     ProtectionParameters, build_protection_mask, protected_sources_from_stars,

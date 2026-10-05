@@ -105,6 +105,42 @@ impl ProtectionParameters {
             maximum_pixel_visits,
         })
     }
+
+    /// FWHM multiplier applied to every measured source.
+    #[must_use]
+    pub const fn growth_factor(self) -> f64 {
+        self.growth_factor
+    }
+
+    /// Additional growth multiplier applied to saturated sources.
+    #[must_use]
+    pub const fn saturated_growth_factor(self) -> f64 {
+        self.saturated_growth_factor
+    }
+
+    /// Minimum circular protection radius in pixels.
+    #[must_use]
+    pub const fn minimum_radius(self) -> usize {
+        self.minimum_radius
+    }
+
+    /// Maximum circular protection radius in pixels.
+    #[must_use]
+    pub const fn maximum_radius(self) -> usize {
+        self.maximum_radius
+    }
+
+    /// Hard source-catalog bound.
+    #[must_use]
+    pub const fn maximum_sources(self) -> usize {
+        self.maximum_sources
+    }
+
+    /// Hard preflight bound on bounding-box pixel visits.
+    #[must_use]
+    pub const fn maximum_pixel_visits(self) -> usize {
+        self.maximum_pixel_visits
+    }
 }
 
 /// Rasterized mask and exact construction evidence.

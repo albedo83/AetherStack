@@ -1819,6 +1819,10 @@ safety reasoning. They do not narrate obvious syntax.
      regions. Major-axis FWHM, saturation-aware growth, radius caps, catalog
      limits, and a complete preflight work bound produce a plane-specific mask
      with explicit edge, unique-pixel, and overlap evidence.
+160. Seal local-normalization controls and exact source/reference identities in
+     canonical SHA-256 digests. Versioned length-prefixed, big-endian encodings
+     bind every algorithm and numeric control, with known-answer tests preventing
+     silent provenance drift before runtime FITS publication is introduced.
 
 ## 11. Stable-release definition
 

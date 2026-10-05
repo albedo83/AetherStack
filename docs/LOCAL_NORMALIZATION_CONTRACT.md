@@ -98,6 +98,19 @@ protected pixels, and overlap hits. Only the selected plane receives the
 `REJECTED` protection flag; other planes remain clear. The resulting mask plugs
 directly into the sampling precedence defined above.
 
+## Canonical plan identity
+
+`aether-local-normalization-parameters-v1` hashes all five versioned algorithm
+identities and every protection, sampling, fitting, and surface control using
+length-prefixed strings, big-endian `u64` integers, and exact big-endian
+binary64 bit patterns. Known-answer tests lock the canonical SHA-256 encoding.
+
+`aether-local-normalization-plan-v1` then binds that parameter digest to the
+exact lowercase SHA-256 identities of the source and reference FITS files. Paths
+and platform-sized binary layouts never enter either digest. Noncanonical source
+identities and controls outside the canonical `u64` domain fail before a plan is
+created.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of
@@ -108,5 +121,5 @@ unsafe near-zero scale are distinct typed failures.
 The current contract covers stellar protection, sampling, per-cell fitting,
 guarded coefficient interpolation, and full-image application. Additional
 non-stellar protected regions, optional surface regularization, provenance, and
-bounded FITS publication remain subsequent milestones and must not alter these
-algorithms silently.
+bounded FITS publication remain subsequent milestones. Runtime provenance must
+carry the exact parameter and plan digests defined here.
