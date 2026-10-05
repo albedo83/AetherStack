@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn peak_estimate_uses_active_geometry_instead_of_the_cell_ceiling() -> TestResult {
+    fn priority_camera_peaks_use_active_geometry_and_stay_bounded() -> TestResult {
         let dimensions = Dimensions::new(4_144, 2_822, 1)?;
         let detection = StarMeasurementParameters::new(
             BackgroundParameters::new(3.0, 8, 1_024)?,
@@ -1162,9 +1162,15 @@ mod tests {
             Dimensions::new(4_144, 2_822, 3)?,
             make_parameters(262_144)?,
         )?;
+        let touptek_585c = estimate_local_normalization_peak_bytes(
+            Dimensions::new(3_840, 2_160, 1)?,
+            make_parameters(262_144)?,
+        )?;
         let breakdown = estimate_local_normalization_memory(dimensions, make_parameters(262_144)?)?;
 
         assert_eq!(exact, loose);
+        assert_eq!(loose, 440_485_472);
+        assert_eq!(touptek_585c, 310_198_272);
         assert_eq!(breakdown.required_bytes(), loose);
         assert_eq!(
             breakdown.required_bytes(),
@@ -1177,7 +1183,8 @@ mod tests {
                 + breakdown.slope_bytes()
                 + breakdown.writer_buffer_bytes()
         );
-        assert!(loose < 2 * 1_024 * 1_024 * 1_024);
+        assert!(loose < 512 * 1_024 * 1_024);
+        assert!(touptek_585c < 512 * 1_024 * 1_024);
         assert!(rgb < loose * 2);
         assert!(matches!(
             estimate_local_normalization_peak_bytes(dimensions, make_parameters(exact_grid - 1)?),

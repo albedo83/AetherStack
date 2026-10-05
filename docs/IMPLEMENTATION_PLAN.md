@@ -1910,6 +1910,12 @@ safety reasoning. They do not narrate obvious syntax.
      serializes those exact components and the desktop groups them into readable
      image, fit, diagnostic, and I/O instruments instead of showing an opaque
      reservation alone.
+176. Lock priority-camera local-normalization memory baselines. The quality-first
+     profile reserves 420.1 MiB for a 4,144 × 2,822 ASI294MC plane and 295.8 MiB
+     for a 3,840 × 2,160 ToupTek 585C plane. Tests enforce a 512 MiB ceiling for
+     both, enforce sublinear planar-RGB growth, and cross-check every published
+     breakdown component against the reserved total. The documented figures are
+     deterministic reservation evidence rather than machine-specific RSS claims.
 
 ## 11. Stable-release definition
 

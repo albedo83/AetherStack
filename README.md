@@ -249,6 +249,9 @@ directory, FITS-header, fingerprint, verification, and manifest costs without
 disclosing private corpus identities.
 The [registration benchmark](docs/REGISTRATION_BENCHMARK.md) isolates strict
 affine and projective resampling throughput while verifying stable output bits.
+The [local-normalization memory baseline](docs/LOCAL_NORMALIZATION_MEMORY.md)
+records the deterministic quality-profile reservation for the ASI294MC Pro and
+ToupTek ATR585C priority geometries.
 
 ## Build and test
 
