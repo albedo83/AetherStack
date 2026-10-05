@@ -189,6 +189,7 @@ describe("frame review workspace", () => {
               medianAbsoluteResidual: 0.8,
             },
           ],
+          cellDiagnostics: [],
         },
         message: "Published atomically",
       },
@@ -245,6 +246,23 @@ describe("frame review workspace", () => {
               medianAbsoluteResidual: 0.8,
             },
           ],
+          cellDiagnostics: [
+            {
+              plane: 0,
+              x: 128,
+              y: 128,
+              width: 128,
+              height: 128,
+              protected: 16_384,
+              sourceMasked: 0,
+              referenceMasked: 0,
+              nonFinite: 0,
+              eligible: 0,
+              retained: 0,
+              accepted: false,
+              rejectionCode: "sample_count_outside_bounds",
+            },
+          ],
         },
         previewState: "ready",
         previewView: "source",
@@ -266,6 +284,16 @@ describe("frame review workspace", () => {
     expect(control?.querySelector("title")?.textContent).toContain(
       "median residual 0.8000",
     );
+    const rejectedCell = workspace.querySelector<SVGRectElement>(
+      "[data-localnorm-control-overlay] rect",
+    );
+    expect(rejectedCell?.getAttribute("x")).toBe("128");
+    expect(rejectedCell?.querySelector("title")?.textContent).toContain(
+      "sample count outside bounds",
+    );
+    expect(
+      workspace.querySelector("[data-localnorm-map-summary]")?.textContent,
+    ).toBe("1 accepted · 1 rejected");
     expect(sourceTab.getAttribute("aria-selected")).toBe("true");
     fireEvent.click(
       getByRole(workspace, "button", { name: "Calculate exact statistics" }),
@@ -301,6 +329,7 @@ describe("frame review workspace", () => {
           validControlPoints: 759,
           rejectedCells: 4,
           controlPoints: [],
+          cellDiagnostics: [],
         },
         previewView: "source",
         statisticsState: "ready",

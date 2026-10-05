@@ -24,8 +24,9 @@ use aether_fits::{
     ImageRegion, PrimaryImageReader, SampleStatus, StoredSampleFormat, primary_image_statistics,
 };
 use aether_localnorm::{
-    LOCAL_APPLICATION_ALGORITHM_ID, LocalFitParameters, LocalNormalizationParameters,
-    LocalNormalizationPlan, ProtectionParameters, SamplingGridParameters, SurfaceParameters,
+    LOCAL_APPLICATION_ALGORITHM_ID, LocalFitError, LocalFitParameters,
+    LocalNormalizationParameters, LocalNormalizationPlan, ProtectionParameters,
+    SamplingGridParameters, SurfaceParameters,
 };
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
@@ -428,6 +429,7 @@ struct LocalNormalizationResponse {
     valid_control_points: usize,
     rejected_cells: usize,
     control_points: Vec<LocalNormalizationControlPointResponse>,
+    cell_diagnostics: Vec<LocalNormalizationCellDiagnosticResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -439,6 +441,24 @@ struct LocalNormalizationControlPointResponse {
     scale: f64,
     offset: f64,
     median_absolute_residual: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalNormalizationCellDiagnosticResponse {
+    plane: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    protected: usize,
+    source_masked: usize,
+    reference_masked: usize,
+    non_finite: usize,
+    eligible: usize,
+    retained: usize,
+    accepted: bool,
+    rejection_code: Option<&'static str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2836,7 +2856,45 @@ where
                 median_absolute_residual: point.median_absolute_residual(),
             })
             .collect(),
+        cell_diagnostics: result
+            .cell_diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let fit = diagnostic.fit();
+                let bounds = fit.bounds();
+                let evidence = fit.sampling_evidence();
+                let rejection_code = fit.result().err().map(local_fit_error_code);
+                LocalNormalizationCellDiagnosticResponse {
+                    plane: diagnostic.plane(),
+                    x: bounds.x(),
+                    y: bounds.y(),
+                    width: bounds.width(),
+                    height: bounds.height(),
+                    protected: evidence.protected(),
+                    source_masked: evidence.source_masked(),
+                    reference_masked: evidence.reference_masked(),
+                    non_finite: evidence.non_finite(),
+                    eligible: evidence.eligible(),
+                    retained: evidence.retained(),
+                    accepted: rejection_code.is_none(),
+                    rejection_code,
+                }
+            })
+            .collect(),
     })
+}
+
+const fn local_fit_error_code(error: LocalFitError) -> &'static str {
+    match error {
+        LocalFitError::InvalidParameters => "invalid_parameters",
+        LocalFitError::NonFiniteSample => "non_finite_sample",
+        LocalFitError::SampleCountOutsideBounds => "sample_count_outside_bounds",
+        LocalFitError::PairwiseWorkLimitExceeded => "pairwise_work_limit_exceeded",
+        LocalFitError::DegenerateSource => "degenerate_source",
+        LocalFitError::ScaleBelowMinimum => "scale_below_minimum",
+        LocalFitError::AllocationFailed => "allocation_failed",
+        LocalFitError::NonFiniteModel => "non_finite_model",
+    }
 }
 
 fn local_normalization_parameters(
@@ -8162,6 +8220,29 @@ mod tests {
     }
 
     #[test]
+    fn local_fit_rejections_have_stable_diagnostic_codes() {
+        let cases = [
+            (LocalFitError::InvalidParameters, "invalid_parameters"),
+            (LocalFitError::NonFiniteSample, "non_finite_sample"),
+            (
+                LocalFitError::SampleCountOutsideBounds,
+                "sample_count_outside_bounds",
+            ),
+            (
+                LocalFitError::PairwiseWorkLimitExceeded,
+                "pairwise_work_limit_exceeded",
+            ),
+            (LocalFitError::DegenerateSource, "degenerate_source"),
+            (LocalFitError::ScaleBelowMinimum, "scale_below_minimum"),
+            (LocalFitError::AllocationFailed, "allocation_failed"),
+            (LocalFitError::NonFiniteModel, "non_finite_model"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(local_fit_error_code(error), expected);
+        }
+    }
+
+    #[test]
     fn local_normalization_adapter_executes_an_atomic_multiplane_job() -> TestResult {
         let directory = TestDirectory::new()?;
         let session = planning_session(directory.path())?;
@@ -8235,6 +8316,22 @@ mod tests {
         assert_eq!(response.protected_pixels, 0);
         assert_eq!(response.valid_control_points, 8);
         assert_eq!(response.control_points.len(), 8);
+        assert_eq!(response.cell_diagnostics.len(), 8);
+        assert!(response.cell_diagnostics.iter().all(|cell| {
+            cell.accepted
+                && cell.rejection_code.is_none()
+                && cell.retained == 256
+                && cell.eligible == 256
+                && cell.protected == 0
+                && cell.source_masked == 0
+                && cell.reference_masked == 0
+                && cell.non_finite == 0
+                && cell.width == 16
+                && cell.height == 16
+                && cell.x < 32
+                && cell.y < 32
+                && cell.plane < 2
+        }));
         assert!(response.control_points.iter().all(|point| {
             point.plane < 2
                 && point.x.is_finite()

@@ -85,6 +85,23 @@ describe("native local-normalization bridge", () => {
           medianAbsoluteResidual: 0.8,
         },
       ],
+      cellDiagnostics: [
+        {
+          plane: 0,
+          x: 0,
+          y: 0,
+          width: 128,
+          height: 128,
+          protected: 512,
+          sourceMasked: 0,
+          referenceMasked: 0,
+          nonFinite: 0,
+          eligible: 15_872,
+          retained: 4_096,
+          accepted: true,
+          rejectionCode: null,
+        },
+      ],
     };
     vi.mocked(invoke).mockResolvedValue(expected);
     const onProgress = vi.fn<(event: LocalNormalizationProgress) => void>();

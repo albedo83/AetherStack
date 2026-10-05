@@ -10,10 +10,10 @@ use aether_fits::{
     ValidationMode,
 };
 use aether_localnorm::{
-    ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplicationEvidence, LocalFitError,
-    LocalNormalizationParameters, LocalNormalizationPlan, PlanError, ProtectionError,
-    SamplingError, SurfaceError, apply_local_surfaces, build_local_surface, build_protection_mask,
-    fit_local_grid, protected_sources_from_stars, sample_local_grid,
+    ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplicationEvidence, LocalCellFit,
+    LocalFitError, LocalNormalizationParameters, LocalNormalizationPlan, PlanError,
+    ProtectionError, SamplingError, SurfaceError, apply_local_surfaces, build_local_surface,
+    build_protection_mask, fit_local_grid, protected_sources_from_stars, sample_local_grid,
 };
 use aether_quality::{FrameQualityError, measure_frame_quality};
 
@@ -235,6 +235,26 @@ pub struct LocalNormalizationControlPoint {
     median_absolute_residual: f64,
 }
 
+/// One accepted or rejected grid-cell fit retained in canonical order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalNormalizationCellDiagnostic {
+    plane: usize,
+    fit: LocalCellFit,
+}
+
+impl LocalNormalizationCellDiagnostic {
+    /// Zero-based FITS plane.
+    #[must_use]
+    pub const fn plane(&self) -> usize {
+        self.plane
+    }
+    /// Bounds, sampling support, and accepted model or typed rejection.
+    #[must_use]
+    pub const fn fit(&self) -> &LocalCellFit {
+        &self.fit
+    }
+}
+
 impl LocalNormalizationControlPoint {
     /// Zero-based FITS plane.
     #[must_use]
@@ -279,6 +299,7 @@ pub struct LocalNormalizationResult {
     valid_control_points: usize,
     rejected_cells: usize,
     control_points: Vec<LocalNormalizationControlPoint>,
+    cell_diagnostics: Vec<LocalNormalizationCellDiagnostic>,
     peak_reserved_bytes: usize,
 }
 
@@ -329,6 +350,12 @@ impl LocalNormalizationResult {
     #[must_use]
     pub fn control_points(&self) -> &[LocalNormalizationControlPoint] {
         &self.control_points
+    }
+
+    /// Complete accepted and rejected grid in deterministic plane-major order.
+    #[must_use]
+    pub fn cell_diagnostics(&self) -> &[LocalNormalizationCellDiagnostic] {
+        &self.cell_diagnostics
     }
 
     /// Peak logical working set observed by the shared memory budget.
@@ -686,6 +713,7 @@ where
     let mut valid_control_points = 0_usize;
     let mut rejected_cells = 0_usize;
     let mut control_points = Vec::new();
+    let mut cell_diagnostics = Vec::new();
     for plane in 0..dimensions.planes() {
         cancellation
             .checkpoint()
@@ -714,6 +742,14 @@ where
         .map_err(LocalNormalizationPipelineError::Sampling)?;
         let fits = fit_local_grid(&samples, parameters.fitting())
             .map_err(LocalNormalizationPipelineError::Fitting)?;
+        cell_diagnostics
+            .try_reserve(fits.len())
+            .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
+        cell_diagnostics.extend(
+            fits.iter()
+                .cloned()
+                .map(|fit| LocalNormalizationCellDiagnostic { plane, fit }),
+        );
         let surface = build_local_surface(&fits, parameters.surface())
             .map_err(LocalNormalizationPipelineError::Surface)?;
         control_points
@@ -787,6 +823,7 @@ where
         valid_control_points,
         rejected_cells,
         control_points,
+        cell_diagnostics,
         peak_reserved_bytes: memory.peak(),
     })
 }
@@ -1336,6 +1373,13 @@ mod tests {
         assert_eq!(result.protected_pixels(), 0);
         assert_eq!(result.valid_control_points(), 8);
         assert_eq!(result.control_points().len(), 8);
+        assert_eq!(result.cell_diagnostics().len(), 8);
+        assert!(
+            result
+                .cell_diagnostics()
+                .iter()
+                .all(|cell| cell.fit().result().is_ok())
+        );
         assert!(
             result
                 .control_points()

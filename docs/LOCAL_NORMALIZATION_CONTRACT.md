@@ -138,6 +138,12 @@ scale and offset, and median absolute residual. This evidence is derived from
 the exact surface controls used for publication; consumers must not reconstruct
 or refit controls from display pixels.
 
+The complete plane-major cell grid is retained alongside accepted controls.
+Each diagnostic binds its edge-clipped bounds to mutually exclusive sampling
+counts, eligible and retained support, and either the accepted affine model or
+the exact typed fit rejection. Adapters expose stable rejection codes; they must
+not infer rejection causes from counts or display imagery.
+
 Execution can emit the shared machine-readable progress protocol under the
 stable `local-normalization` stage. Work becomes determinate after input headers
 agree: one unit covers complete decoding, one covers each plane, one covers

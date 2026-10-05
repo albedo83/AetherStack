@@ -328,7 +328,11 @@ export function localNormalizationMarkup(): string {
               <button type="button" role="tab" data-localnorm-preview="reference" data-localnorm-action="preview-reference" aria-selected="false" disabled>Reference</button>
               <button type="button" role="tab" data-localnorm-preview="output" data-localnorm-action="preview-output" aria-selected="true" disabled>Normalized</button>
             </div>
-            <label class="normalization-overlay-toggle"><input type="checkbox" data-localnorm-overlay checked /> Control map</label>
+            <div class="normalization-overlay-bar">
+              <label class="normalization-overlay-toggle"><input type="checkbox" data-localnorm-overlay checked /> Control map</label>
+              <span data-localnorm-map-summary>Published controls appear here</span>
+              <span class="normalization-map-key"><i></i> accepted <i></i> rejected</span>
+            </div>
             <div class="normalization-preview__surface" data-localnorm-preview-surface data-state="idle">
               <img data-localnorm-preview-image alt="" hidden />
               <svg data-localnorm-control-overlay aria-label="Spatial normalization control map" hidden></svg>
@@ -554,6 +558,13 @@ function renderControlOverlay(
   const svg = required<SVGSVGElement>(root, "[data-localnorm-control-overlay]");
   const result = model.result;
   svg.replaceChildren();
+  text(
+    root,
+    "[data-localnorm-map-summary]",
+    result
+      ? `${result.controlPoints.length.toLocaleString()} accepted · ${result.cellDiagnostics.filter((cell) => !cell.accepted).length.toLocaleString()} rejected`
+      : "Published controls appear here",
+  );
   const hidden = !enabled || !result || !model.preview;
   svg.toggleAttribute("hidden", hidden);
   if (hidden || !result) return;
@@ -564,6 +575,27 @@ function renderControlOverlay(
     Number.EPSILON,
   );
   const colors = ["#6fc4ff", "#72e5a0", "#ff718f"] as const;
+  for (const cell of result.cellDiagnostics.filter((item) => !item.accepted)) {
+    const rectangle = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "rect",
+    );
+    rectangle.setAttribute("x", String(cell.x));
+    rectangle.setAttribute("y", String(cell.y));
+    rectangle.setAttribute("width", String(cell.width));
+    rectangle.setAttribute("height", String(cell.height));
+    rectangle.setAttribute("fill", "#ff365f");
+    rectangle.setAttribute("fill-opacity", "0.22");
+    rectangle.setAttribute("stroke", "#ff5c78");
+    rectangle.setAttribute("stroke-width", "4");
+    const title = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "title",
+    );
+    title.textContent = `Rejected plane ${cell.plane + 1} · ${rejectionLabel(cell.rejectionCode)} · retained ${cell.retained}/${cell.eligible} · protected ${cell.protected}`;
+    rectangle.append(title);
+    svg.append(rectangle);
+  }
   for (const point of result.controlPoints) {
     const circle = document.createElementNS(
       "http://www.w3.org/2000/svg",
@@ -591,6 +623,10 @@ function renderControlOverlay(
     circle.append(title);
     svg.append(circle);
   }
+}
+
+function rejectionLabel(code: string | null): string {
+  return (code ?? "unknown rejection").replaceAll("_", " ");
 }
 
 function readSettings(

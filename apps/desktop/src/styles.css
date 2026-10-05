@@ -5024,6 +5024,18 @@ tr[data-state="blocked"] .association-state {
   box-shadow: inset 0 1px #e5f2ff;
 }
 
+.normalization-overlay-bar {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-height: 38px;
+  padding-right: 12px;
+  color: var(--text-dim);
+  font-size: 10px;
+  background: #0d141c;
+  border-top: 1px solid #283747;
+}
+
 .normalization-overlay-toggle {
   display: inline-flex;
   gap: 7px;
@@ -5032,8 +5044,31 @@ tr[data-state="blocked"] .association-state {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 750;
-  background: #0d141c;
-  border-left: 1px solid #2a3949;
+  border-right: 1px solid #2a3949;
+}
+
+.normalization-map-key {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-left: auto;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.normalization-map-key i {
+  width: 8px;
+  height: 8px;
+  background: #6fc4ff;
+  border: 1px solid #eaf6ff;
+  border-radius: 50%;
+}
+
+.normalization-map-key i + i {
+  margin-left: 5px;
+  background: #ff365f55;
+  border-color: #ff5c78;
+  border-radius: 1px;
 }
 
 .normalization-preview__surface {
@@ -5066,6 +5101,10 @@ tr[data-state="blocked"] .association-state {
 }
 
 .normalization-preview__surface svg circle {
+  vector-effect: non-scaling-stroke;
+}
+
+.normalization-preview__surface svg rect {
   vector-effect: non-scaling-stroke;
 }
 

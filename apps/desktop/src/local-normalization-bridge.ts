@@ -122,6 +122,23 @@ export interface LocalNormalizationResult {
   readonly validControlPoints: number;
   readonly rejectedCells: number;
   readonly controlPoints: readonly LocalNormalizationControlPoint[];
+  readonly cellDiagnostics: readonly LocalNormalizationCellDiagnostic[];
+}
+
+export interface LocalNormalizationCellDiagnostic {
+  readonly plane: number;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly protected: number;
+  readonly sourceMasked: number;
+  readonly referenceMasked: number;
+  readonly nonFinite: number;
+  readonly eligible: number;
+  readonly retained: number;
+  readonly accepted: boolean;
+  readonly rejectionCode: string | null;
 }
 
 export interface LocalNormalizationControlPoint {

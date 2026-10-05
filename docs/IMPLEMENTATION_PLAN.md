@@ -1883,6 +1883,12 @@ safety reasoning. They do not narrate obvious syntax.
      desktop boundary. The matched FITS viewer renders a toggleable vector map,
      colors controls by plane, scales markers by residual, and exposes exact
      values as accessible per-point descriptions without recomputing the fit.
+172. Preserve rejected local-normalization cells as spatial diagnostics. Runtime
+     evidence now retains every canonical cell bound, sampling-account category,
+     retained support, acceptance state, and typed fit rejection. Stable desktop
+     codes cross the IPC boundary, while the control map marks rejected regions
+     distinctly and exposes the precise cause and support without reducing the
+     scientific result to an aggregate rejected-cell count.
 
 ## 11. Stable-release definition
 
