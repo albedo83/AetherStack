@@ -12,7 +12,7 @@ use aether_fits::{
 use aether_localnorm::{
     ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplicationEvidence, LocalCellFit,
     LocalFitError, LocalNormalizationParameters, LocalNormalizationPlan, PlanError,
-    ProtectionError, SamplingError, SurfaceError, apply_local_surfaces, build_local_surface,
+    ProtectionError, SamplingError, SurfaceError, apply_local_surface_band, build_local_surface,
     build_protection_mask, fit_local_grid, protected_sources_from_stars, sample_local_grid,
 };
 use aether_quality::{FrameQualityError, measure_frame_quality};
@@ -25,6 +25,7 @@ use crate::{
 };
 
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
+const APPLICATION_BAND_HEIGHT: usize = 128;
 const LOCAL_NORMALIZATION_STAGE_ID: &str = "local-normalization";
 
 /// A source/reference local-normalization transaction sealed before FITS I/O.
@@ -781,14 +782,20 @@ where
         rejected_cells = rejected_cells
             .checked_add(surface.rejected_cell_count())
             .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-        let application = apply_local_surfaces(&source, std::slice::from_ref(&surface))
-            .map_err(LocalNormalizationPipelineError::Application)?;
-        application_evidence = application_evidence
-            .checked_add(application.evidence())
-            .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-        writer
-            .write_image_chunk(application.image())
-            .map_err(LocalNormalizationPipelineError::Publish)?;
+        for start_y in (0..dimensions.height()).step_by(APPLICATION_BAND_HEIGHT) {
+            cancellation
+                .checkpoint()
+                .map_err(LocalNormalizationPipelineError::Cancelled)?;
+            let row_count = APPLICATION_BAND_HEIGHT.min(dimensions.height() - start_y);
+            let application = apply_local_surface_band(&source, &surface, start_y, row_count)
+                .map_err(LocalNormalizationPipelineError::Application)?;
+            application_evidence = application_evidence
+                .checked_add(application.evidence())
+                .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+            writer
+                .write_image_chunk(application.image())
+                .map_err(LocalNormalizationPipelineError::Publish)?;
+        }
         advance_progress(sequence, stage, completed, *total, progress)?;
     }
 
@@ -850,6 +857,13 @@ pub fn estimate_local_normalization_peak_bytes(
     let decode_status_bytes = plane_samples
         .checked_mul(size_of::<SampleStatus>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let band_samples = dimensions
+        .width()
+        .checked_mul(dimensions.height().min(APPLICATION_BAND_HEIGHT))
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let band_image_bytes = band_samples
+        .checked_mul(size_of::<f64>() + size_of::<PixelFlags>())
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
     let sampling = parameters.sampling();
     let columns = dimensions
         .width()
@@ -888,7 +902,8 @@ pub fn estimate_local_normalization_peak_bytes(
         .checked_mul(size_of::<f64>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
     plane_image_bytes
-        .checked_mul(3)
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(band_image_bytes))
         .and_then(|bytes| bytes.checked_add(decode_status_bytes))
         .and_then(|bytes| bytes.checked_add(retained_sample_bytes))
         .and_then(|bytes| bytes.checked_add(retained_diagnostic_bytes))

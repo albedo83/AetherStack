@@ -128,6 +128,12 @@ and reference fingerprints must all pass before create-new atomic publication.
 Cancellation, memory failure, dimension mismatch, scientific failure, or
 readback failure leaves no public output.
 
+Surface application is itself row-banded. Source and reference planes remain
+available for exact measurement and fitting, while only a fixed-height output
+image is allocated, evaluated at global coordinates, and appended in primary
+array order. Band boundaries cannot affect pixels, masks, evidence, or output
+bytes and provide additional cooperative cancellation checkpoints.
+
 The same overflow-checked peak estimator is a public runtime preflight contract.
 Desktop preflight reads only the source and reference headers, requires identical
 dimensions, validates the complete parameter set, and reports the required bytes
@@ -164,5 +170,5 @@ unsafe near-zero scale are distinct typed failures.
 The current contract covers stellar protection, sampling, per-cell fitting,
 guarded coefficient interpolation, inspectable spatial controls, plane-streamed
 application, provenance, and bounded atomic FITS publication. Additional
-non-stellar protected regions, optional surface regularization, row-banded
-single-plane execution, and a dense residual raster remain subsequent milestones.
+non-stellar protected regions, optional surface regularization, banded source
+sampling, and a dense residual raster remain subsequent milestones.

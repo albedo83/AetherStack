@@ -15,7 +15,7 @@ mod surface;
 
 pub use application::{
     ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplication, LocalApplicationEvidence,
-    apply_local_surfaces,
+    apply_local_surface_band, apply_local_surfaces,
 };
 pub use plan::{LocalNormalizationParameters, LocalNormalizationPlan, PlanError};
 pub use protection::{

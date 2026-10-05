@@ -1893,9 +1893,16 @@ safety reasoning. They do not narrate obvious syntax.
      and FITS publication now retain only one image plane at a time while exact
      evidence is merged with checked arithmetic and the atomic writer preserves
      canonical FITS plane order. The shared preflight model accounts for the
-     same three plane-sized images, decode-status scratch, and accumulated
+     same plane-sized inputs, decode-status scratch, application output, and accumulated
      diagnostics, so planar RGB memory no longer scales with three complete
      source/reference/output arrays.
+174. Stream local-surface application in fixed row bands. The runtime retains
+     complete source and reference planes for measurement and grid fitting, but
+     no longer allocates a third complete output plane. A 128-row binary64 image
+     is transformed with global surface coordinates and appended in canonical
+     FITS order. Bit-exact equivalence, mask equivalence, checked evidence
+     aggregation, invalid-band rejection, cancellation checkpoints, and the
+     matching preflight reservation are locked by tests.
 
 ## 11. Stable-release definition
 

@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use aether_core::{PixelFlags, ScientificImage};
+use aether_core::{Dimensions, PixelFlags, ScientificImage};
 
 use crate::{LocalCoefficientSurface, SurfaceError};
 
@@ -108,6 +108,8 @@ impl LocalApplication {
 pub enum ApplicationError {
     /// Exactly one coefficient surface is required per image plane.
     SurfaceCountMismatch,
+    /// A requested application band is empty or outside the one-plane source.
+    InvalidBand,
     /// Output or bounded interpolation scratch allocation failed.
     AllocationFailed,
     /// Reconstructing a same-sized output image unexpectedly failed.
@@ -120,10 +122,81 @@ impl Display for ApplicationError {
             Self::SurfaceCountMismatch => {
                 "local application requires exactly one surface per image plane"
             }
+            Self::InvalidBand => "local application band is outside its one-plane source",
             Self::AllocationFailed => "local application allocation failed",
             Self::ImageConstructionFailed => "local application could not construct its output",
         })
     }
+}
+
+/// Applies one surface to a consecutive row band of a one-plane source.
+///
+/// Surface coordinates remain global while the returned image is a compact
+/// one-plane chunk suitable for canonical streaming FITS output.
+pub fn apply_local_surface_band(
+    source: &ScientificImage,
+    surface: &LocalCoefficientSurface,
+    start_y: usize,
+    row_count: usize,
+) -> Result<LocalApplication, ApplicationError> {
+    let source_dimensions = source.dimensions();
+    let end_y = start_y
+        .checked_add(row_count)
+        .ok_or(ApplicationError::InvalidBand)?;
+    if source_dimensions.planes() != 1
+        || row_count == 0
+        || start_y >= source_dimensions.height()
+        || end_y > source_dimensions.height()
+    {
+        return Err(ApplicationError::InvalidBand);
+    }
+    let dimensions = Dimensions::new(source_dimensions.width(), row_count, 1)
+        .map_err(|_| ApplicationError::ImageConstructionFailed)?;
+    let mut image = ScientificImage::filled(dimensions, 0.0)
+        .map_err(|_| ApplicationError::ImageConstructionFailed)?;
+    let mut neighbors = Vec::new();
+    neighbors
+        .try_reserve_exact(surface.scratch_capacity())
+        .map_err(|_| ApplicationError::AllocationFailed)?;
+    let mut evidence = LocalApplicationEvidence::default();
+    for local_y in 0..row_count {
+        let source_y = start_y + local_y;
+        for x in 0..source_dimensions.width() {
+            let source_index = source_y * source_dimensions.width() + x;
+            let output_index = local_y * source_dimensions.width() + x;
+            let source_flags = source.mask().as_slice()[source_index];
+            image.mask_mut().as_mut_slice()[output_index] = source_flags;
+            let source_value = source.pixels()[source_index];
+            image.pixels_mut()[output_index] = source_value;
+            if !source_flags.is_clear() {
+                evidence.inherited_masked += 1;
+                continue;
+            }
+            if !source_value.is_finite() {
+                image.mask_mut().as_mut_slice()[output_index] |= PixelFlags::INVALID;
+                evidence.non_finite_input += 1;
+                continue;
+            }
+            match surface
+                .evaluate_with_scratch(x as f64, source_y as f64, &mut neighbors)
+                .and_then(|evaluation| evaluation.apply(source_value))
+            {
+                Ok(value) => {
+                    image.pixels_mut()[output_index] = value;
+                    evidence.transformed += 1;
+                }
+                Err(SurfaceError::NonFiniteModel) => {
+                    image.mask_mut().as_mut_slice()[output_index] |= PixelFlags::INVALID;
+                    evidence.non_finite_result += 1;
+                }
+                Err(_) => {
+                    image.mask_mut().as_mut_slice()[output_index] |= PixelFlags::MISSING;
+                    evidence.unsupported_surface += 1;
+                }
+            }
+        }
+    }
+    Ok(LocalApplication { image, evidence })
 }
 
 impl Error for ApplicationError {}
@@ -291,6 +364,42 @@ mod tests {
         assert_eq!(application.image().pixels()[1].to_bits(), 3.0_f64.to_bits());
         assert!(application.image().mask().as_slice()[0].contains(PixelFlags::HOT));
         assert!(application.image().mask().as_slice()[4].contains(PixelFlags::INVALID));
+        Ok(())
+    }
+
+    #[test]
+    fn row_bands_are_bit_exact_with_complete_application() -> TestResult {
+        let dimensions = Dimensions::new(3, 3, 1)?;
+        let source = ScientificImage::from_pixels(dimensions, (0..9).map(f64::from).collect())?;
+        let surface = constant_surface(10.0)?;
+        let complete = apply_local_surfaces(&source, std::slice::from_ref(&surface))?;
+        let first = apply_local_surface_band(&source, &surface, 0, 1)?;
+        let second = apply_local_surface_band(&source, &surface, 1, 2)?;
+        let pixels = first
+            .image()
+            .pixels()
+            .iter()
+            .chain(second.image().pixels())
+            .copied()
+            .collect::<Vec<_>>();
+        let flags = first
+            .image()
+            .mask()
+            .as_slice()
+            .iter()
+            .chain(second.image().mask().as_slice())
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(pixels, complete.image().pixels());
+        assert_eq!(flags, complete.image().mask().as_slice());
+        assert_eq!(
+            first.evidence().checked_add(second.evidence()),
+            Some(complete.evidence())
+        );
+        assert!(matches!(
+            apply_local_surface_band(&source, &surface, 3, 1),
+            Err(ApplicationError::InvalidBand)
+        ));
         Ok(())
     }
 
