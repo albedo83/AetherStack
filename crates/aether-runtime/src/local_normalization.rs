@@ -765,6 +765,25 @@ mod tests {
         ))
     }
 
+    fn stellar_execution_parameters() -> Result<LocalNormalizationParameters, Box<dyn Error>> {
+        Ok(LocalNormalizationParameters::new(
+            StarMeasurementParameters::new(
+                BackgroundParameters::new(3.0, 8, 1_000)?,
+                6.0,
+                2.0,
+                6,
+                4,
+                6,
+                1_000,
+                Some(900.0),
+            )?,
+            ProtectionParameters::new(1.5, 2.0, 2, 24, 1_000, 4_000_000)?,
+            SamplingGridParameters::new(16, 16, 256, 16)?,
+            LocalFitParameters::new(32, 256, 32_640, 1.0e-12)?,
+            SurfaceParameters::new(4, 1, 4, 128.0)?,
+        ))
+    }
+
     fn write_pipeline_source(
         path: PathBuf,
         image: &ScientificImage,
@@ -802,6 +821,29 @@ mod tests {
         let source_pixels = (0..dimensions.pixel_count())
             .map(|index| (index % 509) as f64 - 127.0)
             .collect::<Vec<_>>();
+        let reference_pixels = source_pixels
+            .iter()
+            .map(|&value| value.mul_add(2.0, 5.0))
+            .collect::<Vec<_>>();
+        Ok((
+            ScientificImage::from_pixels(dimensions, source_pixels)?,
+            ScientificImage::from_pixels(dimensions, reference_pixels)?,
+        ))
+    }
+
+    fn stellar_affine_images() -> Result<(ScientificImage, ScientificImage), Box<dyn Error>> {
+        let dimensions = Dimensions::new(64, 64, 1)?;
+        let mut source_pixels = Vec::new();
+        source_pixels.try_reserve_exact(dimensions.pixel_count())?;
+        for y in 0..dimensions.height() {
+            for x in 0..dimensions.width() {
+                let background = ((y * dimensions.width() + x) % 17) as f64 * 0.01;
+                let dx = x as f64 - 32.0;
+                let dy = y as f64 - 32.0;
+                let star = 1_000.0 * (-(dx.mul_add(dx, dy * dy)) / 12.5).exp();
+                source_pixels.push(background + star);
+            }
+        }
         let reference_pixels = source_pixels
             .iter()
             .map(|&value| value.mul_add(2.0, 5.0))
@@ -1058,6 +1100,68 @@ mod tests {
             Err(LocalNormalizationPipelineError::DimensionMismatch { .. })
         ));
         assert!(!output.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn saturated_stellar_structure_is_measured_protected_and_excluded() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (source_image, reference_image) = stellar_affine_images()?;
+        let dimensions = source_image.dimensions();
+        let source = write_pipeline_source(directory.0.join("source.fits"), &source_image)?;
+        let reference =
+            write_pipeline_source(directory.0.join("reference.fits"), &reference_image)?;
+        let output = directory.0.join("normalized.fits");
+        let request = execution_request(
+            source,
+            reference,
+            output.clone(),
+            stellar_execution_parameters()?,
+        )?;
+        let result = run_local_normalization(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(32 * 1_024 * 1_024)?,
+        )?;
+
+        assert_eq!(result.measured_sources(), 1);
+        assert!(result.protected_pixels() > 100);
+        assert_eq!(result.valid_control_points() + result.rejected_cells(), 16);
+        assert_eq!(
+            result.application().classified_samples(),
+            dimensions.pixel_count()
+        );
+        let file = File::open(output)?;
+        let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+        assert!(reader.verify_checksums()?.is_fully_verified());
+        Ok(())
+    }
+
+    #[test]
+    fn existing_destination_is_never_modified() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let dimensions = Dimensions::new(32, 32, 1)?;
+        let (source_image, reference_image) = affine_images(dimensions)?;
+        let source = write_pipeline_source(directory.0.join("source.fits"), &source_image)?;
+        let reference =
+            write_pipeline_source(directory.0.join("reference.fits"), &reference_image)?;
+        let output = directory.0.join("existing.fits");
+        let sentinel = b"existing scientific product";
+        fs::write(&output, sentinel)?;
+        let request =
+            execution_request(source, reference, output.clone(), execution_parameters()?)?;
+        let result = run_local_normalization(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(16 * 1_024 * 1_024)?,
+        );
+        assert!(matches!(
+            result,
+            Err(LocalNormalizationPipelineError::Publish(
+                AtomicFitsWriteError::TargetExists
+            ))
+        ));
+        assert_eq!(fs::read(output)?, sentinel);
         Ok(())
     }
 }

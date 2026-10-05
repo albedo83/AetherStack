@@ -1835,6 +1835,10 @@ safety reasoning. They do not narrate obvious syntax.
      runtime reserves a conservative full-image peak before decoding, processes
      every plane with stellar protection and guarded surfaces, validates the
      private checksummed output, revalidates both inputs, and publishes atomically.
+164. Exercise local normalization through end-to-end adversarial fixtures. A
+     saturated synthetic star must be measured and protect its complete footprint
+     while preserving enough cell support, and a pre-existing destination must
+     remain byte-for-byte unchanged after the create-new publication refusal.
 
 ## 11. Stable-release definition
 
