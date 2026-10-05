@@ -212,6 +212,7 @@ mod tests {
     use aether_localnorm::{
         LocalFitParameters, ProtectionParameters, SamplingGridParameters, SurfaceParameters,
     };
+    use aether_quality::{BackgroundParameters, StarMeasurementParameters};
     use aether_session::SourceFingerprint;
 
     use super::*;
@@ -220,6 +221,16 @@ mod tests {
 
     fn parameters(cell_width: usize) -> Result<LocalNormalizationParameters, Box<dyn Error>> {
         Ok(LocalNormalizationParameters::new(
+            StarMeasurementParameters::new(
+                BackgroundParameters::new(3.0, 8, 1_024)?,
+                6.0,
+                2.0,
+                8,
+                4,
+                6,
+                10_000,
+                Some(65_000.0),
+            )?,
             ProtectionParameters::new(1.5, 2.0, 2, 32, 10_000, 20_000_000)?,
             SamplingGridParameters::new(cell_width, 64, 256, 16_384)?,
             LocalFitParameters::new(32, 256, 32_640, 1.0e-6)?,

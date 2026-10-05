@@ -1827,6 +1827,10 @@ safety reasoning. They do not narrate obvious syntax.
      cross-checks source and reference fingerprints, canonical parameters, plan
      identity, algorithm identity, source count, and FITS provenance before any
      input is opened or any atomic destination can be created.
+162. Extend the canonical local-normalization plan to version 2 before runtime
+     execution. Robust-background and stellar-detection algorithms and controls,
+     including saturation policy, are now sealed alongside protection and fit
+     controls so the protected-pixel population cannot vary invisibly.
 
 ## 11. Stable-release definition
 

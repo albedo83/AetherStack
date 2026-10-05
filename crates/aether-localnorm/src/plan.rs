@@ -3,18 +3,23 @@ use std::fmt::{Display, Formatter};
 
 use sha2::{Digest, Sha256};
 
+use aether_quality::{
+    GLOBAL_BACKGROUND_ALGORITHM_ID, STAR_MEASUREMENT_ALGORITHM_ID, StarMeasurementParameters,
+};
+
 use crate::{
     CELL_SAMPLING_ALGORITHM_ID, LOCAL_AFFINE_FIT_ALGORITHM_ID, LOCAL_APPLICATION_ALGORITHM_ID,
     LOCAL_SURFACE_ALGORITHM_ID, LocalFitParameters, PROTECTED_SOURCE_MASK_ALGORITHM_ID,
     ProtectionParameters, SamplingGridParameters, SurfaceParameters,
 };
 
-const PLAN_SCHEMA_ID: &str = "aether-local-normalization-plan-v1";
-const PARAMETER_SCHEMA_ID: &str = "aether-local-normalization-parameters-v1";
+const PLAN_SCHEMA_ID: &str = "aether-local-normalization-plan-v2";
+const PARAMETER_SCHEMA_ID: &str = "aether-local-normalization-parameters-v2";
 
 /// Complete immutable controls for one local-normalization plan.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LocalNormalizationParameters {
+    detection: StarMeasurementParameters,
     protection: ProtectionParameters,
     sampling: SamplingGridParameters,
     fitting: LocalFitParameters,
@@ -25,17 +30,25 @@ impl LocalNormalizationParameters {
     /// Combines independently validated stage controls.
     #[must_use]
     pub const fn new(
+        detection: StarMeasurementParameters,
         protection: ProtectionParameters,
         sampling: SamplingGridParameters,
         fitting: LocalFitParameters,
         surface: SurfaceParameters,
     ) -> Self {
         Self {
+            detection,
             protection,
             sampling,
             fitting,
             surface,
         }
+    }
+
+    /// Robust background and stellar measurement controls.
+    #[must_use]
+    pub const fn detection(self) -> StarMeasurementParameters {
+        self.detection
     }
 
     /// Stellar protection controls.
@@ -67,6 +80,8 @@ impl LocalNormalizationParameters {
         let mut hasher = Sha256::new();
         update_string(&mut hasher, PARAMETER_SCHEMA_ID)?;
         for algorithm in [
+            GLOBAL_BACKGROUND_ALGORITHM_ID,
+            STAR_MEASUREMENT_ALGORITHM_ID,
             PROTECTED_SOURCE_MASK_ALGORITHM_ID,
             CELL_SAMPLING_ALGORITHM_ID,
             LOCAL_AFFINE_FIT_ALGORITHM_ID,
@@ -74,6 +89,23 @@ impl LocalNormalizationParameters {
             LOCAL_APPLICATION_ALGORITHM_ID,
         ] {
             update_string(&mut hasher, algorithm)?;
+        }
+        let background = self.detection.background();
+        update_f64(&mut hasher, background.clipping_sigma());
+        hasher.update(background.maximum_iterations().to_be_bytes());
+        update_usize(&mut hasher, background.minimum_samples())?;
+        update_f64(&mut hasher, self.detection.detection_sigma());
+        update_f64(&mut hasher, self.detection.measurement_floor_sigma());
+        update_usize(&mut hasher, self.detection.measurement_radius())?;
+        update_usize(&mut hasher, self.detection.minimum_separation())?;
+        update_usize(&mut hasher, self.detection.minimum_measurement_pixels())?;
+        update_usize(&mut hasher, self.detection.maximum_candidates())?;
+        match self.detection.saturation_level() {
+            Some(value) => {
+                hasher.update([1]);
+                update_f64(&mut hasher, value);
+            }
+            None => hasher.update([0]),
         }
         update_f64(&mut hasher, self.protection.growth_factor());
         update_f64(&mut hasher, self.protection.saturated_growth_factor());
@@ -214,11 +246,29 @@ fn lower_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_quality::BackgroundParameters;
 
     type TestResult = Result<(), Box<dyn Error>>;
 
     fn parameters(cell_width: usize) -> Result<LocalNormalizationParameters, Box<dyn Error>> {
+        parameters_with_detection(cell_width, 6.0)
+    }
+
+    fn parameters_with_detection(
+        cell_width: usize,
+        detection_sigma: f64,
+    ) -> Result<LocalNormalizationParameters, Box<dyn Error>> {
         Ok(LocalNormalizationParameters::new(
+            StarMeasurementParameters::new(
+                BackgroundParameters::new(3.0, 8, 1_024)?,
+                detection_sigma,
+                2.0,
+                8,
+                4,
+                6,
+                10_000,
+                Some(65_000.0),
+            )?,
             ProtectionParameters::new(1.5, 2.0, 2, 32, 10_000, 20_000_000)?,
             SamplingGridParameters::new(cell_width, 64, 256, 16_384)?,
             LocalFitParameters::new(32, 256, 32_640, 1.0e-6)?,
@@ -239,12 +289,22 @@ mod tests {
 
         let changed_control =
             LocalNormalizationPlan::new("a".repeat(64), "b".repeat(64), parameters(65)?)?;
+        let changed_detection = LocalNormalizationPlan::new(
+            "a".repeat(64),
+            "b".repeat(64),
+            parameters_with_detection(64, 7.0)?,
+        )?;
         let changed_source = LocalNormalizationPlan::new("c".repeat(64), "b".repeat(64), controls)?;
         assert_ne!(
             changed_control.parameters_sha256(),
             plan.parameters_sha256()
         );
         assert_ne!(changed_control.plan_sha256(), plan.plan_sha256());
+        assert_ne!(
+            changed_detection.parameters_sha256(),
+            plan.parameters_sha256()
+        );
+        assert_ne!(changed_detection.plan_sha256(), plan.plan_sha256());
         assert_ne!(changed_source.plan_sha256(), plan.plan_sha256());
         Ok(())
     }
@@ -254,12 +314,12 @@ mod tests {
         let controls = parameters(64)?;
         assert_eq!(
             controls.canonical_sha256()?,
-            "4139ea8836604dbf011ab7e29b97f71c297bba270259f5f85c708365ba0ef581"
+            "af94ecf0f963f4ff9ad763fd289cded91160b51b42955b4cdb63972c86696b46"
         );
         let plan = LocalNormalizationPlan::new("a".repeat(64), "b".repeat(64), controls)?;
         assert_eq!(
             plan.plan_sha256(),
-            "17f8b9a82059dcb695d45dce339f71801c2f2cfc3efe0682d2e1a82705539349"
+            "7e53e79c21f7aea0353853bb70d7a6a0a54b676388ce9ef5087e956d44942d66"
         );
         assert_eq!(
             LocalNormalizationPlan::new("A".repeat(64), "b".repeat(64), controls),

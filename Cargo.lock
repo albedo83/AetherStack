@@ -143,6 +143,7 @@ dependencies = [
  "aether-integration",
  "aether-localnorm",
  "aether-metadata",
+ "aether-quality",
  "aether-registration",
  "aether-review",
  "aether-session",

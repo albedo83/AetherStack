@@ -18,6 +18,7 @@ aether-fits = { path = "../aether-fits" }
 aether-integration = { path = "../aether-integration" }
 aether-localnorm = { path = "../aether-localnorm" }
 aether-metadata = { path = "../aether-metadata" }
+aether-quality = { path = "../aether-quality" }
 aether-registration = { path = "../aether-registration" }
 aether-review = { path = "../aether-review" }
 aether-session = { path = "../aether-session" }
