@@ -20,6 +20,7 @@ aether-cache = { path = "../../../crates/aether-cache" }
 aether-calibration = { path = "../../../crates/aether-calibration" }
 aether-core = { path = "../../../crates/aether-core" }
 aether-fits = { path = "../../../crates/aether-fits" }
+aether-localnorm = { path = "../../../crates/aether-localnorm" }
 aether-metadata = { path = "../../../crates/aether-metadata" }
 aether-preview = { path = "../../../crates/aether-preview" }
 aether-quality = { path = "../../../crates/aether-quality" }

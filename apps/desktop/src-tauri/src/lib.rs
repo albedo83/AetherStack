@@ -22,6 +22,10 @@ use aether_fits::{
     FitsOutputProvenance, FitsWriteSummary, HduChecksumVerification, HeaderReadOptions,
     ImageRegion, PrimaryImageReader, SampleStatus, StoredSampleFormat, primary_image_statistics,
 };
+use aether_localnorm::{
+    LOCAL_APPLICATION_ALGORITHM_ID, LocalFitParameters, LocalNormalizationParameters,
+    LocalNormalizationPlan, ProtectionParameters, SamplingGridParameters, SurfaceParameters,
+};
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
     AUTO_STRETCH_ALGORITHM_ID, AutomaticDisplayTransform, FitsPreviewParameters, MissingPixelStyle,
@@ -50,7 +54,8 @@ use aether_review::{
 };
 use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, LightPlanExecutionError,
-    LightPlanExecutionRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
+    LightPlanExecutionRequest, LocalNormalizationPipelineError, LocalNormalizationRequest,
+    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
     ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
     REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
@@ -60,8 +65,8 @@ use aether_runtime::{
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
     SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
     WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, run_calibrated_light_plan,
-    run_demosaiced_light_plan, run_light_plan, run_master_plan, run_projective_registration_plan,
-    run_registered_stack, run_registration_plan,
+    run_demosaiced_light_plan, run_light_plan, run_local_normalization_with_progress,
+    run_master_plan, run_projective_registration_plan, run_registered_stack, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -319,6 +324,86 @@ struct ExecutedRegisteredFrame {
     interpolated_samples: usize,
     outside_footprint_samples: usize,
     masked_support_samples: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalNormalizationCommandRequest {
+    source_path: PathBuf,
+    reference_path: PathBuf,
+    output_path: PathBuf,
+    group_id: String,
+    memory_limit_bytes: u64,
+    settings: LocalNormalizationSettings,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalNormalizationSettings {
+    background_clipping_sigma: f64,
+    background_maximum_iterations: u32,
+    background_minimum_samples: usize,
+    detection_sigma: f64,
+    measurement_floor_sigma: f64,
+    measurement_radius: usize,
+    minimum_separation: usize,
+    minimum_measurement_pixels: usize,
+    maximum_candidates: usize,
+    saturation_level: Option<f64>,
+    protection_growth_factor: f64,
+    saturated_growth_factor: f64,
+    minimum_protection_radius: usize,
+    maximum_protection_radius: usize,
+    maximum_protected_sources: usize,
+    maximum_protection_pixel_visits: usize,
+    cell_width: usize,
+    cell_height: usize,
+    maximum_samples_per_cell: usize,
+    maximum_cells: usize,
+    minimum_fit_samples: usize,
+    maximum_fit_samples: usize,
+    maximum_pairwise_slopes: usize,
+    minimum_absolute_scale: f64,
+    minimum_control_points: usize,
+    minimum_surface_neighbors: usize,
+    maximum_surface_neighbors: usize,
+    maximum_surface_distance: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalNormalizationProgress {
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalNormalizationResponse {
+    plan_sha256: String,
+    parameters_sha256: String,
+    output_path: String,
+    width: usize,
+    height: usize,
+    planes: usize,
+    memory_limit_bytes: usize,
+    peak_reserved_bytes: usize,
+    samples_written: u64,
+    substituted_samples: u64,
+    bytes_written: u64,
+    transformed_samples: usize,
+    inherited_masked_samples: usize,
+    non_finite_input_samples: usize,
+    unsupported_surface_samples: usize,
+    non_finite_result_samples: usize,
+    measured_sources: usize,
+    protected_pixels: usize,
+    valid_control_points: usize,
+    rejected_cells: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2218,6 +2303,46 @@ fn cancel_registration_plan(
 }
 
 #[tauri::command]
+async fn execute_local_normalization(
+    request: LocalNormalizationCommandRequest,
+    on_progress: tauri::ipc::Channel<LocalNormalizationProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<LocalNormalizationResponse, PreviewCommandError> {
+    if !request.source_path.is_absolute()
+        || !request.reference_path.is_absolute()
+        || !request.output_path.is_absolute()
+    {
+        return Err(local_normalization_configuration_error());
+    }
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_local_normalization_sync(&session, request, &worker_cancellation, |event| {
+            let _ignored = on_progress.send(event);
+        })
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "local_normalization_interrupted",
+            "The local-normalization worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_local_normalization(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "local_normalization_execution_missing")
+}
+
+#[tauri::command]
 async fn execute_registered_stack(
     request: RegisteredStackCommandRequest,
     on_progress: tauri::ipc::Channel<RegisteredStackProgress>,
@@ -2542,6 +2667,163 @@ fn projective_registration_plan_response(
             height: crop.height(),
         },
         frames,
+    })
+}
+
+fn execute_local_normalization_sync<F>(
+    session: &ImportedNativeSession,
+    request: LocalNormalizationCommandRequest,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<LocalNormalizationResponse, PreviewCommandError>
+where
+    F: FnMut(LocalNormalizationProgress),
+{
+    if !request.source_path.is_absolute()
+        || !request.reference_path.is_absolute()
+        || !request.output_path.is_absolute()
+    {
+        return Err(local_normalization_configuration_error());
+    }
+    let output_path = request
+        .output_path
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            PreviewCommandError::new(
+                "local_normalization_output_path_not_unicode",
+                "The local-normalization output path cannot be represented as Unicode.",
+            )
+        })?;
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| local_normalization_configuration_error())?;
+    let memory =
+        MemoryBudget::new(memory_limit).map_err(|_| local_normalization_configuration_error())?;
+    let settings = request.settings;
+    let background = BackgroundParameters::new(
+        settings.background_clipping_sigma,
+        settings.background_maximum_iterations,
+        settings.background_minimum_samples,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let detection = StarMeasurementParameters::new(
+        background,
+        settings.detection_sigma,
+        settings.measurement_floor_sigma,
+        settings.measurement_radius,
+        settings.minimum_separation,
+        settings.minimum_measurement_pixels,
+        settings.maximum_candidates,
+        settings.saturation_level,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let protection = ProtectionParameters::new(
+        settings.protection_growth_factor,
+        settings.saturated_growth_factor,
+        settings.minimum_protection_radius,
+        settings.maximum_protection_radius,
+        settings.maximum_protected_sources,
+        settings.maximum_protection_pixel_visits,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let sampling = SamplingGridParameters::new(
+        settings.cell_width,
+        settings.cell_height,
+        settings.maximum_samples_per_cell,
+        settings.maximum_cells,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let fitting = LocalFitParameters::new(
+        settings.minimum_fit_samples,
+        settings.maximum_fit_samples,
+        settings.maximum_pairwise_slopes,
+        settings.minimum_absolute_scale,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let surface = SurfaceParameters::new(
+        settings.minimum_control_points,
+        settings.minimum_surface_neighbors,
+        settings.maximum_surface_neighbors,
+        settings.maximum_surface_distance,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let parameters =
+        LocalNormalizationParameters::new(detection, protection, sampling, fitting, surface);
+
+    let mut source_file =
+        File::open(&request.source_path).map_err(|_| local_normalization_input_error())?;
+    let source_fingerprint =
+        fingerprint_reader(&mut source_file).map_err(|_| local_normalization_input_error())?;
+    let mut reference_file =
+        File::open(&request.reference_path).map_err(|_| local_normalization_input_error())?;
+    let reference_fingerprint =
+        fingerprint_reader(&mut reference_file).map_err(|_| local_normalization_input_error())?;
+    let plan = LocalNormalizationPlan::new(
+        source_fingerprint.sha256(),
+        reference_fingerprint.sha256(),
+        parameters,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let plan_sha256 = plan.plan_sha256().to_owned();
+    let parameters_sha256 = plan.parameters_sha256().to_owned();
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| local_normalization_input_error())?;
+    let provenance = FitsOutputProvenance::new(
+        manifest_sha256,
+        request.group_id,
+        LOCAL_APPLICATION_ALGORITHM_ID,
+        2,
+    )
+    .and_then(|value| value.with_plan_sha256(&plan_sha256))
+    .and_then(|value| value.with_parameters_sha256(&parameters_sha256))
+    .map_err(|_| local_normalization_configuration_error())?;
+    let execution = LocalNormalizationRequest::new(
+        PipelineSource::new(request.source_path, source_fingerprint),
+        PipelineSource::new(request.reference_path, reference_fingerprint),
+        request.output_path,
+        provenance,
+        parameters,
+        plan,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let result =
+        run_local_normalization_with_progress(&execution, cancellation, &memory, |event| {
+            progress(LocalNormalizationProgress {
+                sequence: event.sequence(),
+                stage: event.stage().as_str().to_owned(),
+                state: progress_state_name(event.state()),
+                completed_units: event.completed_units(),
+                total_units: event.total_units(),
+                code: event.code().map(str::to_owned),
+            });
+        })
+        .map_err(local_normalization_execution_error)?;
+    let dimensions = result.dimensions();
+    let write = result.summary();
+    let application = result.application();
+    Ok(LocalNormalizationResponse {
+        plan_sha256,
+        parameters_sha256,
+        output_path,
+        width: dimensions.width(),
+        height: dimensions.height(),
+        planes: dimensions.planes(),
+        memory_limit_bytes: memory.limit(),
+        peak_reserved_bytes: result.peak_reserved_bytes(),
+        samples_written: write.samples_written(),
+        substituted_samples: write.substituted_samples(),
+        bytes_written: write.bytes_written(),
+        transformed_samples: application.transformed(),
+        inherited_masked_samples: application.inherited_masked(),
+        non_finite_input_samples: application.non_finite_input(),
+        unsupported_surface_samples: application.unsupported_surface(),
+        non_finite_result_samples: application.non_finite_result(),
+        measured_sources: result.measured_sources(),
+        protected_pixels: result.protected_pixels(),
+        valid_control_points: result.valid_control_points(),
+        rejected_cells: result.rejected_cells(),
     })
 }
 
@@ -4100,6 +4382,57 @@ fn registration_execution_error(error: RegistrationPlanExecutionError) -> Previe
         | RegistrationPlanExecutionError::RollbackPublication { .. } => PreviewCommandError::new(
             "registration_publication_failed",
             "The registered frame set could not be published as one atomic transaction.",
+        ),
+    }
+}
+
+const fn local_normalization_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "local_normalization_configuration_invalid",
+        "Local-normalization paths, identifiers, settings, or memory limit are invalid.",
+    )
+}
+
+const fn local_normalization_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "local_normalization_input_invalid",
+        "A local-normalization source could not be opened or fingerprinted.",
+    )
+}
+
+fn local_normalization_execution_error(
+    error: LocalNormalizationPipelineError,
+) -> PreviewCommandError {
+    match error {
+        LocalNormalizationPipelineError::Cancelled(_) => PreviewCommandError::new(
+            "local_normalization_cancelled",
+            "Local normalization was cancelled before publication.",
+        ),
+        LocalNormalizationPipelineError::Memory(_) => PreviewCommandError::new(
+            "local_normalization_memory_insufficient",
+            "The configured memory limit cannot cover the bounded normalization plan.",
+        ),
+        LocalNormalizationPipelineError::DimensionMismatch { .. } => PreviewCommandError::new(
+            "local_normalization_dimensions_mismatch",
+            "The source and reference images do not have identical dimensions.",
+        ),
+        LocalNormalizationPipelineError::Publish(
+            aether_fits::AtomicFitsWriteError::TargetExists,
+        ) => PreviewCommandError::new(
+            "local_normalization_destination_exists",
+            "The destination already exists and was not modified.",
+        ),
+        LocalNormalizationPipelineError::Input(_) => PreviewCommandError::new(
+            "local_normalization_source_changed",
+            "A source no longer matches the fingerprint sealed for execution.",
+        ),
+        LocalNormalizationPipelineError::Publish(_) => PreviewCommandError::new(
+            "local_normalization_publication_failed",
+            "The checksummed normalized FITS product could not be published atomically.",
+        ),
+        _ => PreviewCommandError::new(
+            "local_normalization_execution_failed",
+            "Local normalization failed native scientific validation before publication.",
         ),
     }
 }
@@ -7351,6 +7684,7 @@ pub fn run() -> Result<(), tauri::Error> {
             apply_frame_selection,
             apply_review_decision,
             cancel_light_plan,
+            cancel_local_normalization,
             cancel_master_plan,
             cancel_registration_plan,
             cancel_registered_stack,
@@ -7359,6 +7693,7 @@ pub fn run() -> Result<(), tauri::Error> {
             diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_light_plan,
+            execute_local_normalization,
             execute_master_plan,
             execute_registration_plan,
             execute_registered_stack,
@@ -7674,6 +8009,114 @@ mod tests {
             diagnostics_report: None,
             quality_cache_rejections: Vec::new(),
         })
+    }
+
+    fn local_normalization_settings() -> LocalNormalizationSettings {
+        LocalNormalizationSettings {
+            background_clipping_sigma: 3.0,
+            background_maximum_iterations: 8,
+            background_minimum_samples: 100,
+            detection_sigma: 1_000.0,
+            measurement_floor_sigma: 2.0,
+            measurement_radius: 4,
+            minimum_separation: 3,
+            minimum_measurement_pixels: 3,
+            maximum_candidates: 1_000,
+            saturation_level: None,
+            protection_growth_factor: 1.5,
+            saturated_growth_factor: 2.0,
+            minimum_protection_radius: 2,
+            maximum_protection_radius: 16,
+            maximum_protected_sources: 1_000,
+            maximum_protection_pixel_visits: 2_000_000,
+            cell_width: 16,
+            cell_height: 16,
+            maximum_samples_per_cell: 256,
+            maximum_cells: 8,
+            minimum_fit_samples: 32,
+            maximum_fit_samples: 256,
+            maximum_pairwise_slopes: 32_640,
+            minimum_absolute_scale: 1.0e-12,
+            minimum_control_points: 4,
+            minimum_surface_neighbors: 1,
+            maximum_surface_neighbors: 4,
+            maximum_surface_distance: 100.0,
+        }
+    }
+
+    #[test]
+    fn local_normalization_adapter_executes_an_atomic_multiplane_job() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session = planning_session(directory.path())?;
+        let dimensions = Dimensions::new(32, 32, 2)?;
+        let source_pixels = (0..dimensions.pixel_count())
+            .map(|index| (index % 509) as f64 - 127.0)
+            .collect::<Vec<_>>();
+        let reference_pixels = source_pixels
+            .iter()
+            .map(|&value| value.mul_add(2.0, 5.0))
+            .collect::<Vec<_>>();
+        let source_path = directory.path().join("source.fits");
+        let reference_path = directory.path().join("reference.fits");
+        let output_path = directory.path().join("normalized.fits");
+        let source_image = ScientificImage::from_pixels(dimensions, source_pixels)?;
+        let reference_image = ScientificImage::from_pixels(dimensions, reference_pixels)?;
+        write_f64_primary(&mut File::create(&source_path)?, &source_image)?;
+        write_f64_primary(&mut File::create(&reference_path)?, &reference_image)?;
+
+        let mut events = Vec::new();
+        let response = execute_local_normalization_sync(
+            &session,
+            LocalNormalizationCommandRequest {
+                source_path,
+                reference_path,
+                output_path: output_path.clone(),
+                group_id: "light-uvir".to_owned(),
+                memory_limit_bytes: 16 * 1_024 * 1_024,
+                settings: local_normalization_settings(),
+            },
+            &CancellationToken::new(),
+            |event| events.push(event),
+        )?;
+
+        assert!(output_path.is_file());
+        assert_eq!(response.plan_sha256.len(), 64);
+        assert_eq!(response.parameters_sha256.len(), 64);
+        assert_eq!(response.output_path, output_path.to_string_lossy());
+        assert_eq!(
+            (response.width, response.height, response.planes),
+            (32, 32, 2)
+        );
+        assert_eq!(response.memory_limit_bytes, 16 * 1_024 * 1_024);
+        assert!(response.peak_reserved_bytes > 0);
+        assert_eq!(response.samples_written, dimensions.pixel_count() as u64);
+        assert_eq!(response.substituted_samples, 0);
+        assert!(response.bytes_written > 0);
+        assert_eq!(response.transformed_samples, dimensions.pixel_count());
+        assert_eq!(response.inherited_masked_samples, 0);
+        assert_eq!(response.non_finite_input_samples, 0);
+        assert_eq!(response.unsupported_surface_samples, 0);
+        assert_eq!(response.non_finite_result_samples, 0);
+        assert_eq!(response.measured_sources, 0);
+        assert_eq!(response.protected_pixels, 0);
+        assert_eq!(response.valid_control_points, 8);
+        assert_eq!(response.rejected_cells, 0);
+        assert_eq!(events.first().map(|event| event.state), Some("started"));
+        assert_eq!(events.last().map(|event| event.state), Some("completed"));
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.stage == "local-normalization")
+        );
+        assert_eq!(events.last().map(|event| event.completed_units), Some(5));
+        assert_eq!(events.last().and_then(|event| event.total_units), Some(5));
+        assert!(events.iter().all(|event| event.code.is_none()));
+        Ok(())
     }
 
     const REGISTRATION_TEST_STARS: [(f64, f64); 24] = [

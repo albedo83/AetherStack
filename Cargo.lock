@@ -180,6 +180,7 @@ dependencies = [
  "aether-calibration",
  "aether-core",
  "aether-fits",
+ "aether-localnorm",
  "aether-metadata",
  "aether-preview",
  "aether-quality",

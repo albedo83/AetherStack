@@ -1843,6 +1843,13 @@ safety reasoning. They do not narrate obvious syntax.
      protocol. Stable sequence numbers, stage identity, deterministic work totals,
      per-plane advancement, terminal states, and canonical failure codes are now
      available to desktop and command-line adapters without polling runtime state.
+166. Connect the local-normalization transaction to the native desktop boundary.
+     The adapter validates the complete advanced-control set, fingerprints both
+     absolute FITS inputs, constructs the canonical plan and provenance internally,
+     holds the shared exclusive execution slot, supports cancellation, and streams
+     typed progress without exposing private image data to the webview. A desktop
+     end-to-end test locks multiplane execution, atomic publication, resource
+     evidence, and the stable progress contract before the inspection UI is added.
 
 ## 11. Stable-release definition
 
