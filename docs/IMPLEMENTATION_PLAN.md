@@ -1889,6 +1889,13 @@ safety reasoning. They do not narrate obvious syntax.
      codes cross the IPC boundary, while the control map marks rejected regions
      distinctly and exposes the precise cause and support without reducing the
      scientific result to an aggregate rejected-cell count.
+173. Stream local normalization plane by plane. Source, reference, application,
+     and FITS publication now retain only one image plane at a time while exact
+     evidence is merged with checked arithmetic and the atomic writer preserves
+     canonical FITS plane order. The shared preflight model accounts for the
+     same three plane-sized images, decode-status scratch, and accumulated
+     diagnostics, so planar RGB memory no longer scales with three complete
+     source/reference/output arrays.
 
 ## 11. Stable-release definition
 

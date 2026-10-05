@@ -118,13 +118,15 @@ name the local-application algorithm, represent exactly two inputs, and carry
 the same plan and parameter digests. Any mismatch fails before FITS input or
 destination I/O begins.
 
-The first complete runtime executor reserves a conservative full-image peak
-before decoding either pixel array. It measures and protects stellar structure
-independently on every plane, retains valid and rejected cell totals, applies one
-guarded surface per plane, and writes a private binary64 FITS product. Structural
-and checksum readback plus fresh source and reference fingerprints must all pass
-before create-new atomic publication. Cancellation, memory failure, dimension
-mismatch, scientific failure, or readback failure leaves no public output.
+The runtime executor reserves a conservative peak before decoding either pixel
+array. It reads source and reference one plane at a time, measures and protects
+stellar structure independently, fits and applies one guarded surface, and
+streams that normalized plane into a private binary64 FITS product. Checked
+evidence accumulation preserves complete-image accounting without retaining
+complete planar RGB arrays. Structural and checksum readback plus fresh source
+and reference fingerprints must all pass before create-new atomic publication.
+Cancellation, memory failure, dimension mismatch, scientific failure, or
+readback failure leaves no public output.
 
 The same overflow-checked peak estimator is a public runtime preflight contract.
 Desktop preflight reads only the source and reference headers, requires identical
@@ -146,8 +148,9 @@ not infer rejection causes from counts or display imagery.
 
 Execution can emit the shared machine-readable progress protocol under the
 stable `local-normalization` stage. Work becomes determinate after input headers
-agree: one unit covers complete decoding, one covers each plane, one covers
-private output validation, and one covers atomic publication. Sequence numbers
+agree: one unit covers private-stream initialization, one covers each decoded,
+fitted, applied, and written plane, one covers private output validation, and
+one covers atomic publication. Sequence numbers
 are monotonic; successful, failed, and cancelled terminal events retain canonical
 state and failure codes.
 
@@ -159,7 +162,7 @@ storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
 The current contract covers stellar protection, sampling, per-cell fitting,
-guarded coefficient interpolation, inspectable spatial controls, full-image
+guarded coefficient interpolation, inspectable spatial controls, plane-streamed
 application, provenance, and bounded atomic FITS publication. Additional
-non-stellar protected regions, optional surface regularization, a lower-memory
-banded executor, and a dense residual raster remain subsequent milestones.
+non-stellar protected regions, optional surface regularization, row-banded
+single-plane execution, and a dense residual raster remain subsequent milestones.

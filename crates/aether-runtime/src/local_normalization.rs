@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
-use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
+use aether_core::{Dimensions, PixelFlags};
 use aether_fits::{
     AtomicF64PrimaryStreamWriter, AtomicFitsWriteError, FitsOutputProvenance, FitsWriteSummary,
     HeaderReadOptions, ImageReadError, ImageRegion, PrimaryImageReader, SampleStatus,
@@ -381,10 +381,8 @@ pub enum LocalNormalizationPipelineError {
     WorkSizeOverflow,
     /// The configured memory budget cannot cover the complete planned peak.
     Memory(MemoryBudgetError),
-    /// A complete registered image could not be decoded.
+    /// A registered image plane could not be decoded.
     ReadInput(ImageReadError),
-    /// A complete decoded image could not be allocated.
-    Core(CoreError),
     /// Deterministic background or stellar measurement failed.
     Quality(FrameQualityError),
     /// Stellar protection construction failed.
@@ -417,7 +415,6 @@ impl LocalNormalizationPipelineError {
             Self::WorkSizeOverflow => "localnorm-work-size",
             Self::Memory(_) => "localnorm-memory",
             Self::ReadInput(_) => "localnorm-read",
-            Self::Core(_) => "localnorm-image",
             Self::Quality(_) => "localnorm-quality",
             Self::Protection(_) => "localnorm-protection",
             Self::Sampling(_) => "localnorm-sampling",
@@ -457,12 +454,6 @@ impl Display for LocalNormalizationPipelineError {
             }
             Self::ReadInput(error) => {
                 write!(formatter, "cannot read local-normalization input: {error}")
-            }
-            Self::Core(error) => {
-                write!(
-                    formatter,
-                    "cannot allocate local-normalization image: {error}"
-                )
             }
             Self::Quality(error) => {
                 write!(
@@ -514,7 +505,6 @@ impl Error for LocalNormalizationPipelineError {
             Self::Input(error) => Some(error),
             Self::Memory(error) => Some(error),
             Self::ReadInput(error) => Some(error),
-            Self::Core(error) => Some(error),
             Self::Quality(error) => Some(error),
             Self::Protection(error) => Some(error),
             Self::Sampling(error) => Some(error),
@@ -699,26 +689,40 @@ where
     let _reservation = memory
         .try_reserve(planned_bytes)
         .map_err(LocalNormalizationPipelineError::Memory)?;
-    let source = read_complete_image(&mut source_reader, dimensions, cancellation)?;
-    let reference = read_complete_image(&mut reference_reader, dimensions, cancellation)?;
+    let mut writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        request.output(),
+        dimensions,
+        request.provenance(),
+    )
+    .map_err(LocalNormalizationPipelineError::Publish)?;
     advance_progress(sequence, stage, completed, *total, progress)?;
 
     let parameters = request.parameters();
-    let mut surfaces = Vec::new();
-    surfaces
-        .try_reserve_exact(dimensions.planes())
-        .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
     let mut measured_sources = 0_usize;
     let mut protected_pixels = 0_usize;
     let mut valid_control_points = 0_usize;
     let mut rejected_cells = 0_usize;
     let mut control_points = Vec::new();
     let mut cell_diagnostics = Vec::new();
+    let mut application_evidence = LocalApplicationEvidence::default();
+    let plane_width = u64::try_from(dimensions.width())
+        .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let plane_height = u64::try_from(dimensions.height())
+        .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
     for plane in 0..dimensions.planes() {
         cancellation
             .checkpoint()
             .map_err(LocalNormalizationPipelineError::Cancelled)?;
-        let quality = measure_frame_quality(&source, plane, parameters.detection())
+        let plane_index =
+            u64::try_from(plane).map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
+        let region = ImageRegion::new(plane_index, 0, 0, plane_width, plane_height);
+        let source = source_reader
+            .read_region_image(region)
+            .map_err(LocalNormalizationPipelineError::ReadInput)?;
+        let reference = reference_reader
+            .read_region_image(region)
+            .map_err(LocalNormalizationPipelineError::ReadInput)?;
+        let quality = measure_frame_quality(&source, 0, parameters.detection())
             .map_err(LocalNormalizationPipelineError::Quality)?;
         let protected_sources = protected_sources_from_stars(
             quality.stars(),
@@ -726,8 +730,8 @@ where
         )
         .map_err(LocalNormalizationPipelineError::Protection)?;
         let protection = build_protection_mask(
-            dimensions,
-            plane,
+            source.dimensions(),
+            0,
             &protected_sources,
             parameters.protection(),
         )
@@ -736,7 +740,7 @@ where
             &source,
             &reference,
             Some(protection.mask()),
-            plane,
+            0,
             parameters.sampling(),
         )
         .map_err(LocalNormalizationPipelineError::Sampling)?;
@@ -777,25 +781,20 @@ where
         rejected_cells = rejected_cells
             .checked_add(surface.rejected_cell_count())
             .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-        surfaces.push(surface);
+        let application = apply_local_surfaces(&source, std::slice::from_ref(&surface))
+            .map_err(LocalNormalizationPipelineError::Application)?;
+        application_evidence = application_evidence
+            .checked_add(application.evidence())
+            .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+        writer
+            .write_image_chunk(application.image())
+            .map_err(LocalNormalizationPipelineError::Publish)?;
         advance_progress(sequence, stage, completed, *total, progress)?;
     }
 
     cancellation
         .checkpoint()
         .map_err(LocalNormalizationPipelineError::Cancelled)?;
-    let application = apply_local_surfaces(&source, &surfaces)
-        .map_err(LocalNormalizationPipelineError::Application)?;
-    let application_evidence = application.evidence();
-    let mut writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
-        request.output(),
-        dimensions,
-        request.provenance(),
-    )
-    .map_err(LocalNormalizationPipelineError::Publish)?;
-    writer
-        .write_image_chunk(application.image())
-        .map_err(LocalNormalizationPipelineError::Publish)?;
     let staged = writer
         .finish()
         .map_err(LocalNormalizationPipelineError::Publish)?;
@@ -828,47 +827,6 @@ where
     })
 }
 
-fn read_complete_image<R: std::io::Read + std::io::Seek>(
-    reader: &mut PrimaryImageReader<R>,
-    dimensions: Dimensions,
-    cancellation: &CancellationToken,
-) -> Result<ScientificImage, LocalNormalizationPipelineError> {
-    let mut image =
-        ScientificImage::filled(dimensions, 0.0).map_err(LocalNormalizationPipelineError::Core)?;
-    let plane_area = dimensions
-        .width()
-        .checked_mul(dimensions.height())
-        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    let width = u64::try_from(dimensions.width())
-        .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    let height = u64::try_from(dimensions.height())
-        .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    for plane in 0..dimensions.planes() {
-        cancellation
-            .checkpoint()
-            .map_err(LocalNormalizationPipelineError::Cancelled)?;
-        let plane_image = reader
-            .read_region_image(ImageRegion::new(
-                u64::try_from(plane)
-                    .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?,
-                0,
-                0,
-                width,
-                height,
-            ))
-            .map_err(LocalNormalizationPipelineError::ReadInput)?;
-        let start = plane
-            .checked_mul(plane_area)
-            .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-        let end = start
-            .checked_add(plane_area)
-            .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-        image.pixels_mut()[start..end].copy_from_slice(plane_image.pixels());
-        image.mask_mut().as_mut_slice()[start..end].copy_from_slice(plane_image.mask().as_slice());
-    }
-    Ok(image)
-}
-
 /// Computes the conservative peak reservation for one local-normalization job.
 ///
 /// This pure preflight uses the same accounting path as execution, allowing a
@@ -882,16 +840,15 @@ pub fn estimate_local_normalization_peak_bytes(
     dimensions: Dimensions,
     parameters: LocalNormalizationParameters,
 ) -> Result<usize, LocalNormalizationPipelineError> {
-    let samples = dimensions.pixel_count();
     let plane_samples = dimensions
         .width()
         .checked_mul(dimensions.height())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    let image_bytes = samples
+    let plane_image_bytes = plane_samples
         .checked_mul(size_of::<f64>() + size_of::<PixelFlags>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    let plane_decode_bytes = plane_samples
-        .checked_mul(size_of::<f64>() + size_of::<PixelFlags>() + size_of::<SampleStatus>())
+    let decode_status_bytes = plane_samples
+        .checked_mul(size_of::<SampleStatus>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
     let sampling = parameters.sampling();
     let columns = dimensions
@@ -916,6 +873,10 @@ pub fn estimate_local_normalization_peak_bytes(
         .checked_mul(parameters.sampling().maximum_samples_per_cell())
         .and_then(|count| count.checked_mul(64))
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let retained_diagnostic_bytes = active_cells
+        .checked_mul(dimensions.planes())
+        .and_then(|count| count.checked_mul(256))
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
     let quality_bytes = parameters
         .detection()
         .maximum_candidates()
@@ -926,10 +887,11 @@ pub fn estimate_local_normalization_peak_bytes(
         .maximum_pairwise_slopes()
         .checked_mul(size_of::<f64>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    image_bytes
-        .checked_mul(4)
-        .and_then(|bytes| bytes.checked_add(plane_decode_bytes))
+    plane_image_bytes
+        .checked_mul(3)
+        .and_then(|bytes| bytes.checked_add(decode_status_bytes))
         .and_then(|bytes| bytes.checked_add(retained_sample_bytes))
+        .and_then(|bytes| bytes.checked_add(retained_diagnostic_bytes))
         .and_then(|bytes| bytes.checked_add(quality_bytes))
         .and_then(|bytes| bytes.checked_add(slope_bytes))
         .and_then(|bytes| bytes.checked_add(STREAM_WRITER_BUFFER_BYTES))
@@ -1008,6 +970,7 @@ mod tests {
     use std::fs::{self, File};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use aether_core::ScientificImage;
     use aether_fits::{FitsProvenanceError, write_f64_primary_atomic_new};
     use aether_localnorm::{
         LocalFitParameters, ProtectionParameters, SamplingGridParameters, SurfaceParameters,
@@ -1092,9 +1055,14 @@ mod tests {
         let exact =
             estimate_local_normalization_peak_bytes(dimensions, make_parameters(exact_grid)?)?;
         let loose = estimate_local_normalization_peak_bytes(dimensions, make_parameters(262_144)?)?;
+        let rgb = estimate_local_normalization_peak_bytes(
+            Dimensions::new(4_144, 2_822, 3)?,
+            make_parameters(262_144)?,
+        )?;
 
         assert_eq!(exact, loose);
         assert!(loose < 2 * 1_024 * 1_024 * 1_024);
+        assert!(rgb < loose * 2);
         assert!(matches!(
             estimate_local_normalization_peak_bytes(dimensions, make_parameters(exact_grid - 1)?),
             Err(LocalNormalizationPipelineError::Sampling(

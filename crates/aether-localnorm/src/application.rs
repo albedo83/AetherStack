@@ -19,6 +19,22 @@ pub struct LocalApplicationEvidence {
 }
 
 impl LocalApplicationEvidence {
+    /// Adds disjoint plane evidence with checked accounting.
+    #[must_use]
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        Some(Self {
+            transformed: self.transformed.checked_add(other.transformed)?,
+            inherited_masked: self.inherited_masked.checked_add(other.inherited_masked)?,
+            non_finite_input: self.non_finite_input.checked_add(other.non_finite_input)?,
+            unsupported_surface: self
+                .unsupported_surface
+                .checked_add(other.unsupported_surface)?,
+            non_finite_result: self
+                .non_finite_result
+                .checked_add(other.non_finite_result)?,
+        })
+    }
+
     /// Clear finite samples transformed successfully.
     #[must_use]
     pub const fn transformed(self) -> usize {
@@ -221,6 +237,38 @@ mod tests {
             &fits,
             SurfaceParameters::new(1, 1, 1, maximum_distance)?,
         )?)
+    }
+
+    #[test]
+    fn plane_evidence_combines_without_losing_categories() -> TestResult {
+        let first = LocalApplicationEvidence {
+            transformed: 5,
+            inherited_masked: 1,
+            non_finite_input: 2,
+            unsupported_surface: 3,
+            non_finite_result: 4,
+        };
+        let Some(combined) = first.checked_add(first) else {
+            return Err("small evidence counts unexpectedly overflowed".into());
+        };
+        assert_eq!(combined.transformed(), 10);
+        assert_eq!(combined.inherited_masked(), 2);
+        assert_eq!(combined.non_finite_input(), 4);
+        assert_eq!(combined.unsupported_surface(), 6);
+        assert_eq!(combined.non_finite_result(), 8);
+        assert_eq!(combined.classified_samples(), 30);
+        assert!(
+            LocalApplicationEvidence {
+                transformed: usize::MAX,
+                ..LocalApplicationEvidence::default()
+            }
+            .checked_add(LocalApplicationEvidence {
+                transformed: 1,
+                ..LocalApplicationEvidence::default()
+            })
+            .is_none()
+        );
+        Ok(())
     }
 
     #[test]
