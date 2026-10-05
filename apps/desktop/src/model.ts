@@ -9,6 +9,11 @@ import type {
   MasterPlanSettings,
 } from "./calibration-bridge.ts";
 import type {
+  LocalNormalizationProgress,
+  LocalNormalizationResult,
+  LocalNormalizationSettings,
+} from "./local-normalization-bridge.ts";
+import type {
   RegistrationDiagnostic,
   RegistrationExecutionProgress,
   RegistrationExecutionResult,
@@ -28,7 +33,8 @@ import type {
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
 
-export type WorkspaceView = "frames" | "calibration" | "registration";
+export type WorkspaceView =
+  "frames" | "calibration" | "registration" | "normalization";
 
 export type LightFrameView = "raw" | "calibrated";
 
@@ -230,6 +236,20 @@ export interface ReviewViewModel {
   readonly statisticsPanel: StatisticsPanel;
   readonly calibration: CalibrationViewModel;
   readonly registration: RegistrationViewModel;
+  readonly localNormalization: LocalNormalizationViewModel;
+}
+
+export interface LocalNormalizationViewModel {
+  readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+  readonly sourcePath: string | null;
+  readonly referencePath: string | null;
+  readonly outputPath: string | null;
+  readonly groupId: string;
+  readonly memoryLimitBytes: number;
+  readonly settings: LocalNormalizationSettings;
+  readonly progress: LocalNormalizationProgress | null;
+  readonly result: LocalNormalizationResult | null;
+  readonly message: string;
 }
 
 export interface RegistrationFrameOption {
@@ -349,6 +369,16 @@ export type SortDirection = "ascending" | "descending";
 
 export interface ReviewActions {
   readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
+  readonly onSelectLocalNormalizationSource: () => void;
+  readonly onSelectLocalNormalizationReference: () => void;
+  readonly onSelectLocalNormalizationOutput: () => void;
+  readonly onUpdateLocalNormalizationSettings: (
+    settings: LocalNormalizationSettings,
+  ) => void;
+  readonly onUpdateLocalNormalizationMemoryLimit: (bytes: number) => void;
+  readonly onUpdateLocalNormalizationGroupId: (groupId: string) => void;
+  readonly onExecuteLocalNormalization: () => void;
+  readonly onCancelLocalNormalization: () => void;
   readonly onSelectRegistrationReference: (frameId: string) => void;
   readonly onSelectRegistrationSource: (frameId: string) => void;
   readonly onSelectRegistrationGeometryModel: (

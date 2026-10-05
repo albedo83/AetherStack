@@ -10,6 +10,10 @@ import type {
   RegisteredStackSourceVerification,
 } from "./registration-bridge.ts";
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
+import {
+  localNormalizationMarkup,
+  mountLocalNormalizationPanel,
+} from "./local-normalization-screen.ts";
 import type {
   FrameSelectionFrameResult,
   FrameSelectionMetric,
@@ -169,6 +173,10 @@ export function mountReviewScreen(
     registrationWorkspace: required<HTMLElement>(
       root,
       "[data-registration-workspace]",
+    ),
+    normalizationWorkspace: required<HTMLElement>(
+      root,
+      "[data-normalization-workspace]",
     ),
     registrationReference: required<HTMLSelectElement>(
       root,
@@ -726,6 +734,10 @@ export function mountReviewScreen(
     ),
     liveRegion: required<HTMLElement>(root, "[data-live-region]"),
   };
+  const localNormalizationPanel = mountLocalNormalizationPanel(
+    elements.normalizationWorkspace,
+    actions,
+  );
 
   let model = initialModel;
   let pendingRejectFrameId: string | null = null;
@@ -876,7 +888,8 @@ export function mountReviewScreen(
       if (
         workspace === "frames" ||
         workspace === "calibration" ||
-        workspace === "registration"
+        workspace === "registration" ||
+        workspace === "normalization"
       ) {
         actions.onSelectWorkspace(workspace);
       }
@@ -1455,7 +1468,9 @@ export function mountReviewScreen(
       model.calibration.lightExecution.state === "running" ||
       model.calibration.lightExecution.state === "cancelling" ||
       model.registration.execution.state === "running" ||
-      model.registration.execution.state === "cancelling";
+      model.registration.execution.state === "cancelling" ||
+      model.localNormalization.state === "running" ||
+      model.localNormalization.state === "cancelling";
     const decisionBusy = model.decisionPending || importing || masterBusy;
     const decisionsAvailable = reviewCommandsAvailable(model);
     elements.framesWorkspace.hidden = model.activeWorkspace !== "frames";
@@ -1463,6 +1478,8 @@ export function mountReviewScreen(
       model.activeWorkspace !== "calibration";
     elements.registrationWorkspace.hidden =
       model.activeWorkspace !== "registration";
+    elements.normalizationWorkspace.hidden =
+      model.activeWorkspace !== "normalization";
     for (const item of elements.workspaceNavigation) {
       const selected = item.dataset.workspace === model.activeWorkspace;
       item.toggleAttribute("aria-current", selected);
@@ -1484,6 +1501,7 @@ export function mountReviewScreen(
       sourceEvidenceQuery,
       sourceEvidenceLimit,
     );
+    localNormalizationPanel.update(model.localNormalization);
     syncStepperStates(root);
     elements.importSession.disabled = cancellingImport || masterBusy;
     elements.importSession.classList.toggle("button--danger", importing);
@@ -1676,6 +1694,7 @@ export function mountReviewScreen(
   };
 
   const destroy = (): void => {
+    localNormalizationPanel.destroy();
     root.removeEventListener("click", onClick);
     root.removeEventListener("change", onChange);
     root.removeEventListener("input", onInput);
@@ -2695,11 +2714,15 @@ function renderRegistration(
   const stackBusy =
     registration.stack.state === "running" ||
     registration.stack.state === "cancelling";
+  const normalizationBusy =
+    model.localNormalization.state === "running" ||
+    model.localNormalization.state === "cancelling";
   const running =
     registration.state === "running" ||
     registration.planState === "building" ||
     executionBusy ||
-    stackBusy;
+    stackBusy ||
+    normalizationBusy;
   const pairReady =
     !!reference?.sourcePath &&
     !!source?.sourcePath &&
@@ -3721,7 +3744,11 @@ function renderCalibration(
   const registrationBusy =
     model.registration.execution.state === "running" ||
     model.registration.execution.state === "cancelling";
-  const executionBusy = masterBusy || lightBusy || registrationBusy;
+  const normalizationBusy =
+    model.localNormalization.state === "running" ||
+    model.localNormalization.state === "cancelling";
+  const executionBusy =
+    masterBusy || lightBusy || registrationBusy || normalizationBusy;
   elements.refreshMasterPlan.disabled =
     calibration.state === "loading" ||
     !model.reviewSessionReady ||
@@ -4286,6 +4313,7 @@ function shellMarkup(): string {
           ${navigationItem("frames", "Frames", "▦", true)}
           ${navigationItem("calibration", "Calibration", "◫", true)}
           ${navigationItem("registration", "Registration", "⌖", true)}
+          ${navigationItem("normalization", "Normalize", "≋", true)}
           ${navigationItem("run", "Run", "▷", false)}
           ${navigationItem("results", "Results", "◉", false)}
         </nav>
@@ -4769,6 +4797,8 @@ function shellMarkup(): string {
             </section>
           </div>
         </section>
+
+        ${localNormalizationMarkup()}
 
         <section class="calibration-workspace" aria-labelledby="calibration-heading" data-calibration-workspace hidden>
           <div class="workspace-heading calibration-heading">

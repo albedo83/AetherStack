@@ -18,6 +18,14 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
   document.body.append(root);
   const actions: ReviewActions = {
     onSelectWorkspace: vi.fn(),
+    onSelectLocalNormalizationSource: vi.fn(),
+    onSelectLocalNormalizationReference: vi.fn(),
+    onSelectLocalNormalizationOutput: vi.fn(),
+    onUpdateLocalNormalizationSettings: vi.fn(),
+    onUpdateLocalNormalizationMemoryLimit: vi.fn(),
+    onUpdateLocalNormalizationGroupId: vi.fn(),
+    onExecuteLocalNormalization: vi.fn(),
+    onCancelLocalNormalization: vi.fn(),
     onSelectRegistrationReference: vi.fn(),
     onSelectRegistrationSource: vi.fn(),
     onSelectRegistrationGeometryModel: vi.fn(),
@@ -73,6 +81,116 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
 }
 
 describe("frame review workspace", () => {
+  it("presents a clear local-normalization transaction and native file choices", () => {
+    const { root, actions, controller } = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+    });
+    const workspace = root.querySelector<HTMLElement>(
+      "[data-normalization-workspace]",
+    );
+    expect(workspace?.hidden).toBe(false);
+    expect(
+      getByRole(workspace!, "heading", {
+        name: "Match the sky, preserve the signal",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(getByRole(workspace!, "button", { name: "Choose source" }));
+    fireEvent.click(
+      getByRole(workspace!, "button", { name: "Choose reference" }),
+    );
+    fireEvent.click(getByRole(workspace!, "button", { name: "Choose output" }));
+    expect(actions.onSelectLocalNormalizationSource).toHaveBeenCalledOnce();
+    expect(actions.onSelectLocalNormalizationReference).toHaveBeenCalledOnce();
+    expect(actions.onSelectLocalNormalizationOutput).toHaveBeenCalledOnce();
+
+    const execute = getByRole(workspace!, "button", {
+      name: "Normalize image",
+    }) as HTMLButtonElement;
+    expect(execute.disabled).toBe(true);
+    controller.update({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+      localNormalization: {
+        ...demoReviewModel.localNormalization,
+        sourcePath: "/session/source.fits",
+        referencePath: "/session/reference.fits",
+        outputPath: "/session/normalized.fits",
+      },
+    });
+    expect(execute.disabled).toBe(false);
+    fireEvent.click(execute);
+    expect(actions.onExecuteLocalNormalization).toHaveBeenCalledOnce();
+  });
+
+  it("routes the Normalize workflow navigation", () => {
+    const { root, actions } = fixture();
+    fireEvent.click(getByRole(root, "button", { name: "Normalize" }));
+    expect(actions.onSelectWorkspace).toHaveBeenCalledWith("normalization");
+  });
+
+  it("exposes all plan-bound controls and renders scientific evidence", () => {
+    const { root, actions, controller } = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+    });
+    const workspace = root.querySelector<HTMLElement>(
+      "[data-normalization-workspace]",
+    )!;
+    expect(
+      workspace.querySelectorAll<HTMLInputElement>("[data-localnorm-setting]"),
+    ).toHaveLength(27);
+    const detection = workspace.querySelector<HTMLInputElement>(
+      '[data-localnorm-setting="detectionSigma"]',
+    )!;
+    detection.value = "7.5";
+    fireEvent.change(detection);
+    expect(actions.onUpdateLocalNormalizationSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ detectionSigma: 7.5 }),
+    );
+
+    controller.update({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+      localNormalization: {
+        ...demoReviewModel.localNormalization,
+        state: "completed",
+        result: {
+          planSha256: "a".repeat(64),
+          parametersSha256: "b".repeat(64),
+          outputPath: "/session/normalized.fits",
+          width: 4_144,
+          height: 2_822,
+          planes: 3,
+          memoryLimitBytes: 2_147_483_648,
+          peakReservedBytes: 1_073_741_824,
+          samplesWritten: 35_087_124,
+          substitutedSamples: 0,
+          bytesWritten: 280_700_000,
+          transformedSamples: 35_087_124,
+          inheritedMaskedSamples: 0,
+          nonFiniteInputSamples: 0,
+          unsupportedSurfaceSamples: 0,
+          nonFiniteResultSamples: 0,
+          measuredSources: 12_000,
+          protectedPixels: 900_000,
+          validControlPoints: 759,
+          rejectedCells: 4,
+        },
+        message: "Published atomically",
+      },
+    });
+    expect(workspace.querySelector("[data-localnorm-stars]")?.textContent).toBe(
+      "12,000",
+    );
+    expect(workspace.querySelector("[data-localnorm-plan]")?.textContent).toBe(
+      "a".repeat(64),
+    );
+    expect(
+      workspace.querySelector("[data-localnorm-publication]")?.textContent,
+    ).toContain("35,087,124 samples");
+  });
+
   it("offers an explicit projective geometry choice", () => {
     const { root, actions } = fixture({
       ...demoReviewModel,
@@ -2451,5 +2569,22 @@ describe("frame review workspace", () => {
       },
     });
     expect(registrationReport.violations).toEqual([]);
+    registration.controller.destroy();
+    registration.root.remove();
+
+    const normalization = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+    });
+    const advanced = normalization.root.querySelector<HTMLDetailsElement>(
+      ".normalization-advanced",
+    );
+    if (advanced) advanced.open = true;
+    const normalizationReport = await axe.run(normalization.root, {
+      rules: {
+        "color-contrast": { enabled: false },
+      },
+    });
+    expect(normalizationReport.violations).toEqual([]);
   });
 });

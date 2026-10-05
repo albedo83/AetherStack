@@ -17,6 +17,14 @@ import {
   bindCalibratedLightFrames,
   frameArtifactKey,
 } from "./calibrated-review.ts";
+import {
+  cancelLocalNormalization,
+  executeLocalNormalization,
+  selectLocalNormalizationOutput,
+  selectLocalNormalizationReference,
+  selectLocalNormalizationSource,
+  type LocalNormalizationProgress,
+} from "./local-normalization-bridge.ts";
 import { demoReviewModel } from "./demo-data.ts";
 import type {
   FitsStatistics,
@@ -155,6 +163,7 @@ let lightExecutionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
+let localNormalizationTicket = 0;
 let registeredStackPreviewTicket = 0;
 let stackPixelTicket = 0;
 let stackReportTicket = 0;
@@ -175,6 +184,60 @@ let registeredStackDiagnosticPreviewResource: PreviewResource | null = null;
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
     selectWorkspace(workspace);
+  },
+  onSelectLocalNormalizationSource() {
+    void chooseLocalNormalizationPath("source");
+  },
+  onSelectLocalNormalizationReference() {
+    void chooseLocalNormalizationPath("reference");
+  },
+  onSelectLocalNormalizationOutput() {
+    void chooseLocalNormalizationPath("output");
+  },
+  onUpdateLocalNormalizationSettings(settings) {
+    if (isLocalNormalizationActive()) return;
+    localNormalizationTicket += 1;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        settings,
+        state: "idle",
+        progress: null,
+        result: null,
+        message: "Scientific controls changed · ready for a fresh sealed plan",
+      },
+    });
+  },
+  onUpdateLocalNormalizationMemoryLimit(memoryLimitBytes) {
+    if (isLocalNormalizationActive()) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        memoryLimitBytes,
+        result: null,
+        message: "Memory ceiling updated",
+      },
+    });
+  },
+  onUpdateLocalNormalizationGroupId(groupId) {
+    if (isLocalNormalizationActive()) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        groupId,
+        result: null,
+        message: "Output identity updated",
+      },
+    });
+  },
+  onExecuteLocalNormalization() {
+    void runLocalNormalization();
+  },
+  onCancelLocalNormalization() {
+    void cancelLocalNormalizationExecution();
   },
   onSelectRegistrationReference(frameId) {
     selectRegistrationFrame("reference", frameId);
@@ -410,7 +473,8 @@ async function importSession(): Promise<void> {
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -800,6 +864,164 @@ function selectWorkspace(workspace: WorkspaceView): void {
   }
 }
 
+function isLocalNormalizationActive(): boolean {
+  return (
+    model.localNormalization.state === "running" ||
+    model.localNormalization.state === "cancelling"
+  );
+}
+
+function isLocalNormalizationCancelling(): boolean {
+  return model.localNormalization.state === "cancelling";
+}
+
+async function chooseLocalNormalizationPath(
+  kind: "source" | "reference" | "output",
+): Promise<void> {
+  if (isLocalNormalizationActive()) return;
+  const ticket = ++localNormalizationTicket;
+  const path =
+    kind === "source"
+      ? await selectLocalNormalizationSource()
+      : kind === "reference"
+        ? await selectLocalNormalizationReference()
+        : await selectLocalNormalizationOutput();
+  if (!path || ticket !== localNormalizationTicket) return;
+  update({
+    ...model,
+    localNormalization: {
+      ...model.localNormalization,
+      sourcePath:
+        kind === "source" ? path : model.localNormalization.sourcePath,
+      referencePath:
+        kind === "reference" ? path : model.localNormalization.referencePath,
+      outputPath:
+        kind === "output" ? path : model.localNormalization.outputPath,
+      state: "idle",
+      progress: null,
+      result: null,
+      message: `${kind === "source" ? "Source" : kind === "reference" ? "Reference" : "Output"} selected · execution plan will be sealed natively`,
+    },
+  });
+}
+
+async function runLocalNormalization(): Promise<void> {
+  const normalization = model.localNormalization;
+  if (
+    isLocalNormalizationActive() ||
+    isRegistrationWorkActive() ||
+    isActiveExecutionState(model.calibration.execution.state) ||
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    !normalization.sourcePath ||
+    !normalization.referencePath ||
+    !normalization.outputPath ||
+    normalization.groupId.trim().length === 0
+  ) {
+    return;
+  }
+  const ticket = ++localNormalizationTicket;
+  update({
+    ...model,
+    localNormalization: {
+      ...normalization,
+      state: "running",
+      progress: null,
+      result: null,
+      message: "Fingerprinting both FITS inputs before execution…",
+    },
+  });
+  const onProgress = (progress: LocalNormalizationProgress): void => {
+    if (ticket !== localNormalizationTicket || !isLocalNormalizationActive())
+      return;
+    const state = model.localNormalization.state;
+    const units =
+      progress.totalUnits === null
+        ? ""
+        : ` · ${progress.completedUnits}/${progress.totalUnits}`;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        state,
+        progress,
+        message: `Native ${progress.stage}${units}`,
+      },
+    });
+  };
+  try {
+    const result = await executeLocalNormalization(
+      {
+        sourcePath: normalization.sourcePath,
+        referencePath: normalization.referencePath,
+        outputPath: normalization.outputPath,
+        groupId: normalization.groupId.trim(),
+        memoryLimitBytes: normalization.memoryLimitBytes,
+        settings: normalization.settings,
+      },
+      onProgress,
+    );
+    if (ticket !== localNormalizationTicket) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        state: "completed",
+        result,
+        message: `Published ${result.samplesWritten.toLocaleString()} normalized samples atomically`,
+      },
+    });
+  } catch {
+    if (ticket !== localNormalizationTicket) return;
+    const cancelled = model.localNormalization.state === "cancelling";
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        state: cancelled ? "idle" : "error",
+        result: null,
+        message: cancelled
+          ? "Normalization cancelled · no output was published"
+          : "Normalization failed native validation · inputs remain unchanged",
+      },
+    });
+  }
+}
+
+async function cancelLocalNormalizationExecution(): Promise<void> {
+  if (model.localNormalization.state !== "running") return;
+  update({
+    ...model,
+    localNormalization: {
+      ...model.localNormalization,
+      state: "cancelling",
+      message: "Cancelling at the next bounded checkpoint…",
+    },
+  });
+  try {
+    const requested = await cancelLocalNormalization();
+    if (!requested && isLocalNormalizationCancelling()) {
+      update({
+        ...model,
+        localNormalization: {
+          ...model.localNormalization,
+          state: "error",
+          message: "No active normalization transaction was found",
+        },
+      });
+    }
+  } catch {
+    if (!isLocalNormalizationCancelling()) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        state: "error",
+        message: "Cancellation request failed",
+      },
+    });
+  }
+}
+
 function selectRegistrationFrame(
   role: "reference" | "source",
   frameId: string,
@@ -893,7 +1115,8 @@ async function analyzeRegistration(): Promise<void> {
     !reference?.sourcePath ||
     !source?.sourcePath ||
     reference.id === source.id ||
-    model.registration.state === "running"
+    model.registration.state === "running" ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -1127,7 +1350,8 @@ async function executeRegistration(): Promise<void> {
     execution.state === "running" ||
     execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.execution.state) ||
-    isActiveExecutionState(model.calibration.lightExecution.state)
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -1336,6 +1560,7 @@ async function executeStack(): Promise<void> {
     isActiveExecutionState(model.registration.execution.state) ||
     isActiveExecutionState(model.calibration.execution.state) ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isLocalNormalizationActive() ||
     (settings.estimator === "weighted_mean" && !weightPreflight.ready)
   ) {
     return;
@@ -2374,7 +2599,8 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
     model.calibration.execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -2430,7 +2656,8 @@ async function executeMasters(): Promise<void> {
     execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -2447,7 +2674,8 @@ async function executeMasters(): Promise<void> {
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -2577,7 +2805,8 @@ async function executeLights(): Promise<void> {
     execution.state === "cancelling" ||
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -2591,7 +2820,8 @@ async function executeLights(): Promise<void> {
     importedSession !== selectedSession ||
     model.calibration.plan?.planSha256 !== selectedMasterPlanSha256 ||
     model.calibration.plan?.lightPlan?.planSha256 !== selectedLightPlanSha256 ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -2810,7 +3040,8 @@ async function refreshMasterPlan(): Promise<void> {
     model.calibration.execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -3204,7 +3435,8 @@ async function applyAutomaticSelection(): Promise<void> {
     !plan ||
     model.frameSelection.state !== "ready" ||
     model.decisionPending ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   ) {
     return;
   }
@@ -3705,6 +3937,9 @@ function disposeRuntimeResources(): void {
   if (isActiveExecutionState(model.registration.stack.state)) {
     void cancelRegisteredStack();
   }
+  if (isLocalNormalizationActive()) {
+    void cancelLocalNormalization();
+  }
   stopBlinkTimer();
   clearPreviewResources();
   clearRegistrationPreviewResources();
@@ -3720,7 +3955,12 @@ async function setDecision(
   state: Exclude<ReviewState, "undecided">,
   reason: ReviewRejectionReason | null,
 ): Promise<void> {
-  if (!importedSession || model.decisionPending || isRegistrationWorkActive())
+  if (
+    !importedSession ||
+    model.decisionPending ||
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
+  )
     return;
   if (state === "accepted") {
     await runDecisionTransaction(() =>
@@ -3735,7 +3975,12 @@ async function setDecision(
 }
 
 async function clearDecision(frameId: string): Promise<void> {
-  if (!importedSession || model.decisionPending || isRegistrationWorkActive())
+  if (
+    !importedSession ||
+    model.decisionPending ||
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
+  )
     return;
   await runDecisionTransaction(() =>
     applyReviewDecision(frameId, { kind: "clear" }),
@@ -3747,7 +3992,8 @@ async function undoDecision(): Promise<void> {
     !importedSession ||
     model.decisionPending ||
     !model.canUndo ||
-    isRegistrationWorkActive()
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
   )
     return;
   await runDecisionTransaction(undoReviewDecision);

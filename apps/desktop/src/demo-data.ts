@@ -1,4 +1,5 @@
 import type { ReviewViewModel } from "./model.ts";
+import { defaultLocalNormalizationSettings } from "./local-normalization-bridge.ts";
 
 const frameId = (digit: string): string => digit.repeat(64);
 
@@ -80,6 +81,18 @@ export const demoReviewModel: ReviewViewModel = {
     state: "idle",
     statistics: null,
     message: null,
+  },
+  localNormalization: {
+    state: "idle",
+    sourcePath: null,
+    referencePath: null,
+    outputPath: null,
+    groupId: "light-local-normalization",
+    memoryLimitBytes: 2 * 1_024 * 1_024 * 1_024,
+    settings: defaultLocalNormalizationSettings,
+    progress: null,
+    result: null,
+    message: "Choose a calibrated source and a stable reference image",
   },
   registration: {
     state: "idle",

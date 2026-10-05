@@ -1850,6 +1850,14 @@ safety reasoning. They do not narrate obvious syntax.
      typed progress without exposing private image data to the webview. A desktop
      end-to-end test locks multiplane execution, atomic publication, resource
      evidence, and the stable progress contract before the inspection UI is added.
+167. Expose local normalization as a dedicated desktop workflow. A quality-first
+     dark instrument panel separates source, reference, and create-new output,
+     keeps the primary action gated until the transaction is complete, and moves
+     all 28 plan-bound controls into a structured advanced surface. Native file
+     dialogs, cooperative cancellation, progress, resource evidence, and both
+     canonical seals are wired end to end. Interaction, build, and accessibility
+     tests cover the workflow; spatial sample and residual-map visualization
+     remains a later inspection milestone.
 
 ## 11. Stable-release definition
 
