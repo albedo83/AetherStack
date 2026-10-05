@@ -13,6 +13,13 @@ use aether_core::CompensatedSum;
 use aether_metadata::BayerPattern;
 use aether_registration::{CoordinateError, ImagePoint, ProjectiveTransform};
 
+mod sample;
+
+pub use sample::{
+    DetectorSample, DrizzleOutputBounds, DrizzleSampleExclusion, DrizzleSampleOutcome,
+    deposit_cfa_sample,
+};
+
 /// Stable identity of the strict detector-footprint projection contract.
 pub const DRIZZLE_FOOTPRINT_ALGORITHM_ID: &str = "drizzle-footprint-projective-f64-v1";
 

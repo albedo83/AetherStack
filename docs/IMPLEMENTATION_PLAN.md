@@ -1947,6 +1947,11 @@ safety reasoning. They do not narrate obvious syntax.
      or blue planes; unsupported mosaics fail explicitly and no chromatic value
      is interpolated. Tests cover every 2 × 2 phase and prove that a rotated and
      translated footprint retains its original measured channel and flux.
+182. Exclude defective Drizzle samples before geometry. A typed detector-sample
+     boundary retains all known and unknown mask bits, distinguishes pre-existing
+     masks from unflagged non-finite values, adds `INVALID` only where required,
+     and deposits neither flux nor weight for either category. Tests prove that
+     excluded samples bypass even unsupported CFA geometry and allocations.
 
 ## 11. Stable-release definition
 

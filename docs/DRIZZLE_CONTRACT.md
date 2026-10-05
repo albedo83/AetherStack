@@ -60,5 +60,15 @@ cannot change the physical filter that measured a sample. The two green phases
 share the canonical green output plane. Unknown mosaics fail explicitly, and no
 missing chromatic sample is interpolated during deposition.
 
-Input masks, tile ownership, accumulation maps, and atomic FITS publication
-remain subsequent milestones.
+## Sample eligibility
+
+Quality is decided before CFA routing, transformation, clipping, or allocation.
+A sample carrying any known or future mask bit deposits neither flux nor weight
+and retains every original bit in exclusion evidence. An unflagged NaN or
+infinity is excluded separately and gains the `INVALID` bit. Only clear finite
+samples reach the footprint projector. This precedence makes hot, cold,
+saturated, missing, rejected, invalid, and forward-compatible defects auditable
+without letting them consume geometry work.
+
+Tile ownership, accumulation maps, and atomic FITS publication remain subsequent
+milestones.
