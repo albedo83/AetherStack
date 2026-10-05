@@ -790,9 +790,26 @@ pub fn estimate_local_normalization_peak_bytes(
     let plane_decode_bytes = plane_samples
         .checked_mul(size_of::<f64>() + size_of::<PixelFlags>() + size_of::<SampleStatus>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    let retained_sample_bytes = parameters
-        .sampling()
-        .maximum_cells()
+    let sampling = parameters.sampling();
+    let columns = dimensions
+        .width()
+        .checked_add(sampling.cell_width() - 1)
+        .map(|value| value / sampling.cell_width())
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let rows = dimensions
+        .height()
+        .checked_add(sampling.cell_height() - 1)
+        .map(|value| value / sampling.cell_height())
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let active_cells = columns
+        .checked_mul(rows)
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    if active_cells > sampling.maximum_cells() {
+        return Err(LocalNormalizationPipelineError::Sampling(
+            SamplingError::CellLimitExceeded,
+        ));
+    }
+    let retained_sample_bytes = active_cells
         .checked_mul(parameters.sampling().maximum_samples_per_cell())
         .and_then(|count| count.checked_mul(64))
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
@@ -944,6 +961,44 @@ mod tests {
             PathBuf::from(path),
             SourceFingerprint::new(1, digest.to_string().repeat(64))?,
         ))
+    }
+
+    #[test]
+    fn peak_estimate_uses_active_geometry_instead_of_the_cell_ceiling() -> TestResult {
+        let dimensions = Dimensions::new(4_144, 2_822, 1)?;
+        let detection = StarMeasurementParameters::new(
+            BackgroundParameters::new(3.0, 8, 1_024)?,
+            6.0,
+            2.0,
+            6,
+            4,
+            6,
+            24_576,
+            None,
+        )?;
+        let make_parameters = |maximum_cells| -> Result<_, Box<dyn Error>> {
+            Ok(LocalNormalizationParameters::new(
+                detection,
+                ProtectionParameters::new(1.5, 2.0, 2, 24, 24_576, 64_000_000)?,
+                SamplingGridParameters::new(128, 128, 4_096, maximum_cells)?,
+                LocalFitParameters::new(256, 4_096, 1_000_000, 1.0e-12)?,
+                SurfaceParameters::new(16, 4, 16, 1_024.0)?,
+            ))
+        };
+        let exact_grid = 33 * 23;
+        let exact =
+            estimate_local_normalization_peak_bytes(dimensions, make_parameters(exact_grid)?)?;
+        let loose = estimate_local_normalization_peak_bytes(dimensions, make_parameters(262_144)?)?;
+
+        assert_eq!(exact, loose);
+        assert!(loose < 2 * 1_024 * 1_024 * 1_024);
+        assert!(matches!(
+            estimate_local_normalization_peak_bytes(dimensions, make_parameters(exact_grid - 1)?),
+            Err(LocalNormalizationPipelineError::Sampling(
+                SamplingError::CellLimitExceeded
+            ))
+        ));
+        Ok(())
     }
 
     fn execution_parameters() -> Result<LocalNormalizationParameters, Box<dyn Error>> {
