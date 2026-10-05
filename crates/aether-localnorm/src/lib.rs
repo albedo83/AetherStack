@@ -27,8 +27,8 @@ pub use sampling::{
     SamplingError, SamplingGridParameters, SpatialSample, fit_local_grid, sample_local_grid,
 };
 pub use surface::{
-    LOCAL_SURFACE_ALGORITHM_ID, LocalCoefficientSurface, SurfaceError, SurfaceEvaluation,
-    SurfaceParameters, build_local_surface,
+    LOCAL_SURFACE_ALGORITHM_ID, LocalCoefficientSurface, SurfaceControlPoint, SurfaceError,
+    SurfaceEvaluation, SurfaceParameters, build_local_surface,
 };
 
 /// Stable identity of the first bounded Theil-Sen local affine fit.

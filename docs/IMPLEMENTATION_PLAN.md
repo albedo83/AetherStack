@@ -1877,6 +1877,12 @@ safety reasoning. They do not narrate obvious syntax.
      controls before reporting required bytes and headroom. The workflow exposes
      this check explicitly and blocks execution after a verified insufficient
      ceiling without fingerprinting or decoding either complete image.
+171. Make local-normalization controls spatially inspectable. Every retained
+     cell model now exposes its deterministic plane, center coordinate, scale,
+     offset, and median absolute residual through the runtime result and typed
+     desktop boundary. The matched FITS viewer renders a toggleable vector map,
+     colors controls by plane, scales markers by residual, and exposes exact
+     values as accessible per-point descriptions without recomputing the fit.
 
 ## 11. Stable-release definition
 

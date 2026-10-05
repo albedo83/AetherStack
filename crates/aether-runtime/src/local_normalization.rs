@@ -224,8 +224,52 @@ impl Error for LocalNormalizationRequestError {
     }
 }
 
+/// One plane-specific surface control retained for diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalNormalizationControlPoint {
+    plane: usize,
+    x: f64,
+    y: f64,
+    scale: f64,
+    offset: f64,
+    median_absolute_residual: f64,
+}
+
+impl LocalNormalizationControlPoint {
+    /// Zero-based FITS plane.
+    #[must_use]
+    pub const fn plane(self) -> usize {
+        self.plane
+    }
+    /// Horizontal source-pixel coordinate.
+    #[must_use]
+    pub const fn x(self) -> f64 {
+        self.x
+    }
+    /// Vertical source-pixel coordinate.
+    #[must_use]
+    pub const fn y(self) -> f64 {
+        self.y
+    }
+    /// Local multiplier.
+    #[must_use]
+    pub const fn scale(self) -> f64 {
+        self.scale
+    }
+    /// Local offset.
+    #[must_use]
+    pub const fn offset(self) -> f64 {
+        self.offset
+    }
+    /// Median absolute residual in reference units.
+    #[must_use]
+    pub const fn median_absolute_residual(self) -> f64 {
+        self.median_absolute_residual
+    }
+}
+
 /// Exact evidence retained after one atomic local-normalization publication.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LocalNormalizationResult {
     dimensions: Dimensions,
     summary: FitsWriteSummary,
@@ -234,6 +278,7 @@ pub struct LocalNormalizationResult {
     protected_pixels: usize,
     valid_control_points: usize,
     rejected_cells: usize,
+    control_points: Vec<LocalNormalizationControlPoint>,
     peak_reserved_bytes: usize,
 }
 
@@ -278,6 +323,12 @@ impl LocalNormalizationResult {
     #[must_use]
     pub const fn rejected_cells(&self) -> usize {
         self.rejected_cells
+    }
+
+    /// Plane-specific controls in deterministic plane and grid order.
+    #[must_use]
+    pub fn control_points(&self) -> &[LocalNormalizationControlPoint] {
+        &self.control_points
     }
 
     /// Peak logical working set observed by the shared memory budget.
@@ -634,6 +685,7 @@ where
     let mut protected_pixels = 0_usize;
     let mut valid_control_points = 0_usize;
     let mut rejected_cells = 0_usize;
+    let mut control_points = Vec::new();
     for plane in 0..dimensions.planes() {
         cancellation
             .checkpoint()
@@ -664,6 +716,19 @@ where
             .map_err(LocalNormalizationPipelineError::Fitting)?;
         let surface = build_local_surface(&fits, parameters.surface())
             .map_err(LocalNormalizationPipelineError::Surface)?;
+        control_points
+            .try_reserve(surface.control_point_count())
+            .map_err(|_| LocalNormalizationPipelineError::WorkSizeOverflow)?;
+        control_points.extend(surface.control_points().iter().map(|point| {
+            LocalNormalizationControlPoint {
+                plane,
+                x: point.x(),
+                y: point.y(),
+                scale: point.scale(),
+                offset: point.offset(),
+                median_absolute_residual: point.median_absolute_residual(),
+            }
+        }));
         measured_sources = measured_sources
             .checked_add(quality.stars().len())
             .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
@@ -721,6 +786,7 @@ where
         protected_pixels,
         valid_control_points,
         rejected_cells,
+        control_points,
         peak_reserved_bytes: memory.peak(),
     })
 }
@@ -1269,6 +1335,13 @@ mod tests {
         assert_eq!(result.measured_sources(), 0);
         assert_eq!(result.protected_pixels(), 0);
         assert_eq!(result.valid_control_points(), 8);
+        assert_eq!(result.control_points().len(), 8);
+        assert!(
+            result
+                .control_points()
+                .iter()
+                .all(|point| point.median_absolute_residual() == 0.0)
+        );
         assert_eq!(result.rejected_cells(), 0);
         assert_eq!(result.peak_reserved_bytes(), budget.peak());
         assert_eq!(result.peak_reserved_bytes(), estimated_peak);

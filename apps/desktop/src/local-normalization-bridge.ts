@@ -121,6 +121,16 @@ export interface LocalNormalizationResult {
   readonly protectedPixels: number;
   readonly validControlPoints: number;
   readonly rejectedCells: number;
+  readonly controlPoints: readonly LocalNormalizationControlPoint[];
+}
+
+export interface LocalNormalizationControlPoint {
+  readonly plane: number;
+  readonly x: number;
+  readonly y: number;
+  readonly scale: number;
+  readonly offset: number;
+  readonly medianAbsoluteResidual: number;
 }
 
 const fitsFilters = [

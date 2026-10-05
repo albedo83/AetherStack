@@ -5024,6 +5024,18 @@ tr[data-state="blocked"] .association-state {
   box-shadow: inset 0 1px #e5f2ff;
 }
 
+.normalization-overlay-toggle {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  background: #0d141c;
+  border-left: 1px solid #2a3949;
+}
+
 .normalization-preview__surface {
   position: relative;
   display: grid;
@@ -5042,6 +5054,19 @@ tr[data-state="blocked"] .association-state {
   height: 100%;
   max-height: 460px;
   object-fit: contain;
+}
+
+.normalization-preview__surface svg {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 3px #000c);
+}
+
+.normalization-preview__surface svg circle {
+  vector-effect: non-scaling-stroke;
 }
 
 .normalization-preview__surface > div {

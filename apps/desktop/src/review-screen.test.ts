@@ -179,6 +179,16 @@ describe("frame review workspace", () => {
           protectedPixels: 900_000,
           validControlPoints: 759,
           rejectedCells: 4,
+          controlPoints: [
+            {
+              plane: 0,
+              x: 64,
+              y: 96,
+              scale: 1.002,
+              offset: -12.5,
+              medianAbsoluteResidual: 0.8,
+            },
+          ],
         },
         message: "Published atomically",
       },
@@ -225,6 +235,16 @@ describe("frame review workspace", () => {
           protectedPixels: 900_000,
           validControlPoints: 759,
           rejectedCells: 4,
+          controlPoints: [
+            {
+              plane: 0,
+              x: 64,
+              y: 96,
+              scale: 1.002,
+              offset: -12.5,
+              medianAbsoluteResidual: 0.8,
+            },
+          ],
         },
         previewState: "ready",
         previewView: "source",
@@ -239,6 +259,13 @@ describe("frame review workspace", () => {
     )!;
     expect(image.hidden).toBe(false);
     expect(image.alt).toBe("Source local-normalization preview");
+    const control = workspace.querySelector<SVGCircleElement>(
+      "[data-localnorm-control-overlay] circle",
+    );
+    expect(control?.getAttribute("cx")).toBe("64");
+    expect(control?.querySelector("title")?.textContent).toContain(
+      "median residual 0.8000",
+    );
     expect(sourceTab.getAttribute("aria-selected")).toBe("true");
     fireEvent.click(
       getByRole(workspace, "button", { name: "Calculate exact statistics" }),
@@ -273,6 +300,7 @@ describe("frame review workspace", () => {
           protectedPixels: 900_000,
           validControlPoints: 759,
           rejectedCells: 4,
+          controlPoints: [],
         },
         previewView: "source",
         statisticsState: "ready",

@@ -427,6 +427,18 @@ struct LocalNormalizationResponse {
     protected_pixels: usize,
     valid_control_points: usize,
     rejected_cells: usize,
+    control_points: Vec<LocalNormalizationControlPointResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalNormalizationControlPointResponse {
+    plane: usize,
+    x: f64,
+    y: f64,
+    scale: f64,
+    offset: f64,
+    median_absolute_residual: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2812,6 +2824,18 @@ where
         protected_pixels: result.protected_pixels(),
         valid_control_points: result.valid_control_points(),
         rejected_cells: result.rejected_cells(),
+        control_points: result
+            .control_points()
+            .iter()
+            .map(|point| LocalNormalizationControlPointResponse {
+                plane: point.plane(),
+                x: point.x(),
+                y: point.y(),
+                scale: point.scale(),
+                offset: point.offset(),
+                median_absolute_residual: point.median_absolute_residual(),
+            })
+            .collect(),
     })
 }
 
@@ -8210,6 +8234,15 @@ mod tests {
         assert_eq!(response.measured_sources, 0);
         assert_eq!(response.protected_pixels, 0);
         assert_eq!(response.valid_control_points, 8);
+        assert_eq!(response.control_points.len(), 8);
+        assert!(response.control_points.iter().all(|point| {
+            point.plane < 2
+                && point.x.is_finite()
+                && point.y.is_finite()
+                && point.scale.is_finite()
+                && point.offset.is_finite()
+                && point.median_absolute_residual == 0.0
+        }));
         assert_eq!(response.rejected_cells, 0);
         assert_eq!(events.first().map(|event| event.state), Some("started"));
         assert_eq!(events.last().map(|event| event.state), Some("completed"));

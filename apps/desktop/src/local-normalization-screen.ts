@@ -328,8 +328,10 @@ export function localNormalizationMarkup(): string {
               <button type="button" role="tab" data-localnorm-preview="reference" data-localnorm-action="preview-reference" aria-selected="false" disabled>Reference</button>
               <button type="button" role="tab" data-localnorm-preview="output" data-localnorm-action="preview-output" aria-selected="true" disabled>Normalized</button>
             </div>
+            <label class="normalization-overlay-toggle"><input type="checkbox" data-localnorm-overlay checked /> Control map</label>
             <div class="normalization-preview__surface" data-localnorm-preview-surface data-state="idle">
               <img data-localnorm-preview-image alt="" hidden />
+              <svg data-localnorm-control-overlay aria-label="Spatial normalization control map" hidden></svg>
               <div data-localnorm-preview-placeholder>The normalized result will appear after publication</div>
             </div>
             <div class="normalization-statistics" data-localnorm-statistics data-state="idle">
@@ -382,6 +384,7 @@ export function mountLocalNormalizationPanel(
   );
   const memory = required<HTMLInputElement>(root, "[data-localnorm-memory]");
   const groupId = required<HTMLInputElement>(root, "[data-localnorm-group]");
+  const overlay = required<HTMLInputElement>(root, "[data-localnorm-overlay]");
   const execute = required<HTMLButtonElement>(
     root,
     '[data-localnorm-action="execute"]',
@@ -443,6 +446,10 @@ export function mountLocalNormalizationPanel(
     if (event.target === groupId) {
       const value = groupId.value.trim();
       if (value.length > 0) actions.onUpdateLocalNormalizationGroupId(value);
+      return;
+    }
+    if (event.target === overlay) {
+      renderControlOverlay(root, current, overlay.checked);
       return;
     }
     if (event.target === saturationEnabled) {
@@ -529,6 +536,7 @@ export function mountLocalNormalizationPanel(
       ).dataset.state = model.state;
       renderEvidence(root, model);
       renderPreview(root, model);
+      renderControlOverlay(root, model, overlay.checked);
       renderStatistics(root, model);
     },
     destroy() {
@@ -536,6 +544,53 @@ export function mountLocalNormalizationPanel(
       root.removeEventListener("change", onChange);
     },
   };
+}
+
+function renderControlOverlay(
+  root: HTMLElement,
+  model: LocalNormalizationViewModel,
+  enabled: boolean,
+): void {
+  const svg = required<SVGSVGElement>(root, "[data-localnorm-control-overlay]");
+  const result = model.result;
+  svg.replaceChildren();
+  const hidden = !enabled || !result || !model.preview;
+  svg.toggleAttribute("hidden", hidden);
+  if (hidden || !result) return;
+  svg.setAttribute("viewBox", `0 0 ${result.width} ${result.height}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  const largestResidual = Math.max(
+    ...result.controlPoints.map((point) => point.medianAbsoluteResidual),
+    Number.EPSILON,
+  );
+  const colors = ["#6fc4ff", "#72e5a0", "#ff718f"] as const;
+  for (const point of result.controlPoints) {
+    const circle = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "circle",
+    );
+    const residualRatio = Math.min(
+      1,
+      point.medianAbsoluteResidual / largestResidual,
+    );
+    circle.setAttribute("cx", String(point.x));
+    circle.setAttribute("cy", String(point.y));
+    circle.setAttribute("r", String(10 + residualRatio * 18));
+    circle.setAttribute(
+      "fill",
+      colors[point.plane % colors.length] ?? colors[0],
+    );
+    circle.setAttribute("fill-opacity", String(0.35 + residualRatio * 0.45));
+    circle.setAttribute("stroke", "#f3f8ff");
+    circle.setAttribute("stroke-width", "3");
+    const title = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "title",
+    );
+    title.textContent = `Plane ${point.plane + 1} · scale ${point.scale.toPrecision(6)} · offset ${point.offset.toPrecision(6)} · median residual ${point.medianAbsoluteResidual.toPrecision(4)}`;
+    circle.append(title);
+    svg.append(circle);
+  }
 }
 
 function readSettings(

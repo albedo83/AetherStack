@@ -132,6 +132,12 @@ dimensions, validates the complete parameter set, and reports the required bytes
 plus configured headroom. Execution calls that exact estimator again, so the
 preview cannot drift from the reservation enforced by the memory budget.
 
+Successful execution retains every accepted cell model in deterministic plane
+and grid order. Diagnostic evidence contains the cell-center coordinate, robust
+scale and offset, and median absolute residual. This evidence is derived from
+the exact surface controls used for publication; consumers must not reconstruct
+or refit controls from display pixels.
+
 Execution can emit the shared machine-readable progress protocol under the
 stable `local-normalization` stage. Work becomes determinate after input headers
 agree: one unit covers complete decoding, one covers each plane, one covers
@@ -147,7 +153,7 @@ storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
 The current contract covers stellar protection, sampling, per-cell fitting,
-guarded coefficient interpolation, full-image application, provenance, and
-bounded atomic FITS publication. Additional non-stellar protected regions,
-optional surface regularization, and a lower-memory banded executor remain
-subsequent milestones.
+guarded coefficient interpolation, inspectable spatial controls, full-image
+application, provenance, and bounded atomic FITS publication. Additional
+non-stellar protected regions, optional surface regularization, a lower-memory
+banded executor, and a dense residual raster remain subsequent milestones.

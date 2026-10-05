@@ -68,18 +68,48 @@ impl SurfaceParameters {
     }
 }
 
+/// Inspectable cell model retained by a local coefficient surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ControlPoint {
+pub struct SurfaceControlPoint {
     x: f64,
     y: f64,
     scale: f64,
     offset: f64,
+    median_absolute_residual: f64,
+}
+
+impl SurfaceControlPoint {
+    /// Horizontal cell-center coordinate in source pixels.
+    #[must_use]
+    pub const fn x(self) -> f64 {
+        self.x
+    }
+    /// Vertical cell-center coordinate in source pixels.
+    #[must_use]
+    pub const fn y(self) -> f64 {
+        self.y
+    }
+    /// Robust source-to-reference multiplier.
+    #[must_use]
+    pub const fn scale(self) -> f64 {
+        self.scale
+    }
+    /// Robust additive source-to-reference term.
+    #[must_use]
+    pub const fn offset(self) -> f64 {
+        self.offset
+    }
+    /// Median absolute residual of the cell-local affine fit.
+    #[must_use]
+    pub const fn median_absolute_residual(self) -> f64 {
+        self.median_absolute_residual
+    }
 }
 
 /// Immutable coefficient surface built only from valid cell fits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalCoefficientSurface {
-    controls: Vec<ControlPoint>,
+    controls: Vec<SurfaceControlPoint>,
     rejected_cell_count: usize,
     cell_count: usize,
     left: f64,
@@ -94,6 +124,12 @@ impl LocalCoefficientSurface {
     #[must_use]
     pub fn control_point_count(&self) -> usize {
         self.controls.len()
+    }
+
+    /// Cell models retained for bounded diagnostics and visual inspection.
+    #[must_use]
+    pub fn control_points(&self) -> &[SurfaceControlPoint] {
+        &self.controls
     }
 
     /// Number of cell fits excluded from the surface.
@@ -298,11 +334,12 @@ pub fn build_local_surface(
         right = right.max((bounds.x() + bounds.width()) as f64);
         bottom = bottom.max((bounds.y() + bounds.height()) as f64);
         match cell.result() {
-            Ok(model) => controls.push(ControlPoint {
+            Ok(model) => controls.push(SurfaceControlPoint {
                 x: bounds.x() as f64 + (bounds.width() - 1) as f64 * 0.5,
                 y: bounds.y() as f64 + (bounds.height() - 1) as f64 * 0.5,
                 scale: model.scale(),
                 offset: model.offset(),
+                median_absolute_residual: model.median_absolute_residual(),
             }),
             Err(_) => rejected_cell_count += 1,
         }
@@ -343,9 +380,9 @@ fn retain_nearest(neighbors: &mut Vec<(f64, usize)>, candidate: (f64, usize), li
 
 fn stable_weighted_mean(
     neighbors: &[(f64, usize)],
-    controls: &[ControlPoint],
+    controls: &[SurfaceControlPoint],
     nearest_distance_squared: f64,
-    coefficient: impl Fn(&ControlPoint) -> f64,
+    coefficient: impl Fn(&SurfaceControlPoint) -> f64,
 ) -> Result<f64, SurfaceError> {
     let coefficient_scale = neighbors
         .iter()
