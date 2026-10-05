@@ -111,6 +111,12 @@ and platform-sized binary layouts never enter either digest. Noncanonical source
 identities and controls outside the canonical `u64` domain fail before a plan is
 created.
 
+The runtime request constructor independently re-encodes the supplied controls
+and cross-checks both file fingerprints against the plan. Output provenance must
+name the local-application algorithm, represent exactly two inputs, and carry
+the same plan and parameter digests. Any mismatch fails before FITS input or
+destination I/O begins.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of

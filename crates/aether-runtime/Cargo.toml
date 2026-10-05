@@ -16,6 +16,7 @@ aether-core = { path = "../aether-core" }
 aether-demosaic = { path = "../aether-demosaic" }
 aether-fits = { path = "../aether-fits" }
 aether-integration = { path = "../aether-integration" }
+aether-localnorm = { path = "../aether-localnorm" }
 aether-metadata = { path = "../aether-metadata" }
 aether-registration = { path = "../aether-registration" }
 aether-review = { path = "../aether-review" }

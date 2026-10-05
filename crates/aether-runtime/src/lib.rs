@@ -6,6 +6,7 @@
 mod cancellation;
 mod demosaic;
 mod light_plan;
+mod local_normalization;
 mod master_plan;
 mod memory;
 mod pipeline;
@@ -26,6 +27,7 @@ pub use light_plan::{
     LightProductExecutionResult, run_calibrated_light_plan, run_demosaiced_light_plan,
     run_light_plan,
 };
+pub use local_normalization::{LocalNormalizationRequest, LocalNormalizationRequestError};
 pub use master_plan::{
     MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,
     MasterPlanProgressEvent, MasterProductExecutionResult, run_master_plan,

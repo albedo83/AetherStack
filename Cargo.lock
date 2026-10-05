@@ -141,6 +141,7 @@ dependencies = [
  "aether-demosaic",
  "aether-fits",
  "aether-integration",
+ "aether-localnorm",
  "aether-metadata",
  "aether-registration",
  "aether-review",

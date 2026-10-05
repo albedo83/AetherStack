@@ -1823,6 +1823,10 @@ safety reasoning. They do not narrate obvious syntax.
      canonical SHA-256 digests. Versioned length-prefixed, big-endian encodings
      bind every algorithm and numeric control, with known-answer tests preventing
      silent provenance drift before runtime FITS publication is introduced.
+161. Introduce the runtime local-normalization request boundary. Construction
+     cross-checks source and reference fingerprints, canonical parameters, plan
+     identity, algorithm identity, source count, and FITS provenance before any
+     input is opened or any atomic destination can be created.
 
 ## 11. Stable-release definition
 
