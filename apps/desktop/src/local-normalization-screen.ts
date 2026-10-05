@@ -245,6 +245,7 @@ type PanelActions = Pick<
   | "onUpdateLocalNormalizationGroupId"
   | "onExecuteLocalNormalization"
   | "onCancelLocalNormalization"
+  | "onSelectLocalNormalizationPreview"
 >;
 
 /** Returns the static semantic shell mounted inside the main workflow. */
@@ -314,6 +315,22 @@ export function localNormalizationMarkup(): string {
             ${evidence("Publication", "data-localnorm-publication", "Not started")}
           </dl>
 
+          <section class="normalization-preview" aria-labelledby="normalization-preview-heading">
+            <div class="normalization-preview__heading">
+              <div><p class="eyebrow">Matched inspection</p><h4 id="normalization-preview-heading">Source · reference · result</h4></div>
+              <span data-localnorm-stretch>Reference stretch · awaiting publication</span>
+            </div>
+            <div class="normalization-preview__tabs" role="tablist" aria-label="Local normalization comparison">
+              <button type="button" role="tab" data-localnorm-preview="source" data-localnorm-action="preview-source" aria-selected="false" disabled>Source</button>
+              <button type="button" role="tab" data-localnorm-preview="reference" data-localnorm-action="preview-reference" aria-selected="false" disabled>Reference</button>
+              <button type="button" role="tab" data-localnorm-preview="output" data-localnorm-action="preview-output" aria-selected="true" disabled>Normalized</button>
+            </div>
+            <div class="normalization-preview__surface" data-localnorm-preview-surface data-state="idle">
+              <img data-localnorm-preview-image alt="" hidden />
+              <div data-localnorm-preview-placeholder>The normalized result will appear after publication</div>
+            </div>
+          </section>
+
           <details class="advanced-settings normalization-advanced">
             <summary><span>Advanced scientific controls</span><small>28 plan-bound parameters</small></summary>
             <p class="control-note">Every value below is validated in Rust and sealed into the parameter and execution-plan digests.</p>
@@ -381,6 +398,15 @@ export function mountLocalNormalizationPanel(
         break;
       case "cancel":
         actions.onCancelLocalNormalization();
+        break;
+      case "preview-source":
+        actions.onSelectLocalNormalizationPreview("source");
+        break;
+      case "preview-reference":
+        actions.onSelectLocalNormalizationPreview("reference");
+        break;
+      case "preview-output":
+        actions.onSelectLocalNormalizationPreview("output");
         break;
     }
   };
@@ -470,6 +496,7 @@ export function mountLocalNormalizationPanel(
         "[data-localnorm-progress-panel]",
       ).dataset.state = model.state;
       renderEvidence(root, model);
+      renderPreview(root, model);
     },
     destroy() {
       root.removeEventListener("click", onClick);
@@ -558,6 +585,53 @@ function renderEvidence(
     "[data-localnorm-parameters]",
     result?.parametersSha256 ?? "Advanced controls not yet executed",
   );
+}
+
+function renderPreview(
+  root: HTMLElement,
+  model: LocalNormalizationViewModel,
+): void {
+  const available = model.result !== null;
+  for (const button of root.querySelectorAll<HTMLButtonElement>(
+    "[data-localnorm-preview]",
+  )) {
+    const selected = button.dataset.localnormPreview === model.previewView;
+    button.disabled = !available;
+    button.setAttribute("aria-selected", String(selected));
+  }
+  text(root, "[data-localnorm-stretch]", model.sharedStretchLabel);
+  const surface = required<HTMLElement>(
+    root,
+    "[data-localnorm-preview-surface]",
+  );
+  const image = required<HTMLImageElement>(
+    root,
+    "[data-localnorm-preview-image]",
+  );
+  const placeholder = required<HTMLElement>(
+    root,
+    "[data-localnorm-preview-placeholder]",
+  );
+  surface.dataset.state = model.previewState;
+  const preview = model.preview;
+  image.hidden = preview === null;
+  if (preview) {
+    if (image.src !== preview.url) image.src = preview.url;
+    image.alt = `${previewLabel(model.previewView)} local-normalization preview`;
+  } else {
+    image.removeAttribute("src");
+    image.alt = "";
+  }
+  placeholder.hidden = preview !== null;
+  placeholder.textContent = model.previewMessage;
+}
+
+function previewLabel(
+  view: LocalNormalizationViewModel["previewView"],
+): string {
+  if (view === "source") return "Source";
+  if (view === "reference") return "Reference";
+  return "Normalized result";
 }
 
 function setPath(root: HTMLElement, kind: string, path: string | null): void {

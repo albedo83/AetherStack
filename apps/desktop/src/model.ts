@@ -249,6 +249,11 @@ export interface LocalNormalizationViewModel {
   readonly settings: LocalNormalizationSettings;
   readonly progress: LocalNormalizationProgress | null;
   readonly result: LocalNormalizationResult | null;
+  readonly previewState: "idle" | "loading" | "ready" | "error";
+  readonly preview: FramePreview | null;
+  readonly previewView: "source" | "reference" | "output";
+  readonly previewMessage: string;
+  readonly sharedStretchLabel: string;
   readonly message: string;
 }
 
@@ -379,6 +384,9 @@ export interface ReviewActions {
   readonly onUpdateLocalNormalizationGroupId: (groupId: string) => void;
   readonly onExecuteLocalNormalization: () => void;
   readonly onCancelLocalNormalization: () => void;
+  readonly onSelectLocalNormalizationPreview: (
+    view: LocalNormalizationViewModel["previewView"],
+  ) => void;
   readonly onSelectRegistrationReference: (frameId: string) => void;
   readonly onSelectRegistrationSource: (frameId: string) => void;
   readonly onSelectRegistrationGeometryModel: (

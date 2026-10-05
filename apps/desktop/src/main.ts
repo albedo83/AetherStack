@@ -164,6 +164,7 @@ let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
 let localNormalizationTicket = 0;
+let localNormalizationPreviewTicket = 0;
 let registeredStackPreviewTicket = 0;
 let stackPixelTicket = 0;
 let stackReportTicket = 0;
@@ -180,6 +181,8 @@ const registrationPreviewPrefetch =
 let ephemeralRegistrationPreview: PreviewResource | null = null;
 let registeredStackSciencePreviewResource: PreviewResource | null = null;
 let registeredStackDiagnosticPreviewResource: PreviewResource | null = null;
+let localNormalizationPreviewResource: PreviewResource | null = null;
+let localNormalizationSharedTransform: EstimatedDisplayTransform | null = null;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -197,6 +200,7 @@ const screen = mountReviewScreen(root, model, {
   onUpdateLocalNormalizationSettings(settings) {
     if (isLocalNormalizationActive()) return;
     localNormalizationTicket += 1;
+    clearLocalNormalizationPreview();
     update({
       ...model,
       localNormalization: {
@@ -205,30 +209,44 @@ const screen = mountReviewScreen(root, model, {
         state: "idle",
         progress: null,
         result: null,
+        previewState: "idle",
+        preview: null,
+        previewMessage: "Run the updated controls to inspect a new result",
+        sharedStretchLabel: "Reference stretch · awaiting publication",
         message: "Scientific controls changed · ready for a fresh sealed plan",
       },
     });
   },
   onUpdateLocalNormalizationMemoryLimit(memoryLimitBytes) {
     if (isLocalNormalizationActive()) return;
+    clearLocalNormalizationPreview();
     update({
       ...model,
       localNormalization: {
         ...model.localNormalization,
         memoryLimitBytes,
         result: null,
+        previewState: "idle",
+        preview: null,
+        previewMessage: "Run normalization to inspect the output",
+        sharedStretchLabel: "Reference stretch · awaiting publication",
         message: "Memory ceiling updated",
       },
     });
   },
   onUpdateLocalNormalizationGroupId(groupId) {
     if (isLocalNormalizationActive()) return;
+    clearLocalNormalizationPreview();
     update({
       ...model,
       localNormalization: {
         ...model.localNormalization,
         groupId,
         result: null,
+        previewState: "idle",
+        preview: null,
+        previewMessage: "Run normalization to inspect the output",
+        sharedStretchLabel: "Reference stretch · awaiting publication",
         message: "Output identity updated",
       },
     });
@@ -238,6 +256,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelLocalNormalization() {
     void cancelLocalNormalizationExecution();
+  },
+  onSelectLocalNormalizationPreview(view) {
+    void loadLocalNormalizationPreview(view);
   },
   onSelectRegistrationReference(frameId) {
     selectRegistrationFrame("reference", frameId);
@@ -755,6 +776,8 @@ function installImportedSession(session: ImportedSession): void {
   registeredStackTicket += 1;
   registrationTicket += 1;
   clearRegistrationPreviewResources();
+  localNormalizationTicket += 1;
+  clearLocalNormalizationPreview();
 
   const roles = (["bias", "dark", "flat", "light"] as const).map((role) => ({
     role,
@@ -788,6 +811,21 @@ function installImportedSession(session: ImportedSession): void {
     sharedStretchLabel: "Reference stretch · resolving",
     preview: null,
     statisticsPanel: closedStatisticsPanel(),
+    localNormalization: {
+      ...model.localNormalization,
+      state: "idle",
+      sourcePath: null,
+      referencePath: null,
+      outputPath: null,
+      progress: null,
+      result: null,
+      previewState: "idle",
+      preview: null,
+      previewView: "output",
+      previewMessage: "Choose products from the newly imported session",
+      sharedStretchLabel: "Reference stretch · awaiting publication",
+      message: "Choose a calibrated source and a stable reference image",
+    },
     registration: {
       state: "idle",
       geometryModel: "affine",
@@ -875,6 +913,102 @@ function isLocalNormalizationCancelling(): boolean {
   return model.localNormalization.state === "cancelling";
 }
 
+function clearLocalNormalizationPreview(): void {
+  localNormalizationPreviewTicket += 1;
+  localNormalizationPreviewResource?.revoke();
+  localNormalizationPreviewResource = null;
+  localNormalizationSharedTransform = null;
+}
+
+async function loadLocalNormalizationPreview(
+  view: ReviewViewModel["localNormalization"]["previewView"],
+): Promise<void> {
+  const normalization = model.localNormalization;
+  const result = normalization.result;
+  const path =
+    view === "source"
+      ? normalization.sourcePath
+      : view === "reference"
+        ? normalization.referencePath
+        : result?.outputPath;
+  if (!result || !path || !normalization.referencePath) return;
+  const planSha256 = result.planSha256;
+  const ticket = ++localNormalizationPreviewTicket;
+  localNormalizationPreviewResource?.revoke();
+  localNormalizationPreviewResource = null;
+  update({
+    ...model,
+    localNormalization: {
+      ...normalization,
+      previewState: "loading",
+      preview: null,
+      previewView: view,
+      previewMessage: `Rendering ${view === "output" ? "normalized result" : view}…`,
+    },
+  });
+  try {
+    const content =
+      result.planes === 3
+        ? ({ kind: "rgb" } as const)
+        : ({ kind: "scalar", plane: 0 } as const);
+    const transform =
+      localNormalizationSharedTransform ??
+      (await estimateFitsPreviewTransform({
+        path: normalization.referencePath,
+        content,
+        ...previewBounds,
+      }));
+    if (
+      ticket !== localNormalizationPreviewTicket ||
+      model.localNormalization.result?.planSha256 !== planSha256 ||
+      model.localNormalization.previewView !== view
+    ) {
+      return;
+    }
+    localNormalizationSharedTransform = transform;
+    const resource = await requestFitsPreview({
+      frameId: `local-normalization:${planSha256}:${view}`,
+      path,
+      content,
+      ...previewBounds,
+      blackPoint: transform.blackPoint,
+      whitePoint: transform.whitePoint,
+      midtone: transform.midtone,
+      transfer: { kind: "midtones" },
+    });
+    if (
+      ticket !== localNormalizationPreviewTicket ||
+      model.localNormalization.result?.planSha256 !== planSha256 ||
+      model.localNormalization.previewView !== view
+    ) {
+      resource.revoke();
+      return;
+    }
+    localNormalizationPreviewResource = resource;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        previewState: "ready",
+        preview: resource.preview,
+        previewMessage: `${view === "output" ? "Normalized result" : view === "reference" ? "Reference" : "Source"} rendered from native FITS pixels`,
+        sharedStretchLabel: `Shared reference stretch · ${transform.algorithmId}`,
+      },
+    });
+  } catch {
+    if (ticket !== localNormalizationPreviewTicket) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        previewState: "error",
+        preview: null,
+        previewMessage: "Native FITS preview validation failed",
+      },
+    });
+  }
+}
+
 async function chooseLocalNormalizationPath(
   kind: "source" | "reference" | "output",
 ): Promise<void> {
@@ -887,6 +1021,7 @@ async function chooseLocalNormalizationPath(
         ? await selectLocalNormalizationReference()
         : await selectLocalNormalizationOutput();
   if (!path || ticket !== localNormalizationTicket) return;
+  clearLocalNormalizationPreview();
   update({
     ...model,
     localNormalization: {
@@ -900,6 +1035,11 @@ async function chooseLocalNormalizationPath(
       state: "idle",
       progress: null,
       result: null,
+      previewState: "idle",
+      preview: null,
+      previewView: "output",
+      previewMessage: "Run normalization to compare the sealed image triplet",
+      sharedStretchLabel: "Reference stretch · awaiting publication",
       message: `${kind === "source" ? "Source" : kind === "reference" ? "Reference" : "Output"} selected · execution plan will be sealed natively`,
     },
   });
@@ -920,6 +1060,7 @@ async function runLocalNormalization(): Promise<void> {
     return;
   }
   const ticket = ++localNormalizationTicket;
+  clearLocalNormalizationPreview();
   update({
     ...model,
     localNormalization: {
@@ -927,6 +1068,11 @@ async function runLocalNormalization(): Promise<void> {
       state: "running",
       progress: null,
       result: null,
+      previewState: "idle",
+      preview: null,
+      previewView: "output",
+      previewMessage: "The normalized result will appear after publication",
+      sharedStretchLabel: "Reference stretch · preparing",
       message: "Fingerprinting both FITS inputs before execution…",
     },
   });
@@ -967,9 +1113,15 @@ async function runLocalNormalization(): Promise<void> {
         ...model.localNormalization,
         state: "completed",
         result,
+        previewState: "loading",
+        preview: null,
+        previewView: "output",
+        previewMessage:
+          "Rendering the normalized result with a shared stretch…",
         message: `Published ${result.samplesWritten.toLocaleString()} normalized samples atomically`,
       },
     });
+    void loadLocalNormalizationPreview("output");
   } catch {
     if (ticket !== localNormalizationTicket) return;
     const cancelled = model.localNormalization.state === "cancelling";
@@ -979,6 +1131,10 @@ async function runLocalNormalization(): Promise<void> {
         ...model.localNormalization,
         state: cancelled ? "idle" : "error",
         result: null,
+        previewState: "idle",
+        preview: null,
+        previewMessage: "No preview was published",
+        sharedStretchLabel: "Reference stretch · unavailable",
         message: cancelled
           ? "Normalization cancelled · no output was published"
           : "Normalization failed native validation · inputs remain unchanged",
@@ -3943,6 +4099,7 @@ function disposeRuntimeResources(): void {
   stopBlinkTimer();
   clearPreviewResources();
   clearRegistrationPreviewResources();
+  clearLocalNormalizationPreview();
 }
 
 function update(next: ReviewViewModel): void {

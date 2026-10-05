@@ -92,6 +92,11 @@ export const demoReviewModel: ReviewViewModel = {
     settings: defaultLocalNormalizationSettings,
     progress: null,
     result: null,
+    previewState: "idle",
+    preview: null,
+    previewView: "output",
+    previewMessage: "The normalized result will appear after publication",
+    sharedStretchLabel: "Reference stretch · awaiting publication",
     message: "Choose a calibrated source and a stable reference image",
   },
   registration: {

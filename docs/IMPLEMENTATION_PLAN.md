@@ -1858,6 +1858,13 @@ safety reasoning. They do not narrate obvious syntax.
      canonical seals are wired end to end. Interaction, build, and accessibility
      tests cover the workflow; spatial sample and residual-map visualization
      remains a later inspection milestone.
+168. Add matched visual inspection for each published normalization result. The
+     source, reference, and normalized FITS products share one native transform
+     estimated from the reference, preventing independent auto-stretches from
+     hiding background differences. Bounded PNG resources are revoked on every
+     plan, input, session, or view change; stale asynchronous renders cannot
+     replace the active result. Spatial control-point and residual overlays remain
+     separate from this pixel-product comparison.
 
 ## 11. Stable-release definition
 

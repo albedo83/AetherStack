@@ -26,6 +26,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUpdateLocalNormalizationGroupId: vi.fn(),
     onExecuteLocalNormalization: vi.fn(),
     onCancelLocalNormalization: vi.fn(),
+    onSelectLocalNormalizationPreview: vi.fn(),
     onSelectRegistrationReference: vi.fn(),
     onSelectRegistrationSource: vi.fn(),
     onSelectRegistrationGeometryModel: vi.fn(),
@@ -189,6 +190,54 @@ describe("frame review workspace", () => {
     expect(
       workspace.querySelector("[data-localnorm-publication]")?.textContent,
     ).toContain("35,087,124 samples");
+    const sourceTab = getByRole(workspace, "tab", { name: "Source" });
+    expect(sourceTab.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(sourceTab);
+    expect(actions.onSelectLocalNormalizationPreview).toHaveBeenCalledWith(
+      "source",
+    );
+    controller.update({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+      localNormalization: {
+        ...demoReviewModel.localNormalization,
+        state: "completed",
+        result: {
+          planSha256: "a".repeat(64),
+          parametersSha256: "b".repeat(64),
+          outputPath: "/session/normalized.fits",
+          width: 4_144,
+          height: 2_822,
+          planes: 3,
+          memoryLimitBytes: 2_147_483_648,
+          peakReservedBytes: 1_073_741_824,
+          samplesWritten: 35_087_124,
+          substitutedSamples: 0,
+          bytesWritten: 280_700_000,
+          transformedSamples: 35_087_124,
+          inheritedMaskedSamples: 0,
+          nonFiniteInputSamples: 0,
+          unsupportedSurfaceSamples: 0,
+          nonFiniteResultSamples: 0,
+          measuredSources: 12_000,
+          protectedPixels: 900_000,
+          validControlPoints: 759,
+          rejectedCells: 4,
+        },
+        previewState: "ready",
+        previewView: "source",
+        preview: { frameId: "source-preview", url: "blob:source-preview" },
+        previewMessage: "Source rendered from native FITS pixels",
+        sharedStretchLabel: "Shared reference stretch · robust-v1",
+        message: "Published atomically",
+      },
+    });
+    const image = workspace.querySelector<HTMLImageElement>(
+      "[data-localnorm-preview-image]",
+    )!;
+    expect(image.hidden).toBe(false);
+    expect(image.alt).toBe("Source local-normalization preview");
+    expect(sourceTab.getAttribute("aria-selected")).toBe("true");
   });
 
   it("offers an explicit projective geometry choice", () => {
