@@ -92,6 +92,8 @@ export const demoReviewModel: ReviewViewModel = {
     settings: defaultLocalNormalizationSettings,
     progress: null,
     result: null,
+    preflightState: "idle",
+    preflight: null,
     previewState: "idle",
     preview: null,
     previewView: "output",

@@ -617,7 +617,7 @@ where
         progress,
     )?;
 
-    let planned_bytes = planned_peak_bytes(dimensions, request.parameters())?;
+    let planned_bytes = estimate_local_normalization_peak_bytes(dimensions, request.parameters())?;
     let _reservation = memory
         .try_reserve(planned_bytes)
         .map_err(LocalNormalizationPipelineError::Memory)?;
@@ -766,7 +766,16 @@ fn read_complete_image<R: std::io::Read + std::io::Seek>(
     Ok(image)
 }
 
-fn planned_peak_bytes(
+/// Computes the conservative peak reservation for one local-normalization job.
+///
+/// This pure preflight uses the same accounting path as execution, allowing a
+/// caller to reject an undersized memory ceiling before reading image pixels.
+///
+/// # Errors
+///
+/// Returns [`LocalNormalizationPipelineError::WorkSizeOverflow`] when any
+/// dimension or configured work ceiling cannot be represented safely.
+pub fn estimate_local_normalization_peak_bytes(
     dimensions: Dimensions,
     parameters: LocalNormalizationParameters,
 ) -> Result<usize, LocalNormalizationPipelineError> {
@@ -1185,6 +1194,8 @@ mod tests {
         let output = directory.0.join("normalized.fits");
         let request =
             execution_request(source, reference, output.clone(), execution_parameters()?)?;
+        let estimated_peak =
+            estimate_local_normalization_peak_bytes(dimensions, request.parameters())?;
         let budget = MemoryBudget::new(16 * 1_024 * 1_024)?;
         let mut events = Vec::new();
         let result = run_local_normalization_with_progress(
@@ -1205,6 +1216,7 @@ mod tests {
         assert_eq!(result.valid_control_points(), 8);
         assert_eq!(result.rejected_cells(), 0);
         assert_eq!(result.peak_reserved_bytes(), budget.peak());
+        assert_eq!(result.peak_reserved_bytes(), estimated_peak);
         assert_eq!(
             result.summary().samples_written(),
             dimensions.pixel_count() as u64

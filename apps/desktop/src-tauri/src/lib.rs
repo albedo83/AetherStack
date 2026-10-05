@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use aether_cache::{ArtifactFileFingerprint, ArtifactRemovalState, ArtifactStore, CacheKey};
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
+use aether_core::Dimensions;
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, DatasumVerification, FITS_STATISTICS_ALGORITHM_ID,
     FitsOutputProvenance, FitsWriteSummary, HduChecksumVerification, HeaderReadOptions,
@@ -64,9 +65,10 @@ use aether_runtime::{
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
     SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
-    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, run_calibrated_light_plan,
-    run_demosaiced_light_plan, run_light_plan, run_local_normalization_with_progress,
-    run_master_plan, run_projective_registration_plan, run_registered_stack, run_registration_plan,
+    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_peak_bytes,
+    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
+    run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
+    run_registered_stack, run_registration_plan,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -368,6 +370,27 @@ struct LocalNormalizationSettings {
     minimum_surface_neighbors: usize,
     maximum_surface_neighbors: usize,
     maximum_surface_distance: f64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalNormalizationPreflightRequest {
+    source_path: PathBuf,
+    reference_path: PathBuf,
+    memory_limit_bytes: u64,
+    settings: LocalNormalizationSettings,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalNormalizationPreflightResponse {
+    width: usize,
+    height: usize,
+    planes: usize,
+    required_bytes: usize,
+    memory_limit_bytes: usize,
+    headroom_bytes: usize,
+    fits_memory_limit: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2303,6 +2326,20 @@ fn cancel_registration_plan(
 }
 
 #[tauri::command]
+async fn preflight_local_normalization(
+    request: LocalNormalizationPreflightRequest,
+) -> Result<LocalNormalizationPreflightResponse, PreviewCommandError> {
+    tauri::async_runtime::spawn_blocking(move || preflight_local_normalization_sync(request))
+        .await
+        .map_err(|_| {
+            PreviewCommandError::new(
+                "local_normalization_preflight_interrupted",
+                "The local-normalization preflight worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
 async fn execute_local_normalization(
     request: LocalNormalizationCommandRequest,
     on_progress: tauri::ipc::Channel<LocalNormalizationProgress>,
@@ -2699,56 +2736,7 @@ where
         .map_err(|_| local_normalization_configuration_error())?;
     let memory =
         MemoryBudget::new(memory_limit).map_err(|_| local_normalization_configuration_error())?;
-    let settings = request.settings;
-    let background = BackgroundParameters::new(
-        settings.background_clipping_sigma,
-        settings.background_maximum_iterations,
-        settings.background_minimum_samples,
-    )
-    .map_err(|_| local_normalization_configuration_error())?;
-    let detection = StarMeasurementParameters::new(
-        background,
-        settings.detection_sigma,
-        settings.measurement_floor_sigma,
-        settings.measurement_radius,
-        settings.minimum_separation,
-        settings.minimum_measurement_pixels,
-        settings.maximum_candidates,
-        settings.saturation_level,
-    )
-    .map_err(|_| local_normalization_configuration_error())?;
-    let protection = ProtectionParameters::new(
-        settings.protection_growth_factor,
-        settings.saturated_growth_factor,
-        settings.minimum_protection_radius,
-        settings.maximum_protection_radius,
-        settings.maximum_protected_sources,
-        settings.maximum_protection_pixel_visits,
-    )
-    .map_err(|_| local_normalization_configuration_error())?;
-    let sampling = SamplingGridParameters::new(
-        settings.cell_width,
-        settings.cell_height,
-        settings.maximum_samples_per_cell,
-        settings.maximum_cells,
-    )
-    .map_err(|_| local_normalization_configuration_error())?;
-    let fitting = LocalFitParameters::new(
-        settings.minimum_fit_samples,
-        settings.maximum_fit_samples,
-        settings.maximum_pairwise_slopes,
-        settings.minimum_absolute_scale,
-    )
-    .map_err(|_| local_normalization_configuration_error())?;
-    let surface = SurfaceParameters::new(
-        settings.minimum_control_points,
-        settings.minimum_surface_neighbors,
-        settings.maximum_surface_neighbors,
-        settings.maximum_surface_distance,
-    )
-    .map_err(|_| local_normalization_configuration_error())?;
-    let parameters =
-        LocalNormalizationParameters::new(detection, protection, sampling, fitting, surface);
+    let parameters = local_normalization_parameters(request.settings)?;
 
     let mut source_file =
         File::open(&request.source_path).map_err(|_| local_normalization_input_error())?;
@@ -2825,6 +2813,110 @@ where
         valid_control_points: result.valid_control_points(),
         rejected_cells: result.rejected_cells(),
     })
+}
+
+fn local_normalization_parameters(
+    settings: LocalNormalizationSettings,
+) -> Result<LocalNormalizationParameters, PreviewCommandError> {
+    let background = BackgroundParameters::new(
+        settings.background_clipping_sigma,
+        settings.background_maximum_iterations,
+        settings.background_minimum_samples,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let detection = StarMeasurementParameters::new(
+        background,
+        settings.detection_sigma,
+        settings.measurement_floor_sigma,
+        settings.measurement_radius,
+        settings.minimum_separation,
+        settings.minimum_measurement_pixels,
+        settings.maximum_candidates,
+        settings.saturation_level,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let protection = ProtectionParameters::new(
+        settings.protection_growth_factor,
+        settings.saturated_growth_factor,
+        settings.minimum_protection_radius,
+        settings.maximum_protection_radius,
+        settings.maximum_protected_sources,
+        settings.maximum_protection_pixel_visits,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let sampling = SamplingGridParameters::new(
+        settings.cell_width,
+        settings.cell_height,
+        settings.maximum_samples_per_cell,
+        settings.maximum_cells,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let fitting = LocalFitParameters::new(
+        settings.minimum_fit_samples,
+        settings.maximum_fit_samples,
+        settings.maximum_pairwise_slopes,
+        settings.minimum_absolute_scale,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    let surface = SurfaceParameters::new(
+        settings.minimum_control_points,
+        settings.minimum_surface_neighbors,
+        settings.maximum_surface_neighbors,
+        settings.maximum_surface_distance,
+    )
+    .map_err(|_| local_normalization_configuration_error())?;
+    Ok(LocalNormalizationParameters::new(
+        detection, protection, sampling, fitting, surface,
+    ))
+}
+
+fn preflight_local_normalization_sync(
+    request: LocalNormalizationPreflightRequest,
+) -> Result<LocalNormalizationPreflightResponse, PreviewCommandError> {
+    if !request.source_path.is_absolute() || !request.reference_path.is_absolute() {
+        return Err(local_normalization_configuration_error());
+    }
+    let memory_limit_bytes = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| local_normalization_configuration_error())?;
+    MemoryBudget::new(memory_limit_bytes).map_err(|_| local_normalization_configuration_error())?;
+    let parameters = local_normalization_parameters(request.settings)?;
+    let source = local_normalization_dimensions(&request.source_path)?;
+    let reference = local_normalization_dimensions(&request.reference_path)?;
+    if source != reference {
+        return Err(PreviewCommandError::new(
+            "local_normalization_dimensions_mismatch",
+            "The source and reference images do not have identical dimensions.",
+        ));
+    }
+    let required_bytes = estimate_local_normalization_peak_bytes(source, parameters)
+        .map_err(local_normalization_execution_error)?;
+    Ok(LocalNormalizationPreflightResponse {
+        width: source.width(),
+        height: source.height(),
+        planes: source.planes(),
+        required_bytes,
+        memory_limit_bytes,
+        headroom_bytes: memory_limit_bytes.saturating_sub(required_bytes),
+        fits_memory_limit: required_bytes <= memory_limit_bytes,
+    })
+}
+
+fn local_normalization_dimensions(path: &Path) -> Result<Dimensions, PreviewCommandError> {
+    let file = File::open(path).map_err(|_| local_normalization_input_error())?;
+    let reader = PrimaryImageReader::open(file, HeaderReadOptions::default())
+        .map_err(|_| local_normalization_input_error())?;
+    let axes = reader.descriptor().axes();
+    let (width, height, planes) = match axes {
+        [width, height] => (*width, *height, 1),
+        [width, height, planes] => (*width, *height, *planes),
+        _ => return Err(local_normalization_input_error()),
+    };
+    Dimensions::new(
+        usize::try_from(width).map_err(|_| local_normalization_input_error())?,
+        usize::try_from(height).map_err(|_| local_normalization_input_error())?,
+        usize::try_from(planes).map_err(|_| local_normalization_input_error())?,
+    )
+    .map_err(|_| local_normalization_input_error())
 }
 
 enum DesktopRegistrationPlan {
@@ -7705,6 +7797,7 @@ pub fn run() -> Result<(), tauri::Error> {
             inspect_session_diagnostics_report,
             inspect_registered_stack_report,
             inspect_stack_pixel,
+            preflight_local_normalization,
             preview_quality_cache_maintenance,
             preview_master_plan,
             preview_frame_selection,
@@ -8064,6 +8157,22 @@ mod tests {
         write_f64_primary(&mut File::create(&source_path)?, &source_image)?;
         write_f64_primary(&mut File::create(&reference_path)?, &reference_image)?;
 
+        let preflight = preflight_local_normalization_sync(LocalNormalizationPreflightRequest {
+            source_path: source_path.clone(),
+            reference_path: reference_path.clone(),
+            memory_limit_bytes: 16 * 1_024 * 1_024,
+            settings: local_normalization_settings(),
+        })?;
+        assert_eq!(
+            (preflight.width, preflight.height, preflight.planes),
+            (32, 32, 2)
+        );
+        assert!(preflight.fits_memory_limit);
+        assert_eq!(
+            preflight.headroom_bytes,
+            preflight.memory_limit_bytes - preflight.required_bytes
+        );
+
         let mut events = Vec::new();
         let response = execute_local_normalization_sync(
             &session,
@@ -8089,6 +8198,7 @@ mod tests {
         );
         assert_eq!(response.memory_limit_bytes, 16 * 1_024 * 1_024);
         assert!(response.peak_reserved_bytes > 0);
+        assert_eq!(response.peak_reserved_bytes, preflight.required_bytes);
         assert_eq!(response.samples_written, dimensions.pixel_count() as u64);
         assert_eq!(response.substituted_samples, 0);
         assert!(response.bytes_written > 0);

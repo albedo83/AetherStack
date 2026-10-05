@@ -29,7 +29,8 @@ pub use light_plan::{
 };
 pub use local_normalization::{
     LocalNormalizationPipelineError, LocalNormalizationRequest, LocalNormalizationRequestError,
-    LocalNormalizationResult, run_local_normalization, run_local_normalization_with_progress,
+    LocalNormalizationResult, estimate_local_normalization_peak_bytes, run_local_normalization,
+    run_local_normalization_with_progress,
 };
 pub use master_plan::{
     MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,

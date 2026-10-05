@@ -249,6 +249,10 @@ export interface LocalNormalizationViewModel {
   readonly settings: LocalNormalizationSettings;
   readonly progress: LocalNormalizationProgress | null;
   readonly result: LocalNormalizationResult | null;
+  readonly preflightState: "idle" | "loading" | "ready" | "error";
+  readonly preflight:
+    | import("./local-normalization-bridge.ts").LocalNormalizationPreflight
+    | null;
   readonly previewState: "idle" | "loading" | "ready" | "error";
   readonly preview: FramePreview | null;
   readonly previewView: "source" | "reference" | "output";
@@ -387,6 +391,7 @@ export interface ReviewActions {
   readonly onUpdateLocalNormalizationMemoryLimit: (bytes: number) => void;
   readonly onUpdateLocalNormalizationGroupId: (groupId: string) => void;
   readonly onExecuteLocalNormalization: () => void;
+  readonly onPreflightLocalNormalization: () => void;
   readonly onCancelLocalNormalization: () => void;
   readonly onSelectLocalNormalizationPreview: (
     view: LocalNormalizationViewModel["previewView"],

@@ -126,6 +126,12 @@ and checksum readback plus fresh source and reference fingerprints must all pass
 before create-new atomic publication. Cancellation, memory failure, dimension
 mismatch, scientific failure, or readback failure leaves no public output.
 
+The same overflow-checked peak estimator is a public runtime preflight contract.
+Desktop preflight reads only the source and reference headers, requires identical
+dimensions, validates the complete parameter set, and reports the required bytes
+plus configured headroom. Execution calls that exact estimator again, so the
+preview cannot drift from the reservation enforced by the memory budget.
+
 Execution can emit the shared machine-readable progress protocol under the
 stable `local-normalization` stage. Work becomes determinate after input headers
 agree: one unit covers complete decoding, one covers each plane, one covers

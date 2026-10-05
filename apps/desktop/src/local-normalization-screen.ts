@@ -243,6 +243,7 @@ type PanelActions = Pick<
   | "onUpdateLocalNormalizationSettings"
   | "onUpdateLocalNormalizationMemoryLimit"
   | "onUpdateLocalNormalizationGroupId"
+  | "onPreflightLocalNormalization"
   | "onExecuteLocalNormalization"
   | "onCancelLocalNormalization"
   | "onSelectLocalNormalizationPreview"
@@ -288,6 +289,7 @@ export function localNormalizationMarkup(): string {
               <span>Memory ceiling</span>
               <span class="instrument-stepper number-control"><input data-localnorm-memory type="number" min="256" step="256" inputmode="numeric" /><b>MiB</b></span>
             </label>
+            <button class="button button--quiet" type="button" data-localnorm-action="preflight">Verify memory</button>
           </div>
           <div class="normalization-progress" data-localnorm-progress-panel data-state="idle">
             <div><span>Native f64 transaction</span><strong data-localnorm-progress-label>Waiting for inputs</strong></div>
@@ -408,6 +410,9 @@ export function mountLocalNormalizationPanel(
       case "execute":
         actions.onExecuteLocalNormalization();
         break;
+      case "preflight":
+        actions.onPreflightLocalNormalization();
+        break;
       case "cancel":
         actions.onCancelLocalNormalization();
         break;
@@ -465,6 +470,10 @@ export function mountLocalNormalizationPanel(
     update(model) {
       current = model;
       const busy = model.state === "running" || model.state === "cancelling";
+      const preflight = required<HTMLButtonElement>(
+        root,
+        '[data-localnorm-action="preflight"]',
+      );
       setPath(root, "source", model.sourcePath);
       setPath(root, "reference", model.referencePath);
       setPath(root, "output", model.outputPath);
@@ -484,12 +493,20 @@ export function mountLocalNormalizationPanel(
       saturationLevel.disabled = busy || !saturationEnabled.checked;
       memory.disabled = busy;
       groupId.disabled = busy;
+      preflight.disabled =
+        busy ||
+        model.preflightState === "loading" ||
+        !model.sourcePath ||
+        !model.referencePath;
+      preflight.textContent =
+        model.preflightState === "loading" ? "Checking…" : "Verify memory";
       execute.hidden = busy;
       execute.disabled =
         !model.sourcePath ||
         !model.referencePath ||
         !model.outputPath ||
-        model.groupId.trim().length === 0;
+        model.groupId.trim().length === 0 ||
+        model.preflight?.fitsMemoryLimit === false;
       cancel.hidden = !busy;
       cancel.disabled = model.state === "cancelling";
       text(root, "[data-localnorm-status]", statusLabel(model));
@@ -560,7 +577,9 @@ function renderEvidence(
     "[data-localnorm-dimensions]",
     result
       ? `${result.width} × ${result.height} × ${result.planes}`
-      : "Awaiting result",
+      : model.preflight
+        ? `${model.preflight.width} × ${model.preflight.height} × ${model.preflight.planes}`
+        : "Awaiting result",
   );
   text(
     root,
@@ -582,7 +601,11 @@ function renderEvidence(
   text(
     root,
     "[data-localnorm-peak-memory]",
-    result ? formatBytes(result.peakReservedBytes) : "—",
+    result
+      ? formatBytes(result.peakReservedBytes)
+      : model.preflight
+        ? `${formatBytes(model.preflight.requiredBytes)} · ${model.preflight.fitsMemoryLimit ? "ready" : "insufficient"}`
+        : "—",
   );
   text(
     root,

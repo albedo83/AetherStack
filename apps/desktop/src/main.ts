@@ -21,6 +21,7 @@ import {
   cancelLocalNormalization,
   executeLocalNormalization,
   localNormalizationFailureMessage,
+  preflightLocalNormalization,
   selectLocalNormalizationOutput,
   selectLocalNormalizationReference,
   selectLocalNormalizationSource,
@@ -208,6 +209,8 @@ const screen = mountReviewScreen(root, model, {
       localNormalization: {
         ...model.localNormalization,
         settings,
+        preflightState: "idle",
+        preflight: null,
         state: "idle",
         progress: null,
         result: null,
@@ -227,6 +230,8 @@ const screen = mountReviewScreen(root, model, {
       localNormalization: {
         ...model.localNormalization,
         memoryLimitBytes,
+        preflightState: "idle",
+        preflight: null,
         result: null,
         previewState: "idle",
         preview: null,
@@ -255,6 +260,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onExecuteLocalNormalization() {
     void runLocalNormalization();
+  },
+  onPreflightLocalNormalization() {
+    void runLocalNormalizationPreflight();
   },
   onCancelLocalNormalization() {
     void cancelLocalNormalizationExecution();
@@ -824,6 +832,8 @@ function installImportedSession(session: ImportedSession): void {
       outputPath: null,
       progress: null,
       result: null,
+      preflightState: "idle",
+      preflight: null,
       previewState: "idle",
       preview: null,
       previewView: "output",
@@ -1107,6 +1117,9 @@ async function chooseLocalNormalizationPath(
       state: "idle",
       progress: null,
       result: null,
+      preflightState:
+        kind === "output" ? model.localNormalization.preflightState : "idle",
+      preflight: kind === "output" ? model.localNormalization.preflight : null,
       previewState: "idle",
       preview: null,
       previewView: "output",
@@ -1115,6 +1128,62 @@ async function chooseLocalNormalizationPath(
       message: `${kind === "source" ? "Source" : kind === "reference" ? "Reference" : "Output"} selected · execution plan will be sealed natively`,
     },
   });
+}
+
+async function runLocalNormalizationPreflight(): Promise<void> {
+  const normalization = model.localNormalization;
+  if (
+    isLocalNormalizationActive() ||
+    normalization.preflightState === "loading" ||
+    !normalization.sourcePath ||
+    !normalization.referencePath
+  )
+    return;
+  const ticket = ++localNormalizationTicket;
+  update({
+    ...model,
+    localNormalization: {
+      ...normalization,
+      preflightState: "loading",
+      preflight: null,
+      message: "Reading FITS headers and calculating the bounded peak…",
+    },
+  });
+  try {
+    const preflight = await preflightLocalNormalization({
+      sourcePath: normalization.sourcePath,
+      referencePath: normalization.referencePath,
+      memoryLimitBytes: normalization.memoryLimitBytes,
+      settings: normalization.settings,
+    });
+    if (ticket !== localNormalizationTicket) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        preflightState: "ready",
+        preflight,
+        message: preflight.fitsMemoryLimit
+          ? `Memory verified · ${formatMemoryBytes(preflight.headroomBytes)} headroom`
+          : `Memory ceiling is short by ${formatMemoryBytes(preflight.requiredBytes - preflight.memoryLimitBytes)}`,
+      },
+    });
+  } catch (error) {
+    if (ticket !== localNormalizationTicket) return;
+    update({
+      ...model,
+      localNormalization: {
+        ...model.localNormalization,
+        preflightState: "error",
+        preflight: null,
+        message: localNormalizationFailureMessage(error),
+      },
+    });
+  }
+}
+
+function formatMemoryBytes(bytes: number): string {
+  return `${(bytes / 1_048_576).toLocaleString(undefined, { maximumFractionDigits: 1 })} MiB`;
 }
 
 async function runLocalNormalization(): Promise<void> {
@@ -1127,6 +1196,7 @@ async function runLocalNormalization(): Promise<void> {
     !normalization.sourcePath ||
     !normalization.referencePath ||
     !normalization.outputPath ||
+    normalization.preflight?.fitsMemoryLimit === false ||
     normalization.groupId.trim().length === 0
   ) {
     return;

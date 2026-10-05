@@ -7,6 +7,7 @@ import {
   defaultLocalNormalizationSettings,
   executeLocalNormalization,
   localNormalizationFailureMessage,
+  preflightLocalNormalization,
   selectLocalNormalizationOutput,
   selectLocalNormalizationReference,
   selectLocalNormalizationSource,
@@ -28,6 +29,30 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 afterEach(() => vi.clearAllMocks());
 
 describe("native local-normalization bridge", () => {
+  it("requests a header-only bounded-memory preflight", async () => {
+    const expected = {
+      width: 4_144,
+      height: 2_822,
+      planes: 1,
+      requiredBytes: 768_000_000,
+      memoryLimitBytes: 2_147_483_648,
+      headroomBytes: 1_379_483_648,
+      fitsMemoryLimit: true,
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+    const request = {
+      sourcePath: "/session/source.fits",
+      referencePath: "/session/reference.fits",
+      memoryLimitBytes: expected.memoryLimitBytes,
+      settings: defaultLocalNormalizationSettings,
+    };
+
+    await expect(preflightLocalNormalization(request)).resolves.toBe(expected);
+    expect(invoke).toHaveBeenCalledWith("preflight_local_normalization", {
+      request,
+    });
+  });
+
   it("passes every scientific control through one progress channel", async () => {
     const expected: LocalNormalizationResult = {
       planSha256: "a".repeat(64),

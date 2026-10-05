@@ -74,6 +74,23 @@ export interface LocalNormalizationRequest {
   readonly settings: LocalNormalizationSettings;
 }
 
+export interface LocalNormalizationPreflightRequest {
+  readonly sourcePath: string;
+  readonly referencePath: string;
+  readonly memoryLimitBytes: number;
+  readonly settings: LocalNormalizationSettings;
+}
+
+export interface LocalNormalizationPreflight {
+  readonly width: number;
+  readonly height: number;
+  readonly planes: number;
+  readonly requiredBytes: number;
+  readonly memoryLimitBytes: number;
+  readonly headroomBytes: number;
+  readonly fitsMemoryLimit: boolean;
+}
+
 export interface LocalNormalizationProgress {
   readonly sequence: number;
   readonly stage: "local-normalization";
@@ -150,6 +167,15 @@ export function executeLocalNormalization(
   return invoke<LocalNormalizationResult>("execute_local_normalization", {
     request,
     onProgress: progress,
+  });
+}
+
+/** Reads FITS headers and applies the executor's exact bounded-memory model. */
+export function preflightLocalNormalization(
+  request: LocalNormalizationPreflightRequest,
+): Promise<LocalNormalizationPreflight> {
+  return invoke<LocalNormalizationPreflight>("preflight_local_normalization", {
+    request,
   });
 }
 

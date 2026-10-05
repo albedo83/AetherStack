@@ -1871,6 +1871,12 @@ safety reasoning. They do not narrate obvious syntax.
      population deviation without materializing pixels in the webview. Reads are
      explicit rather than automatic so large 294MC data sets do not pay three
      additional full-image passes unless the user requests quantitative evidence.
+170. Add a header-only memory preflight for local normalization. The public
+     runtime estimator and the executor now share one overflow-checked peak model;
+     the desktop adapter validates both FITS geometries and all 28 scientific
+     controls before reporting required bytes and headroom. The workflow exposes
+     this check explicitly and blocks execution after a verified insufficient
+     ceiling without fingerprinting or decoding either complete image.
 
 ## 11. Stable-release definition
 

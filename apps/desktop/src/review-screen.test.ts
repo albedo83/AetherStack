@@ -25,6 +25,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUpdateLocalNormalizationMemoryLimit: vi.fn(),
     onUpdateLocalNormalizationGroupId: vi.fn(),
     onExecuteLocalNormalization: vi.fn(),
+    onPreflightLocalNormalization: vi.fn(),
     onCancelLocalNormalization: vi.fn(),
     onSelectLocalNormalizationPreview: vi.fn(),
     onInspectLocalNormalizationStatistics: vi.fn(),
