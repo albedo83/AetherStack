@@ -1922,6 +1922,13 @@ safety reasoning. They do not narrate obvious syntax.
      the same validated action path as a manual ceiling change. The execution
      control remains unavailable while the displayed preflight is insufficient,
      and desktop tests cover the 294MC recommendation and accessible action.
+178. Lock the local-normalization scientific exit oracle. An end-to-end FITS
+     fixture injects simultaneous horizontal scale and vertical offset gradients
+     around a protected central star. The published background must reduce raw
+     error by more than eight times, while the star keeps its location and peak
+     within 0.2% of the reference despite four deliberately unsupported central
+     cells. A separate exact-affine stellar oracle holds every published sample
+     to 1e-10 absolute error.
 
 ## 11. Stable-release definition
 

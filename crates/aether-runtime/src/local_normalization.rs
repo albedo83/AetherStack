@@ -1233,6 +1233,25 @@ mod tests {
         ))
     }
 
+    fn gradient_execution_parameters() -> Result<LocalNormalizationParameters, Box<dyn Error>> {
+        Ok(LocalNormalizationParameters::new(
+            StarMeasurementParameters::new(
+                BackgroundParameters::new(3.0, 8, 4_000)?,
+                6.0,
+                2.0,
+                6,
+                4,
+                6,
+                4_000,
+                Some(1_500.0),
+            )?,
+            ProtectionParameters::new(1.5, 2.0, 2, 32, 4_000, 16_000_000)?,
+            SamplingGridParameters::new(16, 16, 256, 64)?,
+            LocalFitParameters::new(32, 256, 32_640, 1.0e-12)?,
+            SurfaceParameters::new(32, 4, 12, 256.0)?,
+        ))
+    }
+
     fn write_pipeline_source(
         path: PathBuf,
         image: &ScientificImage,
@@ -1297,6 +1316,31 @@ mod tests {
             .iter()
             .map(|&value| value.mul_add(2.0, 5.0))
             .collect::<Vec<_>>();
+        Ok((
+            ScientificImage::from_pixels(dimensions, source_pixels)?,
+            ScientificImage::from_pixels(dimensions, reference_pixels)?,
+        ))
+    }
+
+    fn gradient_stellar_images() -> Result<(ScientificImage, ScientificImage), Box<dyn Error>> {
+        let dimensions = Dimensions::new(128, 128, 1)?;
+        let mut source_pixels = Vec::new();
+        let mut reference_pixels = Vec::new();
+        source_pixels.try_reserve_exact(dimensions.pixel_count())?;
+        reference_pixels.try_reserve_exact(dimensions.pixel_count())?;
+        for y in 0..dimensions.height() {
+            for x in 0..dimensions.width() {
+                let background = 100.0 + ((x * 17 + y * 31) % 37) as f64;
+                let dx = x as f64 - 64.0;
+                let dy = y as f64 - 64.0;
+                let star = 2_000.0 * (-(dx.mul_add(dx, dy * dy)) / 18.0).exp();
+                let source = background + star;
+                let scale = 0.92 + 0.16 * x as f64 / 127.0;
+                let offset = -8.0 + 16.0 * y as f64 / 127.0;
+                source_pixels.push(source);
+                reference_pixels.push(source.mul_add(scale, offset));
+            }
+        }
         Ok((
             ScientificImage::from_pixels(dimensions, source_pixels)?,
             ScientificImage::from_pixels(dimensions, reference_pixels)?,
@@ -1647,6 +1691,109 @@ mod tests {
         let file = File::open(output)?;
         let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
         assert!(reader.verify_checksums()?.is_fully_verified());
+        let actual = reader.read_region_image(ImageRegion::new(
+            0,
+            0,
+            0,
+            dimensions.width() as u64,
+            dimensions.height() as u64,
+        ))?;
+        let maximum_error = actual
+            .pixels()
+            .iter()
+            .zip(reference_image.pixels())
+            .map(|(&actual, &expected)| (actual - expected).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(maximum_error <= 1.0e-10, "maximum error: {maximum_error}");
+        let stellar_peak = 32 * dimensions.width() + 32;
+        assert!(actual.pixels()[stellar_peak] > 2_000.0);
+        assert_eq!(
+            actual
+                .pixels()
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .map(|(index, _)| index),
+            Some(stellar_peak)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spatial_gradient_is_recovered_without_suppressing_the_protected_star() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (source_image, reference_image) = gradient_stellar_images()?;
+        let dimensions = source_image.dimensions();
+        let source = write_pipeline_source(directory.0.join("source.fits"), &source_image)?;
+        let reference =
+            write_pipeline_source(directory.0.join("reference.fits"), &reference_image)?;
+        let output = directory.0.join("normalized.fits");
+        let request = execution_request(
+            source,
+            reference,
+            output.clone(),
+            gradient_execution_parameters()?,
+        )?;
+        let result = run_local_normalization(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(64 * 1_024 * 1_024)?,
+        )?;
+
+        assert_eq!(result.measured_sources(), 1);
+        assert!(result.protected_pixels() > 100);
+        assert_eq!(result.valid_control_points(), 60);
+        assert_eq!(result.rejected_cells(), 4);
+
+        let file = File::open(output)?;
+        let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())?;
+        let actual = reader.read_region_image(ImageRegion::new(
+            0,
+            0,
+            0,
+            dimensions.width() as u64,
+            dimensions.height() as u64,
+        ))?;
+        let mut raw_squared_error = 0.0;
+        let mut normalized_squared_error = 0.0;
+        let mut background_samples = 0_u64;
+        for y in 0..dimensions.height() {
+            for x in 0..dimensions.width() {
+                let dx = x as f64 - 64.0;
+                let dy = y as f64 - 64.0;
+                if dx.mul_add(dx, dy * dy) <= 144.0 {
+                    continue;
+                }
+                let index = y * dimensions.width() + x;
+                let expected = reference_image.pixels()[index];
+                raw_squared_error += (source_image.pixels()[index] - expected).powi(2);
+                normalized_squared_error += (actual.pixels()[index] - expected).powi(2);
+                background_samples += 1;
+            }
+        }
+        let raw_rmse = (raw_squared_error / background_samples as f64).sqrt();
+        let normalized_rmse = (normalized_squared_error / background_samples as f64).sqrt();
+        assert!(
+            normalized_rmse < raw_rmse * 0.12,
+            "raw RMSE {raw_rmse}, normalized RMSE {normalized_rmse}"
+        );
+
+        let stellar_peak = 64 * dimensions.width() + 64;
+        let expected_peak = reference_image.pixels()[stellar_peak];
+        let actual_peak = actual.pixels()[stellar_peak];
+        assert!(
+            (actual_peak - expected_peak).abs() / expected_peak < 0.002,
+            "expected protected peak {expected_peak}, actual {actual_peak}"
+        );
+        assert_eq!(
+            actual
+                .pixels()
+                .iter()
+                .enumerate()
+                .max_by(|left, right| left.1.total_cmp(right.1))
+                .map(|(index, _)| index),
+            Some(stellar_peak)
+        );
         Ok(())
     }
 
