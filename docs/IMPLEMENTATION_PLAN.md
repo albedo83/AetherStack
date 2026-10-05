@@ -1952,6 +1952,12 @@ safety reasoning. They do not narrate obvious syntax.
      masks from unflagged non-finite values, adds `INVALID` only where required,
      and deposits neither flux nor weight for either category. Tests prove that
      excluded samples bypass even unsupported CFA geometry and allocations.
+183. Accumulate Drizzle output in strictly owned bounded tiles. Half-open global
+     rectangles prevent overlap at adjacent tile borders; independent binary64
+     compensated sums retain weighted flux and weight in stable source order,
+     while per-pixel support maps and checked evidence expose every contribution.
+     Zero-weight outputs remain NaN with `MISSING`, and tests require bit-identical
+     science, weight, support, and flag maps between complete and split tiles.
 
 ## 11. Stable-release definition
 

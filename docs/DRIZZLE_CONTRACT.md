@@ -70,5 +70,21 @@ samples reach the footprint projector. This precedence makes hot, cold,
 saturated, missing, rejected, invalid, and forward-compatible defects auditable
 without letting them consume geometry work.
 
-Tile ownership, accumulation maps, and atomic FITS publication remain subsequent
-milestones.
+## Tiled accumulation
+
+Every accumulation tile owns a half-open global rectangle: its left and top
+edges are included, while its right and bottom edges are excluded. Adjacent
+tiles therefore own each geometric contribution exactly once. The strict
+profile accepts either one monochrome plane or three planar CFA planes.
+
+Weighted flux and weight use independent binary64 Neumaier accumulators in the
+stable source-deposition order. A per-pixel unsigned support counter records how
+many detector footprints contributed. Final science values are `weighted flux /
+weight`; a zero-weight output is never replaced with a numeric background. It is
+published as NaN with `MISSING`, zero weight, and zero support instead. Tile
+evidence accounts separately for depositions, contributions seen, contributions
+owned, contributions outside, and unsupported output samples. Tests require
+bit-identical science, weight, support, and flag maps when a complete tile is
+replaced by adjacent tiles and reassembled.
+
+Atomic FITS publication remains a subsequent milestone.
