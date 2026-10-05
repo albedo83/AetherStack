@@ -14,6 +14,7 @@ aether-cache = { path = "../aether-cache" }
 aether-calibration = { path = "../aether-calibration" }
 aether-core = { path = "../aether-core" }
 aether-demosaic = { path = "../aether-demosaic" }
+aether-drizzle = { path = "../aether-drizzle" }
 aether-fits = { path = "../aether-fits" }
 aether-integration = { path = "../aether-integration" }
 aether-localnorm = { path = "../aether-localnorm" }

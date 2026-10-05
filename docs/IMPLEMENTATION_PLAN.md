@@ -1964,6 +1964,13 @@ safety reasoning. They do not narrate obvious syntax.
      and a later link failure removes this transaction's earlier links in reverse
      order. Typed errors distinguish a clean rollback from the rare states where
      a rollback, temporary-link cleanup, or directory durability check failed.
+185. Publish each complete Drizzle result as a verified three-product FITS set.
+     Science, accumulated weight, and exact detector support carry distinct
+     algorithm identities bound to one manifest, plan, parameter digest, group,
+     and source set. Missing science becomes canonical NaN while diagnostic maps
+     retain numeric zero; support conversion refuses integers beyond binary64's
+     exact consecutive domain. All dimensions and checksums pass private readback
+     before the create-new rollback transaction exposes any destination.
 
 ## 11. Stable-release definition
 

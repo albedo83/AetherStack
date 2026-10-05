@@ -87,4 +87,19 @@ owned, contributions outside, and unsupported output samples. Tests require
 bit-identical science, weight, support, and flag maps when a complete tile is
 replaced by adjacent tiles and reassembled.
 
-Atomic FITS publication remains a subsequent milestone.
+## FITS product publication
+
+A complete origin-aligned result publishes as one create-new transaction with
+three checksummed binary64 primary images: normalized science, accumulated
+weight, and detector contribution count. Each product has a distinct algorithm
+identity while sharing the same manifest, plan, parameter, group, and source
+bindings. Every private stream is read back and its dimensions and checksums are
+verified before any destination becomes visible.
+
+Missing science samples use the canonical FITS NaN. Their weight and support
+companions remain valid numeric zeros so downstream diagnostics can distinguish
+no support without interpreting a missing numeric payload. Support counts are
+accepted only through `2^53`, the complete consecutive-integer domain of
+binary64. All private files are synchronized before the first public link; a
+collision never overwrites and rolls back earlier links from the same product
+set. Cleanup and durability failures after visibility remain explicitly typed.

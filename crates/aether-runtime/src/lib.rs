@@ -5,6 +5,7 @@
 
 mod cancellation;
 mod demosaic;
+mod drizzle;
 mod light_plan;
 mod local_normalization;
 mod master_plan;
@@ -18,6 +19,11 @@ pub use cancellation::{CancellationToken, Cancelled};
 pub use demosaic::{
     DemosaicPipelineError, StrictDemosaicRequest, StrictDemosaicResult,
     run_strict_demosaic_pipeline,
+};
+pub use drizzle::{
+    DRIZZLE_SCIENCE_ALGORITHM_ID, DRIZZLE_SUPPORT_ALGORITHM_ID, DRIZZLE_WEIGHT_ALGORITHM_ID,
+    DrizzleProductDestinations, DrizzleProductKind, DrizzleProductProvenance,
+    DrizzlePublicationError, DrizzlePublicationResult, publish_drizzle_products,
 };
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,

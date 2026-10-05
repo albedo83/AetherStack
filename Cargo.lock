@@ -148,6 +148,7 @@ dependencies = [
  "aether-calibration",
  "aether-core",
  "aether-demosaic",
+ "aether-drizzle",
  "aether-fits",
  "aether-integration",
  "aether-localnorm",
