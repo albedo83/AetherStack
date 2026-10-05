@@ -847,6 +847,81 @@ pub fn estimate_local_normalization_peak_bytes(
     dimensions: Dimensions,
     parameters: LocalNormalizationParameters,
 ) -> Result<usize, LocalNormalizationPipelineError> {
+    Ok(estimate_local_normalization_memory(dimensions, parameters)?.required_bytes())
+}
+
+/// Auditable components of the conservative local-normalization reservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalNormalizationMemoryEstimate {
+    plane_images_bytes: usize,
+    application_band_bytes: usize,
+    decode_status_bytes: usize,
+    retained_samples_bytes: usize,
+    diagnostics_bytes: usize,
+    quality_bytes: usize,
+    slope_bytes: usize,
+    writer_buffer_bytes: usize,
+    required_bytes: usize,
+}
+
+impl LocalNormalizationMemoryEstimate {
+    /// Two complete active input planes.
+    #[must_use]
+    pub const fn plane_images_bytes(self) -> usize {
+        self.plane_images_bytes
+    }
+    /// Fixed-height normalized output band.
+    #[must_use]
+    pub const fn application_band_bytes(self) -> usize {
+        self.application_band_bytes
+    }
+    /// Temporary FITS sample-status decoding array.
+    #[must_use]
+    pub const fn decode_status_bytes(self) -> usize {
+        self.decode_status_bytes
+    }
+    /// Maximum retained spatial sample storage.
+    #[must_use]
+    pub const fn retained_samples_bytes(self) -> usize {
+        self.retained_samples_bytes
+    }
+    /// Accepted and rejected cell diagnostics retained across planes.
+    #[must_use]
+    pub const fn diagnostics_bytes(self) -> usize {
+        self.diagnostics_bytes
+    }
+    /// Bounded stellar-quality candidate storage.
+    #[must_use]
+    pub const fn quality_bytes(self) -> usize {
+        self.quality_bytes
+    }
+    /// Bounded pairwise-slope scratch storage.
+    #[must_use]
+    pub const fn slope_bytes(self) -> usize {
+        self.slope_bytes
+    }
+    /// Buffered atomic FITS writer allocation.
+    #[must_use]
+    pub const fn writer_buffer_bytes(self) -> usize {
+        self.writer_buffer_bytes
+    }
+    /// Conservative sum reserved before pixel decoding.
+    #[must_use]
+    pub const fn required_bytes(self) -> usize {
+        self.required_bytes
+    }
+}
+
+/// Computes an auditable conservative memory breakdown for preflight UIs.
+///
+/// # Errors
+///
+/// Returns a typed overflow or sampling-limit error under the same conditions
+/// as [`estimate_local_normalization_peak_bytes`].
+pub fn estimate_local_normalization_memory(
+    dimensions: Dimensions,
+    parameters: LocalNormalizationParameters,
+) -> Result<LocalNormalizationMemoryEstimate, LocalNormalizationPipelineError> {
     let plane_samples = dimensions
         .width()
         .checked_mul(dimensions.height())
@@ -901,16 +976,29 @@ pub fn estimate_local_normalization_peak_bytes(
         .maximum_pairwise_slopes()
         .checked_mul(size_of::<f64>())
         .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
-    plane_image_bytes
+    let plane_images_bytes = plane_image_bytes
         .checked_mul(2)
-        .and_then(|bytes| bytes.checked_add(band_image_bytes))
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    let required_bytes = plane_images_bytes
+        .checked_add(band_image_bytes)
         .and_then(|bytes| bytes.checked_add(decode_status_bytes))
         .and_then(|bytes| bytes.checked_add(retained_sample_bytes))
         .and_then(|bytes| bytes.checked_add(retained_diagnostic_bytes))
         .and_then(|bytes| bytes.checked_add(quality_bytes))
         .and_then(|bytes| bytes.checked_add(slope_bytes))
         .and_then(|bytes| bytes.checked_add(STREAM_WRITER_BUFFER_BYTES))
-        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    Ok(LocalNormalizationMemoryEstimate {
+        plane_images_bytes,
+        application_band_bytes: band_image_bytes,
+        decode_status_bytes,
+        retained_samples_bytes: retained_sample_bytes,
+        diagnostics_bytes: retained_diagnostic_bytes,
+        quality_bytes,
+        slope_bytes,
+        writer_buffer_bytes: STREAM_WRITER_BUFFER_BYTES,
+        required_bytes,
+    })
 }
 
 fn validate_staged_output(
@@ -1074,8 +1162,21 @@ mod tests {
             Dimensions::new(4_144, 2_822, 3)?,
             make_parameters(262_144)?,
         )?;
+        let breakdown = estimate_local_normalization_memory(dimensions, make_parameters(262_144)?)?;
 
         assert_eq!(exact, loose);
+        assert_eq!(breakdown.required_bytes(), loose);
+        assert_eq!(
+            breakdown.required_bytes(),
+            breakdown.plane_images_bytes()
+                + breakdown.application_band_bytes()
+                + breakdown.decode_status_bytes()
+                + breakdown.retained_samples_bytes()
+                + breakdown.diagnostics_bytes()
+                + breakdown.quality_bytes()
+                + breakdown.slope_bytes()
+                + breakdown.writer_buffer_bytes()
+        );
         assert!(loose < 2 * 1_024 * 1_024 * 1_024);
         assert!(rgb < loose * 2);
         assert!(matches!(

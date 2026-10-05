@@ -1903,6 +1903,13 @@ safety reasoning. They do not narrate obvious syntax.
      FITS order. Bit-exact equivalence, mask equivalence, checked evidence
      aggregation, invalid-band rejection, cancellation checkpoints, and the
      matching preflight reservation are locked by tests.
+175. Expose the complete local-normalization memory estimate. The public runtime
+     contract now reports active plane images, application band, decode status,
+     retained samples, accumulated diagnostics, stellar-quality candidates,
+     pairwise slopes, FITS buffering, and their checked total. Native preflight
+     serializes those exact components and the desktop groups them into readable
+     image, fit, diagnostic, and I/O instruments instead of showing an opaque
+     reservation alone.
 
 ## 11. Stable-release definition
 

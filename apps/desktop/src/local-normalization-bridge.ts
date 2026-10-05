@@ -89,6 +89,14 @@ export interface LocalNormalizationPreflight {
   readonly memoryLimitBytes: number;
   readonly headroomBytes: number;
   readonly fitsMemoryLimit: boolean;
+  readonly planeImagesBytes: number;
+  readonly applicationBandBytes: number;
+  readonly decodeStatusBytes: number;
+  readonly retainedSamplesBytes: number;
+  readonly diagnosticsBytes: number;
+  readonly qualityBytes: number;
+  readonly slopeBytes: number;
+  readonly writerBufferBytes: number;
 }
 
 export interface LocalNormalizationProgress {

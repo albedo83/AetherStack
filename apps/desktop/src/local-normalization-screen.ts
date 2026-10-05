@@ -296,6 +296,12 @@ export function localNormalizationMarkup(): string {
             <progress data-localnorm-progress aria-label="Local normalization progress" max="1" hidden></progress>
             <p data-localnorm-message></p>
           </div>
+          <dl class="normalization-memory-breakdown" data-localnorm-memory-breakdown hidden>
+            ${evidence("Active images", "data-localnorm-memory-images", "—")}
+            ${evidence("Sampling + fit", "data-localnorm-memory-fit", "—")}
+            ${evidence("Diagnostics", "data-localnorm-memory-diagnostics", "—")}
+            ${evidence("FITS I/O", "data-localnorm-memory-io", "—")}
+          </dl>
         </section>
 
         <section class="normalization-instrument" aria-labelledby="normalization-profile-heading">
@@ -539,6 +545,7 @@ export function mountLocalNormalizationPanel(
         "[data-localnorm-progress-panel]",
       ).dataset.state = model.state;
       renderEvidence(root, model);
+      renderMemoryBreakdown(root, model);
       renderPreview(root, model);
       renderControlOverlay(root, model, overlay.checked);
       renderStatistics(root, model);
@@ -548,6 +555,48 @@ export function mountLocalNormalizationPanel(
       root.removeEventListener("change", onChange);
     },
   };
+}
+
+function renderMemoryBreakdown(
+  root: HTMLElement,
+  model: LocalNormalizationViewModel,
+): void {
+  const panel = required<HTMLElement>(
+    root,
+    "[data-localnorm-memory-breakdown]",
+  );
+  panel.hidden = model.preflight === null;
+  const estimate = model.preflight;
+  text(
+    root,
+    "[data-localnorm-memory-images]",
+    estimate
+      ? formatBytes(estimate.planeImagesBytes + estimate.applicationBandBytes)
+      : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-memory-fit]",
+    estimate
+      ? formatBytes(
+          estimate.retainedSamplesBytes +
+            estimate.qualityBytes +
+            estimate.slopeBytes,
+        )
+      : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-memory-diagnostics]",
+    estimate ? formatBytes(estimate.diagnosticsBytes) : "—",
+  );
+  text(
+    root,
+    "[data-localnorm-memory-io]",
+    estimate
+      ? formatBytes(estimate.decodeStatusBytes + estimate.writerBufferBytes)
+      : "—",
+  );
 }
 
 function renderControlOverlay(

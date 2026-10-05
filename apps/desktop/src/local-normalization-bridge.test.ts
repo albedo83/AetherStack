@@ -38,6 +38,14 @@ describe("native local-normalization bridge", () => {
       memoryLimitBytes: 2_147_483_648,
       headroomBytes: 1_379_483_648,
       fitsMemoryLimit: true,
+      planeImagesBytes: 256_000_000,
+      applicationBandBytes: 8_000_000,
+      decodeStatusBytes: 32_000_000,
+      retainedSamplesBytes: 400_000_000,
+      diagnosticsBytes: 1_000_000,
+      qualityBytes: 63_000_000,
+      slopeBytes: 7_934_464,
+      writerBufferBytes: 65_536,
     };
     vi.mocked(invoke).mockResolvedValue(expected);
     const request = {

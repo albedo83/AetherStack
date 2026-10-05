@@ -66,7 +66,7 @@ use aether_runtime::{
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
     SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
-    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_peak_bytes,
+    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_memory,
     run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
     run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
     run_registered_stack, run_registration_plan,
@@ -392,6 +392,14 @@ struct LocalNormalizationPreflightResponse {
     memory_limit_bytes: usize,
     headroom_bytes: usize,
     fits_memory_limit: bool,
+    plane_images_bytes: usize,
+    application_band_bytes: usize,
+    decode_status_bytes: usize,
+    retained_samples_bytes: usize,
+    diagnostics_bytes: usize,
+    quality_bytes: usize,
+    slope_bytes: usize,
+    writer_buffer_bytes: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2970,8 +2978,9 @@ fn preflight_local_normalization_sync(
             "The source and reference images do not have identical dimensions.",
         ));
     }
-    let required_bytes = estimate_local_normalization_peak_bytes(source, parameters)
+    let estimate = estimate_local_normalization_memory(source, parameters)
         .map_err(local_normalization_execution_error)?;
+    let required_bytes = estimate.required_bytes();
     Ok(LocalNormalizationPreflightResponse {
         width: source.width(),
         height: source.height(),
@@ -2980,6 +2989,14 @@ fn preflight_local_normalization_sync(
         memory_limit_bytes,
         headroom_bytes: memory_limit_bytes.saturating_sub(required_bytes),
         fits_memory_limit: required_bytes <= memory_limit_bytes,
+        plane_images_bytes: estimate.plane_images_bytes(),
+        application_band_bytes: estimate.application_band_bytes(),
+        decode_status_bytes: estimate.decode_status_bytes(),
+        retained_samples_bytes: estimate.retained_samples_bytes(),
+        diagnostics_bytes: estimate.diagnostics_bytes(),
+        quality_bytes: estimate.quality_bytes(),
+        slope_bytes: estimate.slope_bytes(),
+        writer_buffer_bytes: estimate.writer_buffer_bytes(),
     })
 }
 
@@ -8276,6 +8293,17 @@ mod tests {
         assert_eq!(
             preflight.headroom_bytes,
             preflight.memory_limit_bytes - preflight.required_bytes
+        );
+        assert_eq!(
+            preflight.required_bytes,
+            preflight.plane_images_bytes
+                + preflight.application_band_bytes
+                + preflight.decode_status_bytes
+                + preflight.retained_samples_bytes
+                + preflight.diagnostics_bytes
+                + preflight.quality_bytes
+                + preflight.slope_bytes
+                + preflight.writer_buffer_bytes
         );
 
         let mut events = Vec::new();

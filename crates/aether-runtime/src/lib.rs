@@ -29,8 +29,9 @@ pub use light_plan::{
 };
 pub use local_normalization::{
     LocalNormalizationCellDiagnostic, LocalNormalizationControlPoint,
-    LocalNormalizationPipelineError, LocalNormalizationRequest, LocalNormalizationRequestError,
-    LocalNormalizationResult, estimate_local_normalization_peak_bytes, run_local_normalization,
+    LocalNormalizationMemoryEstimate, LocalNormalizationPipelineError, LocalNormalizationRequest,
+    LocalNormalizationRequestError, LocalNormalizationResult, estimate_local_normalization_memory,
+    estimate_local_normalization_peak_bytes, run_local_normalization,
     run_local_normalization_with_progress,
 };
 pub use master_plan::{

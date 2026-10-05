@@ -122,6 +122,42 @@ describe("frame review workspace", () => {
       },
     });
     expect(execute.disabled).toBe(false);
+    fireEvent.click(getByRole(workspace!, "button", { name: "Verify memory" }));
+    expect(actions.onPreflightLocalNormalization).toHaveBeenCalledOnce();
+    controller.update({
+      ...demoReviewModel,
+      activeWorkspace: "normalization",
+      localNormalization: {
+        ...demoReviewModel.localNormalization,
+        sourcePath: "/session/source.fits",
+        referencePath: "/session/reference.fits",
+        outputPath: "/session/normalized.fits",
+        preflightState: "ready",
+        preflight: {
+          width: 4_144,
+          height: 2_822,
+          planes: 1,
+          requiredBytes: 768_000_000,
+          memoryLimitBytes: 2_147_483_648,
+          headroomBytes: 1_379_483_648,
+          fitsMemoryLimit: true,
+          planeImagesBytes: 256_000_000,
+          applicationBandBytes: 8_000_000,
+          decodeStatusBytes: 32_000_000,
+          retainedSamplesBytes: 400_000_000,
+          diagnosticsBytes: 1_000_000,
+          qualityBytes: 63_000_000,
+          slopeBytes: 7_934_464,
+          writerBufferBytes: 65_536,
+        },
+      },
+    });
+    expect(
+      workspace!.querySelector("[data-localnorm-memory-images]")?.textContent,
+    ).toContain("251.8 MiB");
+    expect(
+      workspace!.querySelector("[data-localnorm-memory-fit]")?.textContent,
+    ).toContain("449.1 MiB");
     fireEvent.click(execute);
     expect(actions.onExecuteLocalNormalization).toHaveBeenCalledOnce();
   });

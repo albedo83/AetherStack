@@ -139,6 +139,10 @@ Desktop preflight reads only the source and reference headers, requires identica
 dimensions, validates the complete parameter set, and reports the required bytes
 plus configured headroom. Execution calls that exact estimator again, so the
 preview cannot drift from the reservation enforced by the memory budget.
+The estimate also exposes every additive component: active input planes,
+application band, decode statuses, retained samples, cell diagnostics, quality
+candidates, slope scratch, and the atomic writer buffer. Their checked sum must
+equal the reserved total.
 
 Successful execution retains every accepted cell model in deterministic plane
 and grid order. Diagnostic evidence contains the cell-center coordinate, robust

@@ -4877,6 +4877,42 @@ tr[data-state="blocked"] .association-state {
   border-color: #77404a;
 }
 
+.normalization-memory-breakdown {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: #2a3949;
+  border: 1px solid #2a3949;
+  border-radius: 8px;
+}
+
+.normalization-memory-breakdown[hidden] {
+  display: none;
+}
+
+.normalization-memory-breakdown > div {
+  min-width: 0;
+  padding: 10px 12px;
+  background: linear-gradient(145deg, #151e28, #0c1219);
+}
+
+.normalization-memory-breakdown dt {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.normalization-memory-breakdown dd {
+  margin: 4px 0 0;
+  color: #dcecff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .normalization-profile {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
