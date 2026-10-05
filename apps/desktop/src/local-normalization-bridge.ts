@@ -99,6 +99,25 @@ export interface LocalNormalizationPreflight {
   readonly writerBufferBytes: number;
 }
 
+/** Reconciles a previously computed native estimate with a new UI ceiling. */
+export function reconcileLocalNormalizationPreflightMemory(
+  preflight: LocalNormalizationPreflight,
+  memoryLimitBytes: number,
+): LocalNormalizationPreflight {
+  if (!Number.isSafeInteger(memoryLimitBytes) || memoryLimitBytes <= 0) {
+    throw new RangeError("Memory ceiling must be a positive safe integer");
+  }
+  const fitsMemoryLimit = preflight.requiredBytes <= memoryLimitBytes;
+  return {
+    ...preflight,
+    memoryLimitBytes,
+    headroomBytes: fitsMemoryLimit
+      ? memoryLimitBytes - preflight.requiredBytes
+      : 0,
+    fitsMemoryLimit,
+  };
+}
+
 export interface LocalNormalizationProgress {
   readonly sequence: number;
   readonly stage: "local-normalization";

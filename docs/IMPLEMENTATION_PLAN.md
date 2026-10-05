@@ -1929,6 +1929,12 @@ safety reasoning. They do not narrate obvious syntax.
      within 0.2% of the reference despite four deliberately unsupported central
      cells. A separate exact-affine stellar oracle holds every published sample
      to 1e-10 absolute error.
+179. Reconcile memory-ceiling edits without discarding valid native evidence.
+     Because the required reservation is independent of the user ceiling, the
+     desktop now retains the header-derived component breakdown, recomputes only
+     headroom and sufficiency, and preserves an already published comparison.
+     Raising the 294MC ceiling to the recommended 512 MiB therefore unlocks the
+     run immediately without redundant FITS header I/O.
 
 ## 11. Stable-release definition
 

@@ -22,6 +22,7 @@ import {
   executeLocalNormalization,
   localNormalizationFailureMessage,
   preflightLocalNormalization,
+  reconcileLocalNormalizationPreflightMemory,
   selectLocalNormalizationOutput,
   selectLocalNormalizationReference,
   selectLocalNormalizationSource,
@@ -224,20 +225,25 @@ const screen = mountReviewScreen(root, model, {
   },
   onUpdateLocalNormalizationMemoryLimit(memoryLimitBytes) {
     if (isLocalNormalizationActive()) return;
-    clearLocalNormalizationPreview();
+    const current = model.localNormalization;
+    const preflight = current.preflight
+      ? reconcileLocalNormalizationPreflightMemory(
+          current.preflight,
+          memoryLimitBytes,
+        )
+      : null;
     update({
       ...model,
       localNormalization: {
-        ...model.localNormalization,
+        ...current,
         memoryLimitBytes,
-        preflightState: "idle",
-        preflight: null,
-        result: null,
-        previewState: "idle",
-        preview: null,
-        previewMessage: "Run normalization to inspect the output",
-        sharedStretchLabel: "Reference stretch · awaiting publication",
-        message: "Memory ceiling updated",
+        preflightState: preflight ? "ready" : "idle",
+        preflight,
+        message: preflight
+          ? preflight.fitsMemoryLimit
+            ? `Memory ceiling updated · ${formatMemoryBytes(preflight.headroomBytes)} headroom`
+            : `Memory ceiling is short by ${formatMemoryBytes(preflight.requiredBytes - preflight.memoryLimitBytes)}`
+          : "Memory ceiling updated",
       },
     });
   },

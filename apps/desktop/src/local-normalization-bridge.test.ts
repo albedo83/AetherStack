@@ -8,6 +8,7 @@ import {
   executeLocalNormalization,
   localNormalizationFailureMessage,
   preflightLocalNormalization,
+  reconcileLocalNormalizationPreflightMemory,
   selectLocalNormalizationOutput,
   selectLocalNormalizationReference,
   selectLocalNormalizationSource,
@@ -59,6 +60,50 @@ describe("native local-normalization bridge", () => {
     expect(invoke).toHaveBeenCalledWith("preflight_local_normalization", {
       request,
     });
+  });
+
+  it("reuses native estimate evidence when only the memory ceiling changes", () => {
+    const preflight = {
+      width: 4_144,
+      height: 2_822,
+      planes: 1,
+      requiredBytes: 440_485_472,
+      memoryLimitBytes: 268_435_456,
+      headroomBytes: 0,
+      fitsMemoryLimit: false,
+      planeImagesBytes: 234_000_000,
+      applicationBandBytes: 6_300_000,
+      decodeStatusBytes: 23_400_000,
+      retainedSamplesBytes: 145_000_000,
+      diagnosticsBytes: 300_000,
+      qualityBytes: 23_000_000,
+      slopeBytes: 8_419_936,
+      writerBufferBytes: 65_536,
+    };
+
+    const raised = reconcileLocalNormalizationPreflightMemory(
+      preflight,
+      536_870_912,
+    );
+    expect(raised).toEqual({
+      ...preflight,
+      memoryLimitBytes: 536_870_912,
+      headroomBytes: 96_385_440,
+      fitsMemoryLimit: true,
+    });
+    expect(preflight.fitsMemoryLimit).toBe(false);
+
+    expect(
+      reconcileLocalNormalizationPreflightMemory(raised, 402_653_184),
+    ).toEqual({
+      ...raised,
+      memoryLimitBytes: 402_653_184,
+      headroomBytes: 0,
+      fitsMemoryLimit: false,
+    });
+    expect(() =>
+      reconcileLocalNormalizationPreflightMemory(preflight, Number.NaN),
+    ).toThrow(RangeError);
   });
 
   it("passes every scientific control through one progress channel", async () => {
