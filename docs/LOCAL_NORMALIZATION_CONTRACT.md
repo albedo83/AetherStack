@@ -82,6 +82,22 @@ transformed, inherited-masked, non-finite input, unsupported surface, or
 non-finite result. This makes partial model coverage visible to the runtime and
 prevents unchanged source values from being consumed as normalized science.
 
+## Protected astronomical structures
+
+`stellar-fwhm-protection-mask-v1` converts the existing deterministic stellar
+quality catalog into conservative circular exclusion regions. The major-axis
+FWHM controls the radius, with explicit growth, minimum and maximum radius, and
+an additional multiplier for saturated sources whose wings are less reliably
+described by measured moments. Source coordinates and widths are never inferred
+or repaired by the rasterizer.
+
+Catalog size and total bounding-box pixel visits have hard limits. The complete
+work estimate is checked before mask allocation or rasterization. The report
+retains source count, edge-clipped footprints, candidate visits, unique
+protected pixels, and overlap hits. Only the selected plane receives the
+`REJECTED` protection flag; other planes remain clear. The resulting mask plugs
+directly into the sampling precedence defined above.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of
@@ -89,8 +105,8 @@ pairwise slopes. Work that exceeds any bound fails before allocating scratch
 storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
-The current contract covers sampling, per-cell fitting, guarded coefficient
-interpolation, and full-image application. Detection or construction of
-protected-source masks, optional surface regularization, provenance, and
+The current contract covers stellar protection, sampling, per-cell fitting,
+guarded coefficient interpolation, and full-image application. Additional
+non-stellar protected regions, optional surface regularization, provenance, and
 bounded FITS publication remain subsequent milestones and must not alter these
 algorithms silently.

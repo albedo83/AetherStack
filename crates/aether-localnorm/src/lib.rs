@@ -8,12 +8,17 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 mod application;
+mod protection;
 mod sampling;
 mod surface;
 
 pub use application::{
     ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplication, LocalApplicationEvidence,
     apply_local_surfaces,
+};
+pub use protection::{
+    PROTECTED_SOURCE_MASK_ALGORITHM_ID, ProtectedSource, ProtectionError, ProtectionMask,
+    ProtectionParameters, build_protection_mask, protected_sources_from_stars,
 };
 pub use sampling::{
     CELL_SAMPLING_ALGORITHM_ID, CellBounds, CellSamplingEvidence, LocalCellFit, LocalCellSamples,

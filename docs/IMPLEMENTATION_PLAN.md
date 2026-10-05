@@ -1815,6 +1815,10 @@ safety reasoning. They do not narrate obvious syntax.
      buffer and no per-pixel allocation. Existing masks retain precedence;
      unsupported or non-finite results remain visibly flagged, and exact
      mutually exclusive evidence accounts for every planar sample.
+159. Convert deterministic stellar measurements into conservative protected
+     regions. Major-axis FWHM, saturation-aware growth, radius caps, catalog
+     limits, and a complete preflight work bound produce a plane-specific mask
+     with explicit edge, unique-pixel, and overlap evidence.
 
 ## 11. Stable-release definition
 

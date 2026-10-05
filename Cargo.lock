@@ -69,6 +69,7 @@ name = "aether-localnorm"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-quality",
 ]
 
 [[package]]
