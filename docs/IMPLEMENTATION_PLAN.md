@@ -1811,6 +1811,10 @@ safety reasoning. They do not narrate obvious syntax.
      weights and compensated sums, retains exact controls, reports local support,
      and rejects out-of-domain or under-supported evaluations without
      extrapolating through grid holes.
+158. Apply one guarded surface per plane with one reusable bounded interpolation
+     buffer and no per-pixel allocation. Existing masks retain precedence;
+     unsupported or non-finite results remain visibly flagged, and exact
+     mutually exclusive evidence accounts for every planar sample.
 
 ## 11. Stable-release definition
 

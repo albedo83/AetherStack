@@ -67,6 +67,21 @@ insufficient local support, non-finite inputs, allocation failures, and
 non-finite results are distinct failures. Each evaluation reports its support
 count, furthest contributing distance, and whether it was an exact control.
 
+## Full-image application
+
+`local-surface-apply-f64-v1` requires exactly one coefficient surface per image
+plane and reuses one bounded nearest-neighbor scratch buffer for the complete
+image. It performs no per-pixel allocation. Existing quality flags take
+precedence and are copied unchanged. Clear non-finite inputs gain `INVALID`;
+coordinates without surface support retain their source value and gain
+`MISSING`; finite affine overflow retains its source value and gains `INVALID`.
+Only successfully transformed values remain clear.
+
+The application report accounts for every planar sample exactly once as
+transformed, inherited-masked, non-finite input, unsupported surface, or
+non-finite result. This makes partial model coverage visible to the runtime and
+prevents unchanged source values from being consumed as normalized science.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of
@@ -74,8 +89,8 @@ pairwise slopes. Work that exceeds any bound fails before allocating scratch
 storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
-The current contract covers sampling, per-cell fitting, and guarded coefficient
-interpolation. Detection or construction of protected-source masks, optional
-surface regularization, full-frame application, provenance, and bounded FITS
-publication remain subsequent milestones and must not alter these algorithms
-silently.
+The current contract covers sampling, per-cell fitting, guarded coefficient
+interpolation, and full-image application. Detection or construction of
+protected-source masks, optional surface regularization, provenance, and
+bounded FITS publication remain subsequent milestones and must not alter these
+algorithms silently.

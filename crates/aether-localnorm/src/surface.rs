@@ -110,6 +110,23 @@ impl LocalCoefficientSurface {
 
     /// Evaluates scale and offset with explicit local-support evidence.
     pub fn evaluate(&self, x: f64, y: f64) -> Result<SurfaceEvaluation, SurfaceError> {
+        let mut neighbors = Vec::new();
+        neighbors
+            .try_reserve_exact(self.parameters.maximum_neighbors)
+            .map_err(|_| SurfaceError::AllocationFailed)?;
+        self.evaluate_with_scratch(x, y, &mut neighbors)
+    }
+
+    pub(crate) const fn scratch_capacity(&self) -> usize {
+        self.parameters.maximum_neighbors
+    }
+
+    pub(crate) fn evaluate_with_scratch(
+        &self,
+        x: f64,
+        y: f64,
+        neighbors: &mut Vec<(f64, usize)>,
+    ) -> Result<SurfaceEvaluation, SurfaceError> {
         if !x.is_finite() || !y.is_finite() {
             return Err(SurfaceError::NonFiniteCoordinate);
         }
@@ -117,10 +134,7 @@ impl LocalCoefficientSurface {
             return Err(SurfaceError::OutsideDomain);
         }
 
-        let mut neighbors = Vec::<(f64, usize)>::new();
-        neighbors
-            .try_reserve_exact(self.parameters.maximum_neighbors)
-            .map_err(|_| SurfaceError::AllocationFailed)?;
+        neighbors.clear();
         let maximum_distance_squared =
             self.parameters.maximum_distance * self.parameters.maximum_distance;
         for (index, control) in self.controls.iter().enumerate() {
@@ -138,7 +152,7 @@ impl LocalCoefficientSurface {
             }
             if distance_squared <= maximum_distance_squared {
                 retain_nearest(
-                    &mut neighbors,
+                    neighbors,
                     (distance_squared, index),
                     self.parameters.maximum_neighbors,
                 );
@@ -150,11 +164,11 @@ impl LocalCoefficientSurface {
 
         let nearest_distance_squared = neighbors[0].0;
         let scale =
-            stable_weighted_mean(&neighbors, &self.controls, nearest_distance_squared, |p| {
+            stable_weighted_mean(neighbors, &self.controls, nearest_distance_squared, |p| {
                 p.scale
             })?;
         let offset =
-            stable_weighted_mean(&neighbors, &self.controls, nearest_distance_squared, |p| {
+            stable_weighted_mean(neighbors, &self.controls, nearest_distance_squared, |p| {
                 p.offset
             })?;
         let furthest_distance = neighbors.last().map_or(0.0, |neighbor| neighbor.0.sqrt());

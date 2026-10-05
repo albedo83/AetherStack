@@ -7,9 +7,14 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+mod application;
 mod sampling;
 mod surface;
 
+pub use application::{
+    ApplicationError, LOCAL_APPLICATION_ALGORITHM_ID, LocalApplication, LocalApplicationEvidence,
+    apply_local_surfaces,
+};
 pub use sampling::{
     CELL_SAMPLING_ALGORITHM_ID, CellBounds, CellSamplingEvidence, LocalCellFit, LocalCellSamples,
     SamplingError, SamplingGridParameters, SpatialSample, fit_local_grid, sample_local_grid,
