@@ -116,6 +116,134 @@ impl Error for AtomicFitsWriteError {
     }
 }
 
+/// Failure while publishing a create-new set of completed FITS products.
+#[derive(Debug)]
+pub enum AtomicFitsSetWriteError {
+    /// A product set must contain at least one completed output.
+    EmptySet,
+    /// Two completed streams target the same public path.
+    DuplicateDestination(PathBuf),
+    /// Bookkeeping storage could not be reserved before publication.
+    AllocationFailed,
+    /// One private stream could not be synchronized before any link was made.
+    SyncTemporary {
+        /// Destination whose private stream failed synchronization.
+        destination: PathBuf,
+        /// Operating-system synchronization failure.
+        source: io::Error,
+    },
+    /// One complete stream could not be linked to its create-new destination.
+    Publish {
+        /// Destination that rejected publication.
+        destination: PathBuf,
+        /// Operating-system hard-link failure.
+        source: io::Error,
+    },
+    /// A public link created by this transaction could not be rolled back.
+    Rollback {
+        /// Public path that may remain visible.
+        destination: PathBuf,
+        /// Operating-system removal failure.
+        source: io::Error,
+    },
+    /// All destinations are visible, but one private link could not be removed.
+    CleanupAfterPublish {
+        /// Temporary path that may require manual cleanup.
+        temporary_path: PathBuf,
+        /// Operating-system removal failure.
+        source: io::Error,
+    },
+    /// All destinations are visible, but directory metadata could not be synced.
+    DirectorySyncAfterPublish {
+        /// Parent directory whose durability could not be confirmed.
+        directory: PathBuf,
+        /// Operating-system synchronization failure.
+        source: io::Error,
+    },
+}
+
+impl AtomicFitsSetWriteError {
+    /// Returns whether at least one destination created by the set may be visible.
+    ///
+    /// A rollback failure can leave only part of the set visible. Cleanup and
+    /// directory-sync failures occur after the complete set became visible.
+    #[must_use]
+    pub const fn output_may_be_published(&self) -> bool {
+        matches!(
+            self,
+            Self::Rollback { .. }
+                | Self::CleanupAfterPublish { .. }
+                | Self::DirectorySyncAfterPublish { .. }
+        )
+    }
+}
+
+impl Display for AtomicFitsSetWriteError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptySet => formatter.write_str("FITS product set is empty"),
+            Self::DuplicateDestination(path) => write!(
+                formatter,
+                "FITS product set repeats destination {}",
+                path.display()
+            ),
+            Self::AllocationFailed => {
+                formatter.write_str("cannot allocate FITS product-set bookkeeping")
+            }
+            Self::SyncTemporary {
+                destination,
+                source,
+            } => write!(
+                formatter,
+                "cannot synchronize private FITS product {}: {source}",
+                destination.display()
+            ),
+            Self::Publish {
+                destination,
+                source,
+            } => write!(
+                formatter,
+                "cannot publish FITS product {}: {source}",
+                destination.display()
+            ),
+            Self::Rollback {
+                destination,
+                source,
+            } => write!(
+                formatter,
+                "cannot roll back FITS product {}: {source}",
+                destination.display()
+            ),
+            Self::CleanupAfterPublish {
+                temporary_path,
+                source,
+            } => write!(
+                formatter,
+                "FITS product set is published but temporary link {} could not be removed: {source}",
+                temporary_path.display()
+            ),
+            Self::DirectorySyncAfterPublish { directory, source } => write!(
+                formatter,
+                "FITS product set is published but directory {} could not be synchronized: {source}",
+                directory.display()
+            ),
+        }
+    }
+}
+
+impl Error for AtomicFitsSetWriteError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::SyncTemporary { source, .. }
+            | Self::Publish { source, .. }
+            | Self::Rollback { source, .. }
+            | Self::CleanupAfterPublish { source, .. }
+            | Self::DirectorySyncAfterPublish { source, .. } => Some(source),
+            Self::EmptySet | Self::DuplicateDestination(_) | Self::AllocationFailed => None,
+        }
+    }
+}
+
 struct TemporaryPathGuard {
     path: PathBuf,
     armed: bool,
@@ -267,6 +395,18 @@ pub struct CompletedAtomicFits {
 }
 
 impl CompletedAtomicFits {
+    /// Final create-new destination retained by this private stream.
+    #[must_use]
+    pub fn destination(&self) -> &Path {
+        &self.destination
+    }
+
+    /// Exact encoding summary available before publication.
+    #[must_use]
+    pub const fn summary(&self) -> FitsWriteSummary {
+        self.summary
+    }
+
     /// Opens an independent handle to the complete unpublished bytes.
     ///
     /// This supports bounded readback and statistics without exposing a partial
@@ -298,16 +438,7 @@ impl CompletedAtomicFits {
     /// durability failures. See [`AtomicFitsWriteError::output_is_published`]
     /// to distinguish post-publication failures.
     pub fn publish(mut self) -> Result<FitsWriteSummary, AtomicFitsWriteError> {
-        let writer = self.writer.take().ok_or_else(|| {
-            AtomicFitsWriteError::SyncTemporary(io::Error::other(
-                "temporary FITS writer is unavailable",
-            ))
-        })?;
-        writer
-            .get_ref()
-            .sync_all()
-            .map_err(AtomicFitsWriteError::SyncTemporary)?;
-        drop(writer);
+        self.synchronize_temporary()?;
 
         match fs::hard_link(&self.temporary_path, &self.destination) {
             Ok(()) => {}
@@ -328,6 +459,140 @@ impl CompletedAtomicFits {
         sync_directory_after_publish(&self.parent)?;
         Ok(self.summary)
     }
+
+    fn synchronize_temporary(&mut self) -> Result<(), AtomicFitsWriteError> {
+        let writer = self.writer.take().ok_or_else(|| {
+            AtomicFitsWriteError::SyncTemporary(io::Error::other(
+                "temporary FITS writer is unavailable",
+            ))
+        })?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(AtomicFitsWriteError::SyncTemporary)?;
+        drop(writer);
+        Ok(())
+    }
+}
+
+/// Publishes a complete create-new FITS product set as one rollback transaction.
+///
+/// Every private stream is synchronized before the first destination is linked.
+/// Destinations are then linked in caller order. A failure removes links created
+/// by this transaction in reverse order; existing paths are never overwritten.
+/// The standard library cannot make several directory entries visible in one
+/// indivisible filesystem operation, but a successful return guarantees the
+/// complete set, while a prepublication or successfully rolled-back error leaves
+/// none of this transaction's destinations behind.
+///
+/// # Errors
+///
+/// Returns a typed validation, allocation, synchronization, publication,
+/// rollback, cleanup, or durability error. When
+/// [`AtomicFitsSetWriteError::output_may_be_published`] is `true`, callers must
+/// inspect the named paths instead of retrying under new names.
+pub fn publish_atomic_fits_set(
+    mut products: Vec<CompletedAtomicFits>,
+) -> Result<Vec<FitsWriteSummary>, AtomicFitsSetWriteError> {
+    if products.is_empty() {
+        return Err(AtomicFitsSetWriteError::EmptySet);
+    }
+    for (index, product) in products.iter().enumerate() {
+        if products[..index]
+            .iter()
+            .any(|earlier| earlier.destination == product.destination)
+        {
+            return Err(AtomicFitsSetWriteError::DuplicateDestination(
+                product.destination.clone(),
+            ));
+        }
+    }
+
+    let mut published = Vec::new();
+    published
+        .try_reserve_exact(products.len())
+        .map_err(|_| AtomicFitsSetWriteError::AllocationFailed)?;
+    let mut summaries = Vec::new();
+    summaries
+        .try_reserve_exact(products.len())
+        .map_err(|_| AtomicFitsSetWriteError::AllocationFailed)?;
+
+    for product in &mut products {
+        product.synchronize_temporary().map_err(|error| {
+            let source = match error {
+                AtomicFitsWriteError::SyncTemporary(source) => source,
+                _ => io::Error::other("unexpected FITS set synchronization state"),
+            };
+            AtomicFitsSetWriteError::SyncTemporary {
+                destination: product.destination.clone(),
+                source,
+            }
+        })?;
+    }
+
+    for product in &products {
+        if let Err(source) = fs::hard_link(&product.temporary_path, &product.destination) {
+            rollback_set_publications(&published)?;
+            return Err(AtomicFitsSetWriteError::Publish {
+                destination: product.destination.clone(),
+                source,
+            });
+        }
+        published.push(product.destination.clone());
+    }
+
+    for product in &mut products {
+        if let Err(source) = fs::remove_file(&product.temporary_path) {
+            return Err(AtomicFitsSetWriteError::CleanupAfterPublish {
+                temporary_path: product.temporary_path.clone(),
+                source,
+            });
+        }
+        product.guard.disarm();
+        summaries.push(product.summary);
+    }
+
+    for (index, product) in products.iter().enumerate() {
+        if products[..index]
+            .iter()
+            .any(|earlier| earlier.parent == product.parent)
+        {
+            continue;
+        }
+        sync_set_directory(&product.parent)?;
+    }
+    Ok(summaries)
+}
+
+fn rollback_set_publications(paths: &[PathBuf]) -> Result<(), AtomicFitsSetWriteError> {
+    for destination in paths.iter().rev() {
+        fs::remove_file(destination).map_err(|source| AtomicFitsSetWriteError::Rollback {
+            destination: destination.clone(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_set_directory(directory: &Path) -> Result<(), AtomicFitsSetWriteError> {
+    let file = File::open(directory).map_err(|source| {
+        AtomicFitsSetWriteError::DirectorySyncAfterPublish {
+            directory: directory.to_path_buf(),
+            source,
+        }
+    })?;
+    file.sync_all().map_err(
+        |source| AtomicFitsSetWriteError::DirectorySyncAfterPublish {
+            directory: directory.to_path_buf(),
+            source,
+        },
+    )
+}
+
+#[cfg(not(unix))]
+fn sync_set_directory(_directory: &Path) -> Result<(), AtomicFitsSetWriteError> {
+    Ok(())
 }
 
 /// Writes and atomically publishes a new binary64 FITS file without overwriting.
@@ -582,6 +847,106 @@ mod tests {
         Ok(())
     }
 
+    fn completed_product(
+        path: &Path,
+        value: f64,
+    ) -> Result<CompletedAtomicFits, Box<dyn StdError>> {
+        let image = image(value)?;
+        let mut writer = AtomicF64PrimaryStreamWriter::create(path, image.dimensions())?;
+        writer.write_image_chunk(&image)?;
+        Ok(writer.finish()?)
+    }
+
+    #[test]
+    fn publishes_a_complete_ordered_product_set() -> Result<(), Box<dyn StdError>> {
+        let directory = TestDirectory::new()?;
+        let science = directory.path.join("science.fits");
+        let weight = directory.path.join("weight.fits");
+        let products = vec![
+            completed_product(&science, 10.0)?,
+            completed_product(&weight, 20.0)?,
+        ];
+        assert!(
+            products
+                .iter()
+                .all(|product| !product.destination().exists())
+        );
+        assert_eq!(products[0].summary().samples_written(), 2);
+
+        let summaries = publish_atomic_fits_set(products)?;
+
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(
+            read_values(&science)?.map(f64::to_bits),
+            [10.0, 11.0].map(f64::to_bits)
+        );
+        assert_eq!(
+            read_values(&weight)?.map(f64::to_bits),
+            [20.0, 21.0].map(f64::to_bits)
+        );
+        let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
+        assert_eq!(entries.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn product_set_collision_rolls_back_earlier_links() -> Result<(), Box<dyn StdError>> {
+        let directory = TestDirectory::new()?;
+        let science = directory.path.join("science.fits");
+        let weight = directory.path.join("weight.fits");
+        let products = vec![
+            completed_product(&science, 10.0)?,
+            completed_product(&weight, 20.0)?,
+        ];
+        fs::write(&weight, b"existing")?;
+
+        let Err(error) = publish_atomic_fits_set(products) else {
+            return Err(io::Error::other("racing destination was overwritten").into());
+        };
+
+        assert!(matches!(
+            &error,
+            AtomicFitsSetWriteError::Publish {
+                destination,
+                source: _
+            } if *destination == weight
+        ));
+        assert!(!error.output_may_be_published());
+        assert!(!science.exists());
+        assert_eq!(fs::read(&weight)?, b"existing");
+        let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
+        assert_eq!(entries.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_empty_and_duplicate_product_sets_before_publication() -> Result<(), Box<dyn StdError>>
+    {
+        assert!(matches!(
+            publish_atomic_fits_set(Vec::new()),
+            Err(AtomicFitsSetWriteError::EmptySet)
+        ));
+        let directory = TestDirectory::new()?;
+        let destination = directory.path.join("same.fits");
+        let products = vec![
+            completed_product(&destination, 1.0)?,
+            completed_product(&destination, 2.0)?,
+        ];
+
+        let Err(error) = publish_atomic_fits_set(products) else {
+            return Err(io::Error::other("duplicate destinations were published").into());
+        };
+
+        assert!(matches!(
+            error,
+            AtomicFitsSetWriteError::DuplicateDestination(path) if path == destination
+        ));
+        assert!(!destination.exists());
+        let entries: Vec<_> = fs::read_dir(&directory.path)?.collect::<Result<_, _>>()?;
+        assert!(entries.is_empty());
+        Ok(())
+    }
+
     #[test]
     fn abandoning_a_staged_stream_removes_its_private_file() -> Result<(), Box<dyn StdError>> {
         let directory = TestDirectory::new()?;
@@ -734,5 +1099,13 @@ mod tests {
         assert!(!error.output_is_published());
         let published = AtomicFitsWriteError::DirectorySyncAfterPublish(io::Error::other("sync"));
         assert!(published.output_is_published());
+        assert!(!AtomicFitsSetWriteError::EmptySet.output_may_be_published());
+        assert!(
+            AtomicFitsSetWriteError::Rollback {
+                destination: PathBuf::from("result.fits"),
+                source: io::Error::other("rollback"),
+            }
+            .output_may_be_published()
+        );
     }
 }

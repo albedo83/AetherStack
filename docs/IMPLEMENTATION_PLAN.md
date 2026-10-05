@@ -1958,6 +1958,12 @@ safety reasoning. They do not narrate obvious syntax.
      while per-pixel support maps and checked evidence expose every contribution.
      Zero-weight outputs remain NaN with `MISSING`, and tests require bit-identical
      science, weight, support, and flag maps between complete and split tiles.
+184. Generalize create-new FITS publication to coherent product sets. Every
+     completed private stream is synchronized before the first public link;
+     duplicate destinations fail before mutation, collisions never overwrite,
+     and a later link failure removes this transaction's earlier links in reverse
+     order. Typed errors distinguish a clean rollback from the rare states where
+     a rollback, temporary-link cleanup, or directory durability check failed.
 
 ## 11. Stable-release definition
 

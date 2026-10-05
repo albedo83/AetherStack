@@ -18,8 +18,9 @@ mod statistics;
 mod writer;
 
 pub use atomic_writer::{
-    AtomicF64PrimaryStreamWriter, AtomicFitsWriteError, CompletedAtomicFits,
-    write_f64_primary_atomic_new, write_f64_primary_atomic_new_with_provenance,
+    AtomicF64PrimaryStreamWriter, AtomicFitsSetWriteError, AtomicFitsWriteError,
+    CompletedAtomicFits, publish_atomic_fits_set, write_f64_primary_atomic_new,
+    write_f64_primary_atomic_new_with_provenance,
 };
 pub use card::{Card, FitsValue};
 pub use checksum::{
