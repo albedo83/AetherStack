@@ -14,12 +14,14 @@ use aether_metadata::BayerPattern;
 use aether_registration::{CoordinateError, ImagePoint, ProjectiveTransform};
 
 mod accumulation;
+mod frame;
 mod sample;
 
 pub use accumulation::{
     DrizzleAccumulationError, DrizzleTileAccumulator, DrizzleTileBounds, DrizzleTileEvidence,
     DrizzleTileResult,
 };
+pub use frame::{DrizzleFrameError, DrizzleFrameEvidence, accumulate_cfa_frame};
 pub use sample::{
     DetectorSample, DrizzleOutputBounds, DrizzleSampleExclusion, DrizzleSampleOutcome,
     deposit_cfa_sample,

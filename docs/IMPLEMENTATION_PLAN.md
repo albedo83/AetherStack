@@ -1971,6 +1971,13 @@ safety reasoning. They do not narrate obvious syntax.
      retain numeric zero; support conversion refuses integers beyond binary64's
      exact consecutive domain. All dimensions and checksums pass private readback
      before the create-new rollback transaction exposes any destination.
+186. Execute complete CFA frames into bounded Drizzle tiles. Global source,
+     mosaic, weight, and tile contracts fail before the first detector sample;
+     accepted frames traverse original photosites once in stable row-major order.
+     Per-frame evidence exactly partitions existing masks, unflagged non-finite
+     values, and deposited samples, while separately counting footprints outside
+     global output and contributions before tile ownership filtering. Weighted
+     multi-exposure tests lock physical CFA separation and exact output values.
 
 ## 11. Stable-release definition
 

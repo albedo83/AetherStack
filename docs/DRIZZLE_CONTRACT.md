@@ -87,6 +87,18 @@ owned, contributions outside, and unsupported output samples. Tests require
 bit-identical science, weight, support, and flag maps when a complete tile is
 replaced by adjacent tiles and reassembled.
 
+## Complete CFA frame execution
+
+A frame executor validates its single-plane detector shape, supported CFA
+phase, positive finite frame weight, and RGB tile containment before inspecting
+the first sample. It then visits original photosites exactly once in detector
+row-major order. Per-frame evidence partitions every source sample into existing
+mask, unflagged non-finite, or geometrically deposited categories; deposited
+samples whose footprint misses the global output remain distinct. The executor
+also counts geometric contributions before tile ownership filtering, while the
+tile retains its independent owned/outside accounting. This separation makes
+cropping, defective input, and missing output support distinguishable.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with
