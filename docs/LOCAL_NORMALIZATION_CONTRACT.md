@@ -126,6 +126,13 @@ and checksum readback plus fresh source and reference fingerprints must all pass
 before create-new atomic publication. Cancellation, memory failure, dimension
 mismatch, scientific failure, or readback failure leaves no public output.
 
+Execution can emit the shared machine-readable progress protocol under the
+stable `local-normalization` stage. Work becomes determinate after input headers
+agree: one unit covers complete decoding, one covers each plane, one covers
+private output validation, and one covers atomic publication. Sequence numbers
+are monotonic; successful, failed, and cancelled terminal events retain canonical
+state and failure codes.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of

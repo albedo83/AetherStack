@@ -20,10 +20,12 @@ use aether_quality::{FrameQualityError, measure_frame_quality};
 use crate::pipeline::{dimensions_from_axes, open_reader, verify_source};
 use crate::{
     CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, PipelineInput, PipelineSource,
+    ProgressEvent, ProgressEventError, ProgressSequence, ProgressState, StageId, StageIdError,
     StrictPipelineError,
 };
 
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
+const LOCAL_NORMALIZATION_STAGE_ID: &str = "local-normalization";
 
 /// A source/reference local-normalization transaction sealed before FITS I/O.
 #[derive(Clone, Debug)]
@@ -323,6 +325,34 @@ pub enum LocalNormalizationPipelineError {
     InvalidStagedOutput,
     /// Execution stopped at a cooperative checkpoint.
     Cancelled(Cancelled),
+    /// The fixed stage identifier unexpectedly failed validation.
+    StageId(StageIdError),
+    /// A machine-readable progress event violated its invariant.
+    Progress(ProgressEventError),
+}
+
+impl LocalNormalizationPipelineError {
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Input(_) => "localnorm-input",
+            Self::DimensionMismatch { .. } => "localnorm-dimensions",
+            Self::WorkSizeOverflow => "localnorm-work-size",
+            Self::Memory(_) => "localnorm-memory",
+            Self::ReadInput(_) => "localnorm-read",
+            Self::Core(_) => "localnorm-image",
+            Self::Quality(_) => "localnorm-quality",
+            Self::Protection(_) => "localnorm-protection",
+            Self::Sampling(_) => "localnorm-sampling",
+            Self::Fitting(_) => "localnorm-fitting",
+            Self::Surface(_) => "localnorm-surface",
+            Self::Application(_) => "localnorm-application",
+            Self::Publish(_) => "localnorm-publish",
+            Self::InvalidStagedOutput => "localnorm-readback",
+            Self::Cancelled(_) => "cancelled",
+            Self::StageId(_) => "localnorm-stage",
+            Self::Progress(_) => "localnorm-progress",
+        }
+    }
 }
 
 impl Display for LocalNormalizationPipelineError {
@@ -392,6 +422,10 @@ impl Display for LocalNormalizationPipelineError {
             Self::InvalidStagedOutput => formatter
                 .write_str("private local-normalized FITS failed exact readback validation"),
             Self::Cancelled(error) => Display::fmt(error, formatter),
+            Self::StageId(error) => write!(formatter, "invalid local-normalization stage: {error}"),
+            Self::Progress(error) => {
+                write!(formatter, "invalid local-normalization progress: {error}")
+            }
         }
     }
 }
@@ -411,6 +445,8 @@ impl Error for LocalNormalizationPipelineError {
             Self::Application(error) => Some(error),
             Self::Publish(error) => Some(error),
             Self::Cancelled(error) => Some(error),
+            Self::StageId(error) => Some(error),
+            Self::Progress(error) => Some(error),
             Self::DimensionMismatch { .. } | Self::WorkSizeOverflow | Self::InvalidStagedOutput => {
                 None
             }
@@ -439,6 +475,99 @@ pub fn run_local_normalization(
     cancellation: &CancellationToken,
     memory: &MemoryBudget,
 ) -> Result<LocalNormalizationResult, LocalNormalizationPipelineError> {
+    run_local_normalization_with_progress(request, cancellation, memory, |_| {})
+}
+
+/// Executes local normalization while delivering validated lifecycle events.
+///
+/// Events use a stable stage identifier and strictly increasing sequence. Once
+/// dimensions are known, the total covers complete input decoding, one unit per
+/// image plane, private output validation, and atomic publication.
+///
+/// # Errors
+///
+/// Returns every error documented by [`run_local_normalization`], plus typed
+/// stage and progress invariant failures.
+pub fn run_local_normalization_with_progress<F>(
+    request: &LocalNormalizationRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<LocalNormalizationResult, LocalNormalizationPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let stage = StageId::new(LOCAL_NORMALIZATION_STAGE_ID)
+        .map_err(LocalNormalizationPipelineError::StageId)?;
+    let sequence = ProgressSequence::new();
+    emit_progress(
+        &sequence,
+        &stage,
+        ProgressState::Started,
+        0,
+        None,
+        None,
+        &mut progress,
+    )?;
+    let mut completed = 0_u64;
+    let mut total = None;
+    let execution = execute_local_normalization(
+        request,
+        cancellation,
+        memory,
+        &sequence,
+        &stage,
+        &mut completed,
+        &mut total,
+        &mut progress,
+    );
+    match execution {
+        Ok(result) => {
+            emit_progress(
+                &sequence,
+                &stage,
+                ProgressState::Completed,
+                completed,
+                total,
+                None,
+                &mut progress,
+            )?;
+            Ok(result)
+        }
+        Err(error) => {
+            let state = if matches!(error, LocalNormalizationPipelineError::Cancelled(_)) {
+                ProgressState::Cancelled
+            } else {
+                ProgressState::Failed
+            };
+            let _ignored = emit_progress(
+                &sequence,
+                &stage,
+                state,
+                completed,
+                total,
+                Some(error.code().to_owned()),
+                &mut progress,
+            );
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_local_normalization<F>(
+    request: &LocalNormalizationRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    sequence: &ProgressSequence,
+    stage: &StageId,
+    completed: &mut u64,
+    total: &mut Option<u64>,
+    progress: &mut F,
+) -> Result<LocalNormalizationResult, LocalNormalizationPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
     cancellation
         .checkpoint()
         .map_err(LocalNormalizationPipelineError::Cancelled)?;
@@ -473,6 +602,20 @@ pub fn run_local_normalization(
             reference: reference_dimensions,
         });
     }
+    let work_units = u64::try_from(dimensions.planes())
+        .ok()
+        .and_then(|planes| planes.checked_add(3))
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    *total = Some(work_units);
+    emit_progress(
+        sequence,
+        stage,
+        ProgressState::Running,
+        *completed,
+        *total,
+        None,
+        progress,
+    )?;
 
     let planned_bytes = planned_peak_bytes(dimensions, request.parameters())?;
     let _reservation = memory
@@ -480,6 +623,7 @@ pub fn run_local_normalization(
         .map_err(LocalNormalizationPipelineError::Memory)?;
     let source = read_complete_image(&mut source_reader, dimensions, cancellation)?;
     let reference = read_complete_image(&mut reference_reader, dimensions, cancellation)?;
+    advance_progress(sequence, stage, completed, *total, progress)?;
 
     let parameters = request.parameters();
     let mut surfaces = Vec::new();
@@ -533,6 +677,7 @@ pub fn run_local_normalization(
             .checked_add(surface.rejected_cell_count())
             .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
         surfaces.push(surface);
+        advance_progress(sequence, stage, completed, *total, progress)?;
     }
 
     cancellation
@@ -554,6 +699,7 @@ pub fn run_local_normalization(
         .finish()
         .map_err(LocalNormalizationPipelineError::Publish)?;
     validate_staged_output(&staged, dimensions)?;
+    advance_progress(sequence, stage, completed, *total, progress)?;
     cancellation
         .checkpoint()
         .map_err(LocalNormalizationPipelineError::Cancelled)?;
@@ -566,6 +712,7 @@ pub fn run_local_normalization(
     let summary = staged
         .publish()
         .map_err(LocalNormalizationPipelineError::Publish)?;
+    advance_progress(sequence, stage, completed, *total, progress)?;
     Ok(LocalNormalizationResult {
         dimensions,
         summary,
@@ -680,6 +827,50 @@ fn validate_staged_output(
     if actual != expected || !checksums.is_fully_verified() {
         return Err(LocalNormalizationPipelineError::InvalidStagedOutput);
     }
+    Ok(())
+}
+
+fn advance_progress<F>(
+    sequence: &ProgressSequence,
+    stage: &StageId,
+    completed: &mut u64,
+    total: Option<u64>,
+    progress: &mut F,
+) -> Result<(), LocalNormalizationPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    *completed = completed
+        .checked_add(1)
+        .ok_or(LocalNormalizationPipelineError::WorkSizeOverflow)?;
+    emit_progress(
+        sequence,
+        stage,
+        ProgressState::Running,
+        *completed,
+        total,
+        None,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_progress<F>(
+    sequence: &ProgressSequence,
+    stage: &StageId,
+    state: ProgressState,
+    completed: u64,
+    total: Option<u64>,
+    code: Option<String>,
+    progress: &mut F,
+) -> Result<(), LocalNormalizationPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let event = sequence
+        .next(stage.clone(), state, completed, total, code)
+        .map_err(LocalNormalizationPipelineError::Progress)?;
+    progress(event);
     Ok(())
 }
 
@@ -995,7 +1186,13 @@ mod tests {
         let request =
             execution_request(source, reference, output.clone(), execution_parameters()?)?;
         let budget = MemoryBudget::new(16 * 1_024 * 1_024)?;
-        let result = run_local_normalization(&request, &CancellationToken::new(), &budget)?;
+        let mut events = Vec::new();
+        let result = run_local_normalization_with_progress(
+            &request,
+            &CancellationToken::new(),
+            &budget,
+            |event| events.push(event),
+        )?;
 
         assert_eq!(result.dimensions(), dimensions);
         assert_eq!(result.application().transformed(), dimensions.pixel_count());
@@ -1011,6 +1208,27 @@ mod tests {
         assert_eq!(
             result.summary().samples_written(),
             dimensions.pixel_count() as u64
+        );
+        assert_eq!(
+            events.first().map(ProgressEvent::state),
+            Some(ProgressState::Started)
+        );
+        assert_eq!(events.first().and_then(ProgressEvent::total_units), None);
+        assert_eq!(
+            events.last().map(ProgressEvent::state),
+            Some(ProgressState::Completed)
+        );
+        assert_eq!(events.last().map(ProgressEvent::completed_units), Some(5));
+        assert_eq!(events.last().and_then(ProgressEvent::total_units), Some(5));
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[1].sequence() == pair[0].sequence() + 1)
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.stage().as_str() == LOCAL_NORMALIZATION_STAGE_ID)
         );
 
         let file = File::open(output)?;
@@ -1048,16 +1266,26 @@ mod tests {
         )?;
         let cancellation = CancellationToken::new();
         assert!(cancellation.cancel());
-        let cancelled = run_local_normalization(
+        let mut cancellation_events = Vec::new();
+        let cancelled = run_local_normalization_with_progress(
             &cancelled_request,
             &cancellation,
             &MemoryBudget::new(16 * 1_024 * 1_024)?,
+            |event| cancellation_events.push(event),
         );
         assert!(matches!(
             cancelled,
             Err(LocalNormalizationPipelineError::Cancelled(_))
         ));
         assert!(!cancelled_output.exists());
+        assert_eq!(
+            cancellation_events.last().map(ProgressEvent::state),
+            Some(ProgressState::Cancelled)
+        );
+        assert_eq!(
+            cancellation_events.last().and_then(ProgressEvent::code),
+            Some("cancelled")
+        );
 
         let memory_output = directory.0.join("memory.fits");
         let memory_request = execution_request(
@@ -1066,16 +1294,26 @@ mod tests {
             memory_output.clone(),
             execution_parameters()?,
         )?;
-        let failed = run_local_normalization(
+        let mut memory_events = Vec::new();
+        let failed = run_local_normalization_with_progress(
             &memory_request,
             &CancellationToken::new(),
             &MemoryBudget::new(1)?,
+            |event| memory_events.push(event),
         );
         assert!(matches!(
             failed,
             Err(LocalNormalizationPipelineError::Memory(_))
         ));
         assert!(!memory_output.exists());
+        assert_eq!(
+            memory_events.last().map(ProgressEvent::state),
+            Some(ProgressState::Failed)
+        );
+        assert_eq!(
+            memory_events.last().and_then(ProgressEvent::code),
+            Some("localnorm-memory")
+        );
         Ok(())
     }
 

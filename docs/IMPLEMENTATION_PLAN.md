@@ -1839,6 +1839,10 @@ safety reasoning. They do not narrate obvious syntax.
      saturated synthetic star must be measured and protect its complete footprint
      while preserving enough cell support, and a pre-existing destination must
      remain byte-for-byte unchanged after the create-new publication refusal.
+165. Expose local-normalization execution through the shared validated progress
+     protocol. Stable sequence numbers, stage identity, deterministic work totals,
+     per-plane advancement, terminal states, and canonical failure codes are now
+     available to desktop and command-line adapters without polling runtime state.
 
 ## 11. Stable-release definition
 
