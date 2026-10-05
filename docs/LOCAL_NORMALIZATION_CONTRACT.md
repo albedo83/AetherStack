@@ -118,6 +118,14 @@ name the local-application algorithm, represent exactly two inputs, and carry
 the same plan and parameter digests. Any mismatch fails before FITS input or
 destination I/O begins.
 
+The first complete runtime executor reserves a conservative full-image peak
+before decoding either pixel array. It measures and protects stellar structure
+independently on every plane, retains valid and rejected cell totals, applies one
+guarded surface per plane, and writes a private binary64 FITS product. Structural
+and checksum readback plus fresh source and reference fingerprints must all pass
+before create-new atomic publication. Cancellation, memory failure, dimension
+mismatch, scientific failure, or readback failure leaves no public output.
+
 ## Resource and failure boundaries
 
 The caller sets minimum and maximum sample counts and a hard maximum number of
@@ -126,7 +134,7 @@ storage. Empty variation, allocation failure, non-finite coefficients, and an
 unsafe near-zero scale are distinct typed failures.
 
 The current contract covers stellar protection, sampling, per-cell fitting,
-guarded coefficient interpolation, and full-image application. Additional
-non-stellar protected regions, optional surface regularization, provenance, and
-bounded FITS publication remain subsequent milestones. Runtime provenance must
-carry the exact parameter and plan digests defined here.
+guarded coefficient interpolation, full-image application, provenance, and
+bounded atomic FITS publication. Additional non-stellar protected regions,
+optional surface regularization, and a lower-memory banded executor remain
+subsequent milestones.

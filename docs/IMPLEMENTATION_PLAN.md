@@ -1831,6 +1831,10 @@ safety reasoning. They do not narrate obvious syntax.
      execution. Robust-background and stellar-detection algorithms and controls,
      including saturation policy, are now sealed alongside protection and fit
      controls so the protected-pixel population cannot vary invisibly.
+163. Execute a complete plan-bound local-normalization FITS transaction. The
+     runtime reserves a conservative full-image peak before decoding, processes
+     every plane with stellar protection and guarded surfaces, validates the
+     private checksummed output, revalidates both inputs, and publishes atomically.
 
 ## 11. Stable-release definition
 

@@ -27,7 +27,10 @@ pub use light_plan::{
     LightProductExecutionResult, run_calibrated_light_plan, run_demosaiced_light_plan,
     run_light_plan,
 };
-pub use local_normalization::{LocalNormalizationRequest, LocalNormalizationRequestError};
+pub use local_normalization::{
+    LocalNormalizationPipelineError, LocalNormalizationRequest, LocalNormalizationRequestError,
+    LocalNormalizationResult, run_local_normalization,
+};
 pub use master_plan::{
     MasterPlanExecutionError, MasterPlanExecutionRequest, MasterPlanExecutionResult,
     MasterPlanProgressEvent, MasterProductExecutionResult, run_master_plan,
