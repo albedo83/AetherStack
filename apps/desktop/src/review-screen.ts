@@ -2984,7 +2984,9 @@ function renderRegistration(
   }
   const drizzleWeightEvidence = buildQualityWeightPreflight(
     registration.plan,
-    model.activeRole === "light" ? model.frames : [],
+    model.activeRole === "light" && model.lightFrameView === "calibrated"
+      ? model.frames
+      : [],
     drizzle.weightReferenceFrameId,
   );
   for (const button of elements.drizzleWeightingButtons) {

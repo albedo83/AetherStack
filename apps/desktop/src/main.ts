@@ -1989,7 +1989,9 @@ async function executeDrizzleProduct(): Promise<void> {
   if (drizzle.weighting === "balanced_psf") {
     const weightEvidence = buildQualityWeightPreflight(
       plan,
-      model.activeRole === "light" ? model.frames : [],
+      model.activeRole === "light" && model.lightFrameView === "calibrated"
+        ? model.frames
+        : [],
       drizzle.weightReferenceFrameId,
     );
     if (!weightEvidence.ready || !weightEvidence.referenceFrameId) {
