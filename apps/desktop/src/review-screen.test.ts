@@ -37,6 +37,9 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelRegistration: vi.fn(),
     onExecuteRegisteredStack: vi.fn(),
     onCancelRegisteredStack: vi.fn(),
+    onExecuteDrizzle: vi.fn(),
+    onCancelDrizzle: vi.fn(),
+    onUpdateDrizzleSettings: vi.fn(),
     onUpdateRegisteredStackSettings: vi.fn(),
     onSelectRegisteredStackProduct: vi.fn(),
     onSetRegisteredStackOverlayOpacity: vi.fn(),
@@ -1022,6 +1025,7 @@ describe("frame review workspace", () => {
       plan: null,
       execution: demoReviewModel.registration.execution,
       stack: demoReviewModel.registration.stack,
+      drizzle: demoReviewModel.registration.drizzle,
       resultReview: demoReviewModel.registration.resultReview,
       diagnostic: {
         schemaVersion: 3,
@@ -1240,6 +1244,22 @@ describe("frame review workspace", () => {
     expect(execute.hasAttribute("disabled")).toBe(false);
     fireEvent.click(execute);
     expect(actions.onExecuteRegistration).toHaveBeenCalledOnce();
+    const drizzle = getByRole(root, "button", { name: "Build Drizzle set" });
+    expect(drizzle.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(drizzle);
+    expect(actions.onExecuteDrizzle).toHaveBeenCalledOnce();
+    fireEvent.click(getByRole(root, "button", { name: "3×" }));
+    expect(actions.onUpdateDrizzleSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scale: 3 }),
+    );
+    const dropShrink = root.querySelector<HTMLInputElement>(
+      "[data-drizzle-drop-shrink]",
+    );
+    expect(dropShrink).not.toBeNull();
+    fireEvent.input(dropShrink!, { target: { value: "0.65" } });
+    expect(actions.onUpdateDrizzleSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ dropShrink: 0.65 }),
+    );
     fireEvent.click(getByRole(root, "button", { name: "Analyze geometry" }));
     expect(actions.onAnalyzeRegistration).toHaveBeenCalledOnce();
   });

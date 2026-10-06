@@ -61,20 +61,25 @@ import {
 } from "./quality-bridge.ts";
 import { buildQualityWeightPreflight } from "./quality-weight.ts";
 import {
+  cancelDrizzle,
   cancelRegisteredStack,
   cancelRegisteredStackSourceVerification,
   cancelRegistrationPlan,
   diagnoseFitsRegistration,
+  executeDrizzle,
   executeRegistrationPlan,
   executeRegisteredStack,
   inspectRegisteredStackReport,
   previewRegisteredWeights,
   previewRegistrationPlan,
+  selectDrizzleOutputDirectory,
   selectRegistrationOutputDirectory,
   selectRegisteredStackReport,
   selectRegisteredStackSourceDirectory,
   selectRegisteredStackOutput,
   verifyRegisteredStackSources,
+  type DrizzleExecutionSettings,
+  type DrizzleProgress,
   type RegistrationExecutionProgress,
   type RegisteredStackIntegrationSettings,
   type RegisteredStackProgress,
@@ -166,6 +171,7 @@ let lightExecutionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
+let drizzleTicket = 0;
 let localNormalizationTicket = 0;
 let localNormalizationPreviewTicket = 0;
 let localNormalizationStatisticsTicket = 0;
@@ -302,6 +308,26 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelRegisteredStack() {
     void cancelStack();
+  },
+  onExecuteDrizzle() {
+    void executeDrizzleProduct();
+  },
+  onCancelDrizzle() {
+    void cancelDrizzleProduct();
+  },
+  onUpdateDrizzleSettings(settings) {
+    if (isActiveExecutionState(model.registration.drizzle.state)) return;
+    drizzleTicket += 1;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: idleDrizzle(
+          "Drizzle controls updated · ready for a new sealed run",
+          settings,
+        ),
+      },
+    });
   },
   onUpdateRegisteredStackSettings(settings) {
     if (
@@ -869,6 +895,7 @@ function installImportedSession(session: ImportedSession): void {
         message: "Export calibrated Lights to unlock registration",
       },
       stack: idleRegisteredStack(),
+      drizzle: idleDrizzle(),
       resultReview: idleRegistrationResultReview(),
       message:
         registrationFrames.length >= 2
@@ -1628,6 +1655,30 @@ function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
   };
 }
 
+function defaultDrizzleSettings(): DrizzleExecutionSettings {
+  return {
+    scale: 2,
+    dropShrink: 0.8,
+    maximumContributions: 64,
+    maximumBandHeight: 128,
+    memoryLimitBytes: 2 * 1_024 * 1_024 * 1_024,
+  };
+}
+
+function idleDrizzle(
+  message = "Seal a registration plan to unlock CFA Drizzle",
+  settings = defaultDrizzleSettings(),
+): ReviewViewModel["registration"]["drizzle"] {
+  return {
+    state: "idle",
+    outputDirectory: null,
+    settings,
+    progress: null,
+    result: null,
+    message,
+  };
+}
+
 function idleRegistrationResultReview(
   message = "Registered pixels will appear here after atomic publication",
 ): ReviewViewModel["registration"]["resultReview"] {
@@ -1653,6 +1704,8 @@ async function executeRegistration(): Promise<void> {
     calibration.outputMode !== "calibrated_frames" ||
     execution.state === "running" ||
     execution.state === "cancelling" ||
+    isActiveExecutionState(model.registration.stack.state) ||
+    isActiveExecutionState(model.registration.drizzle.state) ||
     isActiveExecutionState(model.calibration.execution.state) ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
     isLocalNormalizationActive()
@@ -1842,6 +1895,171 @@ async function cancelRegistration(): Promise<void> {
   }
 }
 
+async function executeDrizzleProduct(): Promise<void> {
+  const plan = model.registration.plan;
+  const calibration = model.calibration.lightExecution.result;
+  const drizzle = model.registration.drizzle;
+  if (
+    model.registration.planState !== "ready" ||
+    !plan ||
+    !calibration ||
+    calibration.outputMode !== "calibrated_frames" ||
+    isActiveExecutionState(drizzle.state) ||
+    isRegistrationWorkActive() ||
+    isActiveExecutionState(model.calibration.execution.state) ||
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isLocalNormalizationActive()
+  ) {
+    return;
+  }
+  const artifacts = plan.frames.map((planned) => {
+    const calibrated = calibration.calibratedFrames.find(
+      (frame) => frame.sourceFrameId === planned.frameId,
+    );
+    return calibrated
+      ? { frameId: planned.frameId, path: calibrated.outputPath }
+      : null;
+  });
+  if (artifacts.some((artifact) => artifact === null)) {
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...drizzle,
+          state: "error",
+          message:
+            "The calibrated CFA set does not match every sealed Light identity",
+        },
+      },
+    });
+    return;
+  }
+  const expectedPlanSha256 = plan.planSha256;
+  const outputDirectory = await selectDrizzleOutputDirectory();
+  if (
+    !outputDirectory ||
+    model.registration.plan?.planSha256 !== expectedPlanSha256
+  ) {
+    return;
+  }
+  const ticket = ++drizzleTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      drizzle: {
+        ...drizzle,
+        state: "running",
+        outputDirectory,
+        progress: null,
+        result: null,
+        message: "Fingerprinting the exact CFA source set…",
+      },
+    },
+  });
+  const onProgress = (progress: DrizzleProgress): void => {
+    if (ticket !== drizzleTicket) return;
+    const state = model.registration.drizzle.state;
+    if (state !== "running" && state !== "cancelling") return;
+    const units = progress.totalUnits
+      ? ` · ${progress.completedUnits}/${progress.totalUnits}`
+      : "";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          state,
+          progress,
+          message: `${humanizeProgressStage(progress.stage)}${units}`,
+        },
+      },
+    });
+  };
+  try {
+    const result = await executeDrizzle(
+      outputDirectory,
+      {
+        referenceFrameId: plan.referenceFrameId,
+        sourceFrameIds: plan.frames
+          .filter((frame) => !frame.reference)
+          .map((frame) => frame.frameId),
+        geometryModel: plan.geometryModel ?? "affine",
+      },
+      expectedPlanSha256,
+      artifacts.filter((artifact) => artifact !== null),
+      [],
+      drizzle.settings,
+      onProgress,
+    );
+    if (ticket !== drizzleTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          state: "completed",
+          progress: model.registration.drizzle.progress,
+          result,
+          message: `${result.sourceCount} CFA frames · ${result.width} × ${result.height} · ${result.bandCount} bounded bands · peak ${formatMemory(result.peakBandBytes)}`,
+        },
+      },
+    });
+  } catch (error) {
+    if (ticket !== drizzleTicket) return;
+    const cancelled = nativeErrorCode(error) === "drizzle_cancelled";
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          state: cancelled ? "idle" : "error",
+          progress: model.registration.drizzle.progress,
+          result: null,
+          message: cancelled
+            ? "Drizzle cancelled · no partial product was published"
+            : "Drizzle failed safely · no existing output was modified",
+        },
+      },
+    });
+  }
+}
+
+async function cancelDrizzleProduct(): Promise<void> {
+  if (model.registration.drizzle.state !== "running") return;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      drizzle: {
+        ...model.registration.drizzle,
+        state: "cancelling",
+        message:
+          "Cancellation requested · discarding private Drizzle products…",
+      },
+    },
+  });
+  try {
+    await cancelDrizzle();
+  } catch {
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          state: "error",
+          message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
 async function executeStack(): Promise<void> {
   const plan = model.registration.plan;
   const registered = model.registration.execution.result;
@@ -1862,6 +2080,7 @@ async function executeStack(): Promise<void> {
     stack.state === "running" ||
     stack.state === "cancelling" ||
     isActiveExecutionState(model.registration.execution.state) ||
+    isActiveExecutionState(model.registration.drizzle.state) ||
     isActiveExecutionState(model.calibration.execution.state) ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
     isLocalNormalizationActive() ||
@@ -3317,6 +3536,16 @@ function formatMemory(bytes: number): string {
   return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
 }
 
+function humanizeProgressStage(stage: string): string {
+  return stage
+    .split("-")
+    .filter(Boolean)
+    .map((part, index) =>
+      index === 0 ? `${part.charAt(0).toUpperCase()}${part.slice(1)}` : part,
+    )
+    .join(" ");
+}
+
 function isActiveExecutionState(
   state: ReviewViewModel["calibration"]["execution"]["state"],
 ): boolean {
@@ -3326,7 +3555,8 @@ function isActiveExecutionState(
 function isRegistrationWorkActive(): boolean {
   return (
     isActiveExecutionState(model.registration.execution.state) ||
-    isActiveExecutionState(model.registration.stack.state)
+    isActiveExecutionState(model.registration.stack.state) ||
+    isActiveExecutionState(model.registration.drizzle.state)
   );
 }
 
@@ -4240,6 +4470,9 @@ function disposeRuntimeResources(): void {
   }
   if (isActiveExecutionState(model.registration.stack.state)) {
     void cancelRegisteredStack();
+  }
+  if (isActiveExecutionState(model.registration.drizzle.state)) {
+    void cancelDrizzle();
   }
   if (isLocalNormalizationActive()) {
     void cancelLocalNormalization();

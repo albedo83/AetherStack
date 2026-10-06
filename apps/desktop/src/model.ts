@@ -14,6 +14,9 @@ import type {
   LocalNormalizationSettings,
 } from "./local-normalization-bridge.ts";
 import type {
+  DrizzleExecutionSettings,
+  DrizzleProgress,
+  DrizzleResult,
   RegistrationDiagnostic,
   RegistrationExecutionProgress,
   RegistrationExecutionResult,
@@ -338,6 +341,14 @@ export interface RegistrationViewModel {
     readonly settings: RegisteredStackIntegrationSettings;
     readonly message: string;
   };
+  readonly drizzle: {
+    readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+    readonly outputDirectory: string | null;
+    readonly settings: DrizzleExecutionSettings;
+    readonly progress: DrizzleProgress | null;
+    readonly result: DrizzleResult | null;
+    readonly message: string;
+  };
   readonly resultReview: RegistrationResultReview;
   readonly message: string;
 }
@@ -407,6 +418,11 @@ export interface ReviewActions {
   readonly onCancelRegistration: () => void;
   readonly onExecuteRegisteredStack: () => void;
   readonly onCancelRegisteredStack: () => void;
+  readonly onExecuteDrizzle: () => void;
+  readonly onCancelDrizzle: () => void;
+  readonly onUpdateDrizzleSettings: (
+    settings: DrizzleExecutionSettings,
+  ) => void;
   readonly onUpdateRegisteredStackSettings: (
     settings: RegisteredStackIntegrationSettings,
   ) => void;

@@ -2042,6 +2042,13 @@ safety reasoning. They do not narrate obvious syntax.
      products through the rollback-safe runtime. Typed frontend bindings relay
      deterministic progress and cancellation without moving image pixels into
      JavaScript.
+199. Add an accessible desktop Drizzle laboratory without native dropdowns or
+     number steppers. A tactile segmented scale selector and labelled continuous
+     controls expose drop shrink, contribution ceiling, and bounded band height;
+     the view reports deterministic progress, cooperative cancellation, atomic
+     product identity, output geometry, source count, and unsupported pixels.
+     Workflow interlocks prevent concurrent registration, integration, local
+     normalization, or Drizzle execution.
 
 ## 11. Stable-release definition
 

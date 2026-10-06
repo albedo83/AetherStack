@@ -172,6 +172,20 @@ export const demoReviewModel: ReviewViewModel = {
       },
       message: "Register the reviewed Lights to unlock integration",
     },
+    drizzle: {
+      state: "idle",
+      outputDirectory: null,
+      settings: {
+        scale: 2,
+        dropShrink: 0.8,
+        maximumContributions: 64,
+        maximumBandHeight: 128,
+        memoryLimitBytes: 2 * 1_024 * 1_024 * 1_024,
+      },
+      progress: null,
+      result: null,
+      message: "Seal a registration plan to unlock CFA Drizzle",
+    },
     resultReview: {
       frames: [],
       selectedFrameId: null,

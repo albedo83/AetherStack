@@ -5,6 +5,7 @@ import type {
   MasterProductPlan,
 } from "./calibration-bridge.ts";
 import type {
+  DrizzleExecutionSettings,
   RegisteredStackIntegrationSettings,
   RegisteredStackReportProductInspection,
   RegisteredStackSourceVerification,
@@ -202,6 +203,49 @@ export function mountReviewScreen(
       root,
       '[data-action="cancel-registration"]',
     ),
+    drizzle: required<HTMLElement>(root, "[data-drizzle]"),
+    executeDrizzle: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-drizzle"]',
+    ),
+    cancelDrizzle: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-drizzle"]',
+    ),
+    drizzleScaleButtons: requiredAll<HTMLButtonElement>(
+      root,
+      "[data-drizzle-scale]",
+    ),
+    drizzleDropShrink: required<HTMLInputElement>(
+      root,
+      "[data-drizzle-drop-shrink]",
+    ),
+    drizzleDropShrinkValue: required<HTMLOutputElement>(
+      root,
+      "[data-drizzle-drop-shrink-value]",
+    ),
+    drizzleMaximumContributions: required<HTMLInputElement>(
+      root,
+      "[data-drizzle-maximum-contributions]",
+    ),
+    drizzleMaximumContributionsValue: required<HTMLOutputElement>(
+      root,
+      "[data-drizzle-maximum-contributions-value]",
+    ),
+    drizzleMaximumBandHeight: required<HTMLInputElement>(
+      root,
+      "[data-drizzle-maximum-band-height]",
+    ),
+    drizzleMaximumBandHeightValue: required<HTMLOutputElement>(
+      root,
+      "[data-drizzle-maximum-band-height-value]",
+    ),
+    drizzleMessage: required<HTMLElement>(root, "[data-drizzle-message]"),
+    drizzleProgress: required<HTMLProgressElement>(
+      root,
+      "[data-drizzle-progress]",
+    ),
+    drizzleOutput: required<HTMLElement>(root, "[data-drizzle-output]"),
     registrationStatus: required<HTMLElement>(
       root,
       "[data-registration-status]",
@@ -927,6 +971,24 @@ export function mountReviewScreen(
       actions.onCancelRegistration();
       return;
     }
+    if (action === "execute-drizzle") {
+      actions.onExecuteDrizzle();
+      return;
+    }
+    if (action === "cancel-drizzle") {
+      actions.onCancelDrizzle();
+      return;
+    }
+    if (action === "select-drizzle-scale") {
+      const scale = Number(actionElement.dataset.drizzleScale);
+      if (Number.isSafeInteger(scale) && scale >= 1 && scale <= 3) {
+        actions.onUpdateDrizzleSettings({
+          ...model.registration.drizzle.settings,
+          scale,
+        });
+      }
+      return;
+    }
     if (action === "execute-registered-stack") {
       actions.onExecuteRegisteredStack();
       return;
@@ -1272,6 +1334,15 @@ export function mountReviewScreen(
   };
 
   const onInput = (event: Event): void => {
+    if (
+      event.target === elements.drizzleDropShrink ||
+      event.target === elements.drizzleMaximumContributions ||
+      event.target === elements.drizzleMaximumBandHeight
+    ) {
+      const settings = drizzleSettings(elements, model);
+      if (settings) actions.onUpdateDrizzleSettings(settings);
+      return;
+    }
     if (event.target === elements.diagnosticsSearch) {
       diagnosticsQuery = elements.diagnosticsSearch.value;
       renderSessionDiagnostics(
@@ -2563,6 +2634,19 @@ interface RegistrationElements {
   readonly analyzeRegistration: HTMLButtonElement;
   readonly executeRegistration: HTMLButtonElement;
   readonly cancelRegistration: HTMLButtonElement;
+  readonly drizzle: HTMLElement;
+  readonly executeDrizzle: HTMLButtonElement;
+  readonly cancelDrizzle: HTMLButtonElement;
+  readonly drizzleScaleButtons: readonly HTMLButtonElement[];
+  readonly drizzleDropShrink: HTMLInputElement;
+  readonly drizzleDropShrinkValue: HTMLOutputElement;
+  readonly drizzleMaximumContributions: HTMLInputElement;
+  readonly drizzleMaximumContributionsValue: HTMLOutputElement;
+  readonly drizzleMaximumBandHeight: HTMLInputElement;
+  readonly drizzleMaximumBandHeightValue: HTMLOutputElement;
+  readonly drizzleMessage: HTMLElement;
+  readonly drizzleProgress: HTMLProgressElement;
+  readonly drizzleOutput: HTMLElement;
   readonly registrationStatus: HTMLElement;
   readonly registrationRms: HTMLElement;
   readonly registrationInliers: HTMLElement;
@@ -2714,6 +2798,9 @@ function renderRegistration(
   const stackBusy =
     registration.stack.state === "running" ||
     registration.stack.state === "cancelling";
+  const drizzleBusy =
+    registration.drizzle.state === "running" ||
+    registration.drizzle.state === "cancelling";
   const normalizationBusy =
     model.localNormalization.state === "running" ||
     model.localNormalization.state === "cancelling";
@@ -2722,6 +2809,7 @@ function renderRegistration(
     registration.planState === "building" ||
     executionBusy ||
     stackBusy ||
+    drizzleBusy ||
     normalizationBusy;
   const pairReady =
     !!reference?.sourcePath &&
@@ -2792,6 +2880,75 @@ function renderRegistration(
     elements.registrationExecutionProgress.max = 1;
   }
   elements.registrationExecutionProgress.hidden = !executionBusy;
+  const drizzle = registration.drizzle;
+  const drizzleArtifactSetReady =
+    registration.plan !== null &&
+    registration.plan.frames.every((planned) =>
+      calibratedFrames.some(
+        (artifact) => artifact.sourceFrameId === planned.frameId,
+      ),
+    );
+  const drizzlePlanCurrent =
+    drizzle.result === null ||
+    drizzle.result.registrationPlanSha256 === registration.plan?.planSha256;
+  elements.drizzle.dataset.state = drizzlePlanCurrent ? drizzle.state : "error";
+  elements.drizzleMessage.textContent = drizzlePlanCurrent
+    ? drizzle.message
+    : "The registration plan changed · run Drizzle again";
+  elements.drizzleOutput.textContent = drizzle.result
+    ? `${drizzle.result.width} × ${drizzle.result.height} · RGB · ${drizzle.result.sourceCount} sources · ${drizzle.result.unsupportedPixels.toLocaleString("en-US")} unsupported px`
+    : (drizzle.outputDirectory ??
+      "Science + weight + support · atomic FITS set");
+  elements.drizzleOutput.title = drizzle.result
+    ? `${drizzle.result.sciencePath}\n${drizzle.result.weightPath}\n${drizzle.result.supportPath}`
+    : (drizzle.outputDirectory ?? "");
+  for (const button of elements.drizzleScaleButtons) {
+    const selected =
+      Number(button.dataset.drizzleScale) === drizzle.settings.scale;
+    button.dataset.selected = String(selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = running;
+  }
+  elements.drizzleDropShrink.value = String(drizzle.settings.dropShrink);
+  elements.drizzleDropShrinkValue.value =
+    drizzle.settings.dropShrink.toFixed(2);
+  elements.drizzleDropShrinkValue.textContent =
+    elements.drizzleDropShrinkValue.value;
+  elements.drizzleMaximumContributions.value = String(
+    drizzle.settings.maximumContributions,
+  );
+  elements.drizzleMaximumContributionsValue.value = String(
+    drizzle.settings.maximumContributions,
+  );
+  elements.drizzleMaximumContributionsValue.textContent =
+    elements.drizzleMaximumContributionsValue.value;
+  elements.drizzleMaximumBandHeight.value = String(
+    drizzle.settings.maximumBandHeight,
+  );
+  elements.drizzleMaximumBandHeightValue.value = `${drizzle.settings.maximumBandHeight} px`;
+  elements.drizzleMaximumBandHeightValue.textContent =
+    elements.drizzleMaximumBandHeightValue.value;
+  elements.drizzleDropShrink.disabled = running;
+  elements.drizzleMaximumContributions.disabled = running;
+  elements.drizzleMaximumBandHeight.disabled = running;
+  elements.executeDrizzle.disabled =
+    registration.planState !== "ready" ||
+    !drizzleArtifactSetReady ||
+    executionBusy ||
+    stackBusy ||
+    normalizationBusy ||
+    drizzleBusy;
+  elements.executeDrizzle.hidden = drizzleBusy;
+  elements.cancelDrizzle.hidden = !drizzleBusy;
+  elements.cancelDrizzle.disabled = drizzle.state === "cancelling";
+  if (drizzle.progress?.totalUnits) {
+    elements.drizzleProgress.max = drizzle.progress.totalUnits;
+    elements.drizzleProgress.value = drizzle.progress.completedUnits;
+  } else {
+    elements.drizzleProgress.removeAttribute("value");
+    elements.drizzleProgress.max = 1;
+  }
+  elements.drizzleProgress.hidden = !drizzleBusy;
   const registeredSetReady =
     registration.execution.state === "completed" &&
     registration.execution.result?.planSha256 === registration.plan?.planSha256;
@@ -3498,6 +3655,38 @@ function setControlFieldVisibility(
 ): void {
   const field = input.closest<HTMLElement>(".control-field");
   if (field) field.hidden = !visible;
+}
+
+function drizzleSettings(
+  elements: Pick<
+    RegistrationElements,
+    | "drizzleDropShrink"
+    | "drizzleMaximumContributions"
+    | "drizzleMaximumBandHeight"
+  >,
+  model: ReviewViewModel,
+): DrizzleExecutionSettings | null {
+  const dropShrink = elements.drizzleDropShrink.valueAsNumber;
+  const maximumContributions =
+    elements.drizzleMaximumContributions.valueAsNumber;
+  const maximumBandHeight = elements.drizzleMaximumBandHeight.valueAsNumber;
+  if (
+    !Number.isFinite(dropShrink) ||
+    dropShrink <= 0 ||
+    dropShrink > 1 ||
+    !Number.isSafeInteger(maximumContributions) ||
+    maximumContributions < 1 ||
+    !Number.isSafeInteger(maximumBandHeight) ||
+    maximumBandHeight < 1
+  ) {
+    return null;
+  }
+  return {
+    ...model.registration.drizzle.settings,
+    dropShrink,
+    maximumContributions,
+    maximumBandHeight,
+  };
 }
 
 function registeredStackSettings(
@@ -4546,6 +4735,44 @@ function shellMarkup(): string {
                 <div class="registration-execution__actions">
                   <button class="button button--primary" type="button" data-action="execute-registration" disabled>Register all frames</button>
                   <button class="button button--danger" type="button" data-action="cancel-registration" hidden>Cancel</button>
+                </div>
+              </section>
+              <section class="drizzle-console" data-drizzle data-state="idle" aria-labelledby="drizzle-heading">
+                <div class="drizzle-console__heading">
+                  <div>
+                    <p class="eyebrow">Native CFA reconstruction</p>
+                    <h4 id="drizzle-heading">Drizzle laboratory</h4>
+                  </div>
+                  <span class="instrument-label">F64 · PROJECTIVE</span>
+                </div>
+                <p data-drizzle-message>Seal a registration plan to unlock CFA Drizzle</p>
+                <div class="drizzle-console__scale" role="group" aria-label="Drizzle output scale">
+                  <span>Output scale</span>
+                  <div class="segmented-control segmented-control--compact">
+                    <button type="button" data-action="select-drizzle-scale" data-drizzle-scale="1" aria-pressed="false">1×</button>
+                    <button type="button" data-action="select-drizzle-scale" data-drizzle-scale="2" aria-pressed="true">2×</button>
+                    <button type="button" data-action="select-drizzle-scale" data-drizzle-scale="3" aria-pressed="false">3×</button>
+                  </div>
+                </div>
+                <div class="drizzle-console__controls">
+                  <label>
+                    <span><strong>Drop shrink</strong><output data-drizzle-drop-shrink-value>0.80</output></span>
+                    <input data-drizzle-drop-shrink type="range" min="0.25" max="1" step="0.05" value="0.8" />
+                  </label>
+                  <label>
+                    <span><strong>Contribution ceiling</strong><output data-drizzle-maximum-contributions-value>64</output></span>
+                    <input data-drizzle-maximum-contributions type="range" min="4" max="256" step="4" value="64" />
+                  </label>
+                  <label>
+                    <span><strong>Band height</strong><output data-drizzle-maximum-band-height-value>128 px</output></span>
+                    <input data-drizzle-maximum-band-height type="range" min="16" max="512" step="16" value="128" />
+                  </label>
+                </div>
+                <progress data-drizzle-progress aria-label="Drizzle progress" hidden></progress>
+                <code data-drizzle-output>Science + weight + support · atomic FITS set</code>
+                <div class="drizzle-console__actions">
+                  <button class="button button--primary" type="button" data-action="execute-drizzle" disabled>Build Drizzle set</button>
+                  <button class="button button--danger" type="button" data-action="cancel-drizzle" hidden>Cancel</button>
                 </div>
               </section>
               <div class="registration-signal" aria-hidden="true">

@@ -789,6 +789,154 @@ button:active:not(:disabled) {
   border-color: #78404a;
 }
 
+.drizzle-console {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  background:
+    radial-gradient(circle at 88% 8%, #4f8fff1a, transparent 32%),
+    linear-gradient(150deg, #162333, #080d14 72%);
+  border: 1px solid #39516c;
+  border-radius: var(--radius-md);
+  box-shadow:
+    inset 0 1px #c5e0ff14,
+    inset 0 -14px 24px #0007,
+    0 10px 24px #0004;
+}
+
+.drizzle-console__heading,
+.drizzle-console__actions,
+.drizzle-console__scale,
+.drizzle-console__controls label > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drizzle-console h4,
+.drizzle-console p {
+  margin: 0;
+}
+
+.drizzle-console h4 {
+  margin-top: 2px;
+  color: #edf6ff;
+  font-size: 14px;
+}
+
+.drizzle-console p,
+.drizzle-console__scale > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.segmented-control {
+  display: inline-grid;
+  grid-auto-flow: column;
+  padding: 3px;
+  background: linear-gradient(#060a0f, #111a24);
+  border: 1px solid #33465b;
+  border-radius: 9px;
+  box-shadow:
+    inset 0 2px 5px #000b,
+    0 1px #ffffff0a;
+}
+
+.segmented-control button {
+  min-width: 46px;
+  min-height: 30px;
+  padding: 5px 10px;
+  color: #8798ac;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segmented-control button[data-selected="true"] {
+  color: #f5fbff;
+  background: linear-gradient(180deg, #4d89c5, #28547f);
+  box-shadow:
+    inset 0 1px #d9efff4d,
+    inset 0 -1px #06111f66,
+    0 2px 7px #0008;
+}
+
+.segmented-control button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.drizzle-console__controls {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  background: #070c12a6;
+  border: 1px solid #293a4d;
+  border-radius: 9px;
+  box-shadow: inset 0 3px 10px #0008;
+}
+
+.drizzle-console__controls label {
+  display: grid;
+  gap: 6px;
+}
+
+.drizzle-console__controls strong,
+.drizzle-console__controls output {
+  font-size: 10px;
+}
+
+.drizzle-console__controls strong {
+  color: #aebccc;
+  font-weight: 600;
+}
+
+.drizzle-console__controls output {
+  min-width: 52px;
+  color: #8dc9ff;
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.drizzle-console__controls input[type="range"] {
+  width: 100%;
+  accent-color: #5ba9ee;
+}
+
+.drizzle-console progress {
+  width: 100%;
+}
+
+.drizzle-console > code {
+  overflow: hidden;
+  color: #7f92a8;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drizzle-console__actions .button {
+  flex: 1;
+}
+
+.drizzle-console[data-state="completed"] {
+  border-color: #34735a;
+  box-shadow:
+    inset 0 1px #84efb31c,
+    0 0 24px #39d98a0d;
+}
+
+.drizzle-console[data-state="error"] {
+  border-color: #78404a;
+}
+
 .registration-signal {
   display: flex;
   align-items: end;
