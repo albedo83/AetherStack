@@ -1056,4 +1056,101 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[test]
+    fn coverage_gate_has_an_exact_integer_boundary() -> TestResult {
+        let mut source = image(10, 7, 100.0)?;
+        for x in 0..5 {
+            source.pixels_mut()[3 * 10 + x] = 500.0;
+        }
+        let accepted = LinearDefectDetectionParameters::new(
+            LinearDefectAxis::Rows,
+            1,
+            1,
+            2,
+            5,
+            500_000,
+            5.0,
+            5.0,
+            1.0,
+        )?;
+        let rejected = LinearDefectDetectionParameters::new(
+            LinearDefectAxis::Rows,
+            1,
+            1,
+            2,
+            5,
+            500_001,
+            5.0,
+            5.0,
+            1.0,
+        )?;
+        assert_eq!(detect_linear_defects(&source, accepted)?.1.hot_lines(), 1);
+        assert_eq!(detect_linear_defects(&source, rejected)?.1.hot_lines(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn legitimate_linear_gradient_is_not_a_line_defect() -> TestResult {
+        let dimensions = Dimensions::new(13, 9, 1)?;
+        let pixels = (0..9)
+            .flat_map(|y| (0..13).map(move |x| x as f64 * 10.0 + y as f64 * 2.0))
+            .collect();
+        let source = ScientificImage::from_pixels(dimensions, pixels)?;
+        let parameters = LinearDefectDetectionParameters::new(
+            LinearDefectAxis::Rows,
+            2,
+            1,
+            2,
+            5,
+            500_000,
+            5.0,
+            5.0,
+            3.0,
+        )?;
+        let (map, evidence) = detect_linear_defects(&source, parameters)?;
+        assert_eq!(evidence.hot_lines(), 0);
+        assert_eq!(evidence.cold_lines(), 0);
+        assert_eq!(map.summary().defective_samples(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn multiplane_detection_and_repair_are_deterministic_and_accounted() -> TestResult {
+        let dimensions = Dimensions::new(7, 7, 2)?;
+        let mut source = ScientificImage::filled(dimensions, 100.0)?;
+        let plane_offset = 7 * 7;
+        for x in 0..7 {
+            source.pixels_mut()[plane_offset + 3 * 7 + x] = 700.0;
+        }
+        let detection = LinearDefectDetectionParameters::new(
+            LinearDefectAxis::Rows,
+            2,
+            1,
+            2,
+            5,
+            500_000,
+            5.0,
+            5.0,
+            1.0,
+        )?;
+        let first = detect_linear_defects(&source, detection)?;
+        let second = detect_linear_defects(&source, detection)?;
+        assert_eq!(first, second);
+        assert_eq!(first.1.examined_lines(), 14);
+        assert_eq!(first.0.summary().defective_samples(), 7);
+        let parameters = correction(LinearDefectAxis::Rows)?;
+        let corrected = correct_linear_defects(&source, &first.0, parameters)?;
+        let repeated = correct_linear_defects(&source, &first.0, parameters)?;
+        assert_eq!(corrected, repeated);
+        let evidence = corrected.evidence();
+        assert_eq!(
+            evidence.requested_samples(),
+            evidence.corrected_samples()
+                + evidence.insufficient_support_samples()
+                + evidence.blocked_by_source_mask_samples()
+        );
+        assert_eq!(evidence.requested_samples(), 7);
+        Ok(())
+    }
 }
