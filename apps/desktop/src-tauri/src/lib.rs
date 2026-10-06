@@ -2001,10 +2001,10 @@ struct DefectCorrectionResponse {
     map_summary: DefectMapSummaryResponse,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DefectBatchReport {
-    algorithm_id: &'static str,
+    algorithm_id: String,
     plan_sha256: String,
     parameters_sha256: String,
     manifest_sha256: String,
@@ -2022,8 +2022,8 @@ struct DefectBatchReport {
     peak_reserved_bytes: usize,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DefectBatchReportEnvelope {
     schema_version: u32,
     report_sha256: String,
@@ -2036,6 +2036,22 @@ struct DefectBatchReportExportResponse {
     path: String,
     report_sha256: String,
     item_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectBatchReportInspectionResponse {
+    schema_version: u32,
+    algorithm_id: String,
+    report_sha256: String,
+    plan_sha256: String,
+    parameters_sha256: String,
+    completed_items: usize,
+    total_items: usize,
+    corrected_samples: usize,
+    requested_samples: usize,
+    conflicting_samples: usize,
+    peak_reserved_bytes: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -6633,7 +6649,7 @@ fn export_defect_batch_report_sync(
         return Err(defect_batch_stale_error());
     }
     let report = DefectBatchReport {
-        algorithm_id: "aetherstack-defect-batch-report-v1",
+        algorithm_id: "aetherstack-defect-batch-report-v1".to_owned(),
         plan_sha256: batch.plan_sha256,
         parameters_sha256: batch.parameters_sha256,
         manifest_sha256: batch.manifest_sha256,
@@ -6681,6 +6697,88 @@ fn export_defect_batch_report_sync(
     })
 }
 
+#[tauri::command]
+fn inspect_defect_batch_report(
+    path: PathBuf,
+) -> Result<DefectBatchReportInspectionResponse, PreviewCommandError> {
+    inspect_defect_batch_report_sync(&path)
+}
+
+fn inspect_defect_batch_report_sync(
+    path: &Path,
+) -> Result<DefectBatchReportInspectionResponse, PreviewCommandError> {
+    const MAXIMUM_BYTES: usize = 1_048_576;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| defect_batch_report_validation_error())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(defect_batch_report_validation_error());
+    }
+    let maximum =
+        u64::try_from(MAXIMUM_BYTES).map_err(|_| defect_batch_report_validation_error())?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(MAXIMUM_BYTES)
+        .map_err(|_| defect_batch_report_validation_error())?;
+    File::open(path)
+        .map_err(|_| defect_batch_report_validation_error())?
+        .take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| defect_batch_report_validation_error())?;
+    if bytes.is_empty() || bytes.len() > MAXIMUM_BYTES || bytes.last() != Some(&b'\n') {
+        return Err(defect_batch_report_validation_error());
+    }
+    let envelope: DefectBatchReportEnvelope =
+        serde_json::from_slice(&bytes).map_err(|_| defect_batch_report_validation_error())?;
+    let report = &envelope.report;
+    if envelope.schema_version != 1
+        || report.algorithm_id != "aetherstack-defect-batch-report-v1"
+        || !is_lower_sha256(&envelope.report_sha256)
+        || !is_lower_sha256(&report.plan_sha256)
+        || !is_lower_sha256(&report.parameters_sha256)
+        || !is_lower_sha256(&report.manifest_sha256)
+        || !is_lower_sha256(&report.light_plan_sha256)
+        || report.total_items == 0
+        || report.completed_items != report.total_items
+        || report.peak_reserved_bytes > usize::try_from(report.memory_limit_bytes).unwrap_or(0)
+        || report.conflicting_samples > report.hot_samples
+        || report.conflicting_samples > report.cold_samples
+    {
+        return Err(defect_batch_report_validation_error());
+    }
+    let accounted = report
+        .corrected_samples
+        .checked_add(report.insufficient_support_samples)
+        .and_then(|value| value.checked_add(report.blocked_by_source_mask_samples))
+        .ok_or_else(defect_batch_report_validation_error)?;
+    if accounted != report.requested_samples {
+        return Err(defect_batch_report_validation_error());
+    }
+    let canonical =
+        serde_json::to_vec(report).map_err(|_| defect_batch_report_validation_error())?;
+    if lowercase_hex(&Sha256::digest(&canonical)) != envelope.report_sha256 {
+        return Err(defect_batch_report_digest_error());
+    }
+    let mut expected =
+        serde_json::to_vec_pretty(&envelope).map_err(|_| defect_batch_report_validation_error())?;
+    expected.push(b'\n');
+    if expected != bytes {
+        return Err(defect_batch_report_validation_error());
+    }
+    Ok(DefectBatchReportInspectionResponse {
+        schema_version: envelope.schema_version,
+        algorithm_id: report.algorithm_id.clone(),
+        report_sha256: envelope.report_sha256,
+        plan_sha256: report.plan_sha256.clone(),
+        parameters_sha256: report.parameters_sha256.clone(),
+        completed_items: report.completed_items,
+        total_items: report.total_items,
+        corrected_samples: report.corrected_samples,
+        requested_samples: report.requested_samples,
+        conflicting_samples: report.conflicting_samples,
+        peak_reserved_bytes: report.peak_reserved_bytes,
+    })
+}
+
 const fn defect_batch_report_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "defect_batch_report_failed",
@@ -6692,6 +6790,20 @@ const fn defect_batch_report_exists_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "defect_batch_report_exists",
         "The detector-correction batch report destination already exists.",
+    )
+}
+
+const fn defect_batch_report_validation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_batch_report_invalid",
+        "The detector-correction batch report is not canonical or internally consistent.",
+    )
+}
+
+const fn defect_batch_report_digest_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_batch_report_digest_mismatch",
+        "The detector-correction batch report digest does not match its contents.",
     )
 }
 
@@ -9625,6 +9737,7 @@ pub fn run() -> Result<(), tauri::Error> {
             export_defect_batch_report,
             import_session_directory,
             inspect_frame_quality,
+            inspect_defect_batch_report,
             inspect_fits_statistics,
             inspect_rejection_histogram,
             inspect_session_diagnostics_report,
@@ -9859,11 +9972,25 @@ mod tests {
         let report: serde_json::Value = serde_json::from_slice(&fs::read(&report_path)?)?;
         assert_eq!(report["report"]["correctedSamples"], 9);
         assert_eq!(report["report"]["peakReservedBytes"], 123_456);
+        let inspected = inspect_defect_batch_report_sync(&report_path)?;
+        assert_eq!(inspected.report_sha256, exported.report_sha256);
+        assert_eq!(inspected.corrected_samples, 9);
         assert_eq!(
             export_defect_batch_report_sync(&report_path, &single.plan_sha256, &state)
                 .err()
                 .map(|error| error.code),
             Some("defect_batch_report_exists")
+        );
+        let mut tampered = report;
+        tampered["reportSha256"] = serde_json::Value::String("f".repeat(64));
+        let mut tampered_bytes = serde_json::to_vec_pretty(&tampered)?;
+        tampered_bytes.push(b'\n');
+        fs::write(&report_path, tampered_bytes)?;
+        assert_eq!(
+            inspect_defect_batch_report_sync(&report_path)
+                .err()
+                .map(|error| error.code),
+            Some("defect_batch_report_digest_mismatch")
         );
 
         fs::write(&preview.items[1].map_output_path, b"existing")?;
