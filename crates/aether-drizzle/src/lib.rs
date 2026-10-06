@@ -22,7 +22,9 @@ pub use accumulation::{
     DrizzleAccumulationError, DrizzleTileAccumulator, DrizzleTileBounds, DrizzleTileEvidence,
     DrizzleTileResult,
 };
-pub use frame::{DrizzleFrameError, DrizzleFrameEvidence, accumulate_cfa_frame};
+pub use frame::{
+    DrizzleFrameError, DrizzleFrameEvidence, accumulate_cfa_frame, accumulate_cfa_window,
+};
 pub use sample::{
     DetectorSample, DrizzleOutputBounds, DrizzleSampleExclusion, DrizzleSampleOutcome,
     deposit_cfa_sample,

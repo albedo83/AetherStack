@@ -1984,6 +1984,11 @@ safety reasoning. They do not narrate obvious syntax.
      half the detector drop, and clipped to the source extent. Disjoint tiles
      perform no detector read. A forward-projection brute-force oracle proves
      that the planned integer window never omits a contributing photosite.
+188. Preserve global detector coordinates across regional FITS reads. A regional
+     image must exactly match its planned source window, and its local origin is
+     offset before CFA routing or projective mapping. A projective, non-unit-drop
+     oracle requires bit-identical science, weights, support counts, and flags
+     between complete-frame processing and the bounded window for one tile.
 
 ## 11. Stable-release definition
 

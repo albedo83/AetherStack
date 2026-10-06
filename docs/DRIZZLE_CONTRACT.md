@@ -111,6 +111,13 @@ read. The integer window is deliberately conservative at exact boundaries, and
 a brute-force projective oracle requires it to contain every photosite whose
 forward-projected drop contributes nonzero area to the tile.
 
+Regional accumulation retains the planned window origin explicitly. Local
+sample `(0, 0)` is therefore evaluated at the window's global detector
+coordinate for both CFA phase and projective mapping. The regional image must
+match the planned extent exactly. A bit-identity oracle compares science,
+weight, support, and flags from a bounded regional read against accumulation of
+the complete detector frame into the same tile.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with
