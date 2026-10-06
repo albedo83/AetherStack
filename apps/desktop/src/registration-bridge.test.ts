@@ -3,20 +3,24 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelDrizzle,
   cancelRegistrationPlan,
   cancelRegisteredStack,
   cancelRegisteredStackSourceVerification,
   diagnoseFitsRegistration,
+  executeDrizzle,
   executeRegistrationPlan,
   executeRegisteredStack,
   inspectRegisteredStackReport,
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
+  selectDrizzleOutputDirectory,
   selectRegisteredStackReport,
   selectRegisteredStackSourceDirectory,
   selectRegisteredStackOutput,
   verifyRegisteredStackSources,
+  type DrizzleProgress,
   type RegistrationExecutionProgress,
   type RegisteredStackProgress,
 } from "./registration-bridge.ts";
@@ -356,5 +360,79 @@ describe("native registration bridge", () => {
     expect(invoke).toHaveBeenLastCalledWith(
       "cancel_registered_stack_source_verification",
     );
+  });
+
+  it("binds Drizzle execution to sealed geometry, sources, and parameters", async () => {
+    const result = {
+      registrationPlanSha256: "a".repeat(64),
+      drizzlePlanSha256: "b".repeat(64),
+      parametersSha256: "c".repeat(64),
+      sciencePath: "/drizzle/drizzle-science.fits",
+      weightPath: "/drizzle/drizzle-weight.fits",
+      supportPath: "/drizzle/drizzle-support.fits",
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+    const planning = {
+      referenceFrameId: "1".repeat(64),
+      sourceFrameIds: ["2".repeat(64)],
+      geometryModel: "projective" as const,
+    };
+    const artifacts = [
+      { frameId: "1".repeat(64), path: "/linear/reference.fits" },
+      { frameId: "2".repeat(64), path: "/linear/source.fits" },
+    ];
+    const weights = [
+      { frameId: "1".repeat(64), weight: 1 },
+      { frameId: "2".repeat(64), weight: 0.75 },
+    ];
+    const onProgress = vi.fn<(event: DrizzleProgress) => void>();
+
+    await expect(
+      executeDrizzle(
+        "/drizzle",
+        planning,
+        "a".repeat(64),
+        artifacts,
+        weights,
+        {
+          scale: 2,
+          dropShrink: 0.8,
+          maximumContributions: 64,
+          maximumBandHeight: 128,
+          memoryLimitBytes: 1_073_741_824,
+        },
+        onProgress,
+      ),
+    ).resolves.toBe(result);
+    expect(Channel).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenLastCalledWith("execute_drizzle", {
+      request: {
+        planning,
+        expectedPlanSha256: "a".repeat(64),
+        artifacts,
+        weights,
+        outputDirectory: "/drizzle",
+        scale: 2,
+        dropShrink: 0.8,
+        maximumContributions: 64,
+        maximumBandHeight: 128,
+        memoryLimitBytes: 1_073_741_824,
+      },
+      onProgress: expect.objectContaining({ onmessage: onProgress }),
+    });
+  });
+
+  it("selects and cancels Drizzle natively", async () => {
+    vi.mocked(open).mockResolvedValue("/drizzle");
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    await expect(selectDrizzleOutputDirectory()).resolves.toBe("/drizzle");
+    expect(open).toHaveBeenCalledWith({
+      title: "Select a directory for Drizzle products",
+      multiple: false,
+      directory: true,
+    });
+    await expect(cancelDrizzle()).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("cancel_drizzle");
   });
 });

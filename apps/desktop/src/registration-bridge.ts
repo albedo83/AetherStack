@@ -269,6 +269,53 @@ export interface RegisteredStackResult {
   readonly reportSha256: string;
 }
 
+export interface DrizzleFrameWeight {
+  readonly frameId: string;
+  readonly weight: number;
+}
+
+export interface DrizzleExecutionSettings {
+  readonly scale: number;
+  readonly dropShrink: number;
+  readonly maximumContributions: number;
+  readonly maximumBandHeight: number;
+  readonly memoryLimitBytes: number;
+}
+
+export interface DrizzleProgress {
+  readonly sequence: number;
+  readonly stage: string;
+  readonly state: "started" | "running" | "completed" | "cancelled" | "failed";
+  readonly completedUnits: number;
+  readonly totalUnits: number | null;
+  readonly code: string | null;
+}
+
+export interface DrizzleResult {
+  readonly registrationPlanSha256: string;
+  readonly drizzlePlanSha256: string;
+  readonly parametersSha256: string;
+  readonly sciencePath: string;
+  readonly weightPath: string;
+  readonly supportPath: string;
+  readonly width: number;
+  readonly height: number;
+  readonly planes: number;
+  readonly sourceCount: number;
+  readonly bandCount: number;
+  readonly peakBandBytes: number;
+  readonly memoryLimitBytes: number;
+  readonly scienceSamplesWritten: number;
+  readonly scienceSubstitutedSamples: number;
+  readonly weightSamplesWritten: number;
+  readonly supportSamplesWritten: number;
+  readonly depositionsSeen: number;
+  readonly contributionsSeen: number;
+  readonly contributionsAccumulated: number;
+  readonly contributionsOutside: number;
+  readonly unsupportedPixels: number;
+}
+
 export interface RegisteredStackReportInspection {
   readonly schemaVersion: number;
   readonly reportSha256: string;
@@ -522,4 +569,44 @@ export function cancelRegisteredStackSourceVerification(): Promise<boolean> {
 /** Requests cooperative cancellation of the active common-crop integration. */
 export function cancelRegisteredStack(): Promise<boolean> {
   return invoke<boolean>("cancel_registered_stack");
+}
+
+/** Chooses the create-new directory for the three atomic Drizzle products. */
+export async function selectDrizzleOutputDirectory(): Promise<string | null> {
+  const path = await open({
+    title: "Select a directory for Drizzle products",
+    multiple: false,
+    directory: true,
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/** Executes sealed CFA Drizzle entirely in Rust with exact source identities. */
+export function executeDrizzle(
+  outputDirectory: string,
+  planning: RegistrationPlanPreviewRequest,
+  expectedPlanSha256: string,
+  artifacts: readonly RegistrationArtifactInput[],
+  weights: readonly DrizzleFrameWeight[],
+  settings: DrizzleExecutionSettings,
+  onProgress: (progress: DrizzleProgress) => void,
+): Promise<DrizzleResult> {
+  const progress = new Channel<DrizzleProgress>();
+  progress.onmessage = onProgress;
+  return invoke<DrizzleResult>("execute_drizzle", {
+    request: {
+      planning,
+      expectedPlanSha256,
+      artifacts,
+      weights,
+      outputDirectory,
+      ...settings,
+    },
+    onProgress: progress,
+  });
+}
+
+/** Requests cooperative cancellation of the active Drizzle transaction. */
+export function cancelDrizzle(): Promise<boolean> {
+  return invoke<boolean>("cancel_drizzle");
 }

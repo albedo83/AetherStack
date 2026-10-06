@@ -18,6 +18,7 @@ use std::time::Instant;
 use aether_cache::{ArtifactFileFingerprint, ArtifactRemovalState, ArtifactStore, CacheKey};
 use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
 use aether_core::Dimensions;
+use aether_drizzle::{DrizzleOutputBounds, DrizzleParameters};
 use aether_fits::{
     DEFAULT_STATISTICS_CHUNK_SAMPLES, DatasumVerification, FITS_STATISTICS_ALGORITHM_ID,
     FitsOutputProvenance, FitsWriteSummary, HduChecksumVerification, HeaderReadOptions,
@@ -55,7 +56,8 @@ use aether_review::{
     TransferFunction,
 };
 use aether_runtime::{
-    BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, LightPlanExecutionError,
+    BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DrizzleOutputExecutionError,
+    DrizzleProductDestinations, DrizzleProductProvenance, LightPlanExecutionError,
     LightPlanExecutionRequest, LocalNormalizationPipelineError, LocalNormalizationRequest,
     MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
@@ -65,11 +67,12 @@ use aether_runtime::{
     RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
-    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters,
+    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDrizzleSource,
     WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_memory,
     run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
     run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
-    run_registered_stack, run_registration_plan,
+    run_registered_stack, run_registration_plan, run_strict_drizzle_output_with_progress,
+    strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -590,6 +593,67 @@ struct RegisteredStackResponse {
     rejection_map_samples_written: Option<u64>,
     report_path: String,
     report_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrizzleCommandRequest {
+    planning: RegistrationPlanPreviewRequest,
+    expected_plan_sha256: String,
+    artifacts: Vec<RegistrationArtifactInput>,
+    #[serde(default)]
+    weights: Vec<DrizzleFrameWeightInput>,
+    output_directory: PathBuf,
+    scale: u32,
+    drop_shrink: f64,
+    maximum_contributions: u64,
+    maximum_band_height: u32,
+    memory_limit_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrizzleFrameWeightInput {
+    frame_id: String,
+    weight: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrizzleExecutionProgress {
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DrizzleExecutionResponse {
+    registration_plan_sha256: String,
+    drizzle_plan_sha256: String,
+    parameters_sha256: String,
+    science_path: String,
+    weight_path: String,
+    support_path: String,
+    width: u32,
+    height: u32,
+    planes: usize,
+    source_count: usize,
+    band_count: usize,
+    peak_band_bytes: usize,
+    memory_limit_bytes: usize,
+    science_samples_written: u64,
+    science_substituted_samples: u64,
+    weight_samples_written: u64,
+    support_samples_written: u64,
+    depositions_seen: u64,
+    contributions_seen: u64,
+    contributions_accumulated: u64,
+    contributions_outside: u64,
+    unsupported_pixels: u64,
 }
 
 /// Stable machine-readable evidence emitted beside every integrated product.
@@ -2469,11 +2533,62 @@ fn cancel_registered_stack(
     cancel_calibration_execution(&execution_state, "registered_stack_execution_missing")
 }
 
+#[tauri::command]
+async fn execute_drizzle(
+    request: DrizzleCommandRequest,
+    on_progress: tauri::ipc::Channel<DrizzleExecutionProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    review_state: tauri::State<'_, DesktopReviewState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<DrizzleExecutionResponse, PreviewCommandError> {
+    if !request.output_directory.is_absolute()
+        || request
+            .artifacts
+            .iter()
+            .any(|artifact| !artifact.path.is_absolute())
+    {
+        return Err(drizzle_configuration_error());
+    }
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let eligible_ids = reviewed_registration_frame_ids(&review_state, &session)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_drizzle_for_ids_sync(
+            &session,
+            request,
+            &eligible_ids,
+            &worker_cancellation,
+            |event| {
+                let _ignored = on_progress.send(event);
+            },
+        )
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "drizzle_interrupted",
+            "The Drizzle worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_drizzle(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "drizzle_execution_missing")
+}
+
 #[derive(Debug)]
 struct RegistrationNativeSource {
     path: PathBuf,
     width: usize,
     height: usize,
+    bayer_pattern: Option<BayerPattern>,
 }
 
 #[cfg(test)]
@@ -3220,6 +3335,263 @@ where
         memory_limit_bytes: memory.limit(),
         peak_reserved_bytes: result.peak_reserved_bytes(),
         frames,
+    })
+}
+
+fn execute_drizzle_for_ids_sync<F>(
+    session: &ImportedNativeSession,
+    request: DrizzleCommandRequest,
+    eligible_ids: &BTreeSet<FrameId>,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<DrizzleExecutionResponse, PreviewCommandError>
+where
+    F: FnMut(DrizzleExecutionProgress),
+{
+    if !session.root.is_absolute()
+        || !request.output_directory.is_absolute()
+        || request.maximum_band_height == 0
+    {
+        return Err(drizzle_configuration_error());
+    }
+    let metadata =
+        fs::metadata(&request.output_directory).map_err(|_| drizzle_configuration_error())?;
+    if !metadata.is_dir() {
+        return Err(drizzle_configuration_error());
+    }
+    let native_sources = registration_native_sources(session)?;
+    let plan = match request.planning.geometry_model {
+        RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
+            build_registration_plan_for_ids_sync(session, &request.planning, eligible_ids)?,
+        ),
+        RegistrationGeometryModel::Projective => {
+            DesktopRegistrationPlan::Projective(build_projective_registration_plan_for_ids_sync(
+                session,
+                &request.planning,
+                eligible_ids,
+            )?)
+        }
+    };
+    if plan.plan_sha256() != request.expected_plan_sha256 {
+        return Err(PreviewCommandError::new(
+            "drizzle_registration_plan_stale",
+            "The reviewed registration geometry no longer matches native evidence.",
+        ));
+    }
+    if request.artifacts.len() != plan.frame_count() {
+        return Err(drizzle_artifact_set_error());
+    }
+    let mut artifacts = BTreeMap::new();
+    for artifact in request.artifacts {
+        if !artifact.path.is_absolute() {
+            return Err(drizzle_configuration_error());
+        }
+        let frame_id = FrameId::new(artifact.frame_id).map_err(|_| drizzle_artifact_set_error())?;
+        if artifacts.insert(frame_id, artifact.path).is_some() {
+            return Err(drizzle_artifact_set_error());
+        }
+    }
+    let expected_ids = plan.frame_ids();
+    if artifacts.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
+        return Err(drizzle_artifact_set_error());
+    }
+    let weights = drizzle_weights(request.weights, &expected_ids)?;
+    let maximum_contributions = usize::try_from(request.maximum_contributions)
+        .map_err(|_| drizzle_configuration_error())?;
+    let parameters = DrizzleParameters::new(request.scale, request.drop_shrink)
+        .map_err(|_| drizzle_configuration_error())?;
+    let (reference_width, reference_height) = match &plan {
+        DesktopRegistrationPlan::Affine(plan) => (plan.reference_width(), plan.reference_height()),
+        DesktopRegistrationPlan::Projective(plan) => {
+            (plan.reference_width(), plan.reference_height())
+        }
+    };
+    let width = u32::try_from(reference_width)
+        .ok()
+        .and_then(|value| value.checked_mul(request.scale))
+        .ok_or_else(drizzle_configuration_error)?;
+    let height = u32::try_from(reference_height)
+        .ok()
+        .and_then(|value| value.checked_mul(request.scale))
+        .ok_or_else(drizzle_configuration_error)?;
+    let output = DrizzleOutputBounds::new(width, height, maximum_contributions)
+        .map_err(|_| drizzle_configuration_error())?;
+    let memory_limit =
+        usize::try_from(request.memory_limit_bytes).map_err(|_| drizzle_configuration_error())?;
+    let memory = MemoryBudget::new(memory_limit).map_err(|_| drizzle_configuration_error())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(plan.frame_count())
+        .map_err(|_| drizzle_allocation_error())?;
+    match &plan {
+        DesktopRegistrationPlan::Affine(plan) => {
+            for frame in plan.frames() {
+                let transform = ProjectiveTransform::from_affine(frame.source_to_reference())
+                    .map_err(|_| drizzle_configuration_error())?;
+                sources.push(strict_drizzle_source(
+                    frame.frame_id(),
+                    transform,
+                    &artifacts,
+                    &native_sources,
+                    &weights,
+                )?);
+            }
+        }
+        DesktopRegistrationPlan::Projective(plan) => {
+            for frame in plan.frames() {
+                sources.push(strict_drizzle_source(
+                    frame.frame_id(),
+                    frame.source_to_reference(),
+                    &artifacts,
+                    &native_sources,
+                    &weights,
+                )?);
+            }
+        }
+    }
+    let drizzle_plan_sha256 =
+        strict_drizzle_plan_sha256(&sources).map_err(drizzle_execution_error)?;
+    let parameters_sha256 =
+        strict_drizzle_parameters_sha256(parameters, output).map_err(drizzle_execution_error)?;
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| drizzle_configuration_error())?;
+    let source_count = u32::try_from(sources.len()).map_err(|_| drizzle_configuration_error())?;
+    let provenance = DrizzleProductProvenance::new(
+        manifest_sha256,
+        drizzle_plan_sha256.clone(),
+        parameters_sha256.clone(),
+        "drizzle-all-lights",
+        source_count,
+    )
+    .map_err(|_| drizzle_configuration_error())?;
+    let destinations = DrizzleProductDestinations::new(
+        request.output_directory.join("drizzle-science.fits"),
+        request.output_directory.join("drizzle-weight.fits"),
+        request.output_directory.join("drizzle-support.fits"),
+    )
+    .map_err(|_| drizzle_configuration_error())?;
+    let result = run_strict_drizzle_output_with_progress(
+        &sources,
+        parameters,
+        output,
+        request.maximum_band_height,
+        destinations,
+        &provenance,
+        cancellation,
+        &memory,
+        |event| {
+            progress(DrizzleExecutionProgress {
+                sequence: event.sequence(),
+                stage: event.stage().as_str().to_owned(),
+                state: progress_state_name(event.state()),
+                completed_units: event.completed_units(),
+                total_units: event.total_units(),
+                code: event.code().map(str::to_owned),
+            });
+        },
+    )
+    .map_err(drizzle_execution_error)?;
+    let publication = result.publication();
+    let published_destinations = publication.destinations();
+    let science_path = unicode_drizzle_output_path(published_destinations.science())?;
+    let weight_path = unicode_drizzle_output_path(published_destinations.weight())?;
+    let support_path = unicode_drizzle_output_path(published_destinations.support())?;
+    let science = publication.science_summary();
+    let weight = publication.weight_summary();
+    let support = publication.support_summary();
+    let evidence = publication.evidence();
+    Ok(DrizzleExecutionResponse {
+        registration_plan_sha256: request.expected_plan_sha256,
+        drizzle_plan_sha256,
+        parameters_sha256,
+        science_path,
+        weight_path,
+        support_path,
+        width,
+        height,
+        planes: 3,
+        source_count: sources.len(),
+        band_count: result.plan().bands().len(),
+        peak_band_bytes: result.plan().peak_bytes(),
+        memory_limit_bytes: memory.limit(),
+        science_samples_written: science.samples_written(),
+        science_substituted_samples: science.substituted_samples(),
+        weight_samples_written: weight.samples_written(),
+        support_samples_written: support.samples_written(),
+        depositions_seen: evidence.depositions_seen(),
+        contributions_seen: evidence.contributions_seen(),
+        contributions_accumulated: evidence.contributions_accumulated(),
+        contributions_outside: evidence.contributions_outside(),
+        unsupported_pixels: evidence.unsupported_pixels(),
+    })
+}
+
+fn drizzle_weights(
+    inputs: Vec<DrizzleFrameWeightInput>,
+    expected_ids: &BTreeSet<FrameId>,
+) -> Result<BTreeMap<FrameId, f64>, PreviewCommandError> {
+    if inputs.is_empty() {
+        return Ok(expected_ids
+            .iter()
+            .cloned()
+            .map(|frame_id| (frame_id, 1.0))
+            .collect());
+    }
+    if inputs.len() != expected_ids.len() {
+        return Err(drizzle_weight_error());
+    }
+    let mut weights = BTreeMap::new();
+    for input in inputs {
+        let frame_id = FrameId::new(input.frame_id).map_err(|_| drizzle_weight_error())?;
+        if !input.weight.is_finite()
+            || input.weight <= 0.0
+            || weights.insert(frame_id, input.weight).is_some()
+        {
+            return Err(drizzle_weight_error());
+        }
+    }
+    if weights.keys().cloned().collect::<BTreeSet<_>>() != *expected_ids {
+        return Err(drizzle_weight_error());
+    }
+    Ok(weights)
+}
+
+fn strict_drizzle_source(
+    frame_id: &FrameId,
+    transform: ProjectiveTransform,
+    artifacts: &BTreeMap<FrameId, PathBuf>,
+    native_sources: &BTreeMap<FrameId, RegistrationNativeSource>,
+    weights: &BTreeMap<FrameId, f64>,
+) -> Result<StrictDrizzleSource, PreviewCommandError> {
+    let path = artifacts
+        .get(frame_id)
+        .ok_or_else(drizzle_artifact_set_error)?;
+    let native = native_sources
+        .get(frame_id)
+        .ok_or_else(drizzle_artifact_set_error)?;
+    let pattern = native.bayer_pattern.clone().ok_or_else(drizzle_cfa_error)?;
+    if matches!(pattern, BayerPattern::Other(_)) {
+        return Err(drizzle_cfa_error());
+    }
+    let weight = *weights.get(frame_id).ok_or_else(drizzle_weight_error)?;
+    let mut input = File::open(path).map_err(|_| drizzle_artifact_error())?;
+    let fingerprint = fingerprint_reader(&mut input).map_err(|_| drizzle_artifact_error())?;
+    Ok(StrictDrizzleSource::new(
+        PipelineSource::new(path.clone(), fingerprint),
+        transform,
+        pattern,
+        weight,
+    ))
+}
+
+fn unicode_drizzle_output_path(path: &Path) -> Result<String, PreviewCommandError> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        PreviewCommandError::new(
+            "drizzle_output_path_not_unicode",
+            "A Drizzle output path cannot be represented as Unicode.",
+        )
     })
 }
 
@@ -4440,6 +4812,11 @@ fn registration_native_sources(
                 path: session.root.join(file.relative_path()),
                 width,
                 height,
+                bayer_pattern: file
+                    .metadata()
+                    .bayer_pattern
+                    .as_ref()
+                    .map(|value| value.value().clone()),
             };
             if sources.insert(frame_id, source).is_some() {
                 return Err(registration_plan_input_error());
@@ -4573,6 +4950,79 @@ fn registration_execution_error(error: RegistrationPlanExecutionError) -> Previe
         | RegistrationPlanExecutionError::RollbackPublication { .. } => PreviewCommandError::new(
             "registration_publication_failed",
             "The registered frame set could not be published as one atomic transaction.",
+        ),
+    }
+}
+
+const fn drizzle_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "drizzle_configuration_invalid",
+        "Drizzle requires a sealed registration plan, absolute artifact paths, CFA metadata, and positive bounded resources.",
+    )
+}
+
+const fn drizzle_artifact_set_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "drizzle_artifact_set_invalid",
+        "The calibrated CFA artifacts do not match every identity in the sealed registration plan.",
+    )
+}
+
+const fn drizzle_artifact_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "drizzle_artifact_invalid",
+        "A calibrated CFA artifact could not be opened or fingerprinted.",
+    )
+}
+
+const fn drizzle_cfa_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "drizzle_cfa_invalid",
+        "Every Drizzle source requires one supported Bayer pattern from native session metadata.",
+    )
+}
+
+const fn drizzle_weight_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "drizzle_weights_invalid",
+        "Drizzle weights must be finite, positive, unique, and cover the complete reviewed frame set.",
+    )
+}
+
+const fn drizzle_allocation_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "drizzle_allocation_failed",
+        "Drizzle could not reserve its bounded execution bookkeeping.",
+    )
+}
+
+fn drizzle_execution_error(error: DrizzleOutputExecutionError) -> PreviewCommandError {
+    match error {
+        DrizzleOutputExecutionError::Cancelled(_) => PreviewCommandError::new(
+            "drizzle_cancelled",
+            "Drizzle was cancelled before the complete product set was published.",
+        ),
+        DrizzleOutputExecutionError::Input(_) => PreviewCommandError::new(
+            "drizzle_source_changed",
+            "A calibrated CFA source no longer matches the fingerprint sealed for execution.",
+        ),
+        DrizzleOutputExecutionError::InvalidProvenance
+        | DrizzleOutputExecutionError::InvalidSourceConfiguration { .. }
+        | DrizzleOutputExecutionError::OutputDimensions => drizzle_configuration_error(),
+        DrizzleOutputExecutionError::SourceAllocation
+        | DrizzleOutputExecutionError::WorkSizeOverflow => drizzle_allocation_error(),
+        DrizzleOutputExecutionError::Publication(_) => PreviewCommandError::new(
+            "drizzle_publication_failed",
+            "The checksummed science, weight, and support set could not be published atomically.",
+        ),
+        DrizzleOutputExecutionError::Plan(_)
+        | DrizzleOutputExecutionError::Band { .. }
+        | DrizzleOutputExecutionError::Spool(_)
+        | DrizzleOutputExecutionError::StageId(_)
+        | DrizzleOutputExecutionError::Progress(_)
+        | DrizzleOutputExecutionError::Evidence(_) => PreviewCommandError::new(
+            "drizzle_execution_failed",
+            "Drizzle failed strict native validation; no output product was published.",
         ),
     }
 }
@@ -7874,6 +8324,7 @@ pub fn run() -> Result<(), tauri::Error> {
             apply_quality_cache_maintenance,
             apply_frame_selection,
             apply_review_decision,
+            cancel_drizzle,
             cancel_light_plan,
             cancel_local_normalization,
             cancel_master_plan,
@@ -7883,6 +8334,7 @@ pub fn run() -> Result<(), tauri::Error> {
             cancel_session_import,
             diagnose_fits_registration,
             estimate_fits_preview_transform,
+            execute_drizzle,
             execute_light_plan,
             execute_local_normalization,
             execute_master_plan,
@@ -8625,6 +9077,59 @@ mod tests {
         })
     }
 
+    fn drizzle_execution_request(
+        session: &ImportedNativeSession,
+        artifact_directory: &Path,
+        output_directory: PathBuf,
+    ) -> TestResult<DrizzleCommandRequest> {
+        fs::create_dir(artifact_directory)?;
+        fs::create_dir(&output_directory)?;
+        let sources = registration_native_sources(session)?;
+        let mut frame_ids = sources.keys();
+        let reference = frame_ids.next().ok_or("reference Light missing")?.clone();
+        let source = frame_ids.next().ok_or("source Light missing")?.clone();
+        let planning = RegistrationPlanPreviewRequest {
+            reference_frame_id: reference.as_str().to_owned(),
+            source_frame_ids: vec![source.as_str().to_owned()],
+            geometry_model: RegistrationGeometryModel::Affine,
+        };
+        let plan = build_registration_plan_sync(session, &planning)?;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(256, 256, 1)?,
+            (0..256 * 256)
+                .map(|index| f64::from(u32::try_from(index % 4096).unwrap_or_default()) + 0.5)
+                .collect(),
+        )?;
+        let mut artifacts = Vec::new();
+        for (index, frame_id) in [reference, source].into_iter().enumerate() {
+            let path = artifact_directory.join(format!("calibrated-cfa-{index}.fits"));
+            let provenance = FitsOutputProvenance::new(
+                "a".repeat(64),
+                "light-uvir",
+                "strict-calibrated-light-v1",
+                1,
+            )?
+            .with_frame_id_sha256(frame_id.as_str())?;
+            write_f64_primary_atomic_new_with_provenance(&path, &image, &provenance)?;
+            artifacts.push(RegistrationArtifactInput {
+                frame_id: frame_id.as_str().to_owned(),
+                path,
+            });
+        }
+        Ok(DrizzleCommandRequest {
+            planning,
+            expected_plan_sha256: plan.plan_sha256().to_owned(),
+            artifacts,
+            weights: Vec::new(),
+            output_directory,
+            scale: 1,
+            drop_shrink: 0.8,
+            maximum_contributions: 16,
+            maximum_band_height: 32,
+            memory_limit_bytes: 32 * 1_024 * 1_024,
+        })
+    }
+
     fn master_execution_request(
         session: &ImportedNativeSession,
         output_directory: PathBuf,
@@ -9209,6 +9714,125 @@ mod tests {
         }));
         assert!(progress.iter().all(|event| event.frame_count == 2));
         assert_eq!(fs::read_dir(output_root)?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn executes_native_drizzle_with_sealed_geometry_and_atomic_companions() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("calibrated-cfa");
+        let output_root = directory.path().join("drizzle");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let request = drizzle_execution_request(&session, &artifact_root, output_root.clone())?;
+        let eligible_ids = registration_native_sources(&session)?
+            .into_keys()
+            .collect::<BTreeSet<_>>();
+        let expected_registration_plan = request.expected_plan_sha256.clone();
+        let mut progress = Vec::new();
+
+        let result = execute_drizzle_for_ids_sync(
+            &session,
+            request,
+            &eligible_ids,
+            &CancellationToken::new(),
+            |event| progress.push(event),
+        )?;
+
+        assert_eq!(result.registration_plan_sha256, expected_registration_plan);
+        assert_eq!(result.drizzle_plan_sha256.len(), 64);
+        assert_eq!(result.parameters_sha256.len(), 64);
+        assert_eq!((result.width, result.height, result.planes), (256, 256, 3));
+        assert_eq!(result.source_count, 2);
+        assert!(result.band_count > 1);
+        assert!(result.peak_band_bytes <= result.memory_limit_bytes);
+        assert_eq!(result.science_samples_written, 256 * 256 * 3);
+        assert_eq!(
+            result.weight_samples_written,
+            result.science_samples_written
+        );
+        assert_eq!(
+            result.support_samples_written,
+            result.science_samples_written
+        );
+        assert!(result.contributions_seen >= result.contributions_accumulated);
+        assert!(result.depositions_seen > 0);
+        assert!(Path::new(&result.science_path).is_file());
+        assert!(Path::new(&result.weight_path).is_file());
+        assert!(Path::new(&result.support_path).is_file());
+        assert_eq!(fs::read_dir(&output_root)?.count(), 3);
+        assert_eq!(progress.first().map(|event| event.state), Some("started"));
+        assert_eq!(progress.last().map(|event| event.state), Some("completed"));
+        assert!(progress.windows(2).all(|events| {
+            events[0].sequence < events[1].sequence
+                && events[0].completed_units <= events[1].completed_units
+        }));
+        assert_eq!(
+            progress.last().map(|event| event.completed_units),
+            progress.last().and_then(|event| event.total_units)
+        );
+        for (path, algorithm) in [
+            (
+                &result.science_path,
+                aether_runtime::DRIZZLE_SCIENCE_ALGORITHM_ID,
+            ),
+            (
+                &result.weight_path,
+                aether_runtime::DRIZZLE_WEIGHT_ALGORITHM_ID,
+            ),
+            (
+                &result.support_path,
+                aether_runtime::DRIZZLE_SUPPORT_ALGORITHM_ID,
+            ),
+        ] {
+            let mut reader =
+                PrimaryImageReader::open(File::open(path)?, HeaderReadOptions::default())?;
+            assert_eq!(reader.descriptor().axes(), &[256, 256, 3]);
+            assert_eq!(
+                reader.report().header().string("AETHPLN"),
+                Some(result.drizzle_plan_sha256.as_str())
+            );
+            assert_eq!(
+                reader.report().header().string("AETHPAR"),
+                Some(result.parameters_sha256.as_str())
+            );
+            assert_eq!(reader.report().header().string("AETHALG"), Some(algorithm));
+            assert!(reader.verify_checksums()?.is_fully_verified());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_native_drizzle_publishes_no_companion() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let artifact_root = directory.path().join("calibrated-cfa");
+        let output_root = directory.path().join("drizzle");
+        fs::create_dir(&session_root)?;
+        let session = registration_planning_session(&session_root)?;
+        let request = drizzle_execution_request(&session, &artifact_root, output_root.clone())?;
+        let eligible_ids = registration_native_sources(&session)?
+            .into_keys()
+            .collect::<BTreeSet<_>>();
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+        let mut progress = Vec::new();
+
+        let error = execute_drizzle_for_ids_sync(
+            &session,
+            request,
+            &eligible_ids,
+            &cancellation,
+            |event| progress.push(event),
+        )
+        .err()
+        .ok_or("cancelled Drizzle unexpectedly completed")?;
+
+        assert_eq!(error.code, "drizzle_cancelled");
+        assert_eq!(fs::read_dir(output_root)?.count(), 0);
+        assert_eq!(progress.first().map(|event| event.state), Some("started"));
+        assert_eq!(progress.last().map(|event| event.state), Some("cancelled"));
         Ok(())
     }
 

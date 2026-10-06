@@ -189,6 +189,7 @@ dependencies = [
  "aether-cache",
  "aether-calibration",
  "aether-core",
+ "aether-drizzle",
  "aether-fits",
  "aether-localnorm",
  "aether-metadata",

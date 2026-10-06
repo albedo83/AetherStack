@@ -179,6 +179,24 @@ once per completed planar FITS streaming chunk. Sequence numbers are monotonic;
 success reaches the declared total exactly, and cancellation or failure ends
 with a stable machine-readable code.
 
+## Desktop execution boundary
+
+The desktop command never accepts caller-authored scientific provenance. It
+reconstructs the reviewed affine or projective registration plan from native
+session state, verifies its expected digest, and requires an exact one-to-one
+set of calibrated artifacts. CFA phases come from validated native manifests;
+missing or unsupported patterns fail before output work. Optional frame weights
+must likewise name every source exactly once and remain finite and positive.
+
+Rust fingerprints each artifact, converts the sealed registration geometry to
+Drizzle transforms, derives the canonical plan and parameter identities, and
+constructs all product provenance internally. Output dimensions are checked
+from the reference geometry and integer scale. The desktop publishes fixed,
+create-new science, weight, and support names in the selected directory, relays
+the canonical progress stream through a typed channel, and exposes cooperative
+cancellation. JavaScript receives only evidence and paths; source pixels and
+private staging state never cross the command boundary.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

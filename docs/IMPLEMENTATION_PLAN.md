@@ -2035,6 +2035,13 @@ safety reasoning. They do not narrate obvious syntax.
      source bytes, stable order, transforms, CFA phases, weights, scale, drop,
      output geometry, and the contribution ceiling; refuse caller provenance
      unless all three product roles carry both exact canonical digests.
+198. Expose strict Drizzle through the desktop native boundary. Reconstruct the
+     reviewed registration plan from native state, require exact calibrated
+     artifact and optional weight identities, derive CFA phases and every
+     scientific digest in Rust, and publish fixed science, weight, and support
+     products through the rollback-safe runtime. Typed frontend bindings relay
+     deterministic progress and cancellation without moving image pixels into
+     JavaScript.
 
 ## 11. Stable-release definition
 
