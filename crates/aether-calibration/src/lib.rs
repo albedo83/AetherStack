@@ -27,8 +27,10 @@ pub use flat::{
     normalize_flat,
 };
 pub use linear_defect::{
-    LinearDefectAxis, LinearDefectDetectionEvidence, LinearDefectDetectionParameters,
-    LinearDefectError, LinearDefectPolarity, detect_linear_defects,
+    CorrectedLinearDefects, LinearDefectAxis, LinearDefectCorrectionEvidence,
+    LinearDefectCorrectionParameters, LinearDefectDetectionEvidence,
+    LinearDefectDetectionParameters, LinearDefectError, LinearDefectPolarity,
+    correct_linear_defects, detect_linear_defects,
 };
 pub use master::{
     CalibrationMasterKind, MasterIntegrationAlgorithm, StrictMeanMaster,

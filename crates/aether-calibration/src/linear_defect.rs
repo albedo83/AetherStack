@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use aether_core::{CoreError, PixelFlags, ScientificImage};
+use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
 
 use crate::{DefectMap, DefectMapError};
 
@@ -96,6 +96,121 @@ impl LinearDefectDetectionEvidence {
     }
 }
 
+/// Explicit controls for conservative perpendicular line repair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinearDefectCorrectionParameters {
+    axis: LinearDefectAxis,
+    perpendicular_radius: usize,
+    stride: usize,
+    minimum_perpendicular_neighbours: usize,
+}
+
+impl LinearDefectCorrectionParameters {
+    /// Validates a bounded repair neighbourhood.
+    pub fn new(
+        axis: LinearDefectAxis,
+        perpendicular_radius: usize,
+        stride: usize,
+        minimum_perpendicular_neighbours: usize,
+    ) -> Result<Self, LinearDefectError> {
+        validate_neighbourhood(
+            perpendicular_radius,
+            stride,
+            minimum_perpendicular_neighbours,
+        )?;
+        Ok(Self {
+            axis,
+            perpendicular_radius,
+            stride,
+            minimum_perpendicular_neighbours,
+        })
+    }
+
+    /// Line orientation repaired by this policy.
+    #[must_use]
+    pub const fn axis(self) -> LinearDefectAxis {
+        self.axis
+    }
+    /// Maximum number of same-phase lines sampled on each side.
+    #[must_use]
+    pub const fn perpendicular_radius(self) -> usize {
+        self.perpendicular_radius
+    }
+    /// Detector-pixel spacing between support lines.
+    #[must_use]
+    pub const fn stride(self) -> usize {
+        self.stride
+    }
+    /// Minimum clean perpendicular support required for replacement.
+    #[must_use]
+    pub const fn minimum_perpendicular_neighbours(self) -> usize {
+        self.minimum_perpendicular_neighbours
+    }
+}
+
+/// Complete accounting for one perpendicular line-repair pass.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LinearDefectCorrectionEvidence {
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+}
+
+impl LinearDefectCorrectionEvidence {
+    /// Samples carrying HOT or COLD evidence in the supplied map.
+    #[must_use]
+    pub const fn requested_samples(self) -> usize {
+        self.requested_samples
+    }
+    /// Samples replaced from clean perpendicular support.
+    #[must_use]
+    pub const fn corrected_samples(self) -> usize {
+        self.corrected_samples
+    }
+    /// Requested samples lacking enough clean perpendicular support.
+    #[must_use]
+    pub const fn insufficient_support_samples(self) -> usize {
+        self.insufficient_support_samples
+    }
+    /// Requested samples carrying an unrelated source-mask reason.
+    #[must_use]
+    pub const fn blocked_by_source_mask_samples(self) -> usize {
+        self.blocked_by_source_mask_samples
+    }
+}
+
+/// Corrected science pixels with immutable line-defect evidence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorrectedLinearDefects {
+    image: ScientificImage,
+    defect_map: DefectMap,
+    evidence: LinearDefectCorrectionEvidence,
+}
+
+impl CorrectedLinearDefects {
+    /// Corrected image. Successful replacements are usable in this mask.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+    /// Immutable reasons that selected each sample for repair.
+    #[must_use]
+    pub const fn defect_map(&self) -> &DefectMap {
+        &self.defect_map
+    }
+    /// Complete replacement accounting.
+    #[must_use]
+    pub const fn evidence(&self) -> LinearDefectCorrectionEvidence {
+        self.evidence
+    }
+    /// Consumes the wrapper and returns the corrected image.
+    #[must_use]
+    pub fn into_image(self) -> ScientificImage {
+        self.image
+    }
+}
+
 impl LinearDefectDetectionParameters {
     /// Validates a fully explicit, bounded line-detection policy.
     #[allow(clippy::too_many_arguments)]
@@ -110,23 +225,11 @@ impl LinearDefectDetectionParameters {
         cold_sigma: f64,
         minimum_absolute_deviation: f64,
     ) -> Result<Self, LinearDefectError> {
-        if perpendicular_radius == 0 || perpendicular_radius > MAXIMUM_PERPENDICULAR_RADIUS {
-            return Err(LinearDefectError::InvalidRadius {
-                radius: perpendicular_radius,
-            });
-        }
-        if !(1..=2).contains(&stride) {
-            return Err(LinearDefectError::InvalidStride { stride });
-        }
-        let maximum_neighbours = perpendicular_radius * 2;
-        if minimum_perpendicular_neighbours == 0
-            || minimum_perpendicular_neighbours > maximum_neighbours
-        {
-            return Err(LinearDefectError::InvalidMinimumNeighbours {
-                minimum: minimum_perpendicular_neighbours,
-                maximum: maximum_neighbours,
-            });
-        }
+        validate_neighbourhood(
+            perpendicular_radius,
+            stride,
+            minimum_perpendicular_neighbours,
+        )?;
         if minimum_affected_samples == 0 {
             return Err(LinearDefectError::InvalidMinimumAffectedSamples);
         }
@@ -267,6 +370,13 @@ pub enum LinearDefectError {
         /// Rejected absolute floor.
         value: f64,
     },
+    /// Source and line map dimensions differ.
+    DimensionMismatch {
+        /// Science image dimensions.
+        source: Dimensions,
+        /// Defect-map dimensions.
+        map: Dimensions,
+    },
     /// Stable map construction rejected generated evidence.
     DefectMap(DefectMapError),
     /// Allocation or coordinate failure from the shared image core.
@@ -302,6 +412,16 @@ impl Display for LinearDefectError {
                 formatter,
                 "linear minimum absolute deviation must be finite and non-negative, received {value}"
             ),
+            Self::DimensionMismatch { source, map } => write!(
+                formatter,
+                "linear-defect map dimensions {}x{}x{} do not match source dimensions {}x{}x{}",
+                map.width(),
+                map.height(),
+                map.planes(),
+                source.width(),
+                source.height(),
+                source.planes()
+            ),
             Self::DefectMap(error) => Display::fmt(error, formatter),
             Self::Core(error) => Display::fmt(error, formatter),
         }
@@ -316,6 +436,132 @@ impl Error for LinearDefectError {
             _ => None,
         }
     }
+}
+
+/// Replaces mapped line defects from immutable clean perpendicular support.
+///
+/// Corrected values never feed later replacements. A sample carrying any mask
+/// reason other than HOT or COLD is retained unchanged and reported as blocked.
+/// Insufficient support produces canonical NaN with MISSING while the separate
+/// line map continues to preserve the original detector evidence.
+pub fn correct_linear_defects(
+    source: &ScientificImage,
+    defect_map: &DefectMap,
+    parameters: LinearDefectCorrectionParameters,
+) -> Result<CorrectedLinearDefects, LinearDefectError> {
+    if source.dimensions() != defect_map.dimensions() {
+        return Err(LinearDefectError::DimensionMismatch {
+            source: source.dimensions(),
+            map: defect_map.dimensions(),
+        });
+    }
+    let dimensions = source.dimensions();
+    let mut output = source.clone();
+    let mut values = Vec::new();
+    let support_capacity = parameters.perpendicular_radius * 2;
+    values.try_reserve_exact(support_capacity).map_err(|_| {
+        LinearDefectError::Core(CoreError::AllocationFailed {
+            elements: support_capacity,
+        })
+    })?;
+    let defect_bits = (PixelFlags::HOT | PixelFlags::COLD).bits();
+    let mut evidence = LinearDefectCorrectionEvidence::default();
+
+    for plane in 0..dimensions.planes() {
+        for y in 0..dimensions.height() {
+            for x in 0..dimensions.width() {
+                let index = dimensions
+                    .linear_index(x, y, plane)
+                    .map_err(LinearDefectError::Core)?;
+                let mapped = defect_map.mask().as_slice()[index];
+                if mapped.bits() & defect_bits == 0 {
+                    continue;
+                }
+                evidence.requested_samples += 1;
+                let source_flags = source.mask().as_slice()[index];
+                if source_flags.bits() & !defect_bits != 0 {
+                    output.mask_mut().as_mut_slice()[index] |= mapped;
+                    evidence.blocked_by_source_mask_samples += 1;
+                    continue;
+                }
+                collect_clean_perpendicular_neighbours(
+                    source,
+                    defect_map,
+                    x,
+                    y,
+                    plane,
+                    parameters,
+                    &mut values,
+                )?;
+                if values.len() < parameters.minimum_perpendicular_neighbours {
+                    output.pixels_mut()[index] = f64::NAN;
+                    output.mask_mut().as_mut_slice()[index] = mapped | PixelFlags::MISSING;
+                    evidence.insufficient_support_samples += 1;
+                    continue;
+                }
+                output.pixels_mut()[index] = median(&mut values);
+                output.mask_mut().as_mut_slice()[index] =
+                    PixelFlags::from_bits_retain(source_flags.bits() & !defect_bits);
+                evidence.corrected_samples += 1;
+            }
+        }
+    }
+
+    Ok(CorrectedLinearDefects {
+        image: output,
+        defect_map: defect_map.clone(),
+        evidence,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_clean_perpendicular_neighbours(
+    image: &ScientificImage,
+    map: &DefectMap,
+    x: usize,
+    y: usize,
+    plane: usize,
+    parameters: LinearDefectCorrectionParameters,
+    values: &mut Vec<f64>,
+) -> Result<(), LinearDefectError> {
+    values.clear();
+    let dimensions = image.dimensions();
+    let (line, position) = match parameters.axis {
+        LinearDefectAxis::Rows => (y, x),
+        LinearDefectAxis::Columns => (x, y),
+    };
+    let radius = isize::try_from(parameters.perpendicular_radius).map_err(|_| {
+        LinearDefectError::InvalidRadius {
+            radius: parameters.perpendicular_radius,
+        }
+    })?;
+    let stride =
+        isize::try_from(parameters.stride).map_err(|_| LinearDefectError::InvalidStride {
+            stride: parameters.stride,
+        })?;
+    for offset in -radius..=radius {
+        if offset == 0 {
+            continue;
+        }
+        let Some(neighbour_line) = line.checked_add_signed(offset * stride) else {
+            continue;
+        };
+        let (nx, ny) = line_coordinates(parameters.axis, neighbour_line, position);
+        if nx >= dimensions.width() || ny >= dimensions.height() {
+            continue;
+        }
+        let index = dimensions
+            .linear_index(nx, ny, plane)
+            .map_err(LinearDefectError::Core)?;
+        let value = image.pixels()[index];
+        if image.mask().as_slice()[index].is_clear()
+            && map.mask().as_slice()[index].is_clear()
+            && value.is_finite()
+        {
+            values.push(value);
+        }
+    }
+    Ok(())
 }
 
 /// Detects coherent row or column outliers against perpendicular support.
@@ -532,6 +778,29 @@ fn validate_sigma(value: f64, polarity: LinearDefectPolarity) -> Result<(), Line
     Ok(())
 }
 
+fn validate_neighbourhood(
+    perpendicular_radius: usize,
+    stride: usize,
+    minimum_perpendicular_neighbours: usize,
+) -> Result<(), LinearDefectError> {
+    if perpendicular_radius == 0 || perpendicular_radius > MAXIMUM_PERPENDICULAR_RADIUS {
+        return Err(LinearDefectError::InvalidRadius {
+            radius: perpendicular_radius,
+        });
+    }
+    if !(1..=2).contains(&stride) {
+        return Err(LinearDefectError::InvalidStride { stride });
+    }
+    let maximum = perpendicular_radius * 2;
+    if minimum_perpendicular_neighbours == 0 || minimum_perpendicular_neighbours > maximum {
+        return Err(LinearDefectError::InvalidMinimumNeighbours {
+            minimum: minimum_perpendicular_neighbours,
+            maximum,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +819,12 @@ mod tests {
         axis: LinearDefectAxis,
     ) -> Result<LinearDefectDetectionParameters, LinearDefectError> {
         LinearDefectDetectionParameters::new(axis, 2, 1, 2, 5, 500_000, 5.0, 5.0, 1.0)
+    }
+
+    fn correction(
+        axis: LinearDefectAxis,
+    ) -> Result<LinearDefectCorrectionParameters, LinearDefectError> {
+        LinearDefectCorrectionParameters::new(axis, 2, 1, 2)
     }
 
     #[test]
@@ -717,6 +992,68 @@ mod tests {
         let (map, evidence) = detect_linear_defects(&source, parameters)?;
         assert_eq!(evidence.hot_lines(), 1);
         assert_eq!(map.summary().hot_samples(), 11);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_uses_only_immutable_clean_perpendicular_support() -> TestResult {
+        let mut source = image(9, 9, 100.0)?;
+        for x in 0..9 {
+            source.pixels_mut()[4 * 9 + x] = 500.0;
+        }
+        let (mut map, _) = detect_linear_defects(&source, detection(LinearDefectAxis::Rows)?)?;
+        map.insert(2, 3, 0, PixelFlags::HOT)?;
+        source.pixels_mut()[3 * 9 + 2] = 900.0;
+        let corrected = correct_linear_defects(&source, &map, correction(LinearDefectAxis::Rows)?)?;
+        assert_eq!(corrected.evidence().requested_samples(), 10);
+        assert_eq!(corrected.evidence().corrected_samples(), 10);
+        for x in 0..9 {
+            assert_eq!(
+                corrected.image().pixels()[4 * 9 + x].to_bits(),
+                100.0_f64.to_bits()
+            );
+        }
+        assert_eq!(corrected.defect_map().summary().defective_samples(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_fails_closed_without_support_and_preserves_unrelated_masks() -> TestResult {
+        let mut source = image(3, 3, 100.0)?;
+        let mut map = DefectMap::clear(source.dimensions())?;
+        map.insert(0, 1, 0, PixelFlags::HOT)?;
+        map.insert(1, 1, 0, PixelFlags::COLD)?;
+        source.mark(1, 1, 0, PixelFlags::SATURATED)?;
+        let parameters = LinearDefectCorrectionParameters::new(LinearDefectAxis::Rows, 1, 2, 1)?;
+        let corrected = correct_linear_defects(&source, &map, parameters)?;
+        assert!(corrected.image().pixels()[3].is_nan());
+        assert!(
+            corrected
+                .image()
+                .mask()
+                .get(0, 1, 0)?
+                .contains(PixelFlags::MISSING)
+        );
+        assert!(
+            corrected
+                .image()
+                .mask()
+                .get(1, 1, 0)?
+                .contains(PixelFlags::SATURATED)
+        );
+        assert_eq!(corrected.evidence().insufficient_support_samples(), 1);
+        assert_eq!(corrected.evidence().blocked_by_source_mask_samples(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn repair_rejects_dimension_mismatch() -> TestResult {
+        let source = image(5, 5, 1.0)?;
+        let map = DefectMap::clear(Dimensions::new(4, 5, 1)?)?;
+        assert!(matches!(
+            correct_linear_defects(&source, &map, correction(LinearDefectAxis::Rows)?),
+            Err(LinearDefectError::DimensionMismatch { .. })
+        ));
         Ok(())
     }
 }
