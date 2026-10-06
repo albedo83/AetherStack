@@ -254,7 +254,11 @@ impl LinearDefectDetectionParameters {
             minimum_affected_fraction_ppm,
             hot_sigma,
             cold_sigma,
-            minimum_absolute_deviation,
+            minimum_absolute_deviation: if minimum_absolute_deviation == 0.0 {
+                0.0
+            } else {
+                minimum_absolute_deviation
+            },
         })
     }
 
