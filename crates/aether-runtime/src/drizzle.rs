@@ -1,14 +1,21 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use aether_core::PixelFlags;
-use aether_drizzle::{DrizzleTileEvidence, DrizzleTileResult};
+use aether_drizzle::{
+    DrizzleError, DrizzleFrameError, DrizzleFrameEvidence, DrizzleOutputBounds, DrizzleParameters,
+    DrizzleSourceWindow, DrizzleTileAccumulator, DrizzleTileEvidence, DrizzleTileResult,
+    accumulate_cfa_window, plan_drizzle_source_window,
+};
 use aether_fits::{
     AtomicF64PrimaryStreamWriter, AtomicFitsSetWriteError, AtomicFitsWriteError,
-    FitsOutputProvenance, FitsProvenanceError, FitsWriteSummary, HeaderReadOptions,
-    PrimaryImageReader, publish_atomic_fits_set,
+    FitsOutputProvenance, FitsProvenanceError, FitsWriteSummary, HeaderReadOptions, ImageReadError,
+    ImageRegion, PrimaryImageReader, publish_atomic_fits_set,
 };
+use aether_metadata::BayerPattern;
+use aether_registration::ProjectiveTransform;
 
 /// Provenance identity of the normalized Drizzle science image.
 pub const DRIZZLE_SCIENCE_ALGORITHM_ID: &str = "drizzle-science-v1";
@@ -19,6 +26,131 @@ pub const DRIZZLE_SUPPORT_ALGORITHM_ID: &str = "drizzle-support-v1";
 
 const SUPPORT_CONVERSION_CHUNK: usize = 4_096;
 const MAX_EXACT_BINARY64_INTEGER: u64 = 1_u64 << 53;
+
+/// Evidence for one bounded FITS region accumulated into a Drizzle tile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrizzleFitsWindowEvidence {
+    window: DrizzleSourceWindow,
+    frame: DrizzleFrameEvidence,
+}
+
+impl DrizzleFitsWindowEvidence {
+    /// Detector rectangle read from the source FITS plane.
+    #[must_use]
+    pub const fn window(self) -> DrizzleSourceWindow {
+        self.window
+    }
+
+    /// Sample accounting for the materialized detector rectangle.
+    #[must_use]
+    pub const fn frame(self) -> DrizzleFrameEvidence {
+        self.frame
+    }
+}
+
+/// Failure while planning, reading, or accumulating one bounded FITS region.
+#[derive(Debug)]
+pub enum DrizzleFitsAccumulationError {
+    /// The primary array is not one non-empty, `u32`-addressable detector plane.
+    InvalidSourceDimensions,
+    /// Conservative source-window planning failed.
+    Planning(DrizzleError),
+    /// The planned FITS region could not be decoded.
+    Read(ImageReadError),
+    /// The decoded detector samples could not be accumulated.
+    Accumulation(DrizzleFrameError),
+}
+
+impl Display for DrizzleFitsAccumulationError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSourceDimensions => formatter.write_str(
+                "Drizzle FITS source must be one non-empty u32-addressable detector plane",
+            ),
+            Self::Planning(error) => write!(formatter, "cannot plan Drizzle FITS region: {error}"),
+            Self::Read(error) => write!(formatter, "cannot read Drizzle FITS region: {error}"),
+            Self::Accumulation(error) => {
+                write!(formatter, "cannot accumulate Drizzle FITS region: {error}")
+            }
+        }
+    }
+}
+
+impl Error for DrizzleFitsAccumulationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidSourceDimensions => None,
+            Self::Planning(error) => Some(error),
+            Self::Read(error) => Some(error),
+            Self::Accumulation(error) => Some(error),
+        }
+    }
+}
+
+/// Reads and accumulates only the detector rectangle needed by one output tile.
+///
+/// Header acceptance and source fingerprint checks remain responsibilities of
+/// the caller that opened `reader`. A disjoint source returns `Ok(None)` without
+/// touching its pixel array. Otherwise the exact planned region is materialized
+/// as one plane and accumulated with global detector coordinates preserved.
+#[allow(clippy::too_many_arguments)]
+pub fn accumulate_fits_cfa_tile<R: Read + Seek>(
+    accumulator: &mut DrizzleTileAccumulator,
+    reader: &mut PrimaryImageReader<R>,
+    transform: ProjectiveTransform,
+    parameters: DrizzleParameters,
+    pattern: &BayerPattern,
+    frame_weight: f64,
+    output: DrizzleOutputBounds,
+) -> Result<Option<DrizzleFitsWindowEvidence>, DrizzleFitsAccumulationError> {
+    let (source_width, source_height) = match reader.descriptor().axes() {
+        [width, height] | [width, height, 1] => (
+            u32::try_from(*width)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or(DrizzleFitsAccumulationError::InvalidSourceDimensions)?,
+            u32::try_from(*height)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or(DrizzleFitsAccumulationError::InvalidSourceDimensions)?,
+        ),
+        _ => return Err(DrizzleFitsAccumulationError::InvalidSourceDimensions),
+    };
+    let Some(window) = plan_drizzle_source_window(
+        source_width,
+        source_height,
+        transform,
+        parameters,
+        accumulator.bounds(),
+        output,
+    )
+    .map_err(DrizzleFitsAccumulationError::Planning)?
+    else {
+        return Ok(None);
+    };
+    let region = ImageRegion::new(
+        0,
+        u64::from(window.x()),
+        u64::from(window.y()),
+        u64::from(window.width()),
+        u64::from(window.height()),
+    );
+    let source = reader
+        .read_region_image(region)
+        .map_err(DrizzleFitsAccumulationError::Read)?;
+    let frame = accumulate_cfa_window(
+        accumulator,
+        &source,
+        window,
+        transform,
+        parameters,
+        pattern,
+        frame_weight,
+        output,
+    )
+    .map_err(DrizzleFitsAccumulationError::Accumulation)?;
+    Ok(Some(DrizzleFitsWindowEvidence { window, frame }))
+}
 
 /// Stable role of one companion in a Drizzle product set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -465,14 +597,16 @@ fn validate_staged(
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-    use std::io;
+    use std::io::{self, Cursor};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use aether_core::{Dimensions, ScientificImage};
     use aether_drizzle::{
-        DrizzleParameters, DrizzleTileAccumulator, DrizzleTileBounds, deposit_detector_footprint,
-        project_detector_footprint,
+        DrizzleOutputBounds, DrizzleParameters, DrizzleTileAccumulator, DrizzleTileBounds,
+        accumulate_cfa_frame, deposit_detector_footprint, project_detector_footprint,
     };
-    use aether_fits::{PrimaryImageReader, SampleStatus};
+    use aether_fits::{PrimaryImageReader, SampleStatus, write_f64_primary};
+    use aether_metadata::BayerPattern;
     use aether_registration::ProjectiveTransform;
 
     use super::*;
@@ -535,6 +669,129 @@ mod tests {
         reader.read_physical_samples(0, &mut values, &mut statuses)?;
         assert!(reader.verify_checksums()?.is_fully_verified());
         Ok((values, statuses))
+    }
+
+    fn fits_bytes(image: &ScientificImage) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, image)?;
+        Ok(bytes)
+    }
+
+    #[test]
+    fn bounded_fits_read_matches_complete_frame_accumulation() -> TestResult {
+        let width = 8_u32;
+        let height = 6_u32;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(width as usize, height as usize, 1)?,
+            (0..width * height)
+                .map(|index| f64::from(index) + 0.125)
+                .collect(),
+        )?;
+        let transform = ProjectiveTransform::new([
+            [0.99, -0.03, 0.4],
+            [0.02, 1.01, -0.2],
+            [0.0005, -0.0003, 1.0],
+        ])?;
+        let parameters = DrizzleParameters::new(1, 0.8)?;
+        let tile = DrizzleTileBounds::new(3, 2, 2, 2, 3)?;
+        let output = DrizzleOutputBounds::new(width, height, 16)?;
+
+        let mut complete = DrizzleTileAccumulator::new(tile)?;
+        accumulate_cfa_frame(
+            &mut complete,
+            &image,
+            transform,
+            parameters,
+            &BayerPattern::Rggb,
+            1.25,
+            output,
+        )?;
+        let complete = complete.finish()?;
+
+        let mut reader = PrimaryImageReader::open(
+            Cursor::new(fits_bytes(&image)?),
+            HeaderReadOptions::default(),
+        )?;
+        let mut bounded = DrizzleTileAccumulator::new(tile)?;
+        let evidence = accumulate_fits_cfa_tile(
+            &mut bounded,
+            &mut reader,
+            transform,
+            parameters,
+            &BayerPattern::Rggb,
+            1.25,
+            output,
+        )?
+        .ok_or("test tile unexpectedly missed the detector")?;
+        assert_eq!(
+            evidence.frame().source_samples(),
+            u64::from(evidence.window().width()) * u64::from(evidence.window().height())
+        );
+        assert!(evidence.window().width() < width || evidence.window().height() < height);
+        let bounded = bounded.finish()?;
+
+        assert_eq!(
+            bounded
+                .values()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            complete
+                .values()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded
+                .weights()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            complete
+                .weights()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded.contribution_counts(),
+            complete.contribution_counts()
+        );
+        assert_eq!(bounded.flags(), complete.flags());
+        Ok(())
+    }
+
+    #[test]
+    fn disjoint_fits_source_requires_no_pixel_bytes() -> TestResult {
+        let image = ScientificImage::from_pixels(Dimensions::new(2, 2, 1)?, vec![1.0; 4])?;
+        let mut bytes = fits_bytes(&image)?;
+        let header_reader =
+            PrimaryImageReader::open(Cursor::new(bytes.clone()), HeaderReadOptions::default())?;
+        bytes.truncate(usize::try_from(header_reader.descriptor().data_offset())?);
+        let mut header_only =
+            PrimaryImageReader::open(Cursor::new(bytes), HeaderReadOptions::default())?;
+        let mut accumulator = DrizzleTileAccumulator::new(DrizzleTileBounds::new(0, 0, 2, 2, 3)?)?;
+        let disjoint = accumulate_fits_cfa_tile(
+            &mut accumulator,
+            &mut header_only,
+            ProjectiveTransform::new([[1.0, 0.0, 100.0], [0.0, 1.0, 100.0], [0.0, 0.0, 1.0]])?,
+            DrizzleParameters::new(1, 1.0)?,
+            &BayerPattern::Rggb,
+            1.0,
+            DrizzleOutputBounds::new(2, 2, 4)?,
+        )?;
+
+        assert_eq!(disjoint, None);
+        let result = accumulator.finish()?;
+        assert_eq!(result.evidence().depositions_seen(), 0);
+        assert!(
+            result
+                .flags()
+                .iter()
+                .all(|flags| flags.contains(PixelFlags::MISSING))
+        );
+        Ok(())
     }
 
     #[test]

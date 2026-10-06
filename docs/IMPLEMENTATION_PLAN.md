@@ -1989,6 +1989,12 @@ safety reasoning. They do not narrate obvious syntax.
      offset before CFA routing or projective mapping. A projective, non-unit-drop
      oracle requires bit-identical science, weights, support counts, and flags
      between complete-frame processing and the bounded window for one tile.
+189. Connect conservative Drizzle windows to bounded FITS decoding. The runtime
+     derives one non-empty detector plane from the validated primary array,
+     performs no pixel I/O for a disjoint source, materializes only the planned
+     rectangle otherwise, and preserves typed planning, read, and accumulation
+     failures. Returned evidence records both the exact window and its complete
+     per-sample accounting.
 
 ## 11. Stable-release definition
 

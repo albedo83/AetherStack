@@ -118,6 +118,12 @@ match the planned extent exactly. A bit-identity oracle compares science,
 weight, support, and flags from a bounded regional read against accumulation of
 the complete detector frame into the same tile.
 
+The runtime FITS adapter derives the detector extent from the validated primary
+array, plans against the accumulator's exact tile, and materializes only that
+rectangle. Two-dimensional arrays and three-dimensional arrays with exactly one
+plane are accepted. A disjoint source returns before pixel decoding, while all
+other read and accumulation failures retain their typed cause.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

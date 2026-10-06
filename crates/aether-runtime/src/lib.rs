@@ -22,8 +22,9 @@ pub use demosaic::{
 };
 pub use drizzle::{
     DRIZZLE_SCIENCE_ALGORITHM_ID, DRIZZLE_SUPPORT_ALGORITHM_ID, DRIZZLE_WEIGHT_ALGORITHM_ID,
-    DrizzleProductDestinations, DrizzleProductKind, DrizzleProductProvenance,
-    DrizzlePublicationError, DrizzlePublicationResult, publish_drizzle_products,
+    DrizzleFitsAccumulationError, DrizzleFitsWindowEvidence, DrizzleProductDestinations,
+    DrizzleProductKind, DrizzleProductProvenance, DrizzlePublicationError,
+    DrizzlePublicationResult, accumulate_fits_cfa_tile, publish_drizzle_products,
 };
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,
