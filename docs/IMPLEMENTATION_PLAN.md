@@ -1978,6 +1978,12 @@ safety reasoning. They do not narrate obvious syntax.
      values, and deposited samples, while separately counting footprints outside
      global output and contributions before tile ownership filtering. Weighted
      multi-exposure tests lock physical CFA separation and exact output values.
+187. Bound each tile's detector I/O with conservative inverse geometry. Output
+     pixel edges are returned to reference coordinates, mapped through the
+     inverse homography after a four-corner projective-horizon proof, expanded by
+     half the detector drop, and clipped to the source extent. Disjoint tiles
+     perform no detector read. A forward-projection brute-force oracle proves
+     that the planned integer window never omits a contributing photosite.
 
 ## 11. Stable-release definition
 

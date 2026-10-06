@@ -99,6 +99,18 @@ also counts geometric contributions before tile ownership filtering, while the
 tile retains its independent owned/outside accounting. This separation makes
 cropping, defective input, and missing output support distinguishable.
 
+## Bounded detector reads
+
+Before reading pixels for a tile, the executor maps the tile's continuous output
+rectangle back through the output scale and inverse source-to-reference
+homography. The inverse projective denominator must be finite, nonzero, and keep
+one sign at all four tile corners; linearity then proves that no horizon crosses
+the rectangle. The source quadrilateral bounds are expanded by half the physical
+drop width and clipped to the detector. A disjoint tile requires no detector
+read. The integer window is deliberately conservative at exact boundaries, and
+a brute-force projective oracle requires it to contain every photosite whose
+forward-projected drop contributes nonzero area to the tile.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

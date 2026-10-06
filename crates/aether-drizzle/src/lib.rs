@@ -16,6 +16,7 @@ use aether_registration::{CoordinateError, ImagePoint, ProjectiveTransform};
 mod accumulation;
 mod frame;
 mod sample;
+mod window;
 
 pub use accumulation::{
     DrizzleAccumulationError, DrizzleTileAccumulator, DrizzleTileBounds, DrizzleTileEvidence,
@@ -25,6 +26,9 @@ pub use frame::{DrizzleFrameError, DrizzleFrameEvidence, accumulate_cfa_frame};
 pub use sample::{
     DetectorSample, DrizzleOutputBounds, DrizzleSampleExclusion, DrizzleSampleOutcome,
     deposit_cfa_sample,
+};
+pub use window::{
+    DRIZZLE_SOURCE_WINDOW_ALGORITHM_ID, DrizzleSourceWindow, plan_drizzle_source_window,
 };
 
 /// Stable identity of the strict detector-footprint projection contract.
