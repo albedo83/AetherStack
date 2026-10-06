@@ -1921,6 +1921,12 @@ struct DefectBatchPreviewRequest {
     focus_frame_id: String,
     expected_manifest_sha256: String,
     expected_light_plan_sha256: String,
+    dark_detection: DefectDetectionSettings,
+    flat_detection: DefectDetectionSettings,
+    correction_radius: usize,
+    correction_stride: usize,
+    correction_minimum_neighbours: usize,
+    memory_limit_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1938,6 +1944,8 @@ struct DefectBatchPreviewItem {
 #[serde(rename_all = "camelCase")]
 struct DefectBatchPreviewResponse {
     ready: bool,
+    plan_sha256: String,
+    parameters_sha256: String,
     item_count: usize,
     blocked_item_count: usize,
     items: Vec<DefectBatchPreviewItem>,
@@ -6255,12 +6263,46 @@ fn preview_defect_batch_sync(
     candidates.insert(0, focus);
 
     let mut destinations = BTreeSet::new();
+    let correction = DefectCorrectionParameters::new(
+        request.correction_radius,
+        request.correction_stride,
+        request.correction_minimum_neighbours,
+    )
+    .map_err(|_| defect_batch_preflight_error())?;
+    let reference_parameters = [
+        DefectReferenceParameters::new(
+            DefectReferenceKind::Dark,
+            defect_detection_parameters(request.dark_detection)?,
+        ),
+        DefectReferenceParameters::new(
+            DefectReferenceKind::Flat,
+            defect_detection_parameters(request.flat_detection)?,
+        ),
+    ];
+    let parameters_sha256 = strict_defect_parameters_sha256(&reference_parameters, correction)
+        .map_err(|_| defect_batch_preflight_error())?;
+    let _memory_limit = usize::try_from(request.memory_limit_bytes)
+        .ok()
+        .and_then(|limit| MemoryBudget::new(limit).ok())
+        .ok_or_else(defect_batch_preflight_error)?;
     let mut items = Vec::new();
     items
         .try_reserve_exact(candidates.len())
         .map_err(|_| defect_batch_preflight_error())?;
     let mut blocked_item_count = 0_usize;
     for ((group_id, source_frame_id), frame) in candidates {
+        let group = session
+            .manifest
+            .groups()
+            .iter()
+            .find(|group| group.id() == group_id)
+            .ok_or_else(calibration_artifact_state_error)?;
+        validate_defect_lattice(
+            group.key().bayer_pattern(),
+            request.dark_detection,
+            request.flat_detection,
+            request.correction_stride,
+        )?;
         if !artifacts
             .masters
             .contains_key(&("dark".to_owned(), frame.dark_group_id.clone()))
@@ -6309,12 +6351,64 @@ fn preview_defect_batch_sync(
             blocked_by_existing_output: blocked,
         });
     }
+    let plan_sha256 = defect_batch_plan_sha256(
+        &request.expected_manifest_sha256,
+        &request.expected_light_plan_sha256,
+        &parameters_sha256,
+        request.memory_limit_bytes,
+        &items,
+    )?;
     Ok(DefectBatchPreviewResponse {
         ready: !items.is_empty() && blocked_item_count == 0,
+        plan_sha256,
+        parameters_sha256,
         item_count: items.len(),
         blocked_item_count,
         items,
     })
+}
+
+fn defect_batch_plan_sha256(
+    manifest_sha256: &str,
+    light_plan_sha256: &str,
+    parameters_sha256: &str,
+    memory_limit_bytes: u64,
+    items: &[DefectBatchPreviewItem],
+) -> Result<String, PreviewCommandError> {
+    const DOMAIN: &[u8] = b"aetherstack-defect-batch-plan-v1\0";
+    let mut hash = Sha256::new();
+    hash.update(DOMAIN);
+    for value in [manifest_sha256, light_plan_sha256, parameters_sha256] {
+        update_defect_batch_hash(&mut hash, value.as_bytes())?;
+    }
+    hash.update(memory_limit_bytes.to_be_bytes());
+    hash.update(
+        u64::try_from(items.len())
+            .map_err(|_| defect_batch_preflight_error())?
+            .to_be_bytes(),
+    );
+    for item in items {
+        update_defect_batch_hash(&mut hash, item.source_frame_id.as_bytes())?;
+        update_defect_batch_hash(&mut hash, item.group_id.as_bytes())?;
+        hash.update(
+            u64::try_from(item.source_index)
+                .map_err(|_| defect_batch_preflight_error())?
+                .to_be_bytes(),
+        );
+        update_defect_batch_hash(&mut hash, item.corrected_output_path.as_bytes())?;
+        update_defect_batch_hash(&mut hash, item.map_output_path.as_bytes())?;
+    }
+    Ok(lowercase_hex(&hash.finalize()))
+}
+
+fn update_defect_batch_hash(hash: &mut Sha256, value: &[u8]) -> Result<(), PreviewCommandError> {
+    hash.update(
+        u64::try_from(value.len())
+            .map_err(|_| defect_batch_preflight_error())?
+            .to_be_bytes(),
+    );
+    hash.update(value);
+    Ok(())
 }
 
 fn defect_batch_output_path(
@@ -9259,16 +9353,25 @@ mod tests {
             ]),
             calibrated_frames,
         };
+        let controls = defect_command_request();
         let request = || DefectBatchPreviewRequest {
             output_directory: output.clone(),
             focus_frame_id: focus_id.clone(),
             expected_manifest_sha256: manifest_sha256.clone(),
             expected_light_plan_sha256: "b".repeat(64),
+            dark_detection: controls.dark_detection,
+            flat_detection: controls.flat_detection,
+            correction_radius: controls.correction_radius,
+            correction_stride: controls.correction_stride,
+            correction_minimum_neighbours: controls.correction_minimum_neighbours,
+            memory_limit_bytes: controls.memory_limit_bytes,
         };
 
         let preview = preview_defect_batch_sync(&session, &artifacts, request())?;
         assert!(preview.ready);
         assert_eq!(preview.item_count, 2);
+        assert_eq!(preview.plan_sha256.len(), 64);
+        assert_eq!(preview.parameters_sha256.len(), 64);
         assert_eq!(preview.items[0].source_frame_id, focus_id);
         assert_eq!(preview.items[0].source_index, 9);
         assert_eq!(preview.items[1].source_frame_id, other_id);
@@ -9277,6 +9380,11 @@ mod tests {
                 .corrected_output_path
                 .ends_with("light-uvir-0010-corrected.fits")
         );
+        let mut other_focus = request();
+        other_focus.focus_frame_id = other_id.clone();
+        let reordered = preview_defect_batch_sync(&session, &artifacts, other_focus)?;
+        assert_ne!(reordered.plan_sha256, preview.plan_sha256);
+        assert_eq!(reordered.items[0].source_frame_id, other_id);
 
         fs::write(&preview.items[1].map_output_path, b"existing")?;
         let blocked = preview_defect_batch_sync(&session, &artifacts, request())?;
