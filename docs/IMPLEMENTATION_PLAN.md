@@ -2065,6 +2065,12 @@ safety reasoning. They do not narrate obvious syntax.
      missing values, and stale responses are rejected across product or plan
      changes. The laboratory reports all RGB-plane values without deriving or
      rounding scientific data in the browser.
+203. Offer uniform or balanced PSF frame weighting for Drizzle. Advanced mode
+     requires complete SNR, FWHM, and eccentricity evidence for the exact plan,
+     recomputes canonical weights in Rust, binds every frame identity exactly
+     once, and passes only the sealed positive weights into strict execution.
+     The UI exposes readiness and the native seal without inventing weights or
+     silently falling back to uniform contribution.
 
 ## 11. Stable-release definition
 

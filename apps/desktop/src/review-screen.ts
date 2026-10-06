@@ -216,6 +216,14 @@ export function mountReviewScreen(
       root,
       "[data-drizzle-scale]",
     ),
+    drizzleWeightingButtons: requiredAll<HTMLButtonElement>(
+      root,
+      "[data-drizzle-weighting]",
+    ),
+    drizzleWeightStatus: required<HTMLElement>(
+      root,
+      "[data-drizzle-weight-status]",
+    ),
     drizzleDropShrink: required<HTMLInputElement>(
       root,
       "[data-drizzle-drop-shrink]",
@@ -1023,6 +1031,13 @@ export function mountReviewScreen(
         product === "support"
       ) {
         actions.onSelectDrizzleProduct(product);
+      }
+      return;
+    }
+    if (action === "select-drizzle-weighting") {
+      const weighting = actionElement.dataset.drizzleWeighting;
+      if (weighting === "uniform" || weighting === "balanced_psf") {
+        actions.onSelectDrizzleWeighting(weighting);
       }
       return;
     }
@@ -2686,6 +2701,8 @@ interface RegistrationElements {
   readonly executeDrizzle: HTMLButtonElement;
   readonly cancelDrizzle: HTMLButtonElement;
   readonly drizzleScaleButtons: readonly HTMLButtonElement[];
+  readonly drizzleWeightingButtons: readonly HTMLButtonElement[];
+  readonly drizzleWeightStatus: HTMLElement;
   readonly drizzleDropShrink: HTMLInputElement;
   readonly drizzleDropShrinkValue: HTMLOutputElement;
   readonly drizzleMaximumContributions: HTMLInputElement;
@@ -2965,6 +2982,32 @@ function renderRegistration(
     button.setAttribute("aria-pressed", String(selected));
     button.disabled = running;
   }
+  const drizzleWeightEvidence = buildQualityWeightPreflight(
+    registration.plan,
+    model.activeRole === "light" ? model.frames : [],
+    drizzle.weightReferenceFrameId,
+  );
+  for (const button of elements.drizzleWeightingButtons) {
+    const selected = button.dataset.drizzleWeighting === drizzle.weighting;
+    button.dataset.selected = String(selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = running;
+  }
+  elements.drizzleWeightStatus.dataset.ready = String(
+    drizzle.weighting === "uniform" || drizzleWeightEvidence.ready,
+  );
+  const currentDrizzleWeightSeal =
+    drizzle.weightPreflight?.planSha256 === registration.plan?.planSha256
+      ? drizzle.weightPreflight
+      : null;
+  elements.drizzleWeightStatus.textContent =
+    drizzle.weighting === "uniform"
+      ? "Equal identity-bound contribution per frame"
+      : currentDrizzleWeightSeal
+        ? `${currentDrizzleWeightSeal.weights.length} balanced weights sealed in Rust`
+        : drizzleWeightEvidence.ready
+          ? `${drizzleWeightEvidence.evidence.length} frames ready · native seal required`
+          : `${drizzleWeightEvidence.evidence.length} / ${drizzleWeightEvidence.rows.length} frames have complete metrics`;
   elements.drizzleDropShrink.value = String(drizzle.settings.dropShrink);
   elements.drizzleDropShrinkValue.value =
     drizzle.settings.dropShrink.toFixed(2);
@@ -2990,6 +3033,7 @@ function renderRegistration(
   elements.executeDrizzle.disabled =
     registration.planState !== "ready" ||
     !drizzleArtifactSetReady ||
+    (drizzle.weighting === "balanced_psf" && !drizzleWeightEvidence.ready) ||
     executionBusy ||
     stackBusy ||
     normalizationBusy ||
@@ -4873,6 +4917,14 @@ function shellMarkup(): string {
                     <button type="button" data-action="select-drizzle-scale" data-drizzle-scale="3" aria-pressed="false">3×</button>
                   </div>
                 </div>
+                <div class="drizzle-console__weighting" role="group" aria-label="Drizzle frame weighting">
+                  <span>Frame weighting</span>
+                  <div class="segmented-control segmented-control--compact">
+                    <button type="button" data-action="select-drizzle-weighting" data-drizzle-weighting="uniform" aria-pressed="true">Uniform</button>
+                    <button type="button" data-action="select-drizzle-weighting" data-drizzle-weighting="balanced_psf" aria-pressed="false">Balanced PSF</button>
+                  </div>
+                </div>
+                <output class="drizzle-console__weight-status" data-drizzle-weight-status data-ready="true">Equal identity-bound contribution per frame</output>
                 <div class="drizzle-console__controls">
                   <label>
                     <span><strong>Drop shrink</strong><output data-drizzle-drop-shrink-value>0.80</output></span>

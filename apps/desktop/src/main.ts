@@ -326,10 +326,15 @@ const screen = mountReviewScreen(root, model, {
       ...model,
       registration: {
         ...model.registration,
-        drizzle: idleDrizzle(
-          "Drizzle controls updated · ready for a new sealed run",
-          settings,
-        ),
+        drizzle: {
+          ...idleDrizzle(
+            "Drizzle controls updated · ready for a new sealed run",
+            settings,
+          ),
+          weighting: model.registration.drizzle.weighting,
+          weightReferenceFrameId:
+            model.registration.drizzle.weightReferenceFrameId,
+        },
       },
     });
   },
@@ -341,6 +346,27 @@ const screen = mountReviewScreen(root, model, {
   },
   onInspectDrizzlePixel(x, y) {
     void inspectDrizzlePixel(x, y);
+  },
+  onSelectDrizzleWeighting(weighting) {
+    if (isActiveExecutionState(model.registration.drizzle.state)) return;
+    drizzleTicket += 1;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...idleDrizzle(
+            weighting === "uniform"
+              ? "Uniform frame weighting selected"
+              : "Balanced PSF weighting selected · complete quality metrics required",
+            model.registration.drizzle.settings,
+          ),
+          weighting,
+          weightReferenceFrameId:
+            model.registration.drizzle.weightReferenceFrameId,
+        },
+      },
+    });
   },
   onUpdateRegisteredStackSettings(settings) {
     if (
@@ -1691,6 +1717,9 @@ function idleDrizzle(
     previewState: "idle",
     preview: null,
     selectedProduct: "science",
+    weighting: "uniform",
+    weightReferenceFrameId: null,
+    weightPreflight: null,
     pixelInspectionState: "idle",
     pixelInspection: null,
     message,
@@ -1953,6 +1982,87 @@ async function executeDrizzleProduct(): Promise<void> {
     });
     return;
   }
+  let drizzleWeights: readonly {
+    readonly frameId: string;
+    readonly weight: number;
+  }[] = [];
+  if (drizzle.weighting === "balanced_psf") {
+    const weightEvidence = buildQualityWeightPreflight(
+      plan,
+      model.activeRole === "light" ? model.frames : [],
+      drizzle.weightReferenceFrameId,
+    );
+    if (!weightEvidence.ready || !weightEvidence.referenceFrameId) {
+      update({
+        ...model,
+        registration: {
+          ...model.registration,
+          drizzle: {
+            ...drizzle,
+            state: "error",
+            message:
+              "Balanced Drizzle weights require complete SNR, FWHM, and eccentricity evidence",
+          },
+        },
+      });
+      return;
+    }
+    const preflightTicket = ++drizzleTicket;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...drizzle,
+          weightPreflight: null,
+          message: "Recomputing canonical Drizzle weights in Rust…",
+        },
+      },
+    });
+    try {
+      const nativePreflight = await previewRegisteredWeights(
+        plan.planSha256,
+        plan.frames.map((frame) => frame.frameId),
+        weightEvidence.referenceFrameId,
+        weightEvidence.evidence,
+      );
+      if (
+        preflightTicket !== drizzleTicket ||
+        model.registration.plan?.planSha256 !== plan.planSha256 ||
+        nativePreflight.planSha256 !== plan.planSha256 ||
+        nativePreflight.weights.length !== plan.frames.length
+      ) {
+        return;
+      }
+      drizzleWeights = nativePreflight.weights;
+      update({
+        ...model,
+        registration: {
+          ...model.registration,
+          drizzle: {
+            ...model.registration.drizzle,
+            weightPreflight: nativePreflight,
+            message: `Balanced weights sealed · ${nativePreflight.parametersSha256.slice(0, 12)}…`,
+          },
+        },
+      });
+    } catch {
+      if (preflightTicket !== drizzleTicket) return;
+      update({
+        ...model,
+        registration: {
+          ...model.registration,
+          drizzle: {
+            ...model.registration.drizzle,
+            state: "error",
+            weightPreflight: null,
+            message: "Native Drizzle weight preflight failed",
+          },
+        },
+      });
+      return;
+    }
+  }
   const expectedPlanSha256 = plan.planSha256;
   const outputDirectory = await selectDrizzleOutputDirectory();
   if (
@@ -1970,7 +2080,7 @@ async function executeDrizzleProduct(): Promise<void> {
     registration: {
       ...model.registration,
       drizzle: {
-        ...drizzle,
+        ...model.registration.drizzle,
         state: "running",
         outputDirectory,
         progress: null,
@@ -2011,7 +2121,7 @@ async function executeDrizzleProduct(): Promise<void> {
       },
       expectedPlanSha256,
       artifacts.filter((artifact) => artifact !== null),
-      [],
+      drizzleWeights,
       drizzle.settings,
       onProgress,
     );

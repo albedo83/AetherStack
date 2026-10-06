@@ -43,6 +43,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onSelectDrizzleProduct: vi.fn(),
     onInspectDrizzleStatistics: vi.fn(),
     onInspectDrizzlePixel: vi.fn(),
+    onSelectDrizzleWeighting: vi.fn(),
     onUpdateRegisteredStackSettings: vi.fn(),
     onSelectRegisteredStackProduct: vi.fn(),
     onSetRegisteredStackOverlayOpacity: vi.fn(),
@@ -1262,6 +1263,10 @@ describe("frame review workspace", () => {
     fireEvent.input(dropShrink!, { target: { value: "0.65" } });
     expect(actions.onUpdateDrizzleSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ dropShrink: 0.65 }),
+    );
+    fireEvent.click(getByRole(root, "button", { name: "Balanced PSF" }));
+    expect(actions.onSelectDrizzleWeighting).toHaveBeenCalledWith(
+      "balanced_psf",
     );
     fireEvent.click(getByRole(root, "button", { name: "Analyze geometry" }));
     expect(actions.onAnalyzeRegistration).toHaveBeenCalledOnce();

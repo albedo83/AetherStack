@@ -808,6 +808,7 @@ button:active:not(:disabled) {
 .drizzle-console__heading,
 .drizzle-console__actions,
 .drizzle-console__scale,
+.drizzle-console__weighting,
 .drizzle-console__controls label > span {
   display: flex;
   align-items: center;
@@ -827,10 +828,25 @@ button:active:not(:disabled) {
 }
 
 .drizzle-console p,
-.drizzle-console__scale > span {
+.drizzle-console__scale > span,
+.drizzle-console__weighting > span {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.drizzle-console__weight-status {
+  padding: 7px 9px;
+  color: #7f94aa;
+  font-size: 9px;
+  line-height: 1.4;
+  background: #080d14;
+  border-left: 2px solid #3f719d;
+}
+
+.drizzle-console__weight-status[data-ready="false"] {
+  color: #dda7ad;
+  border-left-color: #96515c;
 }
 
 .segmented-control {
