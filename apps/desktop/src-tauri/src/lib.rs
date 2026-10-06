@@ -2055,6 +2055,8 @@ struct DefectBatchReportInspectionResponse {
     conflicting_samples: usize,
     defective_samples: usize,
     peak_reserved_bytes: usize,
+    unresolved_samples: usize,
+    repair_efficiency_ppm: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -6768,6 +6770,28 @@ fn inspect_defect_batch_report_sync(
     {
         return Err(defect_batch_report_validation_error());
     }
+    let unresolved_samples = report
+        .requested_samples
+        .checked_sub(report.corrected_samples)
+        .ok_or_else(defect_batch_report_validation_error)?;
+    let repair_efficiency_ppm = if report.requested_samples == 0 {
+        None
+    } else {
+        Some(
+            u32::try_from(
+                u128::try_from(report.corrected_samples)
+                    .map_err(|_| defect_batch_report_validation_error())?
+                    .checked_mul(1_000_000)
+                    .and_then(|value| {
+                        u128::try_from(report.requested_samples)
+                            .ok()
+                            .and_then(|requested| value.checked_div(requested))
+                    })
+                    .ok_or_else(defect_batch_report_validation_error)?,
+            )
+            .map_err(|_| defect_batch_report_validation_error())?,
+        )
+    };
     let canonical =
         serde_json::to_vec(report).map_err(|_| defect_batch_report_validation_error())?;
     if lowercase_hex(&Sha256::digest(&canonical)) != envelope.report_sha256 {
@@ -6792,6 +6816,8 @@ fn inspect_defect_batch_report_sync(
         conflicting_samples: report.conflicting_samples,
         defective_samples: report.defective_samples,
         peak_reserved_bytes: report.peak_reserved_bytes,
+        unresolved_samples,
+        repair_efficiency_ppm,
     })
 }
 
@@ -9999,6 +10025,8 @@ mod tests {
         let inspected = inspect_defect_batch_report_sync(&report_path)?;
         assert_eq!(inspected.report_sha256, exported.report_sha256);
         assert_eq!(inspected.corrected_samples, 9);
+        assert_eq!(inspected.unresolved_samples, 2);
+        assert_eq!(inspected.repair_efficiency_ppm, Some(818_181));
         assert_eq!(
             export_defect_batch_report_sync(&report_path, &single.plan_sha256, &state)
                 .err()

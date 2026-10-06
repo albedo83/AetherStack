@@ -319,6 +319,8 @@ export interface DefectBatchReportInspection {
   readonly conflictingSamples: number;
   readonly defectiveSamples: number;
   readonly peakReservedBytes: number;
+  readonly unresolvedSamples: number;
+  readonly repairEfficiencyPpm: number | null;
 }
 
 export interface DefectExecutionProgress {

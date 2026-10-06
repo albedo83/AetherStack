@@ -1344,6 +1344,8 @@ describe("frame review workspace", () => {
             conflictingSamples: 2,
             defectiveSamples: 62,
             peakReservedBytes: 234_020_736,
+            unresolvedSamples: 2,
+            repairEfficiencyPpm: 967_741,
           },
           reportInspectionMessage:
             "Verified report · 2/2 pairs · SHA-256 ffffffffffff…",
@@ -1352,7 +1354,7 @@ describe("frame review workspace", () => {
     });
     expect(
       root.querySelector("[data-defect-report-inspection]")?.textContent,
-    ).toContain("repaired 60/62");
+    ).toContain("96.77% repaired · unresolved 2");
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {

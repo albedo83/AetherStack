@@ -4479,10 +4479,16 @@ function renderDefectCorrection(
     ? `Plan SHA-256 ${report.planSha256} · parameters SHA-256 ${report.parametersSha256}`
     : "";
   const inspection = correction.reportInspection;
+  const repairEfficiency =
+    inspection?.repairEfficiencyPpm === null
+      ? "no mapped defects"
+      : inspection
+        ? `${(inspection.repairEfficiencyPpm / 10_000).toFixed(2)}% repaired`
+        : "";
   elements.defectReportInspection.dataset.state =
     correction.reportInspectionState;
   elements.defectReportInspection.textContent = inspection
-    ? `${correction.reportInspectionMessage} · defects ${inspection.defectiveSamples} · repaired ${inspection.correctedSamples}/${inspection.requestedSamples} · conflicts ${inspection.conflictingSamples} · peak ${formatByteCount(inspection.peakReservedBytes)}`
+    ? `${correction.reportInspectionMessage} · defects ${inspection.defectiveSamples} · ${repairEfficiency} · unresolved ${inspection.unresolvedSamples} · conflicts ${inspection.conflictingSamples} · peak ${formatByteCount(inspection.peakReservedBytes)}`
     : correction.reportInspectionMessage;
   elements.defectReportInspection.title = inspection
     ? `Plan SHA-256 ${inspection.planSha256} · parameters SHA-256 ${inspection.parametersSha256}`
