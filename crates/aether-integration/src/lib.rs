@@ -2,7 +2,9 @@
 //!
 //! The strict unweighted and weighted means are transparent CPU oracles.
 //! Separately versioned percentile, sigma, and Winsorized-sigma means add
-//! deterministic low/high rejection with exact per-pixel evidence.
+//! deterministic low/high rejection with exact per-pixel evidence. Linear-fit
+//! clipping models the ordered sample distribution without assuming equal
+//! exposure scale or background offset.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -23,6 +25,9 @@ pub const SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "sigma-clipped-mean-f64-v1";
 
 /// Stable identifier for sigma clipping with Winsorized population statistics.
 pub const WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "winsorized-sigma-clipped-mean-v1";
+
+/// Stable identifier for ordered-sample linear-fit rejection.
+pub const LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID: &str = "linear-fit-clipped-mean-f64-v1";
 
 /// Stable identifier for the first transparent PSF quality-weight expression.
 pub const BALANCED_PSF_WEIGHT_ALGORITHM_ID: &str = "balanced-psf-weight-v1";
@@ -360,6 +365,55 @@ impl SigmaClipParameters {
     }
 }
 
+/// Validated controls for deterministic ordered-sample linear-fit rejection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearFitClipParameters {
+    low_sigma: f64,
+    high_sigma: f64,
+    minimum_retained: u32,
+}
+
+impl LinearFitClipParameters {
+    /// Validates asymmetric residual limits and the retained-sample floor.
+    pub fn new(
+        low_sigma: f64,
+        high_sigma: f64,
+        minimum_retained: u32,
+    ) -> Result<Self, IntegrationError> {
+        if !low_sigma.is_finite()
+            || low_sigma <= 0.0
+            || !high_sigma.is_finite()
+            || high_sigma <= 0.0
+            || minimum_retained < 3
+        {
+            return Err(IntegrationError::InvalidLinearFitParameters);
+        }
+        Ok(Self {
+            low_sigma,
+            high_sigma,
+            minimum_retained,
+        })
+    }
+
+    /// Lower-tail rejection distance in residual population deviations.
+    #[must_use]
+    pub const fn low_sigma(self) -> f64 {
+        self.low_sigma
+    }
+
+    /// Upper-tail rejection distance in residual population deviations.
+    #[must_use]
+    pub const fn high_sigma(self) -> f64 {
+        self.high_sigma
+    }
+
+    /// Minimum finite support retained after one fit decision.
+    #[must_use]
+    pub const fn minimum_retained(self) -> u32 {
+        self.minimum_retained
+    }
+}
+
 impl PixelSupport {
     /// Finite, clear samples included in the mean.
     #[must_use]
@@ -664,6 +718,8 @@ pub enum IntegrationError {
     InvalidPercentileParameters,
     /// Sigma limits, iteration bound, or retained-sample floor are invalid.
     InvalidSigmaParameters,
+    /// Linear-fit residual limits or retained-sample floor are invalid.
+    InvalidLinearFitParameters,
     /// An input does not match the first image's dimensions.
     DimensionMismatch {
         /// Zero-based input position.
@@ -738,6 +794,9 @@ impl Display for IntegrationError {
             Self::InvalidSigmaParameters => formatter.write_str(
                 "sigma limits must be finite and positive, with positive iteration and retained-sample bounds",
             ),
+            Self::InvalidLinearFitParameters => formatter.write_str(
+                "linear-fit limits must be finite and positive, with at least three retained samples",
+            ),
             Self::DimensionMismatch {
                 input_index,
                 expected,
@@ -804,6 +863,7 @@ impl Error for IntegrationError {
             | Self::TooManyInputImages { .. }
             | Self::InvalidPercentileParameters
             | Self::InvalidSigmaParameters
+            | Self::InvalidLinearFitParameters
             | Self::DimensionMismatch { .. }
             | Self::InvalidRegion { .. }
             | Self::RegionOutsideInput { .. }
@@ -2243,6 +2303,27 @@ mod tests {
             integrate_sigma_clipped_mean(&[&first, &second], parameters),
             Err(IntegrationError::DimensionMismatch { input_index: 1, .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn linear_fit_parameters_are_explicit_and_bounded() -> TestResult {
+        for (low, high, retained) in [
+            (0.0, 3.5, 3),
+            (-1.0, 3.5, 3),
+            (5.0, f64::NAN, 3),
+            (5.0, 3.5, 0),
+            (5.0, 3.5, 2),
+        ] {
+            assert_eq!(
+                LinearFitClipParameters::new(low, high, retained),
+                Err(IntegrationError::InvalidLinearFitParameters)
+            );
+        }
+        let parameters = LinearFitClipParameters::new(5.0, 3.5, 3)?;
+        assert_eq!(parameters.low_sigma().to_bits(), 5.0_f64.to_bits());
+        assert_eq!(parameters.high_sigma().to_bits(), 3.5_f64.to_bits());
+        assert_eq!(parameters.minimum_retained(), 3);
         Ok(())
     }
 
