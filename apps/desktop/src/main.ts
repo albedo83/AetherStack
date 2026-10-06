@@ -7,6 +7,7 @@ import {
   executeDefectCorrection,
   executeLightPlan,
   executeMasterPlan,
+  previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
   selectLightOutputDirectory,
@@ -24,8 +25,8 @@ import {
 } from "./calibrated-review.ts";
 import {
   defectBatchProgressMessage,
-  defectOutputPath,
-  orderDefectFrames,
+  reconcileDefectBatchPreview,
+  type ReconciledDefectBatchItem,
 } from "./defect-batch.ts";
 import {
   cancelLocalNormalization,
@@ -4176,19 +4177,17 @@ async function loadDefectPreview(
 
 async function executeSelectedDefectCorrection(): Promise<void> {
   const inputs = selectedDefectInputs();
-  if (inputs) await executeDefectQueue([inputs]);
+  if (inputs) await executeDefectQueue([inputs], false);
 }
 
 async function executeAllDefectCorrections(): Promise<void> {
-  const eligible = orderDefectFrames(
-    eligibleDefectInputs(),
-    model.selectedFrameId,
-  );
-  if (eligible.length > 0) await executeDefectQueue(eligible);
+  const eligible = eligibleDefectInputs();
+  if (eligible.length > 0) await executeDefectQueue(eligible, true);
 }
 
 async function executeDefectQueue(
   inputs: readonly DefectFrameInputs[],
+  allEligible: boolean,
 ): Promise<void> {
   const execution = model.calibration.defectCorrection;
   if (
@@ -4210,9 +4209,42 @@ async function executeDefectQueue(
     inputs.some((candidate) => !currentIds.has(candidate.frame.sourceFrameId))
   )
     return;
+  const requestedFocus =
+    inputs.find(
+      (candidate) => candidate.frame.sourceFrameId === model.selectedFrameId,
+    ) ?? inputs[0];
+  if (!requestedFocus) return;
   const ticket = ++defectCorrectionTicket;
-  const focus = inputs[0];
-  if (!focus) return;
+  let sealedBatch: readonly ReconciledDefectBatchItem<DefectFrameInputs>[];
+  try {
+    const preview = await previewDefectBatch({
+      outputDirectory,
+      focusFrameId: requestedFocus.frame.sourceFrameId,
+      allEligible,
+      expectedManifestSha256: requestedFocus.manifestSha256,
+      expectedLightPlanSha256: requestedFocus.lightPlanSha256,
+      ...execution.settings,
+    });
+    if (ticket !== defectCorrectionTicket) return;
+    sealedBatch = reconcileDefectBatchPreview(preview, inputs);
+  } catch {
+    if (ticket !== defectCorrectionTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...execution,
+          state: "error",
+          outputDirectory,
+          message:
+            "Native batch preflight refused the queue · inspect destination collisions and reviewed artifacts",
+        },
+      },
+    });
+    return;
+  }
+  const focus = requestedFocus;
   clearDefectPreview();
   update({
     ...model,
@@ -4229,7 +4261,7 @@ async function executeDefectQueue(
         previewView: "after",
         preview: null,
         previewMessage: "Correction is running; publication is still closed",
-        message: `Preparing ${inputs.length} atomic correction ${inputs.length === 1 ? "pair" : "pairs"}…`,
+        message: `Native plan sealed · preparing ${sealedBatch.length} atomic correction ${sealedBatch.length === 1 ? "pair" : "pairs"}…`,
       },
     },
   });
@@ -4237,7 +4269,8 @@ async function executeDefectQueue(
   let focusResult: DefectCorrectionResult | null = null;
   let lastResult: DefectCorrectionResult | null = null;
   try {
-    for (const [index, input] of inputs.entries()) {
+    for (const [index, item] of sealedBatch.entries()) {
+      const { input, destination } = item;
       if (model.calibration.defectCorrection.state === "cancelling") break;
       const onProgress = (progress: DefectExecutionProgress): void => {
         if (ticket !== defectCorrectionTicket) return;
@@ -4253,7 +4286,7 @@ async function executeDefectQueue(
               progress,
               message: defectBatchProgressMessage(
                 index,
-                inputs.length,
+                sealedBatch.length,
                 progress,
               ),
             },
@@ -4263,16 +4296,8 @@ async function executeDefectQueue(
       const result = await executeDefectCorrection(
         {
           sourceFrameId: input.frame.sourceFrameId,
-          correctedOutputPath: defectOutputPath(
-            outputDirectory,
-            input.frame,
-            "corrected",
-          ),
-          mapOutputPath: defectOutputPath(
-            outputDirectory,
-            input.frame,
-            "defects",
-          ),
+          correctedOutputPath: destination.correctedOutputPath,
+          mapOutputPath: destination.mapOutputPath,
           groupId: input.frame.groupId,
           expectedManifestSha256: input.manifestSha256,
           expectedLightPlanSha256: input.lightPlanSha256,
@@ -4303,7 +4328,7 @@ async function executeDefectQueue(
       return;
     }
     const stoppedEarly =
-      completed < inputs.length &&
+      completed < sealedBatch.length &&
       model.calibration.defectCorrection.state === "cancelling";
     update({
       ...model,
@@ -4321,10 +4346,10 @@ async function executeDefectQueue(
           preview: null,
           previewMessage: "Corrected pixels published · preparing comparison",
           message: stoppedEarly
-            ? `${completed}/${inputs.length} complete pairs retained · queue stopped between Lights`
-            : inputs.length === 1
+            ? `${completed}/${sealedBatch.length} complete pairs retained · queue stopped between Lights`
+            : sealedBatch.length === 1
               ? `${result.correctedSamples}/${result.requestedSamples} detector samples corrected · peak ${formatMemory(result.reservedBytes)}`
-              : `${completed}/${inputs.length} atomic Light + map pairs published · peak ${formatMemory(result.reservedBytes)}`,
+              : `${completed}/${sealedBatch.length} atomic Light + map pairs published · peak ${formatMemory(result.reservedBytes)}`,
         },
       },
     });
@@ -4342,8 +4367,8 @@ async function executeDefectQueue(
           result: focusResult,
           progress: model.calibration.defectCorrection.progress,
           message: cancelled
-            ? `${completed}/${inputs.length} complete pairs retained · active pair cancelled atomically`
-            : `${completed}/${inputs.length} complete pairs retained · failed pair published nothing`,
+            ? `${completed}/${sealedBatch.length} complete pairs retained · active pair cancelled atomically`
+            : `${completed}/${sealedBatch.length} complete pairs retained · failed pair published nothing`,
         },
       },
     });

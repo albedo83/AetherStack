@@ -1919,6 +1919,7 @@ struct DefectCorrectionCommandRequest {
 struct DefectBatchPreviewRequest {
     output_directory: PathBuf,
     focus_frame_id: String,
+    all_eligible: bool,
     expected_manifest_sha256: String,
     expected_light_plan_sha256: String,
     dark_detection: DefectDetectionSettings,
@@ -6261,6 +6262,9 @@ fn preview_defect_batch_sync(
     };
     let focus = candidates.remove(focus_index);
     candidates.insert(0, focus);
+    if !request.all_eligible {
+        candidates.truncate(1);
+    }
 
     let mut destinations = BTreeSet::new();
     let correction = DefectCorrectionParameters::new(
@@ -9357,6 +9361,7 @@ mod tests {
         let request = || DefectBatchPreviewRequest {
             output_directory: output.clone(),
             focus_frame_id: focus_id.clone(),
+            all_eligible: true,
             expected_manifest_sha256: manifest_sha256.clone(),
             expected_light_plan_sha256: "b".repeat(64),
             dark_detection: controls.dark_detection,
@@ -9385,6 +9390,13 @@ mod tests {
         let reordered = preview_defect_batch_sync(&session, &artifacts, other_focus)?;
         assert_ne!(reordered.plan_sha256, preview.plan_sha256);
         assert_eq!(reordered.items[0].source_frame_id, other_id);
+
+        let mut single = request();
+        single.all_eligible = false;
+        let single = preview_defect_batch_sync(&session, &artifacts, single)?;
+        assert!(single.ready);
+        assert_eq!(single.item_count, 1);
+        assert_eq!(single.items[0].source_frame_id, focus_id);
 
         fs::write(&preview.items[1].map_output_path, b"existing")?;
         let blocked = preview_defect_batch_sync(&session, &artifacts, request())?;

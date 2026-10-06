@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   defectBatchProgressMessage,
-  defectOutputPath,
-  orderDefectFrames,
+  reconcileDefectBatchPreview,
 } from "./defect-batch.ts";
 
 function frame(id: string, groupId: string, sourceIndex: number) {
@@ -15,26 +14,64 @@ function frame(id: string, groupId: string, sourceIndex: number) {
 }
 
 describe("detector correction batch helpers", () => {
-  it("prioritizes the reviewed Light without disturbing remaining native order", () => {
+  it("accepts only a complete native-owned order and its destinations", () => {
     const inputs = [
       frame("a", "g", 0),
       frame("b", "g", 1),
-      frame("c", "g", 2),
     ].map((candidate) => ({ frame: candidate }));
-    expect(
-      orderDefectFrames(inputs, "b").map((item) => item.frame.sourceFrameId),
-    ).toEqual(["b", "a", "c"]);
-    expect(orderDefectFrames(inputs, "missing")).toEqual(inputs);
+    const items = [inputs[1]!, inputs[0]!].map(({ frame: source }) => ({
+      sourceFrameId: source.sourceFrameId,
+      sourceIndex: source.sourceIndex,
+      groupId: source.groupId,
+      correctedOutputPath: `/output/${source.sourceFrameId}-corrected.fits`,
+      mapOutputPath: `/output/${source.sourceFrameId}-defects.fits`,
+      blockedByExistingOutput: false,
+    }));
+    const reconciled = reconcileDefectBatchPreview(
+      {
+        ready: true,
+        planSha256: "a".repeat(64),
+        parametersSha256: "b".repeat(64),
+        itemCount: 2,
+        blockedItemCount: 0,
+        items,
+      },
+      inputs,
+    );
+    expect(reconciled.map(({ input }) => input.frame.sourceFrameId)).toEqual([
+      "b",
+      "a",
+    ]);
+    expect(reconciled[0]?.destination.correctedOutputPath).toBe(
+      "/output/b-corrected.fits",
+    );
   });
 
-  it("builds portable stable names and sanitizes group identifiers", () => {
-    const input = frame("a", "M 31/L", 6);
-    expect(defectOutputPath("/output/", input, "corrected")).toBe(
-      "/output/M-31-L-0007-corrected.fits",
+  it("fails closed for collisions, foreign identities, and incomplete plans", () => {
+    const inputs = [{ frame: frame("a", "g", 0) }];
+    const preview = {
+      ready: true,
+      planSha256: "a".repeat(64),
+      parametersSha256: "b".repeat(64),
+      itemCount: 1,
+      blockedItemCount: 0,
+      items: [
+        {
+          sourceFrameId: "foreign",
+          sourceIndex: 0,
+          groupId: "g",
+          correctedOutputPath: "/output/same.fits",
+          mapOutputPath: "/output/same.fits",
+          blockedByExistingOutput: false,
+        },
+      ],
+    };
+    expect(() => reconcileDefectBatchPreview(preview, inputs)).toThrow(
+      "does not match",
     );
-    expect(defectOutputPath("C:\\output\\", input, "defects")).toBe(
-      "C:\\output\\M-31-L-0007-defects.fits",
-    );
+    expect(() =>
+      reconcileDefectBatchPreview({ ...preview, ready: false }, inputs),
+    ).toThrow("not executable");
   });
 
   it("reports per-Light progress without claiming batch atomicity", () => {

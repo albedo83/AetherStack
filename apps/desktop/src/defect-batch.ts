@@ -1,4 +1,6 @@
 import type {
+  DefectBatchPreview,
+  DefectBatchPreviewItem,
   DefectExecutionProgress,
   ExecutedCalibratedLightFrame,
 } from "./calibration-bridge.ts";
@@ -8,34 +10,55 @@ type DefectFrameIdentity = Pick<
   "sourceFrameId" | "sourceIndex" | "groupId"
 >;
 
-/** Keeps native publication order stable while prioritizing the review focus. */
-export function orderDefectFrames<
-  T extends { readonly frame: DefectFrameIdentity },
->(inputs: readonly T[], selectedFrameId: string | null): readonly T[] {
-  const selected = inputs.find(
-    (candidate) => candidate.frame.sourceFrameId === selectedFrameId,
-  );
-  if (!selected) return [...inputs];
-  return [
-    selected,
-    ...inputs.filter(
-      (candidate) => candidate.frame.sourceFrameId !== selectedFrameId,
-    ),
-  ];
+export interface ReconciledDefectBatchItem<T> {
+  readonly input: T;
+  readonly destination: DefectBatchPreviewItem;
 }
 
-/** Creates a deterministic collision-resistant product name inside one group. */
-export function defectOutputPath(
-  directory: string,
-  frame: DefectFrameIdentity,
-  suffix: "corrected" | "defects",
-): string {
-  const separator =
-    directory.includes("\\") && !directory.includes("/") ? "\\" : "/";
-  const root = directory.replace(/[\\/]$/, "");
-  const group = frame.groupId.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const sequence = String(frame.sourceIndex + 1).padStart(4, "0");
-  return `${root}${separator}${group}-${sequence}-${suffix}.fits`;
+/**
+ * Reconciles native destinations with the exact browser-visible artifact set.
+ * Any missing, duplicate, foreign, or blocked identity closes execution.
+ */
+export function reconcileDefectBatchPreview<
+  T extends { readonly frame: DefectFrameIdentity },
+>(
+  preview: DefectBatchPreview,
+  inputs: readonly T[],
+): readonly ReconciledDefectBatchItem<T>[] {
+  if (
+    !preview.ready ||
+    preview.blockedItemCount !== 0 ||
+    preview.itemCount !== preview.items.length ||
+    preview.items.length !== inputs.length ||
+    !/^[0-9a-f]{64}$/.test(preview.planSha256) ||
+    !/^[0-9a-f]{64}$/.test(preview.parametersSha256)
+  ) {
+    throw new Error("The native correction plan is not executable");
+  }
+  const byId = new Map(inputs.map((input) => [input.frame.sourceFrameId, input]));
+  if (byId.size !== inputs.length)
+    throw new Error("The correction inputs contain duplicate identities");
+  const destinations = new Set<string>();
+  const seen = new Set<string>();
+  return preview.items.map((destination) => {
+    const input = byId.get(destination.sourceFrameId);
+    if (
+      !input ||
+      seen.has(destination.sourceFrameId) ||
+      destination.blockedByExistingOutput ||
+      destination.groupId !== input.frame.groupId ||
+      destination.sourceIndex !== input.frame.sourceIndex ||
+      destination.correctedOutputPath === destination.mapOutputPath ||
+      destinations.has(destination.correctedOutputPath) ||
+      destinations.has(destination.mapOutputPath)
+    ) {
+      throw new Error("The native correction plan does not match reviewed artifacts");
+    }
+    seen.add(destination.sourceFrameId);
+    destinations.add(destination.correctedOutputPath);
+    destinations.add(destination.mapOutputPath);
+    return { input, destination };
+  });
 }
 
 /** Explains the exact native phase without implying whole-batch atomicity. */

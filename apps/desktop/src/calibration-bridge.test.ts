@@ -9,6 +9,7 @@ import {
   executeDefectCorrection,
   executeLightPlan,
   executeMasterPlan,
+  previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
   selectLightOutputDirectory,
@@ -296,5 +297,47 @@ describe("native calibration bridge", () => {
     });
     await expect(cancelDefectCorrection()).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith("cancel_defect_correction");
+  });
+
+  it("asks native code to seal the complete defect batch before execution", async () => {
+    const expected = {
+      ready: true,
+      planSha256: "a".repeat(64),
+      parametersSha256: "b".repeat(64),
+      itemCount: 0,
+      blockedItemCount: 0,
+      items: [],
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+    const request = {
+      outputDirectory: "/session/corrected",
+      focusFrameId: "light-1",
+      allEligible: true,
+      expectedManifestSha256: "c".repeat(64),
+      expectedLightPlanSha256: "d".repeat(64),
+      darkDetection: {
+        radius: 2,
+        stride: 2 as const,
+        minimumNeighbours: 8,
+        hotSigma: 6,
+        coldSigma: 8,
+        minimumAbsoluteDeviation: 1,
+      },
+      flatDetection: {
+        radius: 2,
+        stride: 2 as const,
+        minimumNeighbours: 8,
+        hotSigma: 8,
+        coldSigma: 6,
+        minimumAbsoluteDeviation: 0.000_001,
+      },
+      correctionRadius: 2,
+      correctionStride: 2 as const,
+      correctionMinimumNeighbours: 8,
+      memoryLimitBytes: 1_073_741_824,
+    };
+
+    await expect(previewDefectBatch(request)).resolves.toBe(expected);
+    expect(invoke).toHaveBeenCalledWith("preview_defect_batch", { request });
   });
 });

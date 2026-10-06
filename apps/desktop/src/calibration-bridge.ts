@@ -255,6 +255,26 @@ export interface DefectCorrectionSettings {
   readonly memoryLimitBytes: number;
 }
 
+/** One immutable native-owned destination in a reviewed correction batch. */
+export interface DefectBatchPreviewItem {
+  readonly sourceFrameId: string;
+  readonly groupId: string;
+  readonly sourceIndex: number;
+  readonly correctedOutputPath: string;
+  readonly mapOutputPath: string;
+  readonly blockedByExistingOutput: boolean;
+}
+
+/** Sealed correction order returned before any expensive processing starts. */
+export interface DefectBatchPreview {
+  readonly ready: boolean;
+  readonly planSha256: string;
+  readonly parametersSha256: string;
+  readonly itemCount: number;
+  readonly blockedItemCount: number;
+  readonly items: readonly DefectBatchPreviewItem[];
+}
+
 export interface DefectCorrectionResult {
   readonly correctedOutputPath: string;
   readonly mapOutputPath: string;
@@ -398,6 +418,22 @@ export async function selectDefectOutputDirectory(): Promise<string | null> {
     title: "Select a directory for corrected Light products",
   });
   return typeof path === "string" ? path : null;
+}
+
+/**
+ * Lets the backend resolve, name, validate, order, and seal the complete batch.
+ * No destination path is synthesized by browser code.
+ */
+export function previewDefectBatch(
+  request: {
+    readonly outputDirectory: string;
+    readonly focusFrameId: string;
+    readonly allEligible: boolean;
+    readonly expectedManifestSha256: string;
+    readonly expectedLightPlanSha256: string;
+  } & DefectCorrectionSettings,
+): Promise<DefectBatchPreview> {
+  return invoke<DefectBatchPreview>("preview_defect_batch", { request });
 }
 
 /**
