@@ -317,6 +317,7 @@ export interface DefectBatchReportInspection {
   readonly correctedSamples: number;
   readonly requestedSamples: number;
   readonly conflictingSamples: number;
+  readonly defectiveSamples: number;
   readonly peakReservedBytes: number;
 }
 

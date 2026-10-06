@@ -1342,6 +1342,7 @@ describe("frame review workspace", () => {
             correctedSamples: 60,
             requestedSamples: 62,
             conflictingSamples: 2,
+            defectiveSamples: 62,
             peakReservedBytes: 234_020_736,
           },
           reportInspectionMessage:

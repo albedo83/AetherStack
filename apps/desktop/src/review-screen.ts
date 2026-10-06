@@ -4482,7 +4482,7 @@ function renderDefectCorrection(
   elements.defectReportInspection.dataset.state =
     correction.reportInspectionState;
   elements.defectReportInspection.textContent = inspection
-    ? `${correction.reportInspectionMessage} · repaired ${inspection.correctedSamples}/${inspection.requestedSamples} · conflicts ${inspection.conflictingSamples} · peak ${formatByteCount(inspection.peakReservedBytes)}`
+    ? `${correction.reportInspectionMessage} · defects ${inspection.defectiveSamples} · repaired ${inspection.correctedSamples}/${inspection.requestedSamples} · conflicts ${inspection.conflictingSamples} · peak ${formatByteCount(inspection.peakReservedBytes)}`
     : correction.reportInspectionMessage;
   elements.defectReportInspection.title = inspection
     ? `Plan SHA-256 ${inspection.planSha256} · parameters SHA-256 ${inspection.parametersSha256}`

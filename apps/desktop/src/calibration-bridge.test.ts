@@ -391,6 +391,7 @@ describe("native calibration bridge", () => {
       correctedSamples: 42,
       requestedSamples: 43,
       conflictingSamples: 1,
+      defectiveSamples: 43,
       peakReservedBytes: 123_456,
     };
     vi.mocked(invoke).mockResolvedValue(expected);

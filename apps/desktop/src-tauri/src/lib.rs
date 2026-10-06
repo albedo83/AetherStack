@@ -1820,6 +1820,7 @@ struct ReviewedDefectBatch {
     hot_samples: usize,
     cold_samples: usize,
     conflicting_samples: usize,
+    defective_samples: usize,
     peak_reserved_bytes: usize,
 }
 
@@ -2019,6 +2020,7 @@ struct DefectBatchReport {
     hot_samples: usize,
     cold_samples: usize,
     conflicting_samples: usize,
+    defective_samples: usize,
     peak_reserved_bytes: usize,
 }
 
@@ -2051,6 +2053,7 @@ struct DefectBatchReportInspectionResponse {
     corrected_samples: usize,
     requested_samples: usize,
     conflicting_samples: usize,
+    defective_samples: usize,
     peak_reserved_bytes: usize,
 }
 
@@ -6325,6 +6328,7 @@ fn record_reviewed_defect_batch(
         hot_samples: 0,
         cold_samples: 0,
         conflicting_samples: 0,
+        defective_samples: 0,
         peak_reserved_bytes: 0,
     });
     *lock_reviewed_defect_batch(state)? = reviewed;
@@ -6664,6 +6668,7 @@ fn export_defect_batch_report_sync(
         hot_samples: batch.hot_samples,
         cold_samples: batch.cold_samples,
         conflicting_samples: batch.conflicting_samples,
+        defective_samples: batch.defective_samples,
         peak_reserved_bytes: batch.peak_reserved_bytes,
     };
     let canonical = serde_json::to_vec(&report).map_err(|_| defect_batch_report_error())?;
@@ -6753,6 +6758,16 @@ fn inspect_defect_batch_report_sync(
     if accounted != report.requested_samples {
         return Err(defect_batch_report_validation_error());
     }
+    let unique_defects = report
+        .hot_samples
+        .checked_add(report.cold_samples)
+        .and_then(|value| value.checked_sub(report.conflicting_samples))
+        .ok_or_else(defect_batch_report_validation_error)?;
+    if unique_defects != report.defective_samples
+        || report.defective_samples != report.requested_samples
+    {
+        return Err(defect_batch_report_validation_error());
+    }
     let canonical =
         serde_json::to_vec(report).map_err(|_| defect_batch_report_validation_error())?;
     if lowercase_hex(&Sha256::digest(&canonical)) != envelope.report_sha256 {
@@ -6775,6 +6790,7 @@ fn inspect_defect_batch_report_sync(
         corrected_samples: report.corrected_samples,
         requested_samples: report.requested_samples,
         conflicting_samples: report.conflicting_samples,
+        defective_samples: report.defective_samples,
         peak_reserved_bytes: report.peak_reserved_bytes,
     })
 }
@@ -6923,6 +6939,10 @@ fn advance_reviewed_defect_batch(
         .conflicting_samples
         .checked_add(evidence.conflicting_samples)
         .ok_or_else(defect_batch_stale_error)?;
+    batch.defective_samples = batch
+        .defective_samples
+        .checked_add(evidence.defective_samples)
+        .ok_or_else(defect_batch_stale_error)?;
     batch.peak_reserved_bytes = batch.peak_reserved_bytes.max(evidence.reserved_bytes);
     Ok(DefectBatchAdvance {
         completed_items: batch.next_item_index,
@@ -6947,6 +6967,7 @@ struct DefectBatchEvidence {
     hot_samples: usize,
     cold_samples: usize,
     conflicting_samples: usize,
+    defective_samples: usize,
     reserved_bytes: usize,
 }
 
@@ -6960,6 +6981,7 @@ impl From<&DefectCorrectionResponse> for DefectBatchEvidence {
             hot_samples: response.map_summary.hot_samples,
             cold_samples: response.map_summary.cold_samples,
             conflicting_samples: response.map_summary.conflicting_samples,
+            defective_samples: response.map_summary.defective_samples,
             reserved_bytes: response.reserved_bytes,
         }
     }
@@ -9959,9 +9981,10 @@ mod tests {
                 corrected_samples: 9,
                 insufficient_support_samples: 1,
                 blocked_by_source_mask_samples: 1,
-                hot_samples: 5,
-                cold_samples: 4,
+                hot_samples: 6,
+                cold_samples: 7,
                 conflicting_samples: 2,
+                defective_samples: 11,
                 reserved_bytes: 123_456,
             },
         )?;
@@ -9972,6 +9995,7 @@ mod tests {
         let report: serde_json::Value = serde_json::from_slice(&fs::read(&report_path)?)?;
         assert_eq!(report["report"]["correctedSamples"], 9);
         assert_eq!(report["report"]["peakReservedBytes"], 123_456);
+        assert_eq!(report["report"]["defectiveSamples"], 11);
         let inspected = inspect_defect_batch_report_sync(&report_path)?;
         assert_eq!(inspected.report_sha256, exported.report_sha256);
         assert_eq!(inspected.corrected_samples, 9);
