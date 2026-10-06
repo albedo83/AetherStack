@@ -57,7 +57,11 @@ pub use light_plan::{
 };
 pub use linear_defect::{
     LinearDefectMemoryEstimate, LinearDefectMemoryEstimateError, LinearDefectParameterSealError,
-    estimate_linear_defect_memory, strict_linear_defect_parameters_sha256,
+    LinearDefectPipelineError, LinearDefectPipelineResult,
+    STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID, STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID,
+    STRICT_LINEAR_DEFECT_STAGE_ID, StrictLinearDefectCorrectionRequest,
+    estimate_linear_defect_memory, run_strict_linear_defect_correction,
+    run_strict_linear_defect_correction_with_progress, strict_linear_defect_parameters_sha256,
 };
 pub use local_normalization::{
     LocalNormalizationCellDiagnostic, LocalNormalizationControlPoint,
