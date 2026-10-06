@@ -57,6 +57,52 @@ parameters, source fingerprints, and the map-producing policy are bound into
 output provenance. A profile may be called automatic only after representative
 ASI294MC and ToupTek 585C validation fixes defensible defaults.
 
+## Coherent row and column defects
+
+Linear correction is a separate, explicit oracle. The selected axis identifies
+the damaged rows or columns; support is sampled only in the perpendicular
+direction. Each finite, unmasked centre is compared with the median and scaled
+MAD of clean perpendicular neighbours. A sample contributes HOT or COLD line
+evidence only when both its robust-sigma threshold and absolute residual floor
+are crossed.
+
+A line is accepted only when it reaches an absolute minimum affected-sample
+count and an exact affected fraction expressed in parts per million. The
+integer comparison is inclusive at the configured boundary and cannot drift
+with floating-point rounding. Detection makes a second pass only for accepted
+lines, so it does not retain a full-frame residual array. Constant-gradient
+fields, exact threshold boundaries, multiple planes, non-finite data, masks,
+and repeated execution are covered by deterministic tests.
+
+Repair reads the immutable source and samples only clean, non-defective lines
+perpendicular to the selected axis. Stride two is required for CFA Lights and
+stride one for monochrome Lights at the desktop boundary. Insufficient support
+produces canonical NaN plus MISSING while preserving HOT or COLD evidence;
+unrelated source-mask reasons block replacement. Requested, corrected,
+unsupported, and source-blocked totals form an exact partition.
+
+Detection and correction controls have one canonical, path-free SHA-256 seal.
+Axis or stride disagreement is rejected. Checked memory planning includes the
+decoded image and status mask, immutable and retained maps, correction clone,
+bounded median/MAD scratch, and both FITS publication buffers. The modeled
+peaks are 234,018,560 bytes for a 4,144 × 2,822 ASI294MC plane and 166,019,200
+bytes for a 3,840 × 2,160 ToupTek 585C plane at the maximum supported radius.
+
+The runtime fingerprints and checksum-validates the native-resolved calibrated
+Light, reserves the complete peak before decoding, stages the corrected Light
+and exact HOT/COLD map privately, reopens both products, and revalidates the
+source immediately before atomic pair publication. Cancellation or a companion
+collision publishes neither product. Stable algorithm identities distinguish
+the corrected science product from its evidence map.
+
+The desktop accepts only a frame identity and group already present in the
+native calibrated-artifact registry; browser code cannot provide a source path
+or output filename. Its advanced dark laboratory exposes rows versus columns as
+an accessible segmented control, shows every scientific threshold without a
+native dropdown, and reports line counts, replacement accounting, memory, the
+parameter seal, progress, and native-owned outputs. Camera-specific defaults
+remain research-gated until the representative local corpus supplies evidence.
+
 ## Native FITS transaction
 
 The runtime now binds role-tagged dark and normalized-flat controls into one

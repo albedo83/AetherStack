@@ -123,6 +123,9 @@ optimized CPU and GPU paths must match.
 - an on-demand desktop FITS inspector exposing exact three-pass primary-array
   moments and invalid-sample accounting without loading the array into the web
   presenter;
+- strict coherent row/column correction with exact coverage gates, immutable
+  same-phase repair, bounded memory, atomic companion maps, native-only source
+  resolution, complete evidence, and accessible advanced desktop controls;
 - explicit diagnostic frame-quality measurement for declared standard Bayer
   lights through a phase-neutral complete-cell plane and calibrated RGB lights
   through linked linear Rec. 709 luminance, with robust background, noise,

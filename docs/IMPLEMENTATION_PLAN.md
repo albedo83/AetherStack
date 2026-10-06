@@ -2214,6 +2214,44 @@ safety reasoning. They do not narrate obvious syntax.
      complete, and partial outcomes remain distinct from integrity status, and
      mapped, efficiency, unresolved, conflict, memory, and provenance evidence
      stays visible in a responsive live region.
+233. Define typed linear-defect controls. Row and column orientation,
+     perpendicular neighbourhood, same-phase stride, exact coherence fraction,
+     independent HOT/COLD thresholds, residual floor, and repair support reject
+     invalid or ambiguous policies before pixels are inspected.
+234. Detect coherent line evidence without retaining a residual frame. Robust
+     perpendicular median/MAD decisions feed exact integer line gates, then a
+     second pass maps only accepted rows or columns with complete evidence.
+235. Repair accepted lines from immutable perpendicular support. Mapped or
+     masked neighbours never influence replacement, CFA phases stay isolated,
+     and insufficient support produces canonical missing data without erasing
+     the original reason.
+236. Lock the oracle with adversarial invariants. Inclusive exact boundaries,
+     one-part-per-million misses, constant gradients, multiple planes,
+     determinism, accounting partitions, masks, and non-finite samples remain
+     regression-tested.
+237. Seal line policies canonically. A path-free domain-separated SHA-256 binds
+     detection and correction controls, normalizes negative zero, and rejects
+     axis or stride disagreement.
+238. Reserve exact line-correction memory before decoding. Checked arithmetic
+     covers image samples, status masks, generated and retained maps, immutable
+     correction storage, bounded scratch, and simultaneous publication buffers.
+239. Publish one corrected Light and exact line map as an atomic FITS pair.
+     Strict source checksums and fingerprints, private staging, readback,
+     last-boundary source revalidation, cooperative cancellation, and collision
+     rollback prevent partial evidence.
+240. Keep calibrated-Light authority native at the desktop bridge. The webview
+     supplies stable frame and group identities plus reviewed seals; Rust owns
+     source resolution, CFA/mono stride enforcement, output naming, provenance,
+     collision checks, and execution.
+241. Expose coherent-line correction as a professional advanced laboratory.
+     Segmented row/column controls replace a dropdown, numerical steppers are
+     visually suppressed, all scientific controls remain keyboard accessible,
+     and progress, evidence, memory, paths, completion, errors, and cancellation
+     have explicit states.
+242. Publish the linear-defect contract only after repository-wide validation.
+     Rust formatting, unit and documentation tests, warnings-as-errors linting,
+     frontend formatting, type checking, production build, DOM behavior, and
+     accessibility checks must all pass before direct publication to `main`.
 
 ## 11. Stable-release definition
 

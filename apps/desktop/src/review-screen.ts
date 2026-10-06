@@ -4811,7 +4811,7 @@ function renderLinearDefectCorrection(
   }
   const result = linear.result;
   elements.linearDefectEvidence.textContent = result
-    ? `${result.hotLines} hot / ${result.coldLines} cold ${settings.axis} · ${result.correctedSamples}/${result.requestedSamples} samples repaired · ${formatByteCount(result.reservedBytes)} reserved`
+    ? `${result.hotLines} hot / ${result.coldLines} cold ${settings.axis} · ${result.correctedSamples}/${result.requestedSamples} samples repaired · ${formatByteCount(result.reservedBytes)} reserved · seal ${result.parametersSha256.slice(0, 12)}…`
     : "No coherent-line evidence published";
   elements.linearDefectOutput.textContent =
     result?.correctedOutputPath ??
