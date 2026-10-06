@@ -2072,6 +2072,16 @@ safety reasoning. They do not narrate obvious syntax.
      once, and passes only the sealed positive weights into strict execution.
      The UI exposes readiness and the native seal without inventing weights or
      silently falling back to uniform contribution.
+204. Establish the conservative detector-defect oracle. A bounded local
+     median/MAD detector applies independent hot and cold sigma limits plus an
+     absolute residual floor, rejects masked and non-finite evidence, and can
+     restrict support to the same Bayer phase. Replacement reads only immutable
+     clean neighbours, never repairs unrelated mask reasons, fails closed when
+     support is insufficient, and retains the complete HOT/COLD map separately
+     from usable corrected pixels. Typed counters account for every detection
+     and correction decision. Next, bind dark/flat map generation and per-Light
+     correction into a fingerprinted tiled FITS transaction before exposing
+     camera-specific automatic profiles.
 
 ## 11. Stable-release definition
 

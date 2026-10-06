@@ -5,6 +5,7 @@
 //! Master orchestration, dark scaling, rejection, and uncertainty propagation
 //! remain separate versioned policies and are never guessed here.
 
+mod defect;
 mod flat;
 mod master;
 mod pedestal;
@@ -14,6 +15,11 @@ use std::fmt::{Display, Formatter};
 
 use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
 
+pub use defect::{
+    CorrectedDefects, DefectCorrectionEvidence, DefectCorrectionParameters,
+    DefectDetectionEvidence, DefectDetectionParameters, DefectMap, DefectMapError, correct_defects,
+    detect_local_defects,
+};
 pub use flat::{
     FlatNormalizationError, FlatNormalizationParameters, FlatNormalizationSupport, NormalizedFlat,
     normalize_flat,

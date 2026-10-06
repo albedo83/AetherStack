@@ -1,0 +1,54 @@
+# Detector defect correction contract
+
+Detector defects are scientific evidence, not display blemishes. AetherStack
+therefore keeps the immutable defect map separate from the corrected image and
+accounts for every requested replacement.
+
+## Local robust detection
+
+The strict CPU oracle compares each finite, unmasked detector sample with a
+local median. Local spread is the median absolute deviation multiplied by
+`1.482602218505602`; positive and negative limits are independent. A separate
+absolute-residual floor prevents zero-MAD neighbourhoods from classifying
+rounding noise.
+
+The neighbourhood is explicit and bounded:
+
+- radius is between one and eight lattice steps;
+- stride one compares adjacent monochrome or plane-local samples;
+- stride two compares only the same Bayer phase;
+- the minimum usable-neighbour count must fit the selected radius.
+
+Masked and non-finite centres are reported as unavailable and are never silently
+reclassified. Masked and non-finite neighbours do not influence the estimator.
+Large-scale dark-current or flat-field structure is not removed before the local
+comparison; locality is the protection against treating that structure as a
+detector defect.
+
+## Conservative replacement
+
+Correction reads every neighbour from the immutable input. Earlier corrections
+can therefore never alter a later result. Mapped samples are replaced by the
+exact median of finite, unmasked, non-defective samples on the selected lattice.
+For CFA data, stride two is mandatory at the orchestration boundary so measured
+colour phases cannot contaminate one another.
+
+A source sample carrying saturation, missing-data, rejection, invalidity, or an
+unknown future mask bit is not repaired. If clean support is insufficient, the
+output becomes canonical NaN and retains the HOT or COLD reason with MISSING.
+After a successful replacement the corrected image is usable, while the returned
+defect map permanently retains the original HOT or COLD evidence.
+
+## Evidence and future runtime integration
+
+Detection reports examined, unsupported, unavailable, hot, and cold totals.
+Correction reports requested, corrected, unsupported, and source-mask-blocked
+totals. These counters must partition their respective decisions without
+overflow before native FITS publication is enabled.
+
+The initial oracle deliberately does not guess camera-specific thresholds, merge
+dark and flat evidence, repair complete rows or columns, or publish a default
+profile. Runtime integration must bind explicit parameters, source fingerprints,
+camera geometry, CFA state, and map digest into output provenance. A profile may
+be called automatic only after representative ASI294MC and ToupTek 585C
+validation fixes defensible defaults.
