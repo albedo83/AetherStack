@@ -1,4 +1,5 @@
 import type {
+  DefectExecutionProgress,
   DefectCorrectionResult,
   DefectCorrectionSettings,
   LightExecutionProgress,
@@ -397,6 +398,7 @@ export interface DefectCorrectionViewModel {
   readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
   readonly outputDirectory: string | null;
   readonly sourceFrameId: string | null;
+  readonly progress: DefectExecutionProgress | null;
   readonly settings: DefectCorrectionSettings;
   readonly result: DefectCorrectionResult | null;
   readonly previewState: "idle" | "loading" | "ready" | "error";

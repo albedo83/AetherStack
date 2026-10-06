@@ -363,6 +363,7 @@ export const demoReviewModel: ReviewViewModel = {
       state: "idle",
       outputDirectory: null,
       sourceFrameId: null,
+      progress: null,
       settings: {
         darkDetection: {
           radius: 2,

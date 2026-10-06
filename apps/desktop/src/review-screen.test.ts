@@ -1139,6 +1139,35 @@ describe("frame review workspace", () => {
         ...ready.calibration,
         defectCorrection: {
           ...ready.calibration.defectCorrection,
+          state: "running",
+          progress: {
+            sequence: 3,
+            stage: "strict-defect-correction",
+            state: "running",
+            completedUnits: 2,
+            totalUnits: 5,
+            code: null,
+          },
+          message: "Correction complete · staging both FITS companions · 2/5",
+        },
+      },
+    });
+    const correctionProgress = getByRole<HTMLProgressElement>(
+      root,
+      "progressbar",
+      {
+        name: "Detector correction progress",
+      },
+    );
+    expect(correctionProgress.value).toBe(2);
+    expect(correctionProgress.max).toBe(5);
+
+    controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        defectCorrection: {
+          ...ready.calibration.defectCorrection,
           state: "completed",
           sourceFrameId,
           result: {

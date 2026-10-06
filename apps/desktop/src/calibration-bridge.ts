@@ -275,6 +275,15 @@ export interface DefectCorrectionResult {
   readonly mapSummary: DefectMapSummary;
 }
 
+export interface DefectExecutionProgress {
+  readonly sequence: number;
+  readonly stage: string;
+  readonly state: "started" | "running" | "completed" | "cancelled" | "failed";
+  readonly completedUnits: number;
+  readonly totalUnits: number | null;
+  readonly code: string | null;
+}
+
 export interface DefectDetectionEvidence {
   readonly examinedSamples: number;
   readonly insufficientSupportSamples: number;
@@ -406,9 +415,13 @@ export function executeDefectCorrection(
     readonly expectedManifestSha256: string;
     readonly expectedLightPlanSha256: string;
   } & DefectCorrectionSettings,
+  onProgress: (progress: DefectExecutionProgress) => void,
 ): Promise<DefectCorrectionResult> {
+  const progress = new Channel<DefectExecutionProgress>();
+  progress.onmessage = onProgress;
   return invoke<DefectCorrectionResult>("execute_defect_correction", {
     request,
+    onProgress: progress,
   });
 }
 

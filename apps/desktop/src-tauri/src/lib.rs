@@ -78,7 +78,7 @@ use aether_runtime::{
     estimate_local_normalization_memory, run_calibrated_light_plan, run_demosaiced_light_plan,
     run_light_plan, run_local_normalization_with_progress, run_master_plan,
     run_projective_registration_plan, run_registered_stack, run_registration_plan,
-    run_strict_defect_correction, run_strict_drizzle_output_with_progress,
+    run_strict_defect_correction_with_progress, run_strict_drizzle_output_with_progress,
     strict_defect_parameters_sha256, strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
 };
 use aether_session::{
@@ -1933,6 +1933,17 @@ struct DefectCorrectionResponse {
     dark_detection: DefectDetectionResponse,
     flat_detection: DefectDetectionResponse,
     map_summary: DefectMapSummaryResponse,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectExecutionProgress {
+    sequence: u64,
+    stage: String,
+    state: &'static str,
+    completed_units: u64,
+    total_units: Option<u64>,
+    code: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -6156,6 +6167,7 @@ const fn calibration_artifact_state_error() -> PreviewCommandError {
 #[tauri::command]
 async fn execute_defect_correction(
     request: DefectCorrectionCommandRequest,
+    on_progress: tauri::ipc::Channel<DefectExecutionProgress>,
     session_state: tauri::State<'_, DesktopSessionState>,
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
     artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
@@ -6170,7 +6182,15 @@ async fn execute_defect_correction(
     let cancellation = begin_calibration_execution(&execution_state)?;
     let worker_cancellation = cancellation.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
-        execute_defect_correction_sync(&session, &artifacts, request, &worker_cancellation)
+        execute_defect_correction_sync(
+            &session,
+            &artifacts,
+            request,
+            &worker_cancellation,
+            |event| {
+                let _ignored = on_progress.send(event);
+            },
+        )
     })
     .await;
     finish_calibration_execution(&execution_state)?;
@@ -6238,12 +6258,16 @@ fn fingerprint_pipeline_source(path: PathBuf) -> Result<PipelineSource, PreviewC
     Ok(PipelineSource::new(path, fingerprint))
 }
 
-fn execute_defect_correction_sync(
+fn execute_defect_correction_sync<F>(
     session: &ImportedNativeSession,
     artifacts: &PublishedCalibrationArtifacts,
     request: DefectCorrectionCommandRequest,
     cancellation: &CancellationToken,
-) -> Result<DefectCorrectionResponse, PreviewCommandError> {
+    mut progress: F,
+) -> Result<DefectCorrectionResponse, PreviewCommandError>
+where
+    F: FnMut(DefectExecutionProgress),
+{
     validate_defect_command_paths(&request)?;
     let manifest_sha256 = session
         .manifest
@@ -6373,7 +6397,17 @@ fn execute_defect_correction_sync(
         correction,
     )
     .map_err(|_| defect_correction_configuration_error())?;
-    let result = run_strict_defect_correction(&execution, cancellation, &memory)
+    let result =
+        run_strict_defect_correction_with_progress(&execution, cancellation, &memory, |event| {
+            progress(DefectExecutionProgress {
+                sequence: event.sequence(),
+                stage: event.stage().as_str().to_owned(),
+                state: progress_state_name(event.state()),
+                completed_units: event.completed_units(),
+                total_units: event.total_units(),
+                code: event.code().map(str::to_owned),
+            });
+        })
         .map_err(defect_correction_execution_error)?;
     let evidence = result.correction();
     let mut dark_detection = DefectDetectionResponse::default();

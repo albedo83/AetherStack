@@ -669,6 +669,10 @@ export function mountReviewScreen(
       root,
       "[data-defect-correction-message]",
     ),
+    defectCorrectionProgress: required<HTMLProgressElement>(
+      root,
+      "[data-defect-correction-progress]",
+    ),
     defectCorrectionOutput: required<HTMLElement>(
       root,
       "[data-defect-correction-output]",
@@ -2818,6 +2822,7 @@ interface CalibrationElements {
   readonly lightExecutionHeading: HTMLElement;
   readonly defectCorrection: HTMLElement;
   readonly defectCorrectionMessage: HTMLElement;
+  readonly defectCorrectionProgress: HTMLProgressElement;
   readonly defectCorrectionOutput: HTMLElement;
   readonly defectCorrectionEvidence: HTMLElement;
   readonly executeDefectCorrection: HTMLButtonElement;
@@ -4399,6 +4404,16 @@ function renderDefectCorrection(
       0 && (model.calibration.execution.result?.products.length ?? 0) > 0;
   elements.defectCorrection.dataset.state = correction.state;
   elements.defectCorrectionMessage.textContent = correction.message;
+  if (correction.progress?.totalUnits) {
+    elements.defectCorrectionProgress.max = correction.progress.totalUnits;
+    elements.defectCorrectionProgress.value =
+      correction.progress.completedUnits;
+  } else {
+    elements.defectCorrectionProgress.removeAttribute("value");
+    elements.defectCorrectionProgress.max = 1;
+  }
+  elements.defectCorrectionProgress.hidden =
+    correction.state !== "running" && correction.state !== "cancelling";
   elements.defectCorrectionOutput.textContent = correction.result
     ? correction.result.correctedOutputPath
     : correction.outputDirectory
@@ -5658,6 +5673,7 @@ function shellMarkup(): string {
                   </details>
                   <div class="defect-console__status">
                     <p data-defect-correction-message></p>
+                    <progress data-defect-correction-progress aria-label="Detector correction progress" hidden></progress>
                     <output data-defect-correction-evidence>No correction evidence published</output>
                     <code data-defect-correction-output></code>
                   </div>

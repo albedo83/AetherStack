@@ -265,10 +265,17 @@ describe("native calibration bridge", () => {
       memoryLimitBytes: 1_073_741_824,
     };
 
-    await expect(executeDefectCorrection(request)).resolves.toBe(expected);
-    expect(invoke).toHaveBeenCalledWith("execute_defect_correction", {
-      request,
-    });
+    const onProgress = vi.fn();
+    await expect(executeDefectCorrection(request, onProgress)).resolves.toBe(
+      expected,
+    );
+    const invocation = vi.mocked(invoke).mock.calls.at(-1);
+    expect(invocation?.[0]).toBe("execute_defect_correction");
+    expect(invocation?.[1]).toMatchObject({ request });
+    expect(
+      (invocation?.[1] as { onProgress?: { onmessage?: unknown } }).onProgress
+        ?.onmessage,
+    ).toBe(onProgress);
     const payload = JSON.stringify(vi.mocked(invoke).mock.calls[0]?.[1]);
     expect(payload).not.toContain("calibratedLightPath");
     expect(payload).not.toContain("darkMasterPath");

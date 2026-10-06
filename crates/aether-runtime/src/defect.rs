@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, PipelineInput, PipelineSource,
+    ProgressEvent, ProgressEventError, ProgressSequence, ProgressState, StageId, StageIdError,
     StrictPipelineError,
 };
 
@@ -28,6 +29,8 @@ const PUBLICATION_BUFFER_BYTES: usize = 2 * 64 * 1_024;
 pub const STRICT_DEFECT_CORRECTED_ALGORITHM_ID: &str = "strict-defect-corrected-v1";
 /// Algorithm identity for the exact HOT/COLD companion map.
 pub const STRICT_DEFECT_MAP_ALGORITHM_ID: &str = "strict-defect-map-v1";
+/// Stable progress stage for the complete correction transaction.
+pub const STRICT_DEFECT_CORRECTION_STAGE_ID: &str = "strict-defect-correction";
 
 /// Calibration-master role supplying detector-defect evidence.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -328,6 +331,10 @@ impl DefectCorrectionPipelineResult {
 /// Failure of the all-or-nothing defect correction transaction.
 #[derive(Debug)]
 pub enum DefectCorrectionPipelineError {
+    /// Stable progress-stage construction failed.
+    StageId(StageIdError),
+    /// A progress event violated its lifecycle invariants.
+    Progress(ProgressEventError),
     /// Parameter sealing failed.
     Parameters(DefectParameterSealError),
     /// Output destinations are identical.
@@ -372,6 +379,8 @@ pub enum DefectCorrectionPipelineError {
 impl Display for DefectCorrectionPipelineError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::StageId(error) => Display::fmt(error, formatter),
+            Self::Progress(error) => Display::fmt(error, formatter),
             Self::Parameters(error) => Display::fmt(error, formatter),
             Self::DuplicateOutput => {
                 formatter.write_str("corrected image and defect map require distinct outputs")
@@ -705,6 +714,96 @@ pub fn run_strict_defect_correction(
     cancellation: &CancellationToken,
     memory: &MemoryBudget,
 ) -> Result<DefectCorrectionPipelineResult, DefectCorrectionPipelineError> {
+    run_strict_defect_correction_with_progress(request, cancellation, memory, |_| {})
+}
+
+/// Corrects one calibrated Light while reporting five deterministic phases.
+///
+/// Work units represent reference analysis, science correction, private
+/// staging, readback/source revalidation, and atomic publication. Events use a
+/// stable stage identifier and strictly increasing sequence numbers.
+///
+/// # Errors
+///
+/// Returns every error documented by [`run_strict_defect_correction`], plus
+/// typed stage and progress invariant failures.
+pub fn run_strict_defect_correction_with_progress<F>(
+    request: &StrictDefectCorrectionRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<DefectCorrectionPipelineResult, DefectCorrectionPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    const TOTAL_UNITS: u64 = 5;
+    let stage = StageId::new(STRICT_DEFECT_CORRECTION_STAGE_ID)
+        .map_err(DefectCorrectionPipelineError::StageId)?;
+    let sequence = ProgressSequence::new();
+    emit_defect_progress(
+        &sequence,
+        &stage,
+        ProgressState::Started,
+        0,
+        Some(TOTAL_UNITS),
+        None,
+        &mut progress,
+    )?;
+    let mut completed = 0_u64;
+    let execution = execute_strict_defect_correction(request, cancellation, memory, &mut || {
+        completed += 1;
+        emit_defect_progress(
+            &sequence,
+            &stage,
+            ProgressState::Running,
+            completed,
+            Some(TOTAL_UNITS),
+            None,
+            &mut progress,
+        )
+    });
+    match execution {
+        Ok(result) => {
+            emit_defect_progress(
+                &sequence,
+                &stage,
+                ProgressState::Completed,
+                completed,
+                Some(TOTAL_UNITS),
+                None,
+                &mut progress,
+            )?;
+            Ok(result)
+        }
+        Err(error) => {
+            let state = if matches!(error, DefectCorrectionPipelineError::Cancelled(_)) {
+                ProgressState::Cancelled
+            } else {
+                ProgressState::Failed
+            };
+            let _ignored = emit_defect_progress(
+                &sequence,
+                &stage,
+                state,
+                completed,
+                Some(TOTAL_UNITS),
+                Some(defect_error_code(&error).to_owned()),
+                &mut progress,
+            );
+            Err(error)
+        }
+    }
+}
+
+fn execute_strict_defect_correction<F>(
+    request: &StrictDefectCorrectionRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    advance: &mut F,
+) -> Result<DefectCorrectionPipelineResult, DefectCorrectionPipelineError>
+where
+    F: FnMut() -> Result<(), DefectCorrectionPipelineError>,
+{
     let analysis = analyze_defect_references(
         &request.references,
         request.correction,
@@ -712,6 +811,7 @@ pub fn run_strict_defect_correction(
         memory,
     )
     .map_err(DefectCorrectionPipelineError::Analysis)?;
+    advance()?;
     cancellation
         .checkpoint()
         .map_err(DefectCorrectionPipelineError::Cancelled)?;
@@ -764,6 +864,7 @@ pub fn run_strict_defect_correction(
     let corrected = correct_defects(&light, analysis.map(), request.correction)
         .map_err(DefectCorrectionPipelineError::Defect)?;
     drop(light);
+    advance()?;
     cancellation
         .checkpoint()
         .map_err(DefectCorrectionPipelineError::Cancelled)?;
@@ -797,12 +898,14 @@ pub fn run_strict_defect_correction(
     let map_staged = map_writer
         .finish()
         .map_err(DefectCorrectionPipelineError::Stage)?;
+    advance()?;
     validate_defect_staged(&corrected_staged, light_dimensions)?;
     validate_defect_staged(&map_staged, light_dimensions)?;
     cancellation
         .checkpoint()
         .map_err(DefectCorrectionPipelineError::Cancelled)?;
     verify_all_sources(request).map_err(DefectCorrectionPipelineError::Input)?;
+    advance()?;
     let mut products = Vec::new();
     products
         .try_reserve_exact(2)
@@ -811,6 +914,7 @@ pub fn run_strict_defect_correction(
     products.push(map_staged);
     let summaries =
         publish_atomic_fits_set(products).map_err(DefectCorrectionPipelineError::Publish)?;
+    advance()?;
     let [corrected_summary, map_summary] = summaries.as_slice() else {
         return Err(DefectCorrectionPipelineError::AllocationFailed);
     };
@@ -829,6 +933,51 @@ pub fn run_strict_defect_correction(
         parameters_sha256,
         reserved_bytes: estimate.reserved_peak_bytes(),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_defect_progress<F>(
+    sequence: &ProgressSequence,
+    stage: &StageId,
+    state: ProgressState,
+    completed: u64,
+    total: Option<u64>,
+    code: Option<String>,
+    progress: &mut F,
+) -> Result<(), DefectCorrectionPipelineError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let event = sequence
+        .next(stage.clone(), state, completed, total, code)
+        .map_err(DefectCorrectionPipelineError::Progress)?;
+    progress(event);
+    Ok(())
+}
+
+const fn defect_error_code(error: &DefectCorrectionPipelineError) -> &'static str {
+    match error {
+        DefectCorrectionPipelineError::Cancelled(_) => "cancelled",
+        DefectCorrectionPipelineError::Memory(_) => "memory_budget_exceeded",
+        DefectCorrectionPipelineError::ChecksumNotVerified => "checksum_not_verified",
+        DefectCorrectionPipelineError::DimensionMismatch { .. } => "dimension_mismatch",
+        DefectCorrectionPipelineError::Publish(_) => "publication_failed",
+        DefectCorrectionPipelineError::Stage(_) => "staging_failed",
+        DefectCorrectionPipelineError::Readback(_) => "readback_failed",
+        DefectCorrectionPipelineError::Read(_) => "fits_read_failed",
+        DefectCorrectionPipelineError::Input(_) => "source_integrity_failed",
+        DefectCorrectionPipelineError::Analysis(_) => "reference_analysis_failed",
+        DefectCorrectionPipelineError::Defect(_) => "defect_correction_failed",
+        DefectCorrectionPipelineError::Parameters(_)
+        | DefectCorrectionPipelineError::DuplicateOutput
+        | DefectCorrectionPipelineError::TooManySources
+        | DefectCorrectionPipelineError::InvalidProductProvenance
+        | DefectCorrectionPipelineError::ProvenanceMismatch => "configuration_invalid",
+        DefectCorrectionPipelineError::AllocationFailed => "allocation_failed",
+        DefectCorrectionPipelineError::StageId(_) | DefectCorrectionPipelineError::Progress(_) => {
+            "progress_invariant_failed"
+        }
+    }
 }
 
 fn validate_product_provenance(
@@ -1188,7 +1337,13 @@ mod tests {
         )?;
         let estimate = estimate_defect_memory(dimensions)?;
         let budget = MemoryBudget::new(estimate.reserved_peak_bytes())?;
-        let result = run_strict_defect_correction(&request, &CancellationToken::new(), &budget)?;
+        let mut progress = Vec::new();
+        let result = run_strict_defect_correction_with_progress(
+            &request,
+            &CancellationToken::new(),
+            &budget,
+            |event| progress.push(event),
+        )?;
         assert_eq!(result.correction().requested(), 2);
         assert_eq!(result.correction().corrected(), 2);
         assert_eq!(result.detection().len(), 2);
@@ -1200,6 +1355,25 @@ mod tests {
         assert_eq!(result.map_summary().hot_samples(), 1);
         assert_eq!(result.map_summary().cold_samples(), 1);
         assert_eq!(result.map_summary().conflicting_samples(), 0);
+        assert_eq!(progress.len(), 7);
+        assert_eq!(
+            progress.first().map(ProgressEvent::state),
+            Some(ProgressState::Started)
+        );
+        assert_eq!(
+            progress.last().map(ProgressEvent::state),
+            Some(ProgressState::Completed)
+        );
+        assert!(
+            progress
+                .windows(2)
+                .all(|pair| pair[0].sequence() < pair[1].sequence())
+        );
+        assert_eq!(progress.last().map(ProgressEvent::completed_units), Some(5));
+        assert_eq!(
+            progress.last().and_then(ProgressEvent::total_units),
+            Some(5)
+        );
         assert_eq!(result.parameters_sha256(), parameter_digest);
         assert_eq!(result.reserved_bytes(), estimate.reserved_peak_bytes());
         assert!(corrected_path.is_file());
@@ -1262,12 +1436,27 @@ mod tests {
             correction,
         )?;
         let budget = MemoryBudget::new(estimate_defect_memory(dimensions)?.reserved_peak_bytes())?;
+        let mut progress = Vec::new();
         assert!(matches!(
-            run_strict_defect_correction(&request, &CancellationToken::new(), &budget),
+            run_strict_defect_correction_with_progress(
+                &request,
+                &CancellationToken::new(),
+                &budget,
+                |event| progress.push(event),
+            ),
             Err(DefectCorrectionPipelineError::Stage(
                 AtomicFitsWriteError::TargetExists
             ))
         ));
+        assert_eq!(
+            progress.last().map(ProgressEvent::state),
+            Some(ProgressState::Failed)
+        );
+        assert_eq!(
+            progress.last().and_then(ProgressEvent::code),
+            Some("staging_failed")
+        );
+        assert_eq!(progress.last().map(ProgressEvent::completed_units), Some(2));
         assert!(!corrected_path.exists());
         assert_eq!(fs::read(map_path)?, b"existing");
         Ok(())

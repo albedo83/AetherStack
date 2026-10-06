@@ -11,6 +11,7 @@ import {
   selectDefectOutputDirectory,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
+  type DefectExecutionProgress,
   type ExecutedCalibratedLightFrame,
   type LightExecutionProgress,
   type MasterExecutionProgress,
@@ -481,6 +482,7 @@ const screen = mountReviewScreen(root, model, {
         defectCorrection: {
           ...model.calibration.defectCorrection,
           settings,
+          progress: null,
           result: null,
           previewState: "idle",
           preview: null,
@@ -1006,6 +1008,7 @@ function installImportedSession(session: ImportedSession): void {
         state: "idle",
         outputDirectory: null,
         sourceFrameId: null,
+        progress: null,
         result: null,
         previewState: "idle",
         previewView: "after",
@@ -3619,6 +3622,7 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
         state: "idle",
         outputDirectory: null,
         sourceFrameId: null,
+        progress: null,
         result: null,
         previewState: "idle",
         previewView: "after",
@@ -3684,6 +3688,7 @@ async function executeMasters(): Promise<void> {
         state: "idle",
         outputDirectory: null,
         sourceFrameId: null,
+        progress: null,
         result: null,
         previewState: "idle",
         previewView: "after",
@@ -3897,6 +3902,7 @@ async function executeLights(): Promise<void> {
         state: "idle",
         outputDirectory: null,
         sourceFrameId: null,
+        progress: null,
         result: null,
         previewState: "idle",
         previewView: "after",
@@ -4191,6 +4197,7 @@ async function executeSelectedDefectCorrection(): Promise<void> {
         state: "running",
         outputDirectory,
         sourceFrameId: inputs.frame.sourceFrameId,
+        progress: null,
         result: null,
         previewState: "idle",
         previewView: "after",
@@ -4200,16 +4207,36 @@ async function executeSelectedDefectCorrection(): Promise<void> {
       },
     },
   });
-  try {
-    const result = await executeDefectCorrection({
-      sourceFrameId: inputs.frame.sourceFrameId,
-      correctedOutputPath,
-      mapOutputPath,
-      groupId: inputs.frame.groupId,
-      expectedManifestSha256: inputs.manifestSha256,
-      expectedLightPlanSha256: inputs.lightPlanSha256,
-      ...execution.settings,
+  const onProgress = (progress: DefectExecutionProgress): void => {
+    if (ticket !== defectCorrectionTicket) return;
+    const state = model.calibration.defectCorrection.state;
+    if (state !== "running" && state !== "cancelling") return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          state,
+          progress,
+          message: defectProgressMessage(progress),
+        },
+      },
     });
+  };
+  try {
+    const result = await executeDefectCorrection(
+      {
+        sourceFrameId: inputs.frame.sourceFrameId,
+        correctedOutputPath,
+        mapOutputPath,
+        groupId: inputs.frame.groupId,
+        expectedManifestSha256: inputs.manifestSha256,
+        expectedLightPlanSha256: inputs.lightPlanSha256,
+        ...execution.settings,
+      },
+      onProgress,
+    );
     if (ticket !== defectCorrectionTicket) return;
     update({
       ...model,
@@ -4221,6 +4248,7 @@ async function executeSelectedDefectCorrection(): Promise<void> {
           outputDirectory,
           sourceFrameId: inputs.frame.sourceFrameId,
           result,
+          progress: model.calibration.defectCorrection.progress,
           previewState: "idle",
           previewView: "after",
           preview: null,
@@ -4241,6 +4269,7 @@ async function executeSelectedDefectCorrection(): Promise<void> {
           ...model.calibration.defectCorrection,
           state: cancelled ? "idle" : "error",
           result: null,
+          progress: model.calibration.defectCorrection.progress,
           message: cancelled
             ? "Correction cancelled · neither companion product was published"
             : "Correction failed safely · neither companion product was published",
@@ -4248,6 +4277,21 @@ async function executeSelectedDefectCorrection(): Promise<void> {
       },
     });
   }
+}
+
+function defectProgressMessage(progress: DefectExecutionProgress): string {
+  if (progress.state === "cancelled") return "Cancellation acknowledged safely";
+  if (progress.state === "failed")
+    return "Correction stopped before publication";
+  const phase = [
+    "Verifying sources and reserving bounded memory",
+    "Master analysis complete · correcting the calibrated Light",
+    "Correction complete · staging both FITS companions",
+    "Private products staged · validating checksums and sources",
+    "Validation complete · entering atomic publication",
+    "Corrected Light and exact defect map published",
+  ][Math.min(progress.completedUnits, 5)];
+  return `${phase} · ${progress.completedUnits}/${progress.totalUnits ?? 5}`;
 }
 
 async function cancelSelectedDefectCorrection(): Promise<void> {
