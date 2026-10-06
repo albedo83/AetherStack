@@ -6561,6 +6561,26 @@ fn validate_reviewed_defect_item(
         .map_output_path
         .to_str()
         .ok_or_else(defect_batch_stale_error)?;
+    let corrected_parent = request
+        .corrected_output_path
+        .parent()
+        .ok_or_else(defect_batch_stale_error)?;
+    let map_parent = request
+        .map_output_path
+        .parent()
+        .ok_or_else(defect_batch_stale_error)?;
+    let parent_metadata =
+        fs::symlink_metadata(corrected_parent).map_err(|_| defect_batch_stale_error())?;
+    let destinations_clear = request
+        .corrected_output_path
+        .try_exists()
+        .and_then(|corrected_exists| {
+            request
+                .map_output_path
+                .try_exists()
+                .map(|map_exists| !corrected_exists && !map_exists)
+        })
+        .map_err(|_| defect_batch_stale_error())?;
     let parameters_sha256 = defect_request_parameters_sha256(request)?;
     if request.expected_batch_plan_sha256 != batch.plan_sha256
         || request.batch_item_index != batch.next_item_index
@@ -6573,6 +6593,10 @@ fn validate_reviewed_defect_item(
         || corrected != item.corrected_output_path
         || map != item.map_output_path
         || item.blocked_by_existing_output
+        || corrected_parent != map_parent
+        || parent_metadata.file_type().is_symlink()
+        || !parent_metadata.is_dir()
+        || !destinations_clear
     {
         return Err(defect_batch_stale_error());
     }
@@ -9554,6 +9578,14 @@ mod tests {
             Ok(()) => return Err("completed item replay was accepted".into()),
         };
         assert_eq!(replay_error.code, "defect_batch_stale");
+        record_reviewed_defect_batch(&state, &request(), &preview)?;
+        fs::write(&execution.corrected_output_path, b"collision")?;
+        let collision_error = match validate_reviewed_defect_item(&state, &execution) {
+            Err(error) => error,
+            Ok(()) => return Err("late destination collision was accepted".into()),
+        };
+        assert_eq!(collision_error.code, "defect_batch_stale");
+        fs::remove_file(&execution.corrected_output_path)?;
         let mut other_focus = request();
         other_focus.focus_frame_id = other_id.clone();
         let reordered = preview_defect_batch_sync(&session, &artifacts, other_focus)?;
