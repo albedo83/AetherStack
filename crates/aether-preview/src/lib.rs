@@ -601,6 +601,153 @@ pub fn build_fits_preview<R: Read + Seek>(
     })
 }
 
+/// Builds a categorical preview by OR-reducing exact non-negative bit masks.
+///
+/// Unlike a scientific-image preview, a sparse mask must never be averaged:
+/// averaging can erase a single flagged source pixel or invent a category that
+/// never existed. Every reduced pixel therefore contains the bitwise union of
+/// its source block. `allowed_mask` defines the complete accepted vocabulary;
+/// unsupported, fractional, negative, or inexact samples fail closed.
+///
+/// # Errors
+///
+/// Returns the same bounded layout and FITS errors as [`build_fits_preview`],
+/// plus a typed categorical error when the declared mask or a source sample is
+/// not an exact supported bit set.
+pub fn build_fits_bitmask_preview<R: Read + Seek>(
+    reader: &mut PrimaryImageReader<R>,
+    parameters: FitsPreviewParameters,
+    allowed_mask: u64,
+) -> Result<ScalarPreview, PreviewError> {
+    const MAX_EXACT_F64_INTEGER: u64 = 1_u64 << 53;
+    if allowed_mask == 0 || allowed_mask > MAX_EXACT_F64_INTEGER {
+        return Err(PreviewError::InvalidBitMask);
+    }
+    let parameters = FitsPreviewParameters::new(
+        parameters.plane,
+        parameters.reduction_level,
+        parameters.maximum_output_pixels,
+        parameters.io_chunk_samples,
+    )?;
+    let (source_width, source_height, plane_count) = match reader.descriptor().axes() {
+        [width, height] => (*width, *height, 1_u64),
+        [width, height, planes] => (*width, *height, *planes),
+        axes => return Err(PreviewError::UnsupportedAxisCount { axes: axes.len() }),
+    };
+    if parameters.plane >= plane_count {
+        return Err(PreviewError::PlaneOutOfBounds {
+            plane: parameters.plane,
+            planes: plane_count,
+        });
+    }
+    let reduction_factor = 1_u64
+        .checked_shl(u32::from(parameters.reduction_level))
+        .ok_or(PreviewError::SizeOverflow)?;
+    let reduced_width_u64 = ceil_div(source_width, reduction_factor)?;
+    let reduced_height_u64 = ceil_div(source_height, reduction_factor)?;
+    let width = usize::try_from(reduced_width_u64).map_err(|_| PreviewError::SizeOverflow)?;
+    let height = usize::try_from(reduced_height_u64).map_err(|_| PreviewError::SizeOverflow)?;
+    let output_pixels = width
+        .checked_mul(height)
+        .ok_or(PreviewError::SizeOverflow)?;
+    if output_pixels > parameters.maximum_output_pixels {
+        return Err(PreviewError::OutputPixelLimitExceeded {
+            required: output_pixels,
+            maximum: parameters.maximum_output_pixels,
+        });
+    }
+
+    let mut bitsets = try_filled_vec(output_pixels, 0_u64)?;
+    let mut valid_support = try_filled_vec(output_pixels, 0_u32)?;
+    let mut excluded_support = try_filled_vec(output_pixels, 0_u32)?;
+    let mut excluded_flags = try_filled_vec(output_pixels, PixelFlags::CLEAR)?;
+    let source_width_usize =
+        usize::try_from(source_width).map_err(|_| PreviewError::SizeOverflow)?;
+    let chunk_width = source_width_usize.min(parameters.io_chunk_samples);
+    let chunk_height = if chunk_width == source_width_usize {
+        parameters.io_chunk_samples / chunk_width
+    } else {
+        1
+    }
+    .max(1);
+    let buffer_samples = chunk_width
+        .checked_mul(chunk_height)
+        .ok_or(PreviewError::SizeOverflow)?;
+    let mut values = try_filled_vec(buffer_samples, 0.0_f64)?;
+    let mut statuses = try_filled_vec(buffer_samples, SampleStatus::Valid)?;
+
+    let mut source_y = 0_u64;
+    while source_y < source_height {
+        let height_this_read = if chunk_width == source_width_usize {
+            u64::try_from(chunk_height)
+                .map_err(|_| PreviewError::SizeOverflow)?
+                .min(source_height - source_y)
+        } else {
+            1
+        };
+        let mut source_x = 0_u64;
+        while source_x < source_width {
+            let width_this_read = u64::try_from(chunk_width)
+                .map_err(|_| PreviewError::SizeOverflow)?
+                .min(source_width - source_x);
+            let samples_this_read = usize::try_from(
+                width_this_read
+                    .checked_mul(height_this_read)
+                    .ok_or(PreviewError::SizeOverflow)?,
+            )
+            .map_err(|_| PreviewError::SizeOverflow)?;
+            reader
+                .read_physical_region(
+                    ImageRegion::new(
+                        parameters.plane,
+                        source_x,
+                        source_y,
+                        width_this_read,
+                        height_this_read,
+                    ),
+                    &mut values[..samples_this_read],
+                    &mut statuses[..samples_this_read],
+                )
+                .map_err(PreviewError::Fits)?;
+            accumulate_bitmask_region(
+                &values[..samples_this_read],
+                &statuses[..samples_this_read],
+                source_x,
+                source_y,
+                width_this_read,
+                reduction_factor,
+                width,
+                allowed_mask,
+                &mut bitsets,
+                &mut valid_support,
+                &mut excluded_support,
+                &mut excluded_flags,
+            )?;
+            source_x = source_x
+                .checked_add(width_this_read)
+                .ok_or(PreviewError::SizeOverflow)?;
+        }
+        source_y = source_y
+            .checked_add(height_this_read)
+            .ok_or(PreviewError::SizeOverflow)?;
+    }
+
+    let values = bitsets.into_iter().map(|value| value as f64).collect();
+    Ok(ScalarPreview {
+        source_width,
+        source_height,
+        plane: parameters.plane,
+        reduction_level: parameters.reduction_level,
+        reduction_factor,
+        width,
+        height,
+        values,
+        valid_support,
+        excluded_support,
+        excluded_flags,
+    })
+}
+
 /// Estimates a robust, deterministic display-only transform from one preview.
 ///
 /// The estimator ignores pixels without valid support, places the black point
@@ -881,6 +1028,63 @@ pub fn render_false_color_rgba8(
     })
 }
 
+/// Renders an OR-reduced defect map with fixed categorical colors.
+///
+/// The transport vocabulary is deliberately small and stable: bit 2 denotes a
+/// hot defect, bit 3 a cold defect, and their union denotes conflicting
+/// evidence. Zero remains transparent so a future science-image underlay is
+/// never tinted. No display stretch is involved.
+///
+/// # Errors
+///
+/// Returns a typed error if the preview arrays are inconsistent or a reduced
+/// value is outside the exact `0 | 4 | 8 | 12` vocabulary.
+pub fn render_defect_map_rgba8(
+    preview: &ScalarPreview,
+    missing_style: MissingPixelStyle,
+) -> Result<RgbaPreview, PreviewError> {
+    let pixel_count = preview
+        .width
+        .checked_mul(preview.height)
+        .ok_or(PreviewError::SizeOverflow)?;
+    if preview.values.len() != pixel_count
+        || preview.valid_support.len() != pixel_count
+        || preview.excluded_support.len() != pixel_count
+        || preview.excluded_flags.len() != pixel_count
+    {
+        return Err(PreviewError::PreviewInvariant);
+    }
+    let mut pixels = try_filled_vec(
+        pixel_count
+            .checked_mul(4)
+            .ok_or(PreviewError::SizeOverflow)?,
+        0_u8,
+    )?;
+    for index in 0..pixel_count {
+        let target = pixels
+            .get_mut(index * 4..index * 4 + 4)
+            .ok_or(PreviewError::PreviewInvariant)?;
+        if preview.valid_support[index] == 0 {
+            target.copy_from_slice(&missing_rgba(index, preview.width, missing_style));
+            continue;
+        }
+        let rgba = match preview.values[index] {
+            0.0 => [0, 0, 0, 255],
+            4.0 => [255, 92, 52, 255],
+            8.0 => [50, 205, 255, 255],
+            12.0 => [226, 92, 255, 255],
+            _ => return Err(PreviewError::InvalidCategoricalSample),
+        };
+        target.copy_from_slice(&rgba);
+    }
+    Ok(RgbaPreview {
+        width: preview.width,
+        height: preview.height,
+        display_transform_version: 0,
+        pixels,
+    })
+}
+
 fn sequential_palette_color(value: f64, palette: ScalarPalette) -> [u8; 3] {
     const LOW_REJECTION: [[u8; 3]; 5] = [
         [68, 1, 84],
@@ -1040,6 +1244,10 @@ pub enum PreviewError {
     PreviewInvariant,
     /// No finite pixel with valid source support was available for estimation.
     NoValidSamples,
+    /// The caller supplied an empty or non-exact allowed bit mask.
+    InvalidBitMask,
+    /// A categorical FITS sample was fractional, negative, or unsupported.
+    InvalidCategoricalSample,
 }
 
 impl Display for PreviewError {
@@ -1108,6 +1316,12 @@ impl Display for PreviewError {
             Self::NoValidSamples => {
                 formatter.write_str("preview contains no finite pixel with valid support")
             }
+            Self::InvalidBitMask => formatter.write_str(
+                "categorical preview bit mask must be non-zero and exactly representable",
+            ),
+            Self::InvalidCategoricalSample => formatter.write_str(
+                "categorical preview contains a fractional, negative, or unsupported sample",
+            ),
         }
     }
 }
@@ -1212,6 +1426,72 @@ fn accumulate_region(
                 SampleStatus::Undefined => PixelFlags::MISSING,
                 SampleStatus::NonFinite => PixelFlags::INVALID,
                 SampleStatus::Valid => PixelFlags::INVALID,
+            };
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accumulate_bitmask_region(
+    values: &[f64],
+    statuses: &[SampleStatus],
+    source_x: u64,
+    source_y: u64,
+    region_width: u64,
+    reduction_factor: u64,
+    output_width: usize,
+    allowed_mask: u64,
+    bitsets: &mut [u64],
+    valid_support: &mut [u32],
+    excluded_support: &mut [u32],
+    excluded_flags: &mut [PixelFlags],
+) -> Result<(), PreviewError> {
+    if values.len() != statuses.len()
+        || bitsets.len() != valid_support.len()
+        || bitsets.len() != excluded_support.len()
+        || bitsets.len() != excluded_flags.len()
+    {
+        return Err(PreviewError::PreviewInvariant);
+    }
+    let region_width_usize =
+        usize::try_from(region_width).map_err(|_| PreviewError::SizeOverflow)?;
+    for (local_index, (value, status)) in values.iter().zip(statuses).enumerate() {
+        let local_x = local_index % region_width_usize;
+        let local_y = local_index / region_width_usize;
+        let global_x = source_x
+            .checked_add(u64::try_from(local_x).map_err(|_| PreviewError::SizeOverflow)?)
+            .ok_or(PreviewError::SizeOverflow)?;
+        let global_y = source_y
+            .checked_add(u64::try_from(local_y).map_err(|_| PreviewError::SizeOverflow)?)
+            .ok_or(PreviewError::SizeOverflow)?;
+        let output_x =
+            usize::try_from(global_x / reduction_factor).map_err(|_| PreviewError::SizeOverflow)?;
+        let output_y =
+            usize::try_from(global_y / reduction_factor).map_err(|_| PreviewError::SizeOverflow)?;
+        let output_index = output_y
+            .checked_mul(output_width)
+            .and_then(|row| row.checked_add(output_x))
+            .ok_or(PreviewError::SizeOverflow)?;
+        if *status == SampleStatus::Valid && value.is_finite() {
+            if *value < 0.0 || value.fract() != 0.0 {
+                return Err(PreviewError::InvalidCategoricalSample);
+            }
+            let category = *value as u64;
+            if (category as f64).to_bits() != value.to_bits() || category & !allowed_mask != 0 {
+                return Err(PreviewError::InvalidCategoricalSample);
+            }
+            bitsets[output_index] |= category;
+            valid_support[output_index] = valid_support[output_index]
+                .checked_add(1)
+                .ok_or(PreviewError::SizeOverflow)?;
+        } else {
+            excluded_support[output_index] = excluded_support[output_index]
+                .checked_add(1)
+                .ok_or(PreviewError::SizeOverflow)?;
+            excluded_flags[output_index] |= match status {
+                SampleStatus::Undefined => PixelFlags::MISSING,
+                SampleStatus::NonFinite | SampleStatus::Valid => PixelFlags::INVALID,
             };
         }
     }
@@ -1489,6 +1769,37 @@ mod tests {
             &[0, 0, 0, 0, 188, 55, 84, 255, 252, 255, 164, 255]
         );
         assert_ne!(low.pixels(), high.pixels());
+        Ok(())
+    }
+
+    #[test]
+    fn bitmask_reduction_preserves_sparse_and_conflicting_defects() -> TestResult {
+        let mut reader = fits_reader(4, 2, vec![0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 8.0, 4.0])?;
+        let preview = build_fits_bitmask_preview(&mut reader, parameters(1, 3)?, 12)?;
+
+        assert_eq!((preview.width(), preview.height()), (2, 1));
+        assert_eq!(preview.values(), &[4.0, 12.0]);
+        assert_eq!(preview.valid_support(), &[4, 4]);
+        let rgba = render_defect_map_rgba8(&preview, MissingPixelStyle::Transparent)?;
+        assert_eq!(rgba.pixels(), &[255, 92, 52, 255, 226, 92, 255, 255]);
+        assert_eq!(rgba.display_transform_version(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn bitmask_preview_rejects_non_categorical_samples() -> TestResult {
+        for invalid in [-1.0, 2.0, 4.5, 16.0] {
+            let mut reader = fits_reader(1, 1, vec![invalid])?;
+            assert!(matches!(
+                build_fits_bitmask_preview(&mut reader, parameters(0, 1)?, 12),
+                Err(PreviewError::InvalidCategoricalSample)
+            ));
+        }
+        let mut reader = fits_reader(1, 1, vec![0.0])?;
+        assert!(matches!(
+            build_fits_bitmask_preview(&mut reader, parameters(0, 1)?, 0),
+            Err(PreviewError::InvalidBitMask)
+        ));
         Ok(())
     }
 

@@ -35,9 +35,10 @@ use aether_localnorm::{
 use aether_metadata::{BayerPattern, FrameType};
 use aether_preview::{
     AUTO_STRETCH_ALGORITHM_ID, AutomaticDisplayTransform, FitsPreviewParameters, MissingPixelStyle,
-    PreviewLimits, RgbaPreview, ScalarPalette, ScalarPreview, build_fits_preview,
-    choose_reduction_level, estimate_display_transform, estimate_rgb_display_transform,
-    render_false_color_rgba8, render_grayscale_rgba8, render_rgb_rgba8,
+    PreviewLimits, RgbaPreview, ScalarPalette, ScalarPreview, build_fits_bitmask_preview,
+    build_fits_preview, choose_reduction_level, estimate_display_transform,
+    estimate_rgb_display_transform, render_defect_map_rgba8, render_false_color_rgba8,
+    render_grayscale_rgba8, render_rgb_rgba8,
 };
 use aether_quality::{
     BackgroundParameters, CFA_CELL_MEAN_ALGORITHM_ID, FrameQualityError,
@@ -161,6 +162,7 @@ enum PreviewPalette {
     LowRejection,
     #[serde(rename = "rejection_high")]
     HighRejection,
+    DefectMap,
 }
 
 #[derive(Debug, Serialize)]
@@ -8565,12 +8567,22 @@ fn render_fits_preview_png<R: Read + Seek>(
     })?;
     let rgba = match request.content {
         FitsPreviewContent::Scalar { plane } => {
-            let scalar = build_scalar_preview(
-                &mut input,
-                plane,
-                request.maximum_width,
-                request.maximum_height,
-            )?;
+            let scalar = if matches!(request.palette, PreviewPalette::DefectMap) {
+                build_bitmask_preview(
+                    &mut input,
+                    plane,
+                    request.maximum_width,
+                    request.maximum_height,
+                    12,
+                )?
+            } else {
+                build_scalar_preview(
+                    &mut input,
+                    plane,
+                    request.maximum_width,
+                    request.maximum_height,
+                )?
+            };
             match request.palette {
                 PreviewPalette::Grayscale => {
                     render_grayscale_rgba8(&scalar, transform, MissingPixelStyle::Checkerboard)
@@ -8587,6 +8599,9 @@ fn render_fits_preview_png<R: Read + Seek>(
                     MissingPixelStyle::Checkerboard,
                     ScalarPalette::HighRejection,
                 ),
+                PreviewPalette::DefectMap => {
+                    render_defect_map_rgba8(&scalar, MissingPixelStyle::Checkerboard)
+                }
             }
         }
         FitsPreviewContent::Rgb => {
@@ -8693,6 +8708,39 @@ fn build_scalar_preview<R: Read + Seek>(
     maximum_width: usize,
     maximum_height: usize,
 ) -> Result<ScalarPreview, PreviewCommandError> {
+    let (mut reader, parameters) =
+        open_bounded_preview_reader(input, plane, maximum_width, maximum_height)?;
+    build_fits_preview(&mut reader, parameters).map_err(|_| {
+        PreviewCommandError::new(
+            "preview_decode_failed",
+            "The FITS pixels could not be decoded into a bounded preview.",
+        )
+    })
+}
+
+fn build_bitmask_preview<R: Read + Seek>(
+    input: R,
+    plane: u64,
+    maximum_width: usize,
+    maximum_height: usize,
+    allowed_mask: u64,
+) -> Result<ScalarPreview, PreviewCommandError> {
+    let (mut reader, parameters) =
+        open_bounded_preview_reader(input, plane, maximum_width, maximum_height)?;
+    build_fits_bitmask_preview(&mut reader, parameters, allowed_mask).map_err(|_| {
+        PreviewCommandError::new(
+            "preview_category_invalid",
+            "The categorical FITS pixels are outside the supported exact vocabulary.",
+        )
+    })
+}
+
+fn open_bounded_preview_reader<R: Read + Seek>(
+    input: R,
+    plane: u64,
+    maximum_width: usize,
+    maximum_height: usize,
+) -> Result<(PrimaryImageReader<R>, FitsPreviewParameters), PreviewCommandError> {
     let requested_pixels = maximum_width
         .checked_mul(maximum_height)
         .ok_or_else(preview_bounds_error)?;
@@ -8703,13 +8751,12 @@ fn build_scalar_preview<R: Read + Seek>(
     )
     .map_err(|_| preview_bounds_error())?;
 
-    let mut reader =
-        PrimaryImageReader::open(input, HeaderReadOptions::default()).map_err(|_| {
-            PreviewCommandError::new(
-                "fits_layout_unsupported",
-                "The file does not contain a supported primary FITS image.",
-            )
-        })?;
+    let reader = PrimaryImageReader::open(input, HeaderReadOptions::default()).map_err(|_| {
+        PreviewCommandError::new(
+            "fits_layout_unsupported",
+            "The file does not contain a supported primary FITS image.",
+        )
+    })?;
     let axes = reader.descriptor().axes();
     let (source_width, source_height) = match axes {
         [width, height] | [width, height, _] => (*width, *height),
@@ -8734,12 +8781,7 @@ fn build_scalar_preview<R: Read + Seek>(
         DESKTOP_PREVIEW_IO_CHUNK_SAMPLES,
     )
     .map_err(|_| preview_bounds_error())?;
-    build_fits_preview(&mut reader, parameters).map_err(|_| {
-        PreviewCommandError::new(
-            "preview_decode_failed",
-            "The FITS pixels could not be decoded into a bounded preview.",
-        )
-    })
+    Ok((reader, parameters))
 }
 
 fn encode_png(preview: &RgbaPreview) -> Result<Vec<u8>, PreviewCommandError> {
@@ -9923,6 +9965,31 @@ mod tests {
     }
 
     #[test]
+    fn renders_exact_defect_categories_without_a_display_stretch() -> TestResult {
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(4, 2, 1)?,
+            vec![0.0, 4.0, 8.0, 12.0, 0.0, 4.0, 8.0, 12.0],
+        )?;
+        let mut bytes = Vec::new();
+        write_f64_primary(&mut bytes, &image)?;
+        let mut map_request = request(PreviewTransfer::Linear);
+        map_request.palette = PreviewPalette::DefectMap;
+        let encoded = render_fits_preview_png(Cursor::new(bytes), &map_request)?;
+        let decoder = png::Decoder::new(Cursor::new(encoded));
+        let mut reader = decoder.read_info()?;
+        let mut pixels = vec![0; reader.output_buffer_size().ok_or("PNG size overflow")?];
+        reader.next_frame(&mut pixels)?;
+
+        assert_eq!(
+            &pixels[..16],
+            &[
+                0, 0, 0, 255, 255, 92, 52, 255, 50, 205, 255, 255, 226, 92, 255, 255,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn accepts_frontend_rejection_palette_names() -> TestResult {
         let decoded: FitsPreviewRequest = serde_json::from_value(serde_json::json!({
             "path": "rejection.fits",
@@ -9937,6 +10004,24 @@ mod tests {
         }))?;
 
         assert!(matches!(decoded.palette, PreviewPalette::LowRejection));
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_frontend_defect_map_palette_name() -> TestResult {
+        let decoded: FitsPreviewRequest = serde_json::from_value(serde_json::json!({
+            "path": "defects.fits",
+            "content": { "kind": "scalar", "plane": 0 },
+            "maximumWidth": 800,
+            "maximumHeight": 600,
+            "blackPoint": 0.0,
+            "whitePoint": 12.0,
+            "midtone": 0.5,
+            "transfer": { "kind": "linear" },
+            "palette": "defect_map"
+        }))?;
+
+        assert!(matches!(decoded.palette, PreviewPalette::DefectMap));
         Ok(())
     }
 

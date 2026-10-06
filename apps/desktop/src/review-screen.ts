@@ -1206,7 +1206,7 @@ export function mountReviewScreen(
     }
     if (action === "select-defect-preview") {
       const view = actionElement.dataset.defectPreview;
-      if (view === "before" || view === "after") {
+      if (view === "before" || view === "after" || view === "map") {
         actions.onSelectDefectPreview(view);
       }
       return;
@@ -4430,7 +4430,7 @@ function renderDefectCorrection(
         : "Publish one correction to unlock the shared before / after view";
   elements.defectPreviewImage.src = correction.preview?.url ?? "";
   elements.defectPreviewImage.alt = previewReady
-    ? `${correction.previewView === "before" ? "Calibrated input" : "Corrected output"} display preview`
+    ? `${correction.previewView === "before" ? "Calibrated input" : correction.previewView === "after" ? "Corrected output" : "HOT and COLD defect map"} display preview`
     : "";
   elements.defectPreviewMessage.textContent = correction.previewMessage;
   elements.executeDefectCorrection.disabled =
@@ -5662,9 +5662,10 @@ function shellMarkup(): string {
                     <code data-defect-correction-output></code>
                   </div>
                   <section class="defect-preview" aria-label="Detector correction comparison">
-                    <div class="defect-preview__tabs" role="tablist" aria-label="Before and after correction">
+                    <div class="defect-preview__tabs" role="tablist" aria-label="Correction inputs, output, and defect map">
                       <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="before" aria-selected="false" disabled>Before</button>
                       <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="after" aria-selected="true" disabled>After</button>
+                      <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="map" aria-selected="false" disabled>Map</button>
                     </div>
                     <div class="defect-preview__stage">
                       <img data-defect-preview-image alt="" hidden />

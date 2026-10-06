@@ -4053,7 +4053,9 @@ function clearDefectPreview(): void {
   defectSharedTransform = null;
 }
 
-async function loadDefectPreview(view: "before" | "after"): Promise<void> {
+async function loadDefectPreview(
+  view: "before" | "after" | "map",
+): Promise<void> {
   const correction = model.calibration.defectCorrection;
   const result = correction.result;
   const sourceFrameId = correction.sourceFrameId;
@@ -4062,7 +4064,17 @@ async function loadDefectPreview(view: "before" | "after"): Promise<void> {
   );
   if (!result || !frame || correction.previewState === "loading") return;
   const path =
-    view === "before" ? frame.outputPath : result.correctedOutputPath;
+    view === "before"
+      ? frame.outputPath
+      : view === "after"
+        ? result.correctedOutputPath
+        : result.mapOutputPath;
+  const viewLabel =
+    view === "before"
+      ? "calibrated input"
+      : view === "after"
+        ? "corrected output"
+        : "HOT / COLD defect map";
   const ticket = ++defectPreviewTicket;
   update({
     ...model,
@@ -4073,13 +4085,16 @@ async function loadDefectPreview(view: "before" | "after"): Promise<void> {
         previewView: view,
         previewState: "loading",
         preview: null,
-        previewMessage: `Rendering ${view === "before" ? "calibrated input" : "corrected output"} with the shared native stretch…`,
+        previewMessage:
+          view === "map"
+            ? "Rendering the exact categorical HOT / COLD map…"
+            : `Rendering ${viewLabel} with the shared native stretch…`,
       },
     },
   });
   try {
     let transform = defectSharedTransform;
-    if (!transform) {
+    if (view !== "map" && !transform) {
       transform = await estimateFitsPreviewTransform({
         path: frame.outputPath,
         content: { kind: "scalar", plane: 0 },
@@ -4093,10 +4108,11 @@ async function loadDefectPreview(view: "before" | "after"): Promise<void> {
       path,
       content: { kind: "scalar", plane: 0 },
       ...previewBounds,
-      blackPoint: transform.blackPoint,
-      whitePoint: transform.whitePoint,
-      midtone: transform.midtone,
-      transfer: { kind: "midtones" },
+      blackPoint: view === "map" ? 0 : transform!.blackPoint,
+      whitePoint: view === "map" ? 12 : transform!.whitePoint,
+      midtone: view === "map" ? 0.5 : transform!.midtone,
+      transfer: { kind: view === "map" ? "linear" : "midtones" },
+      palette: view === "map" ? "defect_map" : "grayscale",
     });
     if (ticket !== defectPreviewTicket) {
       resource.revoke();
@@ -4113,7 +4129,10 @@ async function loadDefectPreview(view: "before" | "after"): Promise<void> {
           previewView: view,
           previewState: "ready",
           preview: resource.preview,
-          previewMessage: `${view === "before" ? "Calibrated input" : "Corrected output"} · shared ${transform.algorithmId}`,
+          previewMessage:
+            view === "map"
+              ? "Exact categories · HOT orange · COLD cyan · conflict violet"
+              : `${viewLabel} · shared ${transform!.algorithmId}`,
         },
       },
     });

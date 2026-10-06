@@ -16,7 +16,8 @@ export type FitsPreviewContent =
   | { readonly kind: "scalar"; readonly plane: number }
   | { readonly kind: "rgb" };
 
-export type PreviewPalette = "grayscale" | "rejection_low" | "rejection_high";
+export type PreviewPalette =
+  "grayscale" | "rejection_low" | "rejection_high" | "defect_map";
 
 export interface FitsPreviewRequest {
   readonly frameId: string;

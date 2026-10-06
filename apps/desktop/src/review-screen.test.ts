@@ -1174,6 +1174,10 @@ describe("frame review workspace", () => {
     expect(before.disabled).toBe(false);
     fireEvent.click(before);
     expect(actions.onSelectDefectPreview).toHaveBeenCalledWith("before");
+    const map = getByRole<HTMLButtonElement>(root, "tab", { name: "Map" });
+    expect(map.disabled).toBe(false);
+    fireEvent.click(map);
+    expect(actions.onSelectDefectPreview).toHaveBeenCalledWith("map");
     expect(
       root.querySelector<HTMLImageElement>("[data-defect-preview-image]")?.src,
     ).toContain("blob:after");
