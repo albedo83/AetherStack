@@ -63,12 +63,12 @@ use aether_review::{
 use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DefectFitsReference, DefectReferenceKind,
     DefectReferenceParameters, DrizzleOutputExecutionError, DrizzleProductDestinations,
-    DrizzleProductProvenance, LightPlanExecutionError, LightPlanExecutionRequest,
-    LocalNormalizationPipelineError, LocalNormalizationRequest, MasterPlanExecutionError,
-    MasterPlanExecutionRequest, MemoryBudget, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
-    PercentileClipParameters, PipelineSource, ProgressState,
+    DrizzleProductProvenance, LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID, LightPlanExecutionError,
+    LightPlanExecutionRequest, LinearFitClipParameters, LocalNormalizationPipelineError,
+    LocalNormalizationRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
+    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
     ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
-    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
     REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
     RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
@@ -509,6 +509,7 @@ enum RegisteredStackEstimatorInput {
     PercentileClipped,
     SigmaClipped,
     WinsorizedSigmaClipped,
+    LinearFitClipped,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3980,6 +3981,7 @@ where
         RegisteredStackEstimatorInput::PercentileClipped
             | RegisteredStackEstimatorInput::SigmaClipped
             | RegisteredStackEstimatorInput::WinsorizedSigmaClipped
+            | RegisteredStackEstimatorInput::LinearFitClipped
     ) && integration.generate_rejection_maps
     {
         return Err(registered_stack_configuration_error());
@@ -4013,6 +4015,16 @@ where
                     integration.low_sigma,
                     integration.high_sigma,
                     integration.maximum_iterations,
+                    integration.minimum_retained_samples,
+                )
+                .map_err(|_| registered_stack_configuration_error())?,
+            )
+        }
+        RegisteredStackEstimatorInput::LinearFitClipped => {
+            RegisteredStackEstimator::LinearFitClipped(
+                LinearFitClipParameters::new(
+                    integration.low_sigma,
+                    integration.high_sigma,
                     integration.minimum_retained_samples,
                 )
                 .map_err(|_| registered_stack_configuration_error())?,
@@ -4208,6 +4220,9 @@ where
             RegisteredStackEstimatorInput::SigmaClipped => SIGMA_REJECTION_MAP_ALGORITHM_ID,
             RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
                 WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID
+            }
+            RegisteredStackEstimatorInput::LinearFitClipped => {
+                LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID
             }
             RegisteredStackEstimatorInput::StrictMean
             | RegisteredStackEstimatorInput::Median
@@ -5050,6 +5065,9 @@ const fn registered_stack_estimator_algorithm_id(
         RegisteredStackEstimatorInput::SigmaClipped => REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
         RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
             REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+        }
+        RegisteredStackEstimatorInput::LinearFitClipped => {
+            REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID
         }
     }
 }
@@ -10685,6 +10703,16 @@ mod tests {
                 RegisteredStackEstimatorInput::WinsorizedSigmaClipped
             ),
             REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
+        );
+        assert_eq!(
+            serde_json::to_string(&RegisteredStackEstimatorInput::LinearFitClipped)?,
+            "\"linear_fit_clipped\""
+        );
+        assert_eq!(
+            registered_stack_estimator_algorithm_id(
+                RegisteredStackEstimatorInput::LinearFitClipped
+            ),
+            REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID
         );
         let legacy: RegisteredStackIntegrationSettings = serde_json::from_str(
             r#"{"estimator":"strict_mean","lowFraction":0.1,"highFraction":0.1,"minimumRetainedSamples":3,"generateRejectionMaps":false}"#,
