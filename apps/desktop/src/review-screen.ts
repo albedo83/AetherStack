@@ -1,5 +1,6 @@
 import type {
   DefectCorrectionSettings,
+  LinearDefectSettings,
   LightCalibrationProduct,
   LightMasterAssociation,
   MasterPlanSettings,
@@ -759,6 +760,39 @@ export function mountReviewScreen(
       root,
       "[data-defect-correction-minimum-neighbours]",
     ),
+    linearDefect: required<HTMLElement>(root, "[data-linear-defect]"),
+    linearDefectMessage: required<HTMLElement>(
+      root,
+      "[data-linear-defect-message]",
+    ),
+    linearDefectProgress: required<HTMLProgressElement>(
+      root,
+      "[data-linear-defect-progress]",
+    ),
+    linearDefectEvidence: required<HTMLElement>(
+      root,
+      "[data-linear-defect-evidence]",
+    ),
+    linearDefectOutput: required<HTMLElement>(
+      root,
+      "[data-linear-defect-output]",
+    ),
+    linearDefectAxisButtons: Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-action="select-linear-defect-axis"]',
+      ),
+    ),
+    linearDefectInputs: Array.from(
+      root.querySelectorAll<HTMLInputElement>("[data-linear-defect-setting]"),
+    ),
+    executeLinearDefectCorrection: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-linear-defect-correction"]',
+    ),
+    cancelLinearDefectCorrection: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-linear-defect-correction"]',
+    ),
     defectPreviewButtons: Array.from(
       root.querySelectorAll<HTMLButtonElement>(
         '[data-action="select-defect-preview"]',
@@ -1236,6 +1270,24 @@ export function mountReviewScreen(
       actions.onCancelDefectCorrection();
       return;
     }
+    if (action === "execute-linear-defect-correction") {
+      actions.onExecuteLinearDefectCorrection();
+      return;
+    }
+    if (action === "cancel-linear-defect-correction") {
+      actions.onCancelLinearDefectCorrection();
+      return;
+    }
+    if (action === "select-linear-defect-axis") {
+      const axis = actionElement.dataset.linearDefectAxis;
+      if (axis === "rows" || axis === "columns") {
+        actions.onUpdateLinearDefectSettings({
+          ...model.calibration.defectCorrection.linear.settings,
+          axis,
+        });
+      }
+      return;
+    }
     if (action === "select-defect-stride") {
       const stride = Number(actionElement.dataset.defectStride);
       if (stride === 1 || stride === 2) {
@@ -1555,6 +1607,11 @@ export function mountReviewScreen(
     ) {
       const settings = defectCorrectionSettings(elements, model);
       if (settings) actions.onUpdateDefectCorrectionSettings(settings);
+      return;
+    }
+    if (elements.linearDefectInputs.includes(target as HTMLInputElement)) {
+      const settings = linearDefectSettings(elements, model);
+      if (settings) actions.onUpdateLinearDefectSettings(settings);
       return;
     }
     if (
@@ -2885,6 +2942,15 @@ interface CalibrationElements {
   readonly defectFlatFloor: HTMLInputElement;
   readonly defectCorrectionRadius: HTMLInputElement;
   readonly defectCorrectionMinimumNeighbours: HTMLInputElement;
+  readonly linearDefect: HTMLElement;
+  readonly linearDefectMessage: HTMLElement;
+  readonly linearDefectProgress: HTMLProgressElement;
+  readonly linearDefectEvidence: HTMLElement;
+  readonly linearDefectOutput: HTMLElement;
+  readonly linearDefectAxisButtons: readonly HTMLButtonElement[];
+  readonly linearDefectInputs: readonly HTMLInputElement[];
+  readonly executeLinearDefectCorrection: HTMLButtonElement;
+  readonly cancelLinearDefectCorrection: HTMLButtonElement;
   readonly defectPreviewButtons: readonly HTMLButtonElement[];
   readonly defectPreviewImage: HTMLImageElement;
   readonly defectPreviewPlaceholder: HTMLElement;
@@ -4336,6 +4402,84 @@ function defectCorrectionSettings(
   };
 }
 
+function linearDefectSettings(
+  elements: CalibrationElements,
+  model: ReviewViewModel,
+): LinearDefectSettings | null {
+  const values = new Map(
+    elements.linearDefectInputs.map((input) => [
+      input.dataset.linearDefectSetting ?? "",
+      input.valueAsNumber,
+    ]),
+  );
+  const integer = (
+    name: string,
+    minimum: number,
+    maximum: number,
+  ): number | null => {
+    const value = values.get(name);
+    return value !== undefined &&
+      Number.isSafeInteger(value) &&
+      value >= minimum &&
+      value <= maximum
+      ? value
+      : null;
+  };
+  const finite = (name: string, minimum: number): number | null => {
+    const value = values.get(name);
+    return value !== undefined && Number.isFinite(value) && value >= minimum
+      ? value
+      : null;
+  };
+  const perpendicularRadius = integer("perpendicularRadius", 1, 8);
+  const minimumPerpendicularNeighbours = integer(
+    "minimumPerpendicularNeighbours",
+    1,
+    16,
+  );
+  const minimumAffectedSamples = integer(
+    "minimumAffectedSamples",
+    1,
+    10_000_000,
+  );
+  const affectedPercent = finite("minimumAffectedPercent", 0.0001);
+  const hotSigma = finite("hotSigma", 0.01);
+  const coldSigma = finite("coldSigma", 0.01);
+  const minimumAbsoluteDeviation = finite("minimumAbsoluteDeviation", 0);
+  const correctionRadius = integer("correctionRadius", 1, 8);
+  const correctionMinimumNeighbours = integer(
+    "correctionMinimumNeighbours",
+    1,
+    16,
+  );
+  if (
+    perpendicularRadius === null ||
+    minimumPerpendicularNeighbours === null ||
+    minimumAffectedSamples === null ||
+    affectedPercent === null ||
+    affectedPercent > 100 ||
+    hotSigma === null ||
+    coldSigma === null ||
+    minimumAbsoluteDeviation === null ||
+    correctionRadius === null ||
+    correctionMinimumNeighbours === null
+  )
+    return null;
+  const current = model.calibration.defectCorrection.linear.settings;
+  return {
+    ...current,
+    perpendicularRadius,
+    minimumPerpendicularNeighbours,
+    minimumAffectedSamples,
+    minimumAffectedFractionPpm: Math.round(affectedPercent * 10_000),
+    hotSigma,
+    coldSigma,
+    minimumAbsoluteDeviation,
+    correctionRadius,
+    correctionMinimumNeighbours,
+  };
+}
+
 function renderCalibration(
   elements: CalibrationElements,
   model: ReviewViewModel,
@@ -4446,6 +4590,10 @@ function renderDefectCorrection(
   const settings = correction.settings;
   const busy =
     correction.state === "running" || correction.state === "cancelling";
+  const linearBusy =
+    correction.linear.state === "running" ||
+    correction.linear.state === "cancelling";
+  const controlsBlocked = otherExecutionBusy || linearBusy;
   const hasInputs =
     (model.calibration.lightExecution.result?.calibratedFrames.length ?? 0) >
       0 && (model.calibration.execution.result?.products.length ?? 0) > 0;
@@ -4583,16 +4731,16 @@ function renderDefectCorrection(
     : "";
   elements.defectPreviewMessage.textContent = correction.previewMessage;
   elements.executeDefectCorrection.disabled =
-    !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
+    !hasInputs || controlsBlocked || busy || !model.reviewSessionReady;
   elements.executeDefectCorrection.hidden = busy;
   elements.executeAllDefectCorrections.disabled =
-    !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
+    !hasInputs || controlsBlocked || busy || !model.reviewSessionReady;
   elements.executeAllDefectCorrections.hidden = busy;
   elements.exportDefectBatchReport.hidden = busy;
   elements.exportDefectBatchReport.disabled =
-    correction.batchReport?.state !== "completed" || otherExecutionBusy;
+    correction.batchReport?.state !== "completed" || controlsBlocked;
   elements.resumeDefectBatch.hidden = busy || !correction.resumeAvailable;
-  elements.resumeDefectBatch.disabled = otherExecutionBusy;
+  elements.resumeDefectBatch.disabled = controlsBlocked;
   elements.inspectDefectBatchReport.disabled =
     busy || correction.reportInspectionState === "loading";
   const eligibleCount =
@@ -4623,7 +4771,7 @@ function renderDefectCorrection(
     const selected =
       Number(button.dataset.defectStride) === settings.correctionStride;
     button.setAttribute("aria-pressed", String(selected));
-    button.disabled = busy || otherExecutionBusy;
+    button.disabled = busy || controlsBlocked;
   }
   for (const input of [
     elements.defectDetectionRadius,
@@ -4637,8 +4785,70 @@ function renderDefectCorrection(
     elements.defectCorrectionRadius,
     elements.defectCorrectionMinimumNeighbours,
   ]) {
+    input.disabled = busy || controlsBlocked;
+  }
+  renderLinearDefectCorrection(elements, model, otherExecutionBusy || busy);
+}
+
+function renderLinearDefectCorrection(
+  elements: CalibrationElements,
+  model: ReviewViewModel,
+  otherExecutionBusy: boolean,
+): void {
+  const linear = model.calibration.defectCorrection.linear;
+  const settings = linear.settings;
+  const busy = linear.state === "running" || linear.state === "cancelling";
+  const hasInputs = selectedCalibratedLightCount(model) > 0;
+  elements.linearDefect.dataset.state = linear.state;
+  elements.linearDefectMessage.textContent = linear.message;
+  elements.linearDefectProgress.hidden = !busy;
+  if (linear.progress?.totalUnits) {
+    elements.linearDefectProgress.max = linear.progress.totalUnits;
+    elements.linearDefectProgress.value = linear.progress.completedUnits;
+  } else {
+    elements.linearDefectProgress.max = 1;
+    elements.linearDefectProgress.removeAttribute("value");
+  }
+  const result = linear.result;
+  elements.linearDefectEvidence.textContent = result
+    ? `${result.hotLines} hot / ${result.coldLines} cold ${settings.axis} · ${result.correctedSamples}/${result.requestedSamples} samples repaired · ${formatByteCount(result.reservedBytes)} reserved`
+    : "No coherent-line evidence published";
+  elements.linearDefectOutput.textContent =
+    result?.correctedOutputPath ??
+    linear.outputDirectory ??
+    "Destination selected at run time";
+  elements.linearDefectOutput.title = result?.correctedOutputPath ?? "";
+  for (const button of elements.linearDefectAxisButtons) {
+    const selected = button.dataset.linearDefectAxis === settings.axis;
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = busy || otherExecutionBusy;
+  }
+  const values: Readonly<Record<string, number>> = {
+    perpendicularRadius: settings.perpendicularRadius,
+    minimumPerpendicularNeighbours: settings.minimumPerpendicularNeighbours,
+    minimumAffectedSamples: settings.minimumAffectedSamples,
+    minimumAffectedPercent: settings.minimumAffectedFractionPpm / 10_000,
+    hotSigma: settings.hotSigma,
+    coldSigma: settings.coldSigma,
+    minimumAbsoluteDeviation: settings.minimumAbsoluteDeviation,
+    correctionRadius: settings.correctionRadius,
+    correctionMinimumNeighbours: settings.correctionMinimumNeighbours,
+  };
+  for (const input of elements.linearDefectInputs) {
+    const key = input.dataset.linearDefectSetting ?? "";
+    if (key in values) input.value = String(values[key]);
     input.disabled = busy || otherExecutionBusy;
   }
+  elements.executeLinearDefectCorrection.hidden = busy;
+  elements.executeLinearDefectCorrection.disabled =
+    !hasInputs || otherExecutionBusy || !model.reviewSessionReady;
+  elements.cancelLinearDefectCorrection.hidden = !busy;
+  elements.cancelLinearDefectCorrection.disabled =
+    linear.state === "cancelling";
+}
+
+function selectedCalibratedLightCount(model: ReviewViewModel): number {
+  return model.calibration.lightExecution.result?.calibratedFrames.length ?? 0;
 }
 
 function renderLightAssociations(
@@ -5818,6 +6028,41 @@ function shellMarkup(): string {
                       <label><span>Repair neighbours</span><input data-defect-correction-minimum-neighbours type="number" min="1" step="1" inputmode="numeric" /></label>
                     </div>
                   </details>
+                  <section class="linear-defect" data-linear-defect data-state="idle" aria-labelledby="linear-defect-heading">
+                    <header class="linear-defect__heading">
+                      <div>
+                        <p class="eyebrow">Coherent defect oracle</p>
+                        <h5 id="linear-defect-heading">Row / column correction</h5>
+                      </div>
+                      <span class="linear-defect__seal">Atomic pair</span>
+                    </header>
+                    <p class="linear-defect__intro">Detect only defects supported across a strict fraction of one row or column, then repair perpendicular to the damaged line without mixing CFA phases.</p>
+                    <div class="linear-defect__axis" role="group" aria-label="Linear defect direction">
+                      <button type="button" data-action="select-linear-defect-axis" data-linear-defect-axis="rows" aria-pressed="true"><span aria-hidden="true">━</span> Rows</button>
+                      <button type="button" data-action="select-linear-defect-axis" data-linear-defect-axis="columns" aria-pressed="false"><span aria-hidden="true">┃</span> Columns</button>
+                    </div>
+                    <div class="linear-defect__grid">
+                      <label><span>Detection radius</span><input data-linear-defect-setting="perpendicularRadius" type="number" min="1" max="8" step="1" inputmode="numeric" /></label>
+                      <label><span>Detection support</span><input data-linear-defect-setting="minimumPerpendicularNeighbours" type="number" min="1" max="16" step="1" inputmode="numeric" /></label>
+                      <label><span>Samples per line</span><input data-linear-defect-setting="minimumAffectedSamples" type="number" min="1" step="1" inputmode="numeric" /></label>
+                      <label><span>Required coverage (%)</span><input data-linear-defect-setting="minimumAffectedPercent" type="number" min="0.0001" max="100" step="0.01" inputmode="decimal" /></label>
+                      <label><span>HOT threshold (σ)</span><input data-linear-defect-setting="hotSigma" type="number" min="0.01" step="0.1" inputmode="decimal" /></label>
+                      <label><span>COLD threshold (σ)</span><input data-linear-defect-setting="coldSigma" type="number" min="0.01" step="0.1" inputmode="decimal" /></label>
+                      <label><span>Residual floor</span><input data-linear-defect-setting="minimumAbsoluteDeviation" type="number" min="0" step="0.01" inputmode="decimal" /></label>
+                      <label><span>Repair radius</span><input data-linear-defect-setting="correctionRadius" type="number" min="1" max="8" step="1" inputmode="numeric" /></label>
+                      <label><span>Repair support</span><input data-linear-defect-setting="correctionMinimumNeighbours" type="number" min="1" max="16" step="1" inputmode="numeric" /></label>
+                    </div>
+                    <div class="linear-defect__readout" role="status" aria-live="polite">
+                      <p data-linear-defect-message>Ready to inspect coherent rows or columns</p>
+                      <progress data-linear-defect-progress aria-label="Linear defect correction progress" hidden></progress>
+                      <output data-linear-defect-evidence>No coherent-line evidence published</output>
+                      <code data-linear-defect-output>Destination selected at run time</code>
+                    </div>
+                    <div class="linear-defect__actions">
+                      <button class="button button--primary" type="button" data-action="execute-linear-defect-correction" disabled>Correct coherent lines</button>
+                      <button class="button button--danger" type="button" data-action="cancel-linear-defect-correction" hidden>Cancel linear correction</button>
+                    </div>
+                  </section>
                   <div class="defect-console__status">
                     <p data-defect-correction-message role="status" aria-live="polite"></p>
                     <progress data-defect-correction-progress aria-label="Detector correction progress" hidden></progress>

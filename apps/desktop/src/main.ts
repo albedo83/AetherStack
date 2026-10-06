@@ -2,9 +2,11 @@ import "./styles.css";
 
 import {
   cancelDefectCorrection,
+  cancelLinearDefectCorrection,
   cancelLightPlan,
   cancelMasterPlan,
   executeDefectCorrection,
+  executeLinearDefectCorrection,
   exportDefectBatchReport,
   inspectActiveDefectBatch,
   inspectDefectBatchReport,
@@ -21,6 +23,7 @@ import {
   type DefectCorrectionResult,
   type ExecutedCalibratedLightFrame,
   type LightExecutionProgress,
+  type LinearDefectSettings,
   type MasterExecutionProgress,
   type MasterPlanSettings,
 } from "./calibration-bridge.ts";
@@ -190,6 +193,7 @@ let masterPlanTicket = 0;
 let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
 let defectCorrectionTicket = 0;
+let linearDefectCorrectionTicket = 0;
 let defectBatchResume: DefectBatchResume | null = null;
 let defectReportInspectionTicket = 0;
 let registrationTicket = 0;
@@ -533,6 +537,32 @@ const screen = mountReviewScreen(root, model, {
   },
   onSelectDefectPreview(view) {
     void loadDefectPreview(view);
+  },
+  onUpdateLinearDefectSettings(settings) {
+    if (isActiveExecutionState(model.calibration.defectCorrection.linear.state))
+      return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          linear: {
+            ...model.calibration.defectCorrection.linear,
+            settings,
+            progress: null,
+            result: null,
+            message: "Linear controls changed · run to publish new evidence",
+          },
+        },
+      },
+    });
+  },
+  onExecuteLinearDefectCorrection() {
+    void executeSelectedLinearDefectCorrection();
+  },
+  onCancelLinearDefectCorrection() {
+    void cancelSelectedLinearDefectCorrection();
   },
   onImportSession() {
     void importSession();
@@ -929,6 +959,7 @@ function installImportedSession(session: ImportedSession): void {
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
   defectCorrectionTicket += 1;
+  linearDefectCorrectionTicket += 1;
   defectBatchResume = null;
   registrationExecutionTicket += 1;
   registeredStackTicket += 1;
@@ -4648,6 +4679,107 @@ async function cancelSelectedDefectCorrection(): Promise<void> {
   }
 }
 
+async function executeSelectedLinearDefectCorrection(): Promise<void> {
+  const inputs = selectedDefectInputs();
+  const linear = model.calibration.defectCorrection.linear;
+  if (
+    !inputs ||
+    isActiveExecutionState(linear.state) ||
+    isActiveExecutionState(model.calibration.defectCorrection.state)
+  )
+    return;
+  const outputDirectory = await selectDefectOutputDirectory();
+  if (!outputDirectory) return;
+  const ticket = ++linearDefectCorrectionTicket;
+  const settings: LinearDefectSettings = linear.settings;
+  updateLinearDefectState({
+    ...linear,
+    state: "running",
+    outputDirectory,
+    sourceFrameId: inputs.frame.sourceFrameId,
+    progress: null,
+    result: null,
+    message: `Inspecting ${settings.axis} for coherent detector defects…`,
+  });
+  try {
+    const result = await executeLinearDefectCorrection(
+      {
+        sourceFrameId: inputs.frame.sourceFrameId,
+        groupId: inputs.frame.groupId,
+        outputDirectory,
+        expectedManifestSha256: inputs.manifestSha256,
+        expectedLightPlanSha256: inputs.lightPlanSha256,
+        ...settings,
+      },
+      (progress) => {
+        if (ticket !== linearDefectCorrectionTicket) return;
+        const current = model.calibration.defectCorrection.linear;
+        if (!isActiveExecutionState(current.state)) return;
+        updateLinearDefectState({
+          ...current,
+          progress,
+          message: `${progress.stage} · ${progress.completedUnits}/${progress.totalUnits ?? "?"}`,
+        });
+      },
+    );
+    if (ticket !== linearDefectCorrectionTicket) return;
+    updateLinearDefectState({
+      ...model.calibration.defectCorrection.linear,
+      state: "completed",
+      progress: null,
+      result,
+      message: `${result.hotLines + result.coldLines} coherent ${settings.axis} mapped · ${result.correctedSamples}/${result.requestedSamples} samples repaired`,
+    });
+  } catch (error) {
+    if (ticket !== linearDefectCorrectionTicket) return;
+    const cancelled =
+      nativeErrorCode(error) === "linear_defect_correction_cancelled";
+    updateLinearDefectState({
+      ...model.calibration.defectCorrection.linear,
+      state: cancelled ? "idle" : "error",
+      progress: null,
+      message: cancelled
+        ? "Linear correction cancelled before publication"
+        : nativeErrorMessage(error),
+    });
+  }
+}
+
+async function cancelSelectedLinearDefectCorrection(): Promise<void> {
+  const linear = model.calibration.defectCorrection.linear;
+  if (linear.state !== "running") return;
+  updateLinearDefectState({
+    ...linear,
+    state: "cancelling",
+    message: "Cancelling before atomic publication…",
+  });
+  try {
+    await cancelLinearDefectCorrection();
+  } catch (error) {
+    if (nativeErrorCode(error) === "linear_defect_correction_missing") return;
+    updateLinearDefectState({
+      ...model.calibration.defectCorrection.linear,
+      state: "error",
+      message: nativeErrorMessage(error),
+    });
+  }
+}
+
+function updateLinearDefectState(
+  linear: ReviewViewModel["calibration"]["defectCorrection"]["linear"],
+): void {
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        linear,
+      },
+    },
+  });
+}
+
 function lightProgressMessage(progress: LightExecutionProgress): string {
   const product = progress.productIndex + 1;
   const source =
@@ -4701,6 +4833,14 @@ function nativeErrorCode(error: unknown): string | null {
     return null;
   }
   return typeof error.code === "string" ? error.code : null;
+}
+
+function nativeErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  return error instanceof Error ? error.message : "Native operation failed";
 }
 
 async function refreshMasterPlan(): Promise<void> {
@@ -5598,6 +5738,7 @@ function disposeRuntimeResources(): void {
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
   defectCorrectionTicket += 1;
+  linearDefectCorrectionTicket += 1;
   defectBatchResume = null;
   if (
     model.calibration.execution.state === "running" ||
@@ -5613,6 +5754,9 @@ function disposeRuntimeResources(): void {
   }
   if (isActiveExecutionState(model.calibration.defectCorrection.state)) {
     void cancelDefectCorrection();
+  }
+  if (isActiveExecutionState(model.calibration.defectCorrection.linear.state)) {
+    void cancelLinearDefectCorrection();
   }
   if (isActiveExecutionState(model.registration.execution.state)) {
     void cancelRegistrationPlan();

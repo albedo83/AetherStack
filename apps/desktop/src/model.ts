@@ -3,6 +3,8 @@ import type {
   DefectCorrectionResult,
   DefectCorrectionSettings,
   DefectBatchReportInspection,
+  LinearDefectResult,
+  LinearDefectSettings,
   LightExecutionProgress,
   LightExecutionResult,
   LightExecutionSettings,
@@ -412,6 +414,17 @@ export interface DefectCorrectionViewModel {
   readonly preview: FramePreview | null;
   readonly previewMessage: string;
   readonly message: string;
+  readonly linear: LinearDefectCorrectionViewModel;
+}
+
+export interface LinearDefectCorrectionViewModel {
+  readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+  readonly outputDirectory: string | null;
+  readonly sourceFrameId: string | null;
+  readonly progress: DefectExecutionProgress | null;
+  readonly settings: LinearDefectSettings;
+  readonly result: LinearDefectResult | null;
+  readonly message: string;
 }
 
 export interface DefectBatchReport {
@@ -513,6 +526,11 @@ export interface ReviewActions {
   readonly onInspectDefectBatchReport: () => void;
   readonly onCancelDefectCorrection: () => void;
   readonly onSelectDefectPreview: (view: "before" | "after" | "map") => void;
+  readonly onUpdateLinearDefectSettings: (
+    settings: LinearDefectSettings,
+  ) => void;
+  readonly onExecuteLinearDefectCorrection: () => void;
+  readonly onCancelLinearDefectCorrection: () => void;
   readonly onImportSession: () => void;
   readonly onExportDiagnostics: () => void;
   readonly onInspectDiagnosticsReport: () => void;

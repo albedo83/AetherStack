@@ -71,6 +71,9 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onInspectDefectBatchReport: vi.fn(),
     onCancelDefectCorrection: vi.fn(),
     onSelectDefectPreview: vi.fn(),
+    onUpdateLinearDefectSettings: vi.fn(),
+    onExecuteLinearDefectCorrection: vi.fn(),
+    onCancelLinearDefectCorrection: vi.fn(),
     onImportSession: vi.fn(),
     onExportDiagnostics: vi.fn(),
     onInspectDiagnosticsReport: vi.fn(),
@@ -1144,6 +1147,56 @@ describe("frame review workspace", () => {
     expect(actions.onExecuteAllDefectCorrections).toHaveBeenCalledOnce();
     fireEvent.click(getByRole(root, "button", { name: "Inspect report" }));
     expect(actions.onInspectDefectBatchReport).toHaveBeenCalledOnce();
+    const linearExecute = getByRole<HTMLButtonElement>(root, "button", {
+      name: "Correct coherent lines",
+    });
+    expect(linearExecute.disabled).toBe(false);
+    fireEvent.click(getByRole(root, "button", { name: /Columns/ }));
+    expect(actions.onUpdateLinearDefectSettings).toHaveBeenCalledWith({
+      ...ready.calibration.defectCorrection.linear.settings,
+      axis: "columns",
+    });
+    fireEvent.click(linearExecute);
+    expect(actions.onExecuteLinearDefectCorrection).toHaveBeenCalledOnce();
+    fireEvent.change(
+      getByRole(root, "spinbutton", { name: "Required coverage (%)" }),
+      { target: { value: "80" } },
+    );
+    expect(actions.onUpdateLinearDefectSettings).toHaveBeenLastCalledWith({
+      ...ready.calibration.defectCorrection.linear.settings,
+      minimumAffectedFractionPpm: 800_000,
+    });
+
+    controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        defectCorrection: {
+          ...ready.calibration.defectCorrection,
+          linear: {
+            ...ready.calibration.defectCorrection.linear,
+            state: "running",
+            progress: {
+              sequence: 2,
+              stage: "correcting-linear-defects",
+              state: "running",
+              completedUnits: 3,
+              totalUnits: 5,
+              code: null,
+            },
+            message: "Correcting coherent rows",
+          },
+        },
+      },
+    });
+    const linearProgress = getByRole<HTMLProgressElement>(root, "progressbar", {
+      name: "Linear defect correction progress",
+    });
+    expect(linearProgress.value).toBe(3);
+    fireEvent.click(
+      getByRole(root, "button", { name: "Cancel linear correction" }),
+    );
+    expect(actions.onCancelLinearDefectCorrection).toHaveBeenCalledOnce();
 
     controller.update({
       ...ready,
