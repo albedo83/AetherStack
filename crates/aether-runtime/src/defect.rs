@@ -1,12 +1,18 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 
 use aether_calibration::{
-    DefectCorrectionParameters, DefectDetectionEvidence, DefectDetectionParameters, DefectMap,
-    DefectMapError, detect_local_defects, merge_defect_maps,
+    DefectCorrectionEvidence, DefectCorrectionParameters, DefectDetectionEvidence,
+    DefectDetectionParameters, DefectMap, DefectMapError, correct_defects, detect_local_defects,
+    merge_defect_maps,
 };
 use aether_core::{Dimensions, PixelFlags};
-use aether_fits::{HeaderReadOptions, ImageReadError, ImageRegion, SampleStatus, ValidationMode};
+use aether_fits::{
+    AtomicF64PrimaryStreamWriter, AtomicFitsSetWriteError, AtomicFitsWriteError,
+    FitsOutputProvenance, FitsWriteSummary, HeaderReadOptions, ImageReadError, ImageRegion,
+    PrimaryImageReader, SampleStatus, ValidationMode, publish_atomic_fits_set,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -17,6 +23,11 @@ use crate::{
 const PARAMETER_DOMAIN: &[u8] = b"aetherstack-defect-parameters-v1\0";
 const MAX_NEIGHBOUR_SAMPLES: usize = 288;
 const PUBLICATION_BUFFER_BYTES: usize = 2 * 64 * 1_024;
+
+/// Algorithm identity for corrected calibrated-Light pixels.
+pub const STRICT_DEFECT_CORRECTED_ALGORITHM_ID: &str = "strict-defect-corrected-v1";
+/// Algorithm identity for the exact HOT/COLD companion map.
+pub const STRICT_DEFECT_MAP_ALGORITHM_ID: &str = "strict-defect-map-v1";
 
 /// Calibration-master role supplying detector-defect evidence.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -197,6 +208,202 @@ impl DefectAnalysisResult {
         self.reserved_bytes
     }
 }
+
+/// Immutable request for one corrected Light and its exact defect companion.
+#[derive(Clone, Debug)]
+pub struct StrictDefectCorrectionRequest {
+    light: PipelineSource,
+    references: Vec<DefectFitsReference>,
+    corrected_output: PathBuf,
+    map_output: PathBuf,
+    corrected_provenance: FitsOutputProvenance,
+    map_provenance: FitsOutputProvenance,
+    correction: DefectCorrectionParameters,
+}
+
+impl StrictDefectCorrectionRequest {
+    /// Validates product roles, shared provenance, paths, and parameter seal.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        light: PipelineSource,
+        references: Vec<DefectFitsReference>,
+        corrected_output: PathBuf,
+        map_output: PathBuf,
+        corrected_provenance: FitsOutputProvenance,
+        map_provenance: FitsOutputProvenance,
+        correction: DefectCorrectionParameters,
+    ) -> Result<Self, DefectCorrectionPipelineError> {
+        if corrected_output == map_output {
+            return Err(DefectCorrectionPipelineError::DuplicateOutput);
+        }
+        let mut parameter_refs = Vec::new();
+        parameter_refs
+            .try_reserve_exact(references.len())
+            .map_err(|_| DefectCorrectionPipelineError::AllocationFailed)?;
+        parameter_refs.extend(references.iter().map(DefectFitsReference::parameters));
+        let seal = strict_defect_parameters_sha256(&parameter_refs, correction)
+            .map_err(DefectCorrectionPipelineError::Parameters)?;
+        let expected_sources = u32::try_from(references.len().saturating_add(1))
+            .map_err(|_| DefectCorrectionPipelineError::TooManySources)?;
+        validate_product_provenance(
+            &corrected_provenance,
+            STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+            expected_sources,
+            &seal,
+        )?;
+        validate_product_provenance(
+            &map_provenance,
+            STRICT_DEFECT_MAP_ALGORITHM_ID,
+            expected_sources,
+            &seal,
+        )?;
+        if corrected_provenance.manifest_sha256() != map_provenance.manifest_sha256()
+            || corrected_provenance.plan_sha256() != map_provenance.plan_sha256()
+            || corrected_provenance.group_id() != map_provenance.group_id()
+        {
+            return Err(DefectCorrectionPipelineError::ProvenanceMismatch);
+        }
+        Ok(Self {
+            light,
+            references,
+            corrected_output,
+            map_output,
+            corrected_provenance,
+            map_provenance,
+            correction,
+        })
+    }
+}
+
+/// Published corrected Light and exact companion-map evidence.
+#[derive(Clone, Debug)]
+pub struct DefectCorrectionPipelineResult {
+    corrected: FitsWriteSummary,
+    map: FitsWriteSummary,
+    correction: DefectCorrectionEvidence,
+    parameters_sha256: String,
+    reserved_bytes: usize,
+}
+
+impl DefectCorrectionPipelineResult {
+    /// Corrected calibrated-Light FITS summary.
+    #[must_use]
+    pub const fn corrected(&self) -> FitsWriteSummary {
+        self.corrected
+    }
+    /// HOT/COLD companion FITS summary.
+    #[must_use]
+    pub const fn map(&self) -> FitsWriteSummary {
+        self.map
+    }
+    /// Complete replacement accounting.
+    #[must_use]
+    pub const fn correction(&self) -> DefectCorrectionEvidence {
+        self.correction
+    }
+    /// Canonical parameter identity embedded in both products.
+    #[must_use]
+    pub fn parameters_sha256(&self) -> &str {
+        &self.parameters_sha256
+    }
+    /// Peak bytes reserved for each full-frame phase.
+    #[must_use]
+    pub const fn reserved_bytes(&self) -> usize {
+        self.reserved_bytes
+    }
+}
+
+/// Failure of the all-or-nothing defect correction transaction.
+#[derive(Debug)]
+pub enum DefectCorrectionPipelineError {
+    /// Parameter sealing failed.
+    Parameters(DefectParameterSealError),
+    /// Output destinations are identical.
+    DuplicateOutput,
+    /// Too many sources for FITS provenance.
+    TooManySources,
+    /// A product has the wrong algorithm, count, or parameter identity.
+    InvalidProductProvenance,
+    /// Companion products do not share the same manifest, plan, and group.
+    ProvenanceMismatch,
+    /// Master analysis failed.
+    Analysis(DefectAnalysisError),
+    /// Light fingerprint, header, or opening failed.
+    Input(StrictPipelineError),
+    /// Light FITS checksums were absent or invalid.
+    ChecksumNotVerified,
+    /// Light dimensions do not match the defect map.
+    DimensionMismatch {
+        /// Calibrated-Light dimensions.
+        light: Dimensions,
+        /// Derived map dimensions.
+        map: Dimensions,
+    },
+    /// Light decoding failed.
+    Read(ImageReadError),
+    /// Defect replacement or transport failed.
+    Defect(DefectMapError),
+    /// Cancellation was observed before publication.
+    Cancelled(Cancelled),
+    /// Memory reservation failed.
+    Memory(MemoryBudgetError),
+    /// Private output staging failed.
+    Stage(AtomicFitsWriteError),
+    /// Private product readback failed.
+    Readback(String),
+    /// Atomic product-set publication failed.
+    Publish(AtomicFitsSetWriteError),
+    /// Small transaction bookkeeping allocation failed.
+    AllocationFailed,
+}
+
+impl Display for DefectCorrectionPipelineError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parameters(error) => Display::fmt(error, formatter),
+            Self::DuplicateOutput => {
+                formatter.write_str("corrected image and defect map require distinct outputs")
+            }
+            Self::TooManySources => {
+                formatter.write_str("defect correction source count exceeds u32")
+            }
+            Self::InvalidProductProvenance => {
+                formatter.write_str("defect product provenance does not match the sealed request")
+            }
+            Self::ProvenanceMismatch => formatter
+                .write_str("defect companion provenance does not identify one common product set"),
+            Self::Analysis(error) => Display::fmt(error, formatter),
+            Self::Input(error) => Display::fmt(error, formatter),
+            Self::ChecksumNotVerified => {
+                formatter.write_str("calibrated Light does not have fully verified FITS checksums")
+            }
+            Self::DimensionMismatch { light, map } => write!(
+                formatter,
+                "Light dimensions {}x{}x{} do not match defect map {}x{}x{}",
+                light.width(),
+                light.height(),
+                light.planes(),
+                map.width(),
+                map.height(),
+                map.planes()
+            ),
+            Self::Read(error) => Display::fmt(error, formatter),
+            Self::Defect(error) => Display::fmt(error, formatter),
+            Self::Cancelled(error) => Display::fmt(error, formatter),
+            Self::Memory(error) => Display::fmt(error, formatter),
+            Self::Stage(error) => Display::fmt(error, formatter),
+            Self::Readback(message) => {
+                write!(formatter, "defect product readback failed: {message}")
+            }
+            Self::Publish(error) => Display::fmt(error, formatter),
+            Self::AllocationFailed => {
+                formatter.write_str("cannot allocate defect publication bookkeeping")
+            }
+        }
+    }
+}
+
+impl Error for DefectCorrectionPipelineError {}
 
 /// Failure while deriving one map from immutable FITS masters.
 #[derive(Debug)]
@@ -480,6 +687,191 @@ pub fn analyze_defect_references(
     })
 }
 
+/// Corrects one calibrated Light and atomically publishes it with its map.
+pub fn run_strict_defect_correction(
+    request: &StrictDefectCorrectionRequest,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+) -> Result<DefectCorrectionPipelineResult, DefectCorrectionPipelineError> {
+    let analysis = analyze_defect_references(
+        &request.references,
+        request.correction,
+        cancellation,
+        memory,
+    )
+    .map_err(DefectCorrectionPipelineError::Analysis)?;
+    cancellation
+        .checkpoint()
+        .map_err(DefectCorrectionPipelineError::Cancelled)?;
+    crate::pipeline::verify_source(&request.light, PipelineInput::Signal { index: 0 })
+        .map_err(DefectCorrectionPipelineError::Input)?;
+    let mut reader = crate::pipeline::open_reader(
+        request.light.path(),
+        PipelineInput::Signal { index: 0 },
+        HeaderReadOptions::default(),
+        ValidationMode::Strict,
+    )
+    .map_err(DefectCorrectionPipelineError::Input)?;
+    let light_dimensions = crate::pipeline::dimensions_from_axes(
+        PipelineInput::Signal { index: 0 },
+        reader.descriptor().axes(),
+    )
+    .map_err(DefectCorrectionPipelineError::Input)?;
+    if light_dimensions != analysis.map().dimensions() {
+        return Err(DefectCorrectionPipelineError::DimensionMismatch {
+            light: light_dimensions,
+            map: analysis.map().dimensions(),
+        });
+    }
+    if !reader
+        .verify_checksums()
+        .map_err(DefectCorrectionPipelineError::Read)?
+        .is_fully_verified()
+    {
+        return Err(DefectCorrectionPipelineError::ChecksumNotVerified);
+    }
+    let estimate = estimate_defect_memory(light_dimensions).map_err(|error| {
+        DefectCorrectionPipelineError::Analysis(DefectAnalysisError::MemoryEstimate(error))
+    })?;
+    let _reservation = memory
+        .try_reserve(estimate.reserved_peak_bytes())
+        .map_err(DefectCorrectionPipelineError::Memory)?;
+    let width = u64::try_from(light_dimensions.width()).map_err(|_| {
+        DefectCorrectionPipelineError::Analysis(DefectAnalysisError::MemoryEstimate(
+            DefectMemoryEstimateError,
+        ))
+    })?;
+    let height = u64::try_from(light_dimensions.height()).map_err(|_| {
+        DefectCorrectionPipelineError::Analysis(DefectAnalysisError::MemoryEstimate(
+            DefectMemoryEstimateError,
+        ))
+    })?;
+    let light = reader
+        .read_region_image(ImageRegion::new(0, 0, 0, width, height))
+        .map_err(DefectCorrectionPipelineError::Read)?;
+    let corrected = correct_defects(&light, analysis.map(), request.correction)
+        .map_err(DefectCorrectionPipelineError::Defect)?;
+    drop(light);
+    cancellation
+        .checkpoint()
+        .map_err(DefectCorrectionPipelineError::Cancelled)?;
+    verify_all_sources(request).map_err(DefectCorrectionPipelineError::Input)?;
+
+    let map_image = corrected
+        .defect_map()
+        .to_transport_image()
+        .map_err(DefectCorrectionPipelineError::Defect)?;
+    let mut corrected_writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        &request.corrected_output,
+        light_dimensions,
+        &request.corrected_provenance,
+    )
+    .map_err(DefectCorrectionPipelineError::Stage)?;
+    corrected_writer
+        .write_image_chunk(corrected.image())
+        .map_err(DefectCorrectionPipelineError::Stage)?;
+    let corrected_staged = corrected_writer
+        .finish()
+        .map_err(DefectCorrectionPipelineError::Stage)?;
+    let mut map_writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        &request.map_output,
+        light_dimensions,
+        &request.map_provenance,
+    )
+    .map_err(DefectCorrectionPipelineError::Stage)?;
+    map_writer
+        .write_image_chunk(&map_image)
+        .map_err(DefectCorrectionPipelineError::Stage)?;
+    let map_staged = map_writer
+        .finish()
+        .map_err(DefectCorrectionPipelineError::Stage)?;
+    validate_defect_staged(&corrected_staged, light_dimensions)?;
+    validate_defect_staged(&map_staged, light_dimensions)?;
+    cancellation
+        .checkpoint()
+        .map_err(DefectCorrectionPipelineError::Cancelled)?;
+    verify_all_sources(request).map_err(DefectCorrectionPipelineError::Input)?;
+    let mut products = Vec::new();
+    products
+        .try_reserve_exact(2)
+        .map_err(|_| DefectCorrectionPipelineError::AllocationFailed)?;
+    products.push(corrected_staged);
+    products.push(map_staged);
+    let summaries =
+        publish_atomic_fits_set(products).map_err(DefectCorrectionPipelineError::Publish)?;
+    let [corrected_summary, map_summary] = summaries.as_slice() else {
+        return Err(DefectCorrectionPipelineError::AllocationFailed);
+    };
+    Ok(DefectCorrectionPipelineResult {
+        corrected: *corrected_summary,
+        map: *map_summary,
+        correction: corrected.evidence(),
+        parameters_sha256: analysis.parameters_sha256().to_owned(),
+        reserved_bytes: estimate.reserved_peak_bytes(),
+    })
+}
+
+fn validate_product_provenance(
+    provenance: &FitsOutputProvenance,
+    algorithm: &str,
+    source_count: u32,
+    parameters_sha256: &str,
+) -> Result<(), DefectCorrectionPipelineError> {
+    if provenance.algorithm_id() != algorithm
+        || provenance.source_count() != source_count
+        || provenance.parameters_sha256() != Some(parameters_sha256)
+    {
+        return Err(DefectCorrectionPipelineError::InvalidProductProvenance);
+    }
+    Ok(())
+}
+
+fn verify_all_sources(request: &StrictDefectCorrectionRequest) -> Result<(), StrictPipelineError> {
+    crate::pipeline::verify_source(&request.light, PipelineInput::Signal { index: 0 })?;
+    for (index, reference) in request.references.iter().enumerate() {
+        crate::pipeline::verify_source(
+            reference.source(),
+            reference_input(reference.parameters().kind(), index),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_defect_staged(
+    staged: &aether_fits::CompletedAtomicFits,
+    expected: Dimensions,
+) -> Result<(), DefectCorrectionPipelineError> {
+    let file = staged
+        .try_clone_for_readback()
+        .map_err(|error| DefectCorrectionPipelineError::Readback(error.to_string()))?;
+    let mut reader = PrimaryImageReader::open(file, HeaderReadOptions::default())
+        .map_err(|error| DefectCorrectionPipelineError::Readback(error.to_string()))?;
+    let actual = match reader.descriptor().axes() {
+        [width, height] => Dimensions::new(
+            usize::try_from(*width)
+                .map_err(|error| DefectCorrectionPipelineError::Readback(error.to_string()))?,
+            usize::try_from(*height)
+                .map_err(|error| DefectCorrectionPipelineError::Readback(error.to_string()))?,
+            1,
+        )
+        .map_err(|error| DefectCorrectionPipelineError::Readback(error.to_string()))?,
+        _ => {
+            return Err(DefectCorrectionPipelineError::Readback(
+                "unexpected output axes".to_owned(),
+            ));
+        }
+    };
+    let checksums = reader
+        .verify_checksums()
+        .map_err(|error| DefectCorrectionPipelineError::Readback(error.to_string()))?;
+    if actual != expected || !checksums.is_fully_verified() {
+        return Err(DefectCorrectionPipelineError::Readback(
+            "output dimensions or checksums do not match".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_single_plane(dimensions: Dimensions, index: usize) -> Result<(), DefectAnalysisError> {
     if dimensions.planes() != 1 {
         return Err(DefectAnalysisError::UnsupportedPlaneCount {
@@ -717,6 +1109,138 @@ mod tests {
         assert_eq!(result.parameters_sha256().len(), 64);
         assert_eq!(result.reserved_bytes(), estimate.reserved_peak_bytes());
         assert_eq!(budget.used(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn correction_publishes_verified_science_and_map_as_one_set() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let dimensions = Dimensions::new(9, 9, 1)?;
+        let mut dark = ScientificImage::filled(dimensions, 100.0)?;
+        dark.pixels_mut()[4 * 9 + 4] = 1_000.0;
+        let mut flat = ScientificImage::filled(dimensions, 1_000.0)?;
+        flat.pixels_mut()[6 * 9 + 6] = 100.0;
+        let mut light = ScientificImage::filled(dimensions, 50.0)?;
+        light.pixels_mut()[4 * 9 + 4] = 900.0;
+        light.pixels_mut()[6 * 9 + 6] = 2.0;
+        let detection = DefectDetectionParameters::new(2, 1, 8, 5.0, 5.0, 10.0)?;
+        let reference_parameters = [
+            DefectReferenceParameters::new(DefectReferenceKind::Dark, detection),
+            DefectReferenceParameters::new(DefectReferenceKind::Flat, detection),
+        ];
+        let correction = DefectCorrectionParameters::new(2, 1, 8)?;
+        let parameter_digest = strict_defect_parameters_sha256(&reference_parameters, correction)?;
+        let references = vec![
+            DefectFitsReference::new(
+                fits_source(&directory, "dark.fits", &dark)?,
+                reference_parameters[0],
+            ),
+            DefectFitsReference::new(
+                fits_source(&directory, "flat.fits", &flat)?,
+                reference_parameters[1],
+            ),
+        ];
+        let light_source = fits_source(&directory, "light.fits", &light)?;
+        let corrected_path = directory.0.join("corrected.fits");
+        let map_path = directory.0.join("defects.fits");
+        let corrected_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "light-l",
+            STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+            3,
+        )?
+        .with_parameters_sha256(parameter_digest.clone())?;
+        let map_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "light-l",
+            STRICT_DEFECT_MAP_ALGORITHM_ID,
+            3,
+        )?
+        .with_parameters_sha256(parameter_digest.clone())?;
+        let request = StrictDefectCorrectionRequest::new(
+            light_source,
+            references,
+            corrected_path.clone(),
+            map_path.clone(),
+            corrected_provenance,
+            map_provenance,
+            correction,
+        )?;
+        let estimate = estimate_defect_memory(dimensions)?;
+        let budget = MemoryBudget::new(estimate.reserved_peak_bytes())?;
+        let result = run_strict_defect_correction(&request, &CancellationToken::new(), &budget)?;
+        assert_eq!(result.correction().requested(), 2);
+        assert_eq!(result.correction().corrected(), 2);
+        assert_eq!(result.parameters_sha256(), parameter_digest);
+        assert_eq!(result.reserved_bytes(), estimate.reserved_peak_bytes());
+        assert!(corrected_path.is_file());
+        assert!(map_path.is_file());
+
+        let mut corrected_reader =
+            PrimaryImageReader::open(File::open(&corrected_path)?, HeaderReadOptions::default())?;
+        let corrected = corrected_reader.read_region_image(ImageRegion::new(0, 0, 0, 9, 9))?;
+        assert_eq!(corrected.pixels()[4 * 9 + 4].to_bits(), 50.0_f64.to_bits());
+        assert_eq!(corrected.pixels()[6 * 9 + 6].to_bits(), 50.0_f64.to_bits());
+        let mut map_reader =
+            PrimaryImageReader::open(File::open(&map_path)?, HeaderReadOptions::default())?;
+        let map_image = map_reader.read_region_image(ImageRegion::new(0, 0, 0, 9, 9))?;
+        let map = DefectMap::from_transport_image(&map_image)?;
+        assert!(map.mask().get(4, 4, 0)?.contains(PixelFlags::HOT));
+        assert!(map.mask().get(6, 6, 0)?.contains(PixelFlags::COLD));
+        assert_eq!(budget.used(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn companion_collision_publishes_no_corrected_product() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let dimensions = Dimensions::new(7, 7, 1)?;
+        let mut dark = ScientificImage::filled(dimensions, 10.0)?;
+        dark.pixels_mut()[3 * 7 + 3] = 100.0;
+        let light = ScientificImage::filled(dimensions, 20.0)?;
+        let detection = DefectDetectionParameters::new(2, 1, 8, 5.0, 5.0, 1.0)?;
+        let reference_parameters =
+            DefectReferenceParameters::new(DefectReferenceKind::Dark, detection);
+        let correction = DefectCorrectionParameters::new(2, 1, 8)?;
+        let digest = strict_defect_parameters_sha256(&[reference_parameters], correction)?;
+        let corrected_path = directory.0.join("must-not-exist.fits");
+        let map_path = directory.0.join("existing-map.fits");
+        fs::write(&map_path, b"existing")?;
+        let science_provenance = FitsOutputProvenance::new(
+            "b".repeat(64),
+            "light-l",
+            STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+            2,
+        )?
+        .with_parameters_sha256(digest.clone())?;
+        let map_provenance = FitsOutputProvenance::new(
+            "b".repeat(64),
+            "light-l",
+            STRICT_DEFECT_MAP_ALGORITHM_ID,
+            2,
+        )?
+        .with_parameters_sha256(digest)?;
+        let request = StrictDefectCorrectionRequest::new(
+            fits_source(&directory, "light-collision.fits", &light)?,
+            vec![DefectFitsReference::new(
+                fits_source(&directory, "dark-collision.fits", &dark)?,
+                reference_parameters,
+            )],
+            corrected_path.clone(),
+            map_path.clone(),
+            science_provenance,
+            map_provenance,
+            correction,
+        )?;
+        let budget = MemoryBudget::new(estimate_defect_memory(dimensions)?.reserved_peak_bytes())?;
+        assert!(matches!(
+            run_strict_defect_correction(&request, &CancellationToken::new(), &budget),
+            Err(DefectCorrectionPipelineError::Stage(
+                AtomicFitsWriteError::TargetExists
+            ))
+        ));
+        assert!(!corrected_path.exists());
+        assert_eq!(fs::read(map_path)?, b"existing");
         Ok(())
     }
 }

@@ -19,10 +19,12 @@ mod registration;
 
 pub use cancellation::{CancellationToken, Cancelled};
 pub use defect::{
-    DefectAnalysisError, DefectAnalysisResult, DefectFitsReference, DefectMemoryEstimate,
+    DefectAnalysisError, DefectAnalysisResult, DefectCorrectionPipelineError,
+    DefectCorrectionPipelineResult, DefectFitsReference, DefectMemoryEstimate,
     DefectMemoryEstimateError, DefectParameterSealError, DefectReferenceKind,
-    DefectReferenceParameters, analyze_defect_references, estimate_defect_memory,
-    strict_defect_parameters_sha256,
+    DefectReferenceParameters, STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+    STRICT_DEFECT_MAP_ALGORITHM_ID, StrictDefectCorrectionRequest, analyze_defect_references,
+    estimate_defect_memory, run_strict_defect_correction, strict_defect_parameters_sha256,
 };
 pub use demosaic::{
     DemosaicPipelineError, StrictDemosaicRequest, StrictDemosaicResult,

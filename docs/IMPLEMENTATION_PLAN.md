@@ -2089,6 +2089,28 @@ safety reasoning. They do not narrate obvious syntax.
      including outside binary64's consecutive-integer domain; physical scaling
      then uses the documented binary64 fused multiply-add. Boundary, scaling,
      and undefined-sample tests cover every standard integer representation.
+206. Encode detector-defect maps as exact FITS-compatible binary64 integers.
+     Only clear, HOT, COLD, and combined HOT/COLD values round-trip; masked,
+     fractional, non-finite, negative, out-of-range, and foreign-bit transports
+     reject the complete map.
+207. Seal the complete cosmetic-correction policy in Rust. Role-tagged dark and
+     flat detection controls plus replacement geometry use a domain-separated,
+     fixed-width canonical SHA-256 representation. Reference order is neutral,
+     while duplicate roles and every parameter change fail or alter the seal.
+208. Preflight the complete full-frame correction peak before pixel I/O. The
+     component model includes FITS decode status, immutable images and masks,
+     accumulated/temporary/cloned maps, robust scratch, corrected and transport
+     images, and two publication buffers. ASI294MC and ToupTek 585C baselines
+     remain below a 256 MiB working ceiling.
+209. Analyze immutable defect masters through native FITS. Strict headers,
+     complete checksums, exact fingerprints before and after work, congruent
+     one-plane dimensions, cooperative cancellation, reserved memory, local
+     detection, union merging, and per-role evidence all fail closed.
+210. Publish corrected calibrated-Light pixels and their exact HOT/COLD map as
+     one transaction. Both private streams carry the same manifest, plan, group,
+     source count, and parameter seal, pass checksum/dimension readback, and are
+     exposed together with create-new semantics only after final source
+     revalidation. A companion collision publishes no corrected product.
 
 ## 11. Stable-release definition
 

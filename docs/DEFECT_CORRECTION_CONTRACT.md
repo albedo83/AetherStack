@@ -51,9 +51,30 @@ evidence is retained rather than resolved by precedence, and merge evidence
 reports the conflict count. The map API rejects empty flags and every non-defect
 mask reason.
 
-The initial oracle deliberately does not guess camera-specific thresholds,
-repair complete rows or columns, or publish a default profile. Runtime integration
-must bind explicit parameters, source fingerprints, camera geometry, CFA state,
-and map digest into output provenance. A profile may be called automatic only
-after representative ASI294MC and ToupTek 585C validation fixes defensible
-defaults.
+The implementation deliberately does not guess camera-specific thresholds,
+repair complete rows or columns, or publish a default profile. Explicit
+parameters, source fingerprints, and the map-producing policy are bound into
+output provenance. A profile may be called automatic only after representative
+ASI294MC and ToupTek 585C validation fixes defensible defaults.
+
+## Native FITS transaction
+
+The runtime now binds role-tagged dark and normalized-flat controls into one
+path-free SHA-256 parameter seal. Reference order cannot change this identity;
+duplicate roles are rejected. Each reference is fingerprinted before analysis,
+requires strict FITS acceptance and valid `DATASUM` plus `CHECKSUM`, and is
+fingerprinted again after processing.
+
+Memory is reserved before pixel decoding. The published full-frame model covers
+the FITS status vector, immutable image samples and masks, accumulated,
+temporary, and cloned defect maps, robust-statistics scratch, corrected image,
+transport image, and both output buffers. The deterministic peaks are
+234,020,736 bytes for a 4,144 × 2,822 ASI294MC plane and 166,021,376 bytes for a
+3,840 × 2,160 ToupTek 585C plane.
+
+Map transport uses exact binary64 integer values `0`, `4`, `8`, and `12`.
+Decoding rejects masked, non-finite, fractional, negative, out-of-range, and
+foreign-bit samples. Corrected science and its map are privately completed,
+checksum-verified, source-revalidated, and exposed by one create-new product-set
+publication. A companion collision leaves the corrected destination absent and
+does not alter the existing file.
