@@ -685,6 +685,10 @@ export function mountReviewScreen(
       root,
       "[data-defect-batch-report]",
     ),
+    defectReportInspection: required<HTMLElement>(
+      root,
+      "[data-defect-report-inspection]",
+    ),
     executeDefectCorrection: required<HTMLButtonElement>(
       root,
       '[data-action="execute-defect-correction"]',
@@ -700,6 +704,10 @@ export function mountReviewScreen(
     resumeDefectBatch: required<HTMLButtonElement>(
       root,
       '[data-action="resume-defect-batch"]',
+    ),
+    inspectDefectBatchReport: required<HTMLButtonElement>(
+      root,
+      '[data-action="inspect-defect-batch-report"]',
     ),
     cancelDefectCorrection: required<HTMLButtonElement>(
       root,
@@ -1217,6 +1225,10 @@ export function mountReviewScreen(
     }
     if (action === "resume-defect-batch") {
       actions.onResumeDefectBatch();
+      return;
+    }
+    if (action === "inspect-defect-batch-report") {
+      actions.onInspectDefectBatchReport();
       return;
     }
     if (action === "cancel-defect-correction") {
@@ -2854,10 +2866,12 @@ interface CalibrationElements {
   readonly defectCorrectionOutput: HTMLElement;
   readonly defectCorrectionEvidence: HTMLElement;
   readonly defectBatchReport: HTMLElement;
+  readonly defectReportInspection: HTMLElement;
   readonly executeDefectCorrection: HTMLButtonElement;
   readonly executeAllDefectCorrections: HTMLButtonElement;
   readonly exportDefectBatchReport: HTMLButtonElement;
   readonly resumeDefectBatch: HTMLButtonElement;
+  readonly inspectDefectBatchReport: HTMLButtonElement;
   readonly cancelDefectCorrection: HTMLButtonElement;
   readonly defectStrideButtons: readonly HTMLButtonElement[];
   readonly defectDetectionRadius: HTMLInputElement;
@@ -4464,6 +4478,15 @@ function renderDefectCorrection(
   elements.defectBatchReport.title = report
     ? `Plan SHA-256 ${report.planSha256} · parameters SHA-256 ${report.parametersSha256}`
     : "";
+  const inspection = correction.reportInspection;
+  elements.defectReportInspection.dataset.state =
+    correction.reportInspectionState;
+  elements.defectReportInspection.textContent = inspection
+    ? `${correction.reportInspectionMessage} · repaired ${inspection.correctedSamples}/${inspection.requestedSamples} · conflicts ${inspection.conflictingSamples} · peak ${formatByteCount(inspection.peakReservedBytes)}`
+    : correction.reportInspectionMessage;
+  elements.defectReportInspection.title = inspection
+    ? `Plan SHA-256 ${inspection.planSha256} · parameters SHA-256 ${inspection.parametersSha256}`
+    : "";
   if (report && busy) {
     const currentUnits = Math.min(
       correction.progress?.completedUnits ?? 0,
@@ -4507,6 +4530,8 @@ function renderDefectCorrection(
     correction.batchReport?.state !== "completed" || otherExecutionBusy;
   elements.resumeDefectBatch.hidden = busy || !correction.resumeAvailable;
   elements.resumeDefectBatch.disabled = otherExecutionBusy;
+  elements.inspectDefectBatchReport.disabled =
+    busy || correction.reportInspectionState === "loading";
   const eligibleCount =
     model.calibration.lightExecution.result?.calibratedFrames.length ?? 0;
   elements.executeAllDefectCorrections.textContent = `Correct all ${eligibleCount} eligible ${eligibleCount === 1 ? "Light" : "Lights"}`;
@@ -5735,6 +5760,7 @@ function shellMarkup(): string {
                     <progress data-defect-correction-progress aria-label="Detector correction progress" hidden></progress>
                     <output data-defect-correction-evidence>No correction evidence published</output>
                     <output class="defect-console__batch-report" data-defect-batch-report hidden></output>
+                    <output class="defect-console__report-inspection" data-defect-report-inspection data-state="idle">Inspect an exported report independently</output>
                     <code data-defect-correction-output></code>
                   </div>
                   <section class="defect-preview" aria-label="Detector correction comparison">
@@ -5759,6 +5785,7 @@ function shellMarkup(): string {
                     <button class="button" type="button" data-action="execute-all-defect-corrections" disabled>Correct all 0 eligible Lights</button>
                     <button class="button" type="button" data-action="export-defect-batch-report" disabled>Export verified report</button>
                     <button class="button button--primary" type="button" data-action="resume-defect-batch" hidden>Resume remaining Lights</button>
+                    <button class="button" type="button" data-action="inspect-defect-batch-report">Inspect report</button>
                     <button class="button button--danger" type="button" data-action="cancel-defect-correction" hidden>Cancel correction</button>
                   </div>
                 </section>

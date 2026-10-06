@@ -68,6 +68,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onExecuteAllDefectCorrections: vi.fn(),
     onExportDefectBatchReport: vi.fn(),
     onResumeDefectBatch: vi.fn(),
+    onInspectDefectBatchReport: vi.fn(),
     onCancelDefectCorrection: vi.fn(),
     onSelectDefectPreview: vi.fn(),
     onImportSession: vi.fn(),
@@ -1141,6 +1142,8 @@ describe("frame review workspace", () => {
       }),
     );
     expect(actions.onExecuteAllDefectCorrections).toHaveBeenCalledOnce();
+    fireEvent.click(getByRole(root, "button", { name: "Inspect report" }));
+    expect(actions.onInspectDefectBatchReport).toHaveBeenCalledOnce();
 
     controller.update({
       ...ready,
@@ -1320,6 +1323,35 @@ describe("frame review workspace", () => {
     expect(exportReport.disabled).toBe(false);
     fireEvent.click(exportReport);
     expect(actions.onExportDefectBatchReport).toHaveBeenCalledOnce();
+
+    controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        defectCorrection: {
+          ...ready.calibration.defectCorrection,
+          reportInspectionState: "verified",
+          reportInspection: {
+            schemaVersion: 1,
+            algorithmId: "aetherstack-defect-batch-report-v1",
+            reportSha256: "f".repeat(64),
+            planSha256: "a".repeat(64),
+            parametersSha256: "e".repeat(64),
+            completedItems: 2,
+            totalItems: 2,
+            correctedSamples: 60,
+            requestedSamples: 62,
+            conflictingSamples: 2,
+            peakReservedBytes: 234_020_736,
+          },
+          reportInspectionMessage:
+            "Verified report · 2/2 pairs · SHA-256 ffffffffffff…",
+        },
+      },
+    });
+    expect(
+      root.querySelector("[data-defect-report-inspection]")?.textContent,
+    ).toContain("repaired 60/62");
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {

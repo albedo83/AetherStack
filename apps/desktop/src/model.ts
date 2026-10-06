@@ -2,6 +2,7 @@ import type {
   DefectExecutionProgress,
   DefectCorrectionResult,
   DefectCorrectionSettings,
+  DefectBatchReportInspection,
   LightExecutionProgress,
   LightExecutionResult,
   LightExecutionSettings,
@@ -403,6 +404,9 @@ export interface DefectCorrectionViewModel {
   readonly result: DefectCorrectionResult | null;
   readonly batchReport: DefectBatchReport | null;
   readonly resumeAvailable: boolean;
+  readonly reportInspectionState: "idle" | "loading" | "verified" | "error";
+  readonly reportInspection: DefectBatchReportInspection | null;
+  readonly reportInspectionMessage: string;
   readonly previewState: "idle" | "loading" | "ready" | "error";
   readonly previewView: "before" | "after" | "map";
   readonly preview: FramePreview | null;
@@ -506,6 +510,7 @@ export interface ReviewActions {
   readonly onExecuteAllDefectCorrections: () => void;
   readonly onExportDefectBatchReport: () => void;
   readonly onResumeDefectBatch: () => void;
+  readonly onInspectDefectBatchReport: () => void;
   readonly onCancelDefectCorrection: () => void;
   readonly onSelectDefectPreview: (view: "before" | "after" | "map") => void;
   readonly onImportSession: () => void;

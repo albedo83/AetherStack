@@ -6,12 +6,14 @@ import {
   cancelMasterPlan,
   executeDefectCorrection,
   exportDefectBatchReport,
+  inspectDefectBatchReport,
   executeLightPlan,
   executeMasterPlan,
   previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
   selectDefectBatchReportDestination,
+  selectDefectBatchReportSource,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type DefectExecutionProgress,
@@ -187,6 +189,7 @@ let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
 let defectCorrectionTicket = 0;
 let defectBatchResume: DefectBatchResume | null = null;
+let defectReportInspectionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
@@ -519,6 +522,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onResumeDefectBatch() {
     void resumeDefectBatch();
+  },
+  onInspectDefectBatchReport() {
+    void inspectSavedDefectBatchReport();
   },
   onCancelDefectCorrection() {
     void cancelSelectedDefectCorrection();
@@ -4496,6 +4502,55 @@ async function exportCompletedDefectBatchReport(): Promise<void> {
           ...model.calibration.defectCorrection,
           message:
             "Report export refused · use a new JSON destination and keep the completed native batch active",
+        },
+      },
+    });
+  }
+}
+
+async function inspectSavedDefectBatchReport(): Promise<void> {
+  const path = await selectDefectBatchReportSource();
+  if (!path) return;
+  const ticket = ++defectReportInspectionTicket;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        reportInspectionState: "loading",
+        reportInspection: null,
+        reportInspectionMessage: "Verifying canonical report bytes in Rust…",
+      },
+    },
+  });
+  try {
+    const inspection = await inspectDefectBatchReport(path);
+    if (ticket !== defectReportInspectionTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          reportInspectionState: "verified",
+          reportInspection: inspection,
+          reportInspectionMessage: `Verified report · ${inspection.completedItems}/${inspection.totalItems} pairs · SHA-256 ${inspection.reportSha256.slice(0, 12)}…`,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== defectReportInspectionTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          reportInspectionState: "error",
+          reportInspection: null,
+          reportInspectionMessage:
+            "Report rejected · canonical encoding, digest, or scientific accounting is invalid",
         },
       },
     });

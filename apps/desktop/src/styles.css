@@ -2753,6 +2753,18 @@ button:active:not(:disabled) {
   line-height: 1.45;
 }
 
+.defect-console__report-inspection {
+  color: var(--text-muted);
+}
+
+.defect-console__report-inspection[data-state="verified"] {
+  color: #9ee6c0;
+}
+
+.defect-console__report-inspection[data-state="error"] {
+  color: #ffb3a9;
+}
+
 .defect-console__status code {
   overflow: hidden;
   color: var(--text-muted);
