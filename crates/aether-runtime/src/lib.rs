@@ -19,8 +19,8 @@ mod registration;
 
 pub use cancellation::{CancellationToken, Cancelled};
 pub use defect::{
-    DefectParameterSealError, DefectReferenceKind, DefectReferenceParameters,
-    strict_defect_parameters_sha256,
+    DefectMemoryEstimate, DefectMemoryEstimateError, DefectParameterSealError, DefectReferenceKind,
+    DefectReferenceParameters, estimate_defect_memory, strict_defect_parameters_sha256,
 };
 pub use demosaic::{
     DemosaicPipelineError, StrictDemosaicRequest, StrictDemosaicResult,
