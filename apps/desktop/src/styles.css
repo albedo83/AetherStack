@@ -922,6 +922,70 @@ button:active:not(:disabled) {
   white-space: nowrap;
 }
 
+.drizzle-console__product-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 3px;
+  background: #05090e;
+  border: 1px solid #293a4d;
+  border-radius: 8px;
+  box-shadow: inset 0 2px 6px #000c;
+}
+
+.drizzle-console__product-tabs button {
+  min-height: 30px;
+  color: #73879d;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.drizzle-console__product-tabs button[aria-selected="true"] {
+  color: #e9f6ff;
+  background: linear-gradient(#345f88, #203f5f);
+  box-shadow:
+    inset 0 1px #c6e7ff38,
+    0 2px 6px #0009;
+}
+
+.drizzle-console__product-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.drizzle-console__preview {
+  position: relative;
+  display: grid;
+  min-height: 152px;
+  overflow: hidden;
+  color: #667a90;
+  font-size: 10px;
+  place-items: center;
+  background:
+    linear-gradient(#5e91ba0b 1px, transparent 1px),
+    linear-gradient(90deg, #5e91ba0b 1px, transparent 1px),
+    radial-gradient(circle at center, #172839, #05090e 72%);
+  background-size:
+    20px 20px,
+    20px 20px,
+    auto;
+  border: 1px solid #2b3d50;
+  border-radius: 9px;
+  box-shadow: inset 0 4px 18px #000b;
+}
+
+.drizzle-console__preview img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+}
+
 .drizzle-console__actions .button {
   flex: 1;
 }

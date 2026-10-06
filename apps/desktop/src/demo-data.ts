@@ -184,6 +184,9 @@ export const demoReviewModel: ReviewViewModel = {
       },
       progress: null,
       result: null,
+      previewState: "idle",
+      preview: null,
+      selectedProduct: "science",
       message: "Seal a registration plan to unlock CFA Drizzle",
     },
     resultReview: {

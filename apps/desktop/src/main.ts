@@ -30,6 +30,7 @@ import {
 } from "./local-normalization-bridge.ts";
 import { demoReviewModel } from "./demo-data.ts";
 import type {
+  DrizzleProductView,
   FitsStatistics,
   FrameRole,
   LightFrameView,
@@ -172,6 +173,7 @@ let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
 let drizzleTicket = 0;
+let drizzlePreviewTicket = 0;
 let localNormalizationTicket = 0;
 let localNormalizationPreviewTicket = 0;
 let localNormalizationStatisticsTicket = 0;
@@ -191,6 +193,7 @@ const registrationPreviewPrefetch =
 let ephemeralRegistrationPreview: PreviewResource | null = null;
 let registeredStackSciencePreviewResource: PreviewResource | null = null;
 let registeredStackDiagnosticPreviewResource: PreviewResource | null = null;
+let drizzlePreviewResource: PreviewResource | null = null;
 let localNormalizationPreviewResource: PreviewResource | null = null;
 let localNormalizationSharedTransform: EstimatedDisplayTransform | null = null;
 
@@ -328,6 +331,9 @@ const screen = mountReviewScreen(root, model, {
         ),
       },
     });
+  },
+  onSelectDrizzleProduct(product) {
+    selectDrizzleProduct(product);
   },
   onUpdateRegisteredStackSettings(settings) {
     if (
@@ -1675,6 +1681,9 @@ function idleDrizzle(
     settings,
     progress: null,
     result: null,
+    previewState: "idle",
+    preview: null,
+    selectedProduct: "science",
     message,
   };
 }
@@ -1944,6 +1953,8 @@ async function executeDrizzleProduct(): Promise<void> {
     return;
   }
   const ticket = ++drizzleTicket;
+  drizzlePreviewTicket += 1;
+  releaseDrizzlePreview();
   update({
     ...model,
     registration: {
@@ -2004,10 +2015,14 @@ async function executeDrizzleProduct(): Promise<void> {
           state: "completed",
           progress: model.registration.drizzle.progress,
           result,
+          previewState: "loading",
+          preview: null,
+          selectedProduct: "science",
           message: `${result.sourceCount} CFA frames · ${result.width} × ${result.height} · ${result.bandCount} bounded bands · peak ${formatMemory(result.peakBandBytes)}`,
         },
       },
     });
+    void loadDrizzlePreview(result, "science");
   } catch (error) {
     if (ticket !== drizzleTicket) return;
     const cancelled = nativeErrorCode(error) === "drizzle_cancelled";
@@ -2057,6 +2072,113 @@ async function cancelDrizzleProduct(): Promise<void> {
         },
       },
     });
+  }
+}
+
+function selectDrizzleProduct(product: DrizzleProductView): void {
+  const result = model.registration.drizzle.result;
+  if (!result || model.registration.drizzle.state !== "completed") return;
+  if (
+    model.registration.drizzle.selectedProduct === product &&
+    model.registration.drizzle.previewState === "ready"
+  ) {
+    return;
+  }
+  drizzlePreviewTicket += 1;
+  releaseDrizzlePreview();
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      drizzle: {
+        ...model.registration.drizzle,
+        selectedProduct: product,
+        previewState: "loading",
+        preview: null,
+      },
+    },
+  });
+  void loadDrizzlePreview(result, product);
+}
+
+async function loadDrizzlePreview(
+  result: NonNullable<ReviewViewModel["registration"]["drizzle"]["result"]>,
+  product: DrizzleProductView,
+): Promise<void> {
+  const ticket = ++drizzlePreviewTicket;
+  let resource: PreviewResource | null = null;
+  try {
+    const path = drizzleProductPath(result, product);
+    const content =
+      result.planes === 3
+        ? ({ kind: "rgb" } as const)
+        : ({ kind: "scalar", plane: 0 } as const);
+    const transform = await estimateFitsPreviewTransform({
+      path,
+      content,
+      ...previewBounds,
+    });
+    resource = await requestFitsPreview({
+      frameId: `${result.drizzlePlanSha256}:${product}`,
+      path,
+      content,
+      ...previewBounds,
+      blackPoint: transform.blackPoint,
+      whitePoint: transform.whitePoint,
+      midtone: transform.midtone,
+      transfer: { kind: "midtones" },
+      palette: "grayscale",
+    });
+    if (
+      ticket !== drizzlePreviewTicket ||
+      model.registration.drizzle.result?.drizzlePlanSha256 !==
+        result.drizzlePlanSha256 ||
+      model.registration.drizzle.selectedProduct !== product
+    ) {
+      resource.revoke();
+      return;
+    }
+    releaseDrizzlePreview();
+    drizzlePreviewResource = resource;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          previewState: "ready",
+          preview: resource.preview,
+        },
+      },
+    });
+  } catch {
+    resource?.revoke();
+    if (ticket !== drizzlePreviewTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          previewState: "error",
+          preview: null,
+        },
+      },
+    });
+  }
+}
+
+function drizzleProductPath(
+  result: NonNullable<ReviewViewModel["registration"]["drizzle"]["result"]>,
+  product: DrizzleProductView,
+): string {
+  switch (product) {
+    case "science":
+      return result.sciencePath;
+    case "weight":
+      return result.weightPath;
+    case "support":
+      return result.supportPath;
   }
 }
 
@@ -4440,7 +4562,14 @@ function clearRegistrationPreviewResources(): void {
   releaseEphemeralRegistrationPreview();
   registrationPreviewCache.clear();
   clearRegisteredStackPreviewResources();
+  drizzlePreviewTicket += 1;
+  releaseDrizzlePreview();
   stopRegistrationBlinkTimer();
+}
+
+function releaseDrizzlePreview(): void {
+  drizzlePreviewResource?.revoke();
+  drizzlePreviewResource = null;
 }
 
 function disposeRuntimeResources(): void {

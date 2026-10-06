@@ -246,6 +246,18 @@ export function mountReviewScreen(
       "[data-drizzle-progress]",
     ),
     drizzleOutput: required<HTMLElement>(root, "[data-drizzle-output]"),
+    drizzleProducts: requiredAll<HTMLButtonElement>(
+      root,
+      '[data-action="select-drizzle-product"]',
+    ),
+    drizzlePreviewImage: required<HTMLImageElement>(
+      root,
+      "[data-drizzle-preview-image]",
+    ),
+    drizzlePreviewPlaceholder: required<HTMLElement>(
+      root,
+      "[data-drizzle-preview-placeholder]",
+    ),
     registrationStatus: required<HTMLElement>(
       root,
       "[data-registration-status]",
@@ -986,6 +998,17 @@ export function mountReviewScreen(
           ...model.registration.drizzle.settings,
           scale,
         });
+      }
+      return;
+    }
+    if (action === "select-drizzle-product") {
+      const product = actionElement.dataset.drizzleProduct;
+      if (
+        product === "science" ||
+        product === "weight" ||
+        product === "support"
+      ) {
+        actions.onSelectDrizzleProduct(product);
       }
       return;
     }
@@ -2647,6 +2670,9 @@ interface RegistrationElements {
   readonly drizzleMessage: HTMLElement;
   readonly drizzleProgress: HTMLProgressElement;
   readonly drizzleOutput: HTMLElement;
+  readonly drizzleProducts: readonly HTMLButtonElement[];
+  readonly drizzlePreviewImage: HTMLImageElement;
+  readonly drizzlePreviewPlaceholder: HTMLElement;
   readonly registrationStatus: HTMLElement;
   readonly registrationRms: HTMLElement;
   readonly registrationInliers: HTMLElement;
@@ -2949,6 +2975,31 @@ function renderRegistration(
     elements.drizzleProgress.max = 1;
   }
   elements.drizzleProgress.hidden = !drizzleBusy;
+  for (const button of elements.drizzleProducts) {
+    const product = button.dataset.drizzleProduct;
+    const selected = product === drizzle.selectedProduct;
+    button.disabled = drizzle.result === null || drizzleBusy;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  const drizzlePreviewReady =
+    drizzle.previewState === "ready" &&
+    drizzle.preview?.frameId ===
+      `${drizzle.result?.drizzlePlanSha256}:${drizzle.selectedProduct}`;
+  elements.drizzlePreviewImage.hidden = !drizzlePreviewReady;
+  elements.drizzlePreviewImage.src = drizzlePreviewReady
+    ? (drizzle.preview?.url ?? "")
+    : "";
+  elements.drizzlePreviewImage.alt = drizzlePreviewReady
+    ? `${humanize(drizzle.selectedProduct)} Drizzle product preview`
+    : "";
+  elements.drizzlePreviewPlaceholder.hidden = drizzlePreviewReady;
+  elements.drizzlePreviewPlaceholder.textContent =
+    drizzle.previewState === "loading"
+      ? `Rendering the ${drizzle.selectedProduct} product…`
+      : drizzle.previewState === "error"
+        ? "The FITS product is valid, but its display preview is unavailable"
+        : "The atomic Drizzle product set will appear here";
   const registeredSetReady =
     registration.execution.state === "completed" &&
     registration.execution.result?.planSha256 === registration.plan?.planSha256;
@@ -4770,6 +4821,15 @@ function shellMarkup(): string {
                 </div>
                 <progress data-drizzle-progress aria-label="Drizzle progress" hidden></progress>
                 <code data-drizzle-output>Science + weight + support · atomic FITS set</code>
+                <div class="drizzle-console__product-tabs" role="tablist" aria-label="Drizzle product view">
+                  <button type="button" role="tab" data-action="select-drizzle-product" data-drizzle-product="science" aria-label="Drizzle science" aria-selected="true" disabled>Science</button>
+                  <button type="button" role="tab" data-action="select-drizzle-product" data-drizzle-product="weight" aria-label="Drizzle weight" aria-selected="false" disabled>Weight</button>
+                  <button type="button" role="tab" data-action="select-drizzle-product" data-drizzle-product="support" aria-label="Drizzle support" aria-selected="false" disabled>Support</button>
+                </div>
+                <div class="drizzle-console__preview" aria-live="polite">
+                  <img data-drizzle-preview-image alt="" hidden />
+                  <div data-drizzle-preview-placeholder>The atomic Drizzle product set will appear here</div>
+                </div>
                 <div class="drizzle-console__actions">
                   <button class="button button--primary" type="button" data-action="execute-drizzle" disabled>Build Drizzle set</button>
                   <button class="button button--danger" type="button" data-action="cancel-drizzle" hidden>Cancel</button>

@@ -2049,6 +2049,12 @@ safety reasoning. They do not narrate obvious syntax.
      product identity, output geometry, source count, and unsupported pixels.
      Workflow interlocks prevent concurrent registration, integration, local
      normalization, or Drizzle execution.
+200. Preview every published Drizzle companion inside the desktop laboratory.
+     Science, accumulated weight, and detector support remain distinct tabbed
+     products, each decoded by the bounded native FITS renderer with its own
+     robust display transform. Object URLs are revoked on product changes,
+     reruns, session changes, and shutdown; stale asynchronous previews cannot
+     replace the product selected for the current canonical plan.
 
 ## 11. Stable-release definition
 

@@ -35,6 +35,7 @@ import type {
 } from "./selection-bridge.ts";
 
 export type FrameRole = "bias" | "dark" | "flat" | "light";
+export type DrizzleProductView = "science" | "weight" | "support";
 
 export type WorkspaceView =
   "frames" | "calibration" | "registration" | "normalization";
@@ -347,6 +348,9 @@ export interface RegistrationViewModel {
     readonly settings: DrizzleExecutionSettings;
     readonly progress: DrizzleProgress | null;
     readonly result: DrizzleResult | null;
+    readonly previewState: "idle" | "loading" | "ready" | "error";
+    readonly preview: FramePreview | null;
+    readonly selectedProduct: DrizzleProductView;
     readonly message: string;
   };
   readonly resultReview: RegistrationResultReview;
@@ -423,6 +427,7 @@ export interface ReviewActions {
   readonly onUpdateDrizzleSettings: (
     settings: DrizzleExecutionSettings,
   ) => void;
+  readonly onSelectDrizzleProduct: (product: DrizzleProductView) => void;
   readonly onUpdateRegisteredStackSettings: (
     settings: RegisteredStackIntegrationSettings,
   ) => void;
