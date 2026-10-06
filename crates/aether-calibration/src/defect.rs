@@ -202,9 +202,48 @@ impl DefectMap {
         plane: usize,
         flags: PixelFlags,
     ) -> Result<(), DefectMapError> {
+        validate_defect_flags(flags)?;
         self.mask
             .insert(x, y, plane, flags)
             .map_err(DefectMapError::Core)
+    }
+}
+
+/// Complete accounting for combining independent master-derived maps.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DefectMapMergeEvidence {
+    input_maps: usize,
+    defective_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+    conflicting_samples: usize,
+}
+
+impl DefectMapMergeEvidence {
+    /// Number of maps merged in caller order.
+    #[must_use]
+    pub const fn input_maps(self) -> usize {
+        self.input_maps
+    }
+    /// Unique samples carrying at least one defect reason.
+    #[must_use]
+    pub const fn defective_samples(self) -> usize {
+        self.defective_samples
+    }
+    /// Unique samples carrying HOT evidence.
+    #[must_use]
+    pub const fn hot_samples(self) -> usize {
+        self.hot_samples
+    }
+    /// Unique samples carrying COLD evidence.
+    #[must_use]
+    pub const fn cold_samples(self) -> usize {
+        self.cold_samples
+    }
+    /// Samples carrying both HOT and COLD evidence after the merge.
+    #[must_use]
+    pub const fn conflicting_samples(self) -> usize {
+        self.conflicting_samples
     }
 }
 
@@ -348,6 +387,13 @@ pub enum DefectMapError {
         /// Defect map dimensions.
         map: Dimensions,
     },
+    /// A map insertion contained no defect or a non-defect mask reason.
+    InvalidDefectFlags {
+        /// Rejected stable mask bits.
+        bits: u8,
+    },
+    /// A merge requires at least one map.
+    NoDefectMaps,
     /// Allocation or coordinate failure from the shared image core.
     Core(CoreError),
 }
@@ -384,9 +430,60 @@ impl Display for DefectMapError {
                 source.height(),
                 source.planes()
             ),
+            Self::InvalidDefectFlags { bits } => write!(
+                formatter,
+                "defect map accepts only non-empty HOT/COLD bits, received {bits:#010b}"
+            ),
+            Self::NoDefectMaps => formatter.write_str("at least one defect map is required"),
             Self::Core(error) => Display::fmt(error, formatter),
         }
     }
+}
+
+/// Combines master-derived maps without discarding contradictory evidence.
+///
+/// Input order cannot change the result. A sample classified HOT by one map and
+/// COLD by another retains both reasons and is reported as a conflict for later
+/// diagnostics instead of applying an arbitrary precedence rule.
+pub fn merge_defect_maps(
+    maps: &[&DefectMap],
+) -> Result<(DefectMap, DefectMapMergeEvidence), DefectMapError> {
+    let Some(first) = maps.first() else {
+        return Err(DefectMapError::NoDefectMaps);
+    };
+    let dimensions = first.dimensions();
+    for map in maps.iter().skip(1) {
+        if map.dimensions() != dimensions {
+            return Err(DefectMapError::DimensionMismatch {
+                source: dimensions,
+                map: map.dimensions(),
+            });
+        }
+    }
+    let mut merged = DefectMap::clear(dimensions)?;
+    for map in maps {
+        for (output, input) in merged
+            .mask
+            .as_mut_slice()
+            .iter_mut()
+            .zip(map.mask.as_slice())
+        {
+            *output |= *input;
+        }
+    }
+    let mut evidence = DefectMapMergeEvidence {
+        input_maps: maps.len(),
+        ..DefectMapMergeEvidence::default()
+    };
+    for flags in merged.mask.as_slice() {
+        let hot = flags.contains(PixelFlags::HOT);
+        let cold = flags.contains(PixelFlags::COLD);
+        evidence.defective_samples += usize::from(hot || cold);
+        evidence.hot_samples += usize::from(hot);
+        evidence.cold_samples += usize::from(cold);
+        evidence.conflicting_samples += usize::from(hot && cold);
+    }
+    Ok((merged, evidence))
 }
 
 impl Error for DefectMapError {
@@ -629,6 +726,14 @@ fn validate_neighbourhood(
     Ok(())
 }
 
+fn validate_defect_flags(flags: PixelFlags) -> Result<(), DefectMapError> {
+    let allowed = (PixelFlags::HOT | PixelFlags::COLD).bits();
+    if flags.bits() == 0 || flags.bits() & !allowed != 0 {
+        return Err(DefectMapError::InvalidDefectFlags { bits: flags.bits() });
+    }
+    Ok(())
+}
+
 fn maximum_neighbours(radius: usize) -> usize {
     let side = radius * 2 + 1;
     side * side - 1
@@ -857,6 +962,59 @@ mod tests {
         let map = DefectMap::clear(Dimensions::new(4, 5, 1)?)?;
         assert!(matches!(
             correct_defects(&source, &map, correction_parameters(1)?),
+            Err(DefectMapError::DimensionMismatch { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn map_rejects_non_defect_reasons() -> TestResult {
+        let dimensions = Dimensions::new(2, 2, 1)?;
+        let mut map = DefectMap::clear(dimensions)?;
+        assert!(matches!(
+            map.insert(0, 0, 0, PixelFlags::CLEAR),
+            Err(DefectMapError::InvalidDefectFlags { bits: 0 })
+        ));
+        assert!(matches!(
+            map.insert(0, 0, 0, PixelFlags::SATURATED),
+            Err(DefectMapError::InvalidDefectFlags { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn merge_retains_union_and_conflicts_independent_of_order() -> TestResult {
+        let dimensions = Dimensions::new(3, 1, 1)?;
+        let mut dark = DefectMap::clear(dimensions)?;
+        dark.insert(0, 0, 0, PixelFlags::HOT)?;
+        dark.insert(1, 0, 0, PixelFlags::HOT)?;
+        let mut flat = DefectMap::clear(dimensions)?;
+        flat.insert(1, 0, 0, PixelFlags::COLD)?;
+        flat.insert(2, 0, 0, PixelFlags::COLD)?;
+        let (merged, evidence) = merge_defect_maps(&[&dark, &flat])?;
+        let (reversed, _) = merge_defect_maps(&[&flat, &dark])?;
+        assert_eq!(merged, reversed);
+        assert_eq!(evidence.input_maps(), 2);
+        assert_eq!(evidence.defective_samples(), 3);
+        assert_eq!(evidence.hot_samples(), 2);
+        assert_eq!(evidence.cold_samples(), 2);
+        assert_eq!(evidence.conflicting_samples(), 1);
+        let conflict = merged.mask().get(1, 0, 0)?;
+        assert!(conflict.contains(PixelFlags::HOT));
+        assert!(conflict.contains(PixelFlags::COLD));
+        Ok(())
+    }
+
+    #[test]
+    fn merge_rejects_empty_and_mismatched_sets() -> TestResult {
+        assert!(matches!(
+            merge_defect_maps(&[]),
+            Err(DefectMapError::NoDefectMaps)
+        ));
+        let first = DefectMap::clear(Dimensions::new(2, 2, 1)?)?;
+        let second = DefectMap::clear(Dimensions::new(3, 2, 1)?)?;
+        assert!(matches!(
+            merge_defect_maps(&[&first, &second]),
             Err(DefectMapError::DimensionMismatch { .. })
         ));
         Ok(())

@@ -17,8 +17,8 @@ use aether_core::{CoreError, Dimensions, PixelFlags, ScientificImage};
 
 pub use defect::{
     CorrectedDefects, DefectCorrectionEvidence, DefectCorrectionParameters,
-    DefectDetectionEvidence, DefectDetectionParameters, DefectMap, DefectMapError, correct_defects,
-    detect_local_defects,
+    DefectDetectionEvidence, DefectDetectionParameters, DefectMap, DefectMapError,
+    DefectMapMergeEvidence, correct_defects, detect_local_defects, merge_defect_maps,
 };
 pub use flat::{
     FlatNormalizationError, FlatNormalizationParameters, FlatNormalizationSupport, NormalizedFlat,

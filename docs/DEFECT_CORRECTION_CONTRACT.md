@@ -46,9 +46,14 @@ Correction reports requested, corrected, unsupported, and source-mask-blocked
 totals. These counters must partition their respective decisions without
 overflow before native FITS publication is enabled.
 
-The initial oracle deliberately does not guess camera-specific thresholds, merge
-dark and flat evidence, repair complete rows or columns, or publish a default
-profile. Runtime integration must bind explicit parameters, source fingerprints,
-camera geometry, CFA state, and map digest into output provenance. A profile may
-be called automatic only after representative ASI294MC and ToupTek 585C
-validation fixes defensible defaults.
+Independent master-derived maps combine by set union. Contradictory HOT and COLD
+evidence is retained rather than resolved by precedence, and merge evidence
+reports the conflict count. The map API rejects empty flags and every non-defect
+mask reason.
+
+The initial oracle deliberately does not guess camera-specific thresholds,
+repair complete rows or columns, or publish a default profile. Runtime integration
+must bind explicit parameters, source fingerprints, camera geometry, CFA state,
+and map digest into output provenance. A profile may be called automatic only
+after representative ASI294MC and ToupTek 585C validation fixes defensible
+defaults.

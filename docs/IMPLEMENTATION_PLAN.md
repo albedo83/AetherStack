@@ -2078,10 +2078,11 @@ safety reasoning. They do not narrate obvious syntax.
      restrict support to the same Bayer phase. Replacement reads only immutable
      clean neighbours, never repairs unrelated mask reasons, fails closed when
      support is insufficient, and retains the complete HOT/COLD map separately
-     from usable corrected pixels. Typed counters account for every detection
-     and correction decision. Next, bind dark/flat map generation and per-Light
-     correction into a fingerprinted tiled FITS transaction before exposing
-     camera-specific automatic profiles.
+     from usable corrected pixels. Independent maps merge by union without
+     hiding contradictory HOT/COLD evidence. Typed counters account for every
+     detection, merge, and correction decision. Next, bind dark/flat map
+     generation and per-Light correction into a fingerprinted tiled FITS
+     transaction before exposing camera-specific automatic profiles.
 
 ## 11. Stable-release definition
 
