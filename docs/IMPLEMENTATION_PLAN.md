@@ -2007,6 +2007,11 @@ safety reasoning. They do not narrate obvious syntax.
      sources decode sequentially, regional payloads are maximized rather than
      summed; documented process headroom covers allocator metadata, vector
      control blocks, fixed stack scratch, and open-file buffering.
+192. Execute one private Drizzle tile under cancellation and memory contracts.
+     Checkpoints bracket preflight, reservation, every ordered source, and final
+     normalization. The exact estimated peak is reserved across all allocations;
+     every failure drops unpublished state and releases the guard, while success
+     returns one complete tile with source and memory evidence.
 
 ## 11. Stable-release definition
 

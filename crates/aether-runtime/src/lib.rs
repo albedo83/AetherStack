@@ -25,8 +25,9 @@ pub use drizzle::{
     DrizzleFitsAccumulationError, DrizzleFitsFrame, DrizzleFitsStackError, DrizzleFitsTileEvidence,
     DrizzleFitsWindowEvidence, DrizzleProductDestinations, DrizzleProductKind,
     DrizzleProductProvenance, DrizzlePublicationError, DrizzlePublicationResult,
-    DrizzleTileMemoryEstimate, accumulate_fits_cfa_frames, accumulate_fits_cfa_tile,
-    estimate_drizzle_fits_tile_memory, publish_drizzle_products,
+    DrizzleTileExecutionError, DrizzleTileExecutionResult, DrizzleTileMemoryEstimate,
+    accumulate_fits_cfa_frames, accumulate_fits_cfa_tile, estimate_drizzle_fits_tile_memory,
+    publish_drizzle_products, run_drizzle_fits_tile,
 };
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,

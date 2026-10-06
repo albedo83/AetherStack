@@ -18,6 +18,8 @@ use aether_fits::{
 use aether_metadata::BayerPattern;
 use aether_registration::ProjectiveTransform;
 
+use crate::{CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError};
+
 /// Provenance identity of the normalized Drizzle science image.
 pub const DRIZZLE_SCIENCE_ALGORITHM_ID: &str = "drizzle-science-v1";
 /// Provenance identity of the Drizzle accumulated-weight map.
@@ -465,6 +467,143 @@ pub fn accumulate_fits_cfa_frames<R: Read + Seek>(
 fn checked_sum(left: u64, right: u64) -> Result<u64, DrizzleFitsStackError> {
     left.checked_add(right)
         .ok_or(DrizzleFitsStackError::CounterOverflow)
+}
+
+/// Completed private tile together with its bounded-execution evidence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrizzleTileExecutionResult {
+    result: DrizzleTileResult,
+    sources: DrizzleFitsTileEvidence,
+    memory: DrizzleTileMemoryEstimate,
+}
+
+impl DrizzleTileExecutionResult {
+    /// Finalized science, weight, support, and flag buffers for the tile.
+    #[must_use]
+    pub const fn result(&self) -> &DrizzleTileResult {
+        &self.result
+    }
+
+    /// Aggregate ordered-source accounting.
+    #[must_use]
+    pub const fn source_evidence(&self) -> DrizzleFitsTileEvidence {
+        self.sources
+    }
+
+    /// Memory estimate reserved for the complete operation.
+    #[must_use]
+    pub const fn memory_estimate(&self) -> DrizzleTileMemoryEstimate {
+        self.memory
+    }
+
+    /// Transfers ownership of the finalized tile to the caller.
+    #[must_use]
+    pub fn into_result(self) -> DrizzleTileResult {
+        self.result
+    }
+}
+
+/// Failure while executing one cancellation-aware, memory-bounded tile.
+#[derive(Debug)]
+pub enum DrizzleTileExecutionError {
+    /// Cancellation was observed at a bounded checkpoint.
+    Cancelled(Cancelled),
+    /// Tile preflight or one ordered FITS source failed.
+    Sources(DrizzleFitsStackError),
+    /// The planned peak could not be reserved.
+    Memory(MemoryBudgetError),
+    /// Tile allocation or finalization failed.
+    Accumulation(aether_drizzle::DrizzleAccumulationError),
+}
+
+impl Display for DrizzleTileExecutionError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled(error) => Display::fmt(error, formatter),
+            Self::Sources(error) => Display::fmt(error, formatter),
+            Self::Memory(error) => Display::fmt(error, formatter),
+            Self::Accumulation(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl Error for DrizzleTileExecutionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Cancelled(error) => Some(error),
+            Self::Sources(error) => Some(error),
+            Self::Memory(error) => Some(error),
+            Self::Accumulation(error) => Some(error),
+        }
+    }
+}
+
+/// Executes one private Drizzle tile under cancellation and memory contracts.
+///
+/// Cancellation is checked before preflight, after reservation, before every
+/// source, and before finalization. Any failure drops both the unpublished
+/// accumulator and its reservation. The returned tile is complete but remains
+/// private until a higher-level product transaction publishes it.
+pub fn run_drizzle_fits_tile<R: Read + Seek>(
+    tile: DrizzleTileBounds,
+    frames: &mut [DrizzleFitsFrame<R>],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+) -> Result<DrizzleTileExecutionResult, DrizzleTileExecutionError> {
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleTileExecutionError::Cancelled)?;
+    let estimate = estimate_drizzle_fits_tile_memory(tile, frames, parameters, output)
+        .map_err(DrizzleTileExecutionError::Sources)?;
+    let _reservation = memory
+        .try_reserve(estimate.peak_bytes())
+        .map_err(DrizzleTileExecutionError::Memory)?;
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleTileExecutionError::Cancelled)?;
+    let mut accumulator =
+        DrizzleTileAccumulator::new(tile).map_err(DrizzleTileExecutionError::Accumulation)?;
+    let mut sources = DrizzleFitsTileEvidence {
+        source_frames: u64::try_from(frames.len()).map_err(|_| {
+            DrizzleTileExecutionError::Sources(DrizzleFitsStackError::CounterOverflow)
+        })?,
+        ..DrizzleFitsTileEvidence::default()
+    };
+    for (index, frame) in frames.iter_mut().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(DrizzleTileExecutionError::Cancelled)?;
+        let result = accumulate_fits_cfa_tile(
+            &mut accumulator,
+            &mut frame.reader,
+            frame.transform,
+            parameters,
+            &frame.pattern,
+            frame.frame_weight,
+            output,
+        )
+        .map_err(|source| {
+            DrizzleTileExecutionError::Sources(DrizzleFitsStackError::Source { index, source })
+        })?;
+        if let Some(result) = result {
+            sources
+                .add_frame(result.frame())
+                .map_err(DrizzleTileExecutionError::Sources)?;
+        }
+    }
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleTileExecutionError::Cancelled)?;
+    let result = accumulator
+        .finish()
+        .map_err(DrizzleTileExecutionError::Accumulation)?;
+    Ok(DrizzleTileExecutionResult {
+        result,
+        sources,
+        memory: estimate,
+    })
 }
 
 /// Stable role of one companion in a Drizzle product set.
@@ -1251,6 +1390,81 @@ mod tests {
         let reservation = budget.try_reserve(estimate.peak_bytes())?;
         assert_eq!(reservation.bytes(), estimate.peak_bytes());
         drop(reservation);
+        Ok(())
+    }
+
+    #[test]
+    fn tile_execution_holds_and_releases_its_exact_memory_reservation() -> TestResult {
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(4, 3, 1)?,
+            (0..12).map(|value| f64::from(value) + 0.5).collect(),
+        )?;
+        let bytes = fits_bytes(&image)?;
+        let build_frame = || -> Result<_, ImageReadError> {
+            Ok(DrizzleFitsFrame::new(
+                PrimaryImageReader::open(Cursor::new(bytes.clone()), HeaderReadOptions::default())?,
+                ProjectiveTransform::IDENTITY,
+                BayerPattern::Rggb,
+                1.0,
+            ))
+        };
+        let tile = DrizzleTileBounds::new(0, 0, 4, 3, 3)?;
+        let parameters = DrizzleParameters::new(1, 1.0)?;
+        let output = DrizzleOutputBounds::new(4, 3, 4)?;
+        let estimate =
+            estimate_drizzle_fits_tile_memory(tile, &[build_frame()?], parameters, output)?;
+        let memory = crate::MemoryBudget::new(estimate.peak_bytes())?;
+        let mut frames = [build_frame()?];
+
+        let executed = run_drizzle_fits_tile(
+            tile,
+            &mut frames,
+            parameters,
+            output,
+            &CancellationToken::new(),
+            &memory,
+        )?;
+
+        assert_eq!(executed.memory_estimate(), estimate);
+        assert_eq!(executed.source_evidence().source_frames(), 1);
+        assert_eq!(executed.source_evidence().intersecting_frames(), 1);
+        assert_eq!(memory.used(), 0);
+        assert_eq!(memory.peak(), estimate.peak_bytes());
+        assert_eq!(executed.result().bounds(), tile);
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_tile_stops_before_memory_or_pixel_work() -> TestResult {
+        let image = ScientificImage::from_pixels(Dimensions::new(2, 2, 1)?, vec![1.0; 4])?;
+        let mut frames = [DrizzleFitsFrame::new(
+            PrimaryImageReader::open(
+                Cursor::new(fits_bytes(&image)?),
+                HeaderReadOptions::default(),
+            )?,
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        )];
+        let memory = crate::MemoryBudget::new(1)?;
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+
+        let result = run_drizzle_fits_tile(
+            DrizzleTileBounds::new(0, 0, 2, 2, 3)?,
+            &mut frames,
+            DrizzleParameters::new(1, 1.0)?,
+            DrizzleOutputBounds::new(2, 2, 4)?,
+            &cancellation,
+            &memory,
+        );
+
+        assert!(matches!(
+            result,
+            Err(DrizzleTileExecutionError::Cancelled(_))
+        ));
+        assert_eq!(memory.used(), 0);
+        assert_eq!(memory.peak(), 0);
         Ok(())
     }
 

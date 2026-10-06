@@ -139,6 +139,12 @@ therefore maximized, not summed. Fixed stack scratch, vector control blocks,
 allocator metadata, and open-file buffering remain explicitly outside this
 payload figure and must be covered by process headroom.
 
+Tile execution checks cancellation before planning, after memory reservation,
+before every source, and before finalization. The preflight peak remains reserved
+for the complete lifetime of the accumulator and final buffers. Cancellation,
+source failure, allocation failure, or finalization failure drops the private
+state and releases the reservation; only a complete tile can leave this boundary.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with
