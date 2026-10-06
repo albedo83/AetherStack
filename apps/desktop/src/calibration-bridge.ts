@@ -255,6 +255,47 @@ export interface DefectCorrectionSettings {
   readonly memoryLimitBytes: number;
 }
 
+export interface LinearDefectSettings {
+  readonly axis: "rows" | "columns";
+  readonly perpendicularRadius: number;
+  readonly stride: 1 | 2;
+  readonly minimumPerpendicularNeighbours: number;
+  readonly minimumAffectedSamples: number;
+  readonly minimumAffectedFractionPpm: number;
+  readonly hotSigma: number;
+  readonly coldSigma: number;
+  readonly minimumAbsoluteDeviation: number;
+  readonly correctionRadius: number;
+  readonly correctionMinimumNeighbours: number;
+  readonly memoryLimitBytes: number;
+}
+
+export interface LinearDefectResult {
+  readonly correctedOutputPath: string;
+  readonly mapOutputPath: string;
+  readonly parametersSha256: string;
+  readonly reservedBytes: number;
+  readonly examinedLines: number;
+  readonly supportedSamples: number;
+  readonly unavailableSamples: number;
+  readonly insufficientDetectionSupportSamples: number;
+  readonly hotLines: number;
+  readonly coldLines: number;
+  readonly mappedHotSamples: number;
+  readonly mappedColdSamples: number;
+  readonly requestedSamples: number;
+  readonly correctedSamples: number;
+  readonly insufficientCorrectionSupportSamples: number;
+  readonly blockedBySourceMaskSamples: number;
+  readonly correctedSamplesWritten: number;
+  readonly correctedSubstitutedSamples: number;
+  readonly correctedBytesWritten: number;
+  readonly mapSamplesWritten: number;
+  readonly mapSubstitutedSamples: number;
+  readonly mapBytesWritten: number;
+  readonly mapSummary: DefectMapSummary;
+}
+
 /** One immutable native-owned destination in a reviewed correction batch. */
 export interface DefectBatchPreviewItem {
   readonly sourceFrameId: string;
@@ -511,6 +552,33 @@ export function executeDefectCorrection(
 /** Requests cooperative cancellation before the atomic publication boundary. */
 export function cancelDefectCorrection(): Promise<boolean> {
   return invoke<boolean>("cancel_defect_correction");
+}
+
+/**
+ * Corrects coherent detector lines on one native-resolved calibrated Light.
+ * Output names and the calibrated source path remain owned by Rust.
+ */
+export function executeLinearDefectCorrection(
+  request: {
+    readonly sourceFrameId: string;
+    readonly groupId: string;
+    readonly outputDirectory: string;
+    readonly expectedManifestSha256: string;
+    readonly expectedLightPlanSha256: string;
+  } & LinearDefectSettings,
+  onProgress: (progress: DefectExecutionProgress) => void,
+): Promise<LinearDefectResult> {
+  const progress = new Channel<DefectExecutionProgress>();
+  progress.onmessage = onProgress;
+  return invoke<LinearDefectResult>("execute_linear_defect_correction", {
+    request,
+    onProgress: progress,
+  });
+}
+
+/** Requests cancellation before the atomic line-product publication. */
+export function cancelLinearDefectCorrection(): Promise<boolean> {
+  return invoke<boolean>("cancel_linear_defect_correction");
 }
 
 /** Chooses a create-new JSON destination for the completed native report. */

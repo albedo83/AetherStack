@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   cancelDefectCorrection,
+  cancelLinearDefectCorrection,
   cancelLightPlan,
   cancelMasterPlan,
   executeDefectCorrection,
+  executeLinearDefectCorrection,
   executeLightPlan,
   executeMasterPlan,
   exportDefectBatchReport,
@@ -309,6 +311,72 @@ describe("native calibration bridge", () => {
     });
     await expect(cancelDefectCorrection()).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith("cancel_defect_correction");
+  });
+
+  it("keeps linear-defect source paths and product names native-owned", async () => {
+    const expected = {
+      correctedOutputPath: "/session/out/light-linear-rows-corrected.fits",
+      mapOutputPath: "/session/out/light-linear-rows-map.fits",
+      parametersSha256: "d".repeat(64),
+      reservedBytes: 234_018_560,
+      examinedLines: 2822,
+      supportedSamples: 11_694_368,
+      unavailableSamples: 0,
+      insufficientDetectionSupportSamples: 0,
+      hotLines: 1,
+      coldLines: 0,
+      mappedHotSamples: 4144,
+      mappedColdSamples: 0,
+      requestedSamples: 4144,
+      correctedSamples: 4144,
+      insufficientCorrectionSupportSamples: 0,
+      blockedBySourceMaskSamples: 0,
+      correctedSamplesWritten: 11_694_368,
+      correctedSubstitutedSamples: 0,
+      correctedBytesWritten: 93_554_944,
+      mapSamplesWritten: 11_694_368,
+      mapSubstitutedSamples: 0,
+      mapBytesWritten: 93_554_944,
+      mapSummary: {
+        defectiveSamples: 4144,
+        hotSamples: 4144,
+        coldSamples: 0,
+        conflictingSamples: 0,
+      },
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+    const request = {
+      sourceFrameId: "f".repeat(64),
+      groupId: "light-uvir",
+      outputDirectory: "/session/out",
+      expectedManifestSha256: "a".repeat(64),
+      expectedLightPlanSha256: "b".repeat(64),
+      axis: "rows" as const,
+      perpendicularRadius: 2,
+      stride: 2 as const,
+      minimumPerpendicularNeighbours: 3,
+      minimumAffectedSamples: 64,
+      minimumAffectedFractionPpm: 500_000,
+      hotSigma: 5,
+      coldSigma: 5,
+      minimumAbsoluteDeviation: 1,
+      correctionRadius: 2,
+      correctionMinimumNeighbours: 3,
+      memoryLimitBytes: 1_073_741_824,
+    };
+    const onProgress = vi.fn();
+
+    await expect(
+      executeLinearDefectCorrection(request, onProgress),
+    ).resolves.toBe(expected);
+    const invocation = vi.mocked(invoke).mock.calls.at(-1);
+    expect(invocation?.[0]).toBe("execute_linear_defect_correction");
+    expect(invocation?.[1]).toMatchObject({ request });
+    expect(JSON.stringify(invocation?.[1])).not.toContain("sourcePath");
+
+    vi.mocked(invoke).mockResolvedValue(true);
+    await expect(cancelLinearDefectCorrection()).resolves.toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("cancel_linear_defect_correction");
   });
 
   it("asks native code to seal the complete defect batch before execution", async () => {

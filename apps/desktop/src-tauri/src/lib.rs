@@ -18,7 +18,8 @@ use std::time::Instant;
 use aether_cache::{ArtifactFileFingerprint, ArtifactRemovalState, ArtifactStore, CacheKey};
 use aether_calibration::{
     CalibrationParameters, DefectCorrectionParameters, DefectDetectionParameters,
-    FlatNormalizationParameters,
+    FlatNormalizationParameters, LinearDefectAxis, LinearDefectCorrectionParameters,
+    LinearDefectDetectionParameters,
 };
 use aether_core::Dimensions;
 use aether_drizzle::{DrizzleOutputBounds, DrizzleParameters};
@@ -73,13 +74,16 @@ use aether_runtime::{
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
     SIGMA_REJECTION_MAP_ALGORITHM_ID, STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
-    STRICT_DEFECT_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDefectCorrectionRequest,
-    StrictDrizzleSource, WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID,
-    estimate_local_normalization_memory, run_calibrated_light_plan, run_demosaiced_light_plan,
-    run_light_plan, run_local_normalization_with_progress, run_master_plan,
-    run_projective_registration_plan, run_registered_stack, run_registration_plan,
-    run_strict_defect_correction_with_progress, run_strict_drizzle_output_with_progress,
+    STRICT_DEFECT_MAP_ALGORITHM_ID, STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID,
+    STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDefectCorrectionRequest,
+    StrictDrizzleSource, StrictLinearDefectCorrectionRequest,
+    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_memory,
+    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
+    run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
+    run_registered_stack, run_registration_plan, run_strict_defect_correction_with_progress,
+    run_strict_drizzle_output_with_progress, run_strict_linear_defect_correction_with_progress,
     strict_defect_parameters_sha256, strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
+    strict_linear_defect_parameters_sha256,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -1916,6 +1920,72 @@ struct DefectDetectionSettings {
     hot_sigma: f64,
     cold_sigma: f64,
     minimum_absolute_deviation: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LinearDefectAxisSetting {
+    Rows,
+    Columns,
+}
+
+impl From<LinearDefectAxisSetting> for LinearDefectAxis {
+    fn from(value: LinearDefectAxisSetting) -> Self {
+        match value {
+            LinearDefectAxisSetting::Rows => Self::Rows,
+            LinearDefectAxisSetting::Columns => Self::Columns,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinearDefectCommandRequest {
+    source_frame_id: String,
+    group_id: String,
+    output_directory: PathBuf,
+    expected_manifest_sha256: String,
+    expected_light_plan_sha256: String,
+    axis: LinearDefectAxisSetting,
+    perpendicular_radius: usize,
+    stride: usize,
+    minimum_perpendicular_neighbours: usize,
+    minimum_affected_samples: usize,
+    minimum_affected_fraction_ppm: u32,
+    hot_sigma: f64,
+    cold_sigma: f64,
+    minimum_absolute_deviation: f64,
+    correction_radius: usize,
+    correction_minimum_neighbours: usize,
+    memory_limit_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinearDefectResponse {
+    corrected_output_path: String,
+    map_output_path: String,
+    parameters_sha256: String,
+    reserved_bytes: usize,
+    examined_lines: usize,
+    supported_samples: usize,
+    unavailable_samples: usize,
+    insufficient_detection_support_samples: usize,
+    hot_lines: usize,
+    cold_lines: usize,
+    mapped_hot_samples: usize,
+    mapped_cold_samples: usize,
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_correction_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+    corrected_samples_written: u64,
+    corrected_substituted_samples: u64,
+    corrected_bytes_written: u64,
+    map_samples_written: u64,
+    map_substituted_samples: u64,
+    map_bytes_written: u64,
+    map_summary: DefectMapSummaryResponse,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -6669,6 +6739,50 @@ async fn execute_defect_correction(
 }
 
 #[tauri::command]
+async fn execute_linear_defect_correction(
+    request: LinearDefectCommandRequest,
+    on_progress: tauri::ipc::Channel<DefectExecutionProgress>,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
+) -> Result<LinearDefectResponse, PreviewCommandError> {
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let artifacts = lock_calibration_artifacts(&artifact_state)?
+        .clone()
+        .ok_or_else(calibration_artifact_state_error)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_linear_defect_correction_sync(
+            &session,
+            &artifacts,
+            request,
+            &worker_cancellation,
+            |event| {
+                let _ignored = on_progress.send(event);
+            },
+        )
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "linear_defect_correction_interrupted",
+            "The linear-defect worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_linear_defect_correction(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "linear_defect_correction_missing")
+}
+
+#[tauri::command]
 fn cancel_defect_correction(
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
 ) -> Result<bool, PreviewCommandError> {
@@ -7329,6 +7443,239 @@ where
             conflicting_samples: summary.conflicting_samples(),
         },
     })
+}
+
+fn execute_linear_defect_correction_sync<F>(
+    session: &ImportedNativeSession,
+    artifacts: &PublishedCalibrationArtifacts,
+    request: LinearDefectCommandRequest,
+    cancellation: &CancellationToken,
+    mut progress: F,
+) -> Result<LinearDefectResponse, PreviewCommandError>
+where
+    F: FnMut(DefectExecutionProgress),
+{
+    let directory_metadata = fs::symlink_metadata(&request.output_directory)
+        .map_err(|_| linear_defect_configuration_error())?;
+    if !request.output_directory.is_absolute()
+        || directory_metadata.file_type().is_symlink()
+        || !directory_metadata.is_dir()
+    {
+        return Err(linear_defect_configuration_error());
+    }
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| linear_defect_input_error())?;
+    if manifest_sha256 != request.expected_manifest_sha256
+        || artifacts.manifest_sha256 != request.expected_manifest_sha256
+        || artifacts.light_plan_sha256.as_deref()
+            != Some(request.expected_light_plan_sha256.as_str())
+    {
+        return Err(PreviewCommandError::new(
+            "linear_defect_correction_stale",
+            "The calibrated Light no longer matches the reviewed native plan.",
+        ));
+    }
+    let frame = artifacts
+        .calibrated_frames
+        .get(&(request.group_id.clone(), request.source_frame_id.clone()))
+        .ok_or_else(calibration_artifact_state_error)?;
+    let group = session
+        .manifest
+        .groups()
+        .iter()
+        .find(|group| group.id() == request.group_id)
+        .ok_or_else(calibration_artifact_state_error)?;
+    let expected_stride = if group.key().bayer_pattern().is_some() {
+        2
+    } else {
+        1
+    };
+    if request.stride != expected_stride {
+        return Err(PreviewCommandError::new(
+            "linear_defect_lattice_mismatch",
+            "Linear-defect sampling does not match the Light group's CFA metadata.",
+        ));
+    }
+    let axis = LinearDefectAxis::from(request.axis);
+    let detection = LinearDefectDetectionParameters::new(
+        axis,
+        request.perpendicular_radius,
+        request.stride,
+        request.minimum_perpendicular_neighbours,
+        request.minimum_affected_samples,
+        request.minimum_affected_fraction_ppm,
+        request.hot_sigma,
+        request.cold_sigma,
+        request.minimum_absolute_deviation,
+    )
+    .map_err(|_| linear_defect_configuration_error())?;
+    let correction = LinearDefectCorrectionParameters::new(
+        axis,
+        request.correction_radius,
+        request.stride,
+        request.correction_minimum_neighbours,
+    )
+    .map_err(|_| linear_defect_configuration_error())?;
+    let parameters_sha256 = strict_linear_defect_parameters_sha256(detection, correction)
+        .map_err(|_| linear_defect_configuration_error())?;
+    let axis_name = match axis {
+        LinearDefectAxis::Rows => "rows",
+        LinearDefectAxis::Columns => "columns",
+    };
+    let corrected_output = defect_batch_output_path(
+        &request.output_directory,
+        &request.group_id,
+        frame.source_index,
+        &format!("linear-{axis_name}-corrected"),
+    );
+    let map_output = defect_batch_output_path(
+        &request.output_directory,
+        &request.group_id,
+        frame.source_index,
+        &format!("linear-{axis_name}-map"),
+    );
+    if corrected_output == frame.path
+        || map_output == frame.path
+        || corrected_output == map_output
+        || corrected_output
+            .try_exists()
+            .map_err(|_| linear_defect_configuration_error())?
+        || map_output
+            .try_exists()
+            .map_err(|_| linear_defect_configuration_error())?
+    {
+        return Err(linear_defect_configuration_error());
+    }
+    let corrected_output_path = corrected_output
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(linear_defect_configuration_error)?;
+    let map_output_path = map_output
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(linear_defect_configuration_error)?;
+    let corrected_provenance = FitsOutputProvenance::new(
+        manifest_sha256.clone(),
+        request.group_id.clone(),
+        STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID,
+        1,
+    )
+    .and_then(|value| value.with_plan_sha256(&request.expected_light_plan_sha256))
+    .and_then(|value| value.with_parameters_sha256(&parameters_sha256))
+    .map_err(|_| linear_defect_configuration_error())?;
+    let map_provenance = FitsOutputProvenance::new(
+        manifest_sha256,
+        request.group_id,
+        STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID,
+        1,
+    )
+    .and_then(|value| value.with_plan_sha256(&request.expected_light_plan_sha256))
+    .and_then(|value| value.with_parameters_sha256(&parameters_sha256))
+    .map_err(|_| linear_defect_configuration_error())?;
+    let execution = StrictLinearDefectCorrectionRequest::new(
+        fingerprint_pipeline_source(frame.path.clone())?,
+        corrected_output,
+        map_output,
+        corrected_provenance,
+        map_provenance,
+        detection,
+        correction,
+    )
+    .map_err(|_| linear_defect_configuration_error())?;
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| linear_defect_configuration_error())?;
+    let memory =
+        MemoryBudget::new(memory_limit).map_err(|_| linear_defect_configuration_error())?;
+    let result = run_strict_linear_defect_correction_with_progress(
+        &execution,
+        cancellation,
+        &memory,
+        |event| {
+            progress(DefectExecutionProgress {
+                sequence: event.sequence(),
+                stage: event.stage().as_str().to_owned(),
+                state: progress_state_name(event.state()),
+                completed_units: event.completed_units(),
+                total_units: event.total_units(),
+                code: event.code().map(str::to_owned),
+            });
+        },
+    )
+    .map_err(linear_defect_execution_error)?;
+    let detection = result.detection();
+    let correction = result.correction();
+    let summary = result.map_summary();
+    let corrected = result.corrected();
+    let map = result.map();
+    Ok(LinearDefectResponse {
+        corrected_output_path,
+        map_output_path,
+        parameters_sha256: result.parameters_sha256().to_owned(),
+        reserved_bytes: result.reserved_bytes(),
+        examined_lines: detection.examined_lines(),
+        supported_samples: detection.supported_samples(),
+        unavailable_samples: detection.unavailable_samples(),
+        insufficient_detection_support_samples: detection.insufficient_support_samples(),
+        hot_lines: detection.hot_lines(),
+        cold_lines: detection.cold_lines(),
+        mapped_hot_samples: detection.mapped_hot_samples(),
+        mapped_cold_samples: detection.mapped_cold_samples(),
+        requested_samples: correction.requested_samples(),
+        corrected_samples: correction.corrected_samples(),
+        insufficient_correction_support_samples: correction.insufficient_support_samples(),
+        blocked_by_source_mask_samples: correction.blocked_by_source_mask_samples(),
+        corrected_samples_written: corrected.samples_written(),
+        corrected_substituted_samples: corrected.substituted_samples(),
+        corrected_bytes_written: corrected.bytes_written(),
+        map_samples_written: map.samples_written(),
+        map_substituted_samples: map.substituted_samples(),
+        map_bytes_written: map.bytes_written(),
+        map_summary: DefectMapSummaryResponse {
+            defective_samples: summary.defective_samples(),
+            hot_samples: summary.hot_samples(),
+            cold_samples: summary.cold_samples(),
+            conflicting_samples: summary.conflicting_samples(),
+        },
+    })
+}
+
+const fn linear_defect_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "linear_defect_configuration_invalid",
+        "The linear-defect settings, destination, or provenance are invalid.",
+    )
+}
+
+const fn linear_defect_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "linear_defect_input_invalid",
+        "The linear-defect source could not be validated.",
+    )
+}
+
+fn linear_defect_execution_error(
+    error: aether_runtime::LinearDefectPipelineError,
+) -> PreviewCommandError {
+    match error {
+        aether_runtime::LinearDefectPipelineError::Cancelled(_) => PreviewCommandError::new(
+            "linear_defect_cancelled",
+            "Linear-defect correction was cancelled before publication.",
+        ),
+        aether_runtime::LinearDefectPipelineError::Memory(_) => PreviewCommandError::new(
+            "linear_defect_memory_exceeded",
+            "The configured memory budget cannot reserve the strict linear-defect peak.",
+        ),
+        aether_runtime::LinearDefectPipelineError::ChecksumNotVerified => PreviewCommandError::new(
+            "linear_defect_checksum_invalid",
+            "The calibrated Light does not have verified FITS checksums.",
+        ),
+        _ => PreviewCommandError::new(
+            "linear_defect_failed",
+            "Linear-defect correction failed without publishing either companion.",
+        ),
+    }
 }
 
 const fn defect_correction_configuration_error() -> PreviewCommandError {
@@ -9821,6 +10168,7 @@ pub fn run() -> Result<(), tauri::Error> {
             apply_frame_selection,
             apply_review_decision,
             cancel_defect_correction,
+            cancel_linear_defect_correction,
             cancel_drizzle,
             cancel_light_plan,
             cancel_local_normalization,
@@ -9832,6 +10180,7 @@ pub fn run() -> Result<(), tauri::Error> {
             diagnose_fits_registration,
             estimate_fits_preview_transform,
             execute_defect_correction,
+            execute_linear_defect_correction,
             execute_drizzle,
             execute_light_plan,
             execute_local_normalization,
