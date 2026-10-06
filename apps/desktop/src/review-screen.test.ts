@@ -63,6 +63,9 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelMasterPlan: vi.fn(),
     onExecuteLightPlan: vi.fn(),
     onCancelLightPlan: vi.fn(),
+    onUpdateDefectCorrectionSettings: vi.fn(),
+    onExecuteDefectCorrection: vi.fn(),
+    onCancelDefectCorrection: vi.fn(),
     onImportSession: vi.fn(),
     onExportDiagnostics: vi.fn(),
     onInspectDiagnosticsReport: vi.fn(),
@@ -1009,6 +1012,125 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("light-uvir-2s-g120-o30");
     expect(root.textContent).toContain("dark-2s-g120-o30");
     expect(root.textContent).toContain("1 Light group ready");
+  });
+
+  it("presents explicit detector controls only after native artifacts exist", () => {
+    const sourceFrameId = demoReviewModel.frames[0]?.id ?? "f".repeat(64);
+    const ready = {
+      ...demoReviewModel,
+      activeWorkspace: "calibration" as const,
+      reviewSessionReady: true,
+      selectedFrameId: sourceFrameId,
+      calibration: {
+        ...demoReviewModel.calibration,
+        execution: {
+          ...demoReviewModel.calibration.execution,
+          result: {
+            manifestSha256: "a".repeat(64),
+            planSha256: "b".repeat(64),
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 256_000_000,
+            products: [
+              {
+                groupId: "dark-2s-g120-o30",
+                kind: "dark" as const,
+                outputPath: "/masters/dark.fits",
+                totalSamples: 8,
+                usableSamples: 8,
+                maskedSamples: 0,
+                nonFiniteSamples: 0,
+                minimum: 1,
+                maximum: 8,
+                mean: 4,
+                populationStandardDeviation: 1,
+                samplesWritten: 8,
+                substitutedSamples: 0,
+                bytesWritten: 5_760,
+                normalization: null,
+              },
+              {
+                groupId: "flat-uvir-2s-g120-o30",
+                kind: "flat" as const,
+                outputPath: "/masters/flat.fits",
+                totalSamples: 8,
+                usableSamples: 8,
+                maskedSamples: 0,
+                nonFiniteSamples: 0,
+                minimum: 0.9,
+                maximum: 1.1,
+                mean: 1,
+                populationStandardDeviation: 0.01,
+                samplesWritten: 8,
+                substitutedSamples: 0,
+                bytesWritten: 5_760,
+                normalization: 12_345,
+              },
+            ],
+          },
+        },
+        lightExecution: {
+          ...demoReviewModel.calibration.lightExecution,
+          result: {
+            manifestSha256: "a".repeat(64),
+            masterPlanSha256: "b".repeat(64),
+            lightPlanSha256: "c".repeat(64),
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 256_000_000,
+            outputMode: "calibrated_frames" as const,
+            products: [],
+            calibratedFrames: [
+              {
+                groupId: "light-uvir-2s-g120-o30",
+                sourceIndex: 0,
+                sourceFrameId,
+                sourceLabel: "light_0001.fits",
+                sourceSha256: "d".repeat(64),
+                outputPath: "/lights/light-0001.fits",
+                rgbOutputPath: null,
+                totalSamples: 8,
+                usableSamples: 8,
+                maskedSamples: 0,
+                nonFiniteSamples: 0,
+                minimum: 1,
+                maximum: 8,
+                mean: 4,
+                populationStandardDeviation: 1,
+                samplesWritten: 8,
+                substitutedSamples: 0,
+                bytesWritten: 5_760,
+                tilesProcessed: 1,
+                tilesReused: 0,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const { root, actions } = fixture(ready);
+
+    expect(
+      getByRole<HTMLButtonElement>(root, "button", {
+        name: "Correct selected Light",
+      }).disabled,
+    ).toBe(false);
+    expect(root.textContent).toContain("Advanced · experimental");
+    fireEvent.click(getByRole(root, "button", { name: "Mono · 1 px" }));
+    expect(actions.onUpdateDefectCorrectionSettings).toHaveBeenCalledWith({
+      ...ready.calibration.defectCorrection.settings,
+      darkDetection: {
+        ...ready.calibration.defectCorrection.settings.darkDetection,
+        stride: 1,
+      },
+      flatDetection: {
+        ...ready.calibration.defectCorrection.settings.flatDetection,
+        stride: 1,
+      },
+      correctionStride: 1,
+    });
+    fireEvent.click(
+      getByRole(root, "button", { name: "Correct selected Light" }),
+    );
+    expect(actions.onExecuteDefectCorrection).toHaveBeenCalledOnce();
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {

@@ -2576,6 +2576,207 @@ button:active:not(:disabled) {
   box-shadow: inset 0 2px 5px #000;
 }
 
+.defect-console {
+  position: relative;
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  overflow: hidden;
+  border: 1px solid rgb(116 138 151 / 28%);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 88% 0%, rgb(84 211 190 / 10%), transparent 34%),
+    linear-gradient(145deg, rgb(30 38 44 / 96%), rgb(14 19 23 / 98%));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 8%),
+    inset 0 -1px 0 rgb(0 0 0 / 65%),
+    0 16px 36px rgb(0 0 0 / 24%);
+}
+
+.defect-console::before {
+  position: absolute;
+  inset: 0.35rem;
+  pointer-events: none;
+  content: "";
+  border: 1px solid rgb(255 255 255 / 3%);
+  border-radius: 14px;
+}
+
+.defect-console__heading,
+.defect-console__actions,
+.defect-console__lattice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.defect-console__heading h4,
+.defect-console__heading p,
+.defect-console__intro,
+.defect-console__status p {
+  margin: 0;
+}
+
+.experimental-badge {
+  padding: 0.35rem 0.55rem;
+  border: 1px solid rgb(227 184 87 / 35%);
+  border-radius: 999px;
+  color: #f4d384;
+  background: rgb(83 62 19 / 45%);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.defect-console__intro {
+  position: relative;
+  max-width: 78ch;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.defect-console__lattice {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 0.3rem;
+  border: 1px solid rgb(111 131 143 / 22%);
+  border-radius: 13px;
+  background: rgb(4 8 11 / 45%);
+  box-shadow: inset 0 2px 7px rgb(0 0 0 / 45%);
+}
+
+.defect-console__lattice > span {
+  padding: 0 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.defect-console__lattice button {
+  min-height: 2.15rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.defect-console__lattice button[aria-pressed="true"] {
+  border-color: rgb(88 216 193 / 42%);
+  color: #d9fff7;
+  background: linear-gradient(
+    180deg,
+    rgb(55 145 130 / 45%),
+    rgb(19 77 70 / 56%)
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 12%),
+    0 0 18px rgb(67 211 187 / 10%);
+}
+
+.defect-console__advanced {
+  position: relative;
+  border-top: 1px solid rgb(255 255 255 / 7%);
+  border-bottom: 1px solid rgb(0 0 0 / 55%);
+}
+
+.defect-console__advanced summary {
+  padding: 0.8rem 0.2rem;
+  color: #cfe0e6;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.defect-console__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+  gap: 0.65rem;
+  padding: 0 0 0.85rem;
+}
+
+.defect-console__grid label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.defect-console__grid input {
+  width: 100%;
+  min-height: 2.35rem;
+  box-sizing: border-box;
+  border: 1px solid rgb(105 130 144 / 35%);
+  border-radius: 10px;
+  color: var(--text-strong);
+  background: linear-gradient(180deg, rgb(7 11 14 / 95%), rgb(20 28 33 / 92%));
+  box-shadow:
+    inset 0 2px 7px rgb(0 0 0 / 55%),
+    0 1px 0 rgb(255 255 255 / 4%);
+  font: 600 0.82rem/1 var(--font-mono);
+  text-align: center;
+}
+
+.defect-console__grid input:focus-visible,
+.defect-console__lattice button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.defect-console__status {
+  position: relative;
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.75rem;
+  border: 1px solid rgb(93 115 128 / 22%);
+  border-radius: 12px;
+  background: rgb(3 7 9 / 42%);
+}
+
+.defect-console__status output {
+  color: #b6d8d1;
+  font-size: 0.78rem;
+}
+
+.defect-console__status code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.defect-console[data-state="completed"] {
+  border-color: rgb(74 210 170 / 42%);
+}
+
+.defect-console[data-state="error"] {
+  border-color: rgb(235 103 103 / 45%);
+}
+
+@media (max-width: 720px) {
+  .defect-console {
+    padding: 0.85rem;
+    border-radius: 15px;
+  }
+
+  .defect-console__heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .defect-console__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .master-execution progress[hidden],
 .light-execution progress[hidden] {
   display: none;

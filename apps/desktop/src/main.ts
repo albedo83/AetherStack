@@ -1,11 +1,14 @@
 import "./styles.css";
 
 import {
+  cancelDefectCorrection,
   cancelLightPlan,
   cancelMasterPlan,
+  executeDefectCorrection,
   executeLightPlan,
   executeMasterPlan,
   previewMasterPlan,
+  selectDefectOutputDirectory,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type ExecutedCalibratedLightFrame,
@@ -169,6 +172,7 @@ let blinkTimer: number | null = null;
 let masterPlanTicket = 0;
 let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
+let defectCorrectionTicket = 0;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
@@ -463,6 +467,28 @@ const screen = mountReviewScreen(root, model, {
   onCancelLightPlan() {
     void cancelLights();
   },
+  onUpdateDefectCorrectionSettings(settings) {
+    if (isActiveExecutionState(model.calibration.defectCorrection.state))
+      return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          settings,
+          result: null,
+          message: "Settings changed · run correction to publish new evidence",
+        },
+      },
+    });
+  },
+  onExecuteDefectCorrection() {
+    void executeSelectedDefectCorrection();
+  },
+  onCancelDefectCorrection() {
+    void cancelSelectedDefectCorrection();
+  },
   onImportSession() {
     void importSession();
   },
@@ -577,6 +603,7 @@ async function importSession(): Promise<void> {
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
@@ -960,6 +987,14 @@ function installImportedSession(session: ImportedSession): void {
         progress: null,
         result: null,
         message: "Build the reviewed masters before integrating Lights",
+      },
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        state: "idle",
+        outputDirectory: null,
+        sourceFrameId: null,
+        result: null,
+        message: "Export calibrated frames to unlock detector correction",
       },
     },
   });
@@ -3517,6 +3552,7 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
     model.calibration.execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
   ) {
@@ -3559,6 +3595,14 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
         result: null,
         message: "Plan changed · rebuild masters before integrating Lights",
       },
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        state: "idle",
+        outputDirectory: null,
+        sourceFrameId: null,
+        result: null,
+        message: "Plan changed · publish fresh calibrated frames first",
+      },
     },
   });
   if (importedSession) void refreshMasterPlan();
@@ -3574,6 +3618,7 @@ async function executeMasters(): Promise<void> {
     execution.state === "cancelling" ||
     model.calibration.lightExecution.state === "running" ||
     model.calibration.lightExecution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
   ) {
@@ -3592,6 +3637,7 @@ async function executeMasters(): Promise<void> {
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
   ) {
@@ -3608,6 +3654,14 @@ async function executeMasters(): Promise<void> {
         progress: null,
         result: null,
         message: "Preparing transactional master build…",
+      },
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        state: "idle",
+        outputDirectory: null,
+        sourceFrameId: null,
+        result: null,
+        message: "Master rebuild in progress · correction reset",
       },
     },
   });
@@ -3723,6 +3777,7 @@ async function executeLights(): Promise<void> {
     execution.state === "cancelling" ||
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
+    isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
   ) {
@@ -3738,6 +3793,7 @@ async function executeLights(): Promise<void> {
     importedSession !== selectedSession ||
     model.calibration.plan?.planSha256 !== selectedMasterPlanSha256 ||
     model.calibration.plan?.lightPlan?.planSha256 !== selectedLightPlanSha256 ||
+    isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
   ) {
@@ -3806,6 +3862,14 @@ async function executeLights(): Promise<void> {
           outputMode === "calibrated_frames"
             ? "Preparing lossless calibrated-frame export…"
             : "Preparing calibrated integration…",
+      },
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        state: "idle",
+        outputDirectory: null,
+        sourceFrameId: null,
+        result: null,
+        message: "Fresh Light calibration in progress · correction reset",
       },
     },
   });
@@ -3899,6 +3963,175 @@ async function cancelLights(): Promise<void> {
         ...model.calibration,
         lightExecution: {
           ...model.calibration.lightExecution,
+          state: "error",
+          message: "Cancellation request failed · native task state is unknown",
+        },
+      },
+    });
+  }
+}
+
+function selectedDefectInputs(): {
+  readonly frame: ExecutedCalibratedLightFrame;
+  readonly darkMasterPath: string;
+  readonly flatMasterPath: string;
+  readonly manifestSha256: string;
+  readonly lightPlanSha256: string;
+} | null {
+  const masterResult = model.calibration.execution.result;
+  const lightResult = model.calibration.lightExecution.result;
+  const lightPlan = model.calibration.plan?.lightPlan;
+  if (!masterResult || !lightResult || !lightPlan) return null;
+  const frame =
+    lightResult.calibratedFrames.find(
+      (candidate) => candidate.sourceFrameId === model.selectedFrameId,
+    ) ?? lightResult.calibratedFrames[0];
+  if (!frame) return null;
+  const association = lightPlan.products.find(
+    (candidate) => candidate.groupId === frame.groupId,
+  );
+  const darkGroupId = association?.dark.selectedGroupId;
+  const flatGroupId = association?.flat.selectedGroupId;
+  if (!darkGroupId || !flatGroupId) return null;
+  const darkMaster = masterResult.products.find(
+    (product) => product.kind === "dark" && product.groupId === darkGroupId,
+  );
+  const flatMaster = masterResult.products.find(
+    (product) => product.kind === "flat" && product.groupId === flatGroupId,
+  );
+  if (!darkMaster || !flatMaster) return null;
+  return {
+    frame,
+    darkMasterPath: darkMaster.outputPath,
+    flatMasterPath: flatMaster.outputPath,
+    manifestSha256: lightResult.manifestSha256,
+    lightPlanSha256: lightResult.lightPlanSha256,
+  };
+}
+
+function defectOutputPath(
+  directory: string,
+  frame: ExecutedCalibratedLightFrame,
+  suffix: string,
+): string {
+  const separator =
+    directory.includes("\\") && !directory.includes("/") ? "\\" : "/";
+  const root = directory.replace(/[\\/]$/, "");
+  const group = frame.groupId.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const sequence = String(frame.sourceIndex + 1).padStart(4, "0");
+  return `${root}${separator}${group}-${sequence}-${suffix}.fits`;
+}
+
+async function executeSelectedDefectCorrection(): Promise<void> {
+  const inputs = selectedDefectInputs();
+  const execution = model.calibration.defectCorrection;
+  if (
+    !inputs ||
+    isActiveExecutionState(execution.state) ||
+    isActiveExecutionState(model.calibration.execution.state) ||
+    isActiveExecutionState(model.calibration.lightExecution.state) ||
+    isRegistrationWorkActive() ||
+    isLocalNormalizationActive()
+  ) {
+    return;
+  }
+  const outputDirectory = await selectDefectOutputDirectory();
+  if (!outputDirectory || selectedDefectInputs()?.frame !== inputs.frame)
+    return;
+  const ticket = ++defectCorrectionTicket;
+  const correctedOutputPath = defectOutputPath(
+    outputDirectory,
+    inputs.frame,
+    "corrected",
+  );
+  const mapOutputPath = defectOutputPath(
+    outputDirectory,
+    inputs.frame,
+    "defects",
+  );
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      defectCorrection: {
+        ...execution,
+        state: "running",
+        outputDirectory,
+        sourceFrameId: inputs.frame.sourceFrameId,
+        result: null,
+        message: "Verifying masters and deriving exact HOT/COLD evidence…",
+      },
+    },
+  });
+  try {
+    const result = await executeDefectCorrection({
+      calibratedLightPath: inputs.frame.outputPath,
+      darkMasterPath: inputs.darkMasterPath,
+      flatMasterPath: inputs.flatMasterPath,
+      correctedOutputPath,
+      mapOutputPath,
+      groupId: inputs.frame.groupId,
+      expectedManifestSha256: inputs.manifestSha256,
+      expectedLightPlanSha256: inputs.lightPlanSha256,
+      ...execution.settings,
+    });
+    if (ticket !== defectCorrectionTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          state: "completed",
+          outputDirectory,
+          sourceFrameId: inputs.frame.sourceFrameId,
+          result,
+          message: `${result.correctedSamples}/${result.requestedSamples} detector samples corrected · peak ${formatMemory(result.reservedBytes)}`,
+        },
+      },
+    });
+  } catch (error) {
+    if (ticket !== defectCorrectionTicket) return;
+    const cancelled = nativeErrorCode(error) === "defect_correction_cancelled";
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          state: cancelled ? "idle" : "error",
+          result: null,
+          message: cancelled
+            ? "Correction cancelled · neither companion product was published"
+            : "Correction failed safely · neither companion product was published",
+        },
+      },
+    });
+  }
+}
+
+async function cancelSelectedDefectCorrection(): Promise<void> {
+  if (model.calibration.defectCorrection.state !== "running") return;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      defectCorrection: {
+        ...model.calibration.defectCorrection,
+        state: "cancelling",
+        message: "Cancellation requested · publication remains closed…",
+      },
+    },
+  });
+  try {
+    await cancelDefectCorrection();
+  } catch {
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
           state: "error",
           message: "Cancellation request failed · native task state is unknown",
         },

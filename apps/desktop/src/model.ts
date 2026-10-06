@@ -1,4 +1,6 @@
 import type {
+  DefectCorrectionResult,
+  DefectCorrectionSettings,
   LightExecutionProgress,
   LightExecutionResult,
   LightExecutionSettings,
@@ -371,6 +373,7 @@ export interface CalibrationViewModel {
   readonly execution: CalibrationExecutionViewModel;
   readonly lightSettings: LightExecutionSettings;
   readonly lightExecution: LightCalibrationExecutionViewModel;
+  readonly defectCorrection: DefectCorrectionViewModel;
 }
 
 export interface CalibrationExecutionViewModel {
@@ -387,6 +390,15 @@ export interface LightCalibrationExecutionViewModel {
   readonly outputDirectory: string | null;
   readonly progress: LightExecutionProgress | null;
   readonly result: LightExecutionResult | null;
+  readonly message: string;
+}
+
+export interface DefectCorrectionViewModel {
+  readonly state: "idle" | "running" | "cancelling" | "completed" | "error";
+  readonly outputDirectory: string | null;
+  readonly sourceFrameId: string | null;
+  readonly settings: DefectCorrectionSettings;
+  readonly result: DefectCorrectionResult | null;
   readonly message: string;
 }
 
@@ -463,6 +475,11 @@ export interface ReviewActions {
   readonly onCancelMasterPlan: () => void;
   readonly onExecuteLightPlan: () => void;
   readonly onCancelLightPlan: () => void;
+  readonly onUpdateDefectCorrectionSettings: (
+    settings: DefectCorrectionSettings,
+  ) => void;
+  readonly onExecuteDefectCorrection: () => void;
+  readonly onCancelDefectCorrection: () => void;
   readonly onImportSession: () => void;
   readonly onExportDiagnostics: () => void;
   readonly onInspectDiagnosticsReport: () => void;

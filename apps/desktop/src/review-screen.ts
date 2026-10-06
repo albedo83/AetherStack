@@ -1,4 +1,5 @@
 import type {
+  DefectCorrectionSettings,
   LightCalibrationProduct,
   LightMasterAssociation,
   MasterPlanSettings,
@@ -663,6 +664,72 @@ export function mountReviewScreen(
       root,
       "[data-light-execution-heading]",
     ),
+    defectCorrection: required<HTMLElement>(root, "[data-defect-correction]"),
+    defectCorrectionMessage: required<HTMLElement>(
+      root,
+      "[data-defect-correction-message]",
+    ),
+    defectCorrectionOutput: required<HTMLElement>(
+      root,
+      "[data-defect-correction-output]",
+    ),
+    defectCorrectionEvidence: required<HTMLElement>(
+      root,
+      "[data-defect-correction-evidence]",
+    ),
+    executeDefectCorrection: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-defect-correction"]',
+    ),
+    cancelDefectCorrection: required<HTMLButtonElement>(
+      root,
+      '[data-action="cancel-defect-correction"]',
+    ),
+    defectStrideButtons: Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-action="select-defect-stride"]',
+      ),
+    ),
+    defectDetectionRadius: required<HTMLInputElement>(
+      root,
+      "[data-defect-detection-radius]",
+    ),
+    defectDetectionMinimumNeighbours: required<HTMLInputElement>(
+      root,
+      "[data-defect-detection-minimum-neighbours]",
+    ),
+    defectDarkHotSigma: required<HTMLInputElement>(
+      root,
+      "[data-defect-dark-hot-sigma]",
+    ),
+    defectDarkColdSigma: required<HTMLInputElement>(
+      root,
+      "[data-defect-dark-cold-sigma]",
+    ),
+    defectDarkFloor: required<HTMLInputElement>(
+      root,
+      "[data-defect-dark-floor]",
+    ),
+    defectFlatHotSigma: required<HTMLInputElement>(
+      root,
+      "[data-defect-flat-hot-sigma]",
+    ),
+    defectFlatColdSigma: required<HTMLInputElement>(
+      root,
+      "[data-defect-flat-cold-sigma]",
+    ),
+    defectFlatFloor: required<HTMLInputElement>(
+      root,
+      "[data-defect-flat-floor]",
+    ),
+    defectCorrectionRadius: required<HTMLInputElement>(
+      root,
+      "[data-defect-correction-radius]",
+    ),
+    defectCorrectionMinimumNeighbours: required<HTMLInputElement>(
+      root,
+      "[data-defect-correction-minimum-neighbours]",
+    ),
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
     sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
     sessionStatusLabel: required<HTMLElement>(
@@ -1099,6 +1166,27 @@ export function mountReviewScreen(
       actions.onCancelLightPlan();
       return;
     }
+    if (action === "execute-defect-correction") {
+      actions.onExecuteDefectCorrection();
+      return;
+    }
+    if (action === "cancel-defect-correction") {
+      actions.onCancelDefectCorrection();
+      return;
+    }
+    if (action === "select-defect-stride") {
+      const stride = Number(actionElement.dataset.defectStride);
+      if (stride === 1 || stride === 2) {
+        const settings = model.calibration.defectCorrection.settings;
+        actions.onUpdateDefectCorrectionSettings({
+          ...settings,
+          darkDetection: { ...settings.darkDetection, stride },
+          flatDetection: { ...settings.flatDetection, stride },
+          correctionStride: stride,
+        });
+      }
+      return;
+    }
 
     if (action === "select-role") {
       const role = actionElement.dataset.role;
@@ -1382,6 +1470,22 @@ export function mountReviewScreen(
       if (mode === "calibrated_frames" || mode === "integrated") {
         actions.onUpdateLightOutputMode(mode);
       }
+      return;
+    }
+    if (
+      target === elements.defectDetectionRadius ||
+      target === elements.defectDetectionMinimumNeighbours ||
+      target === elements.defectDarkHotSigma ||
+      target === elements.defectDarkColdSigma ||
+      target === elements.defectDarkFloor ||
+      target === elements.defectFlatHotSigma ||
+      target === elements.defectFlatColdSigma ||
+      target === elements.defectFlatFloor ||
+      target === elements.defectCorrectionRadius ||
+      target === elements.defectCorrectionMinimumNeighbours
+    ) {
+      const settings = defectCorrectionSettings(elements, model);
+      if (settings) actions.onUpdateDefectCorrectionSettings(settings);
       return;
     }
     if (
@@ -2688,6 +2792,23 @@ interface CalibrationElements {
   readonly lightExecutionProgress: HTMLProgressElement;
   readonly lightExecutionOutput: HTMLElement;
   readonly lightExecutionHeading: HTMLElement;
+  readonly defectCorrection: HTMLElement;
+  readonly defectCorrectionMessage: HTMLElement;
+  readonly defectCorrectionOutput: HTMLElement;
+  readonly defectCorrectionEvidence: HTMLElement;
+  readonly executeDefectCorrection: HTMLButtonElement;
+  readonly cancelDefectCorrection: HTMLButtonElement;
+  readonly defectStrideButtons: readonly HTMLButtonElement[];
+  readonly defectDetectionRadius: HTMLInputElement;
+  readonly defectDetectionMinimumNeighbours: HTMLInputElement;
+  readonly defectDarkHotSigma: HTMLInputElement;
+  readonly defectDarkColdSigma: HTMLInputElement;
+  readonly defectDarkFloor: HTMLInputElement;
+  readonly defectFlatHotSigma: HTMLInputElement;
+  readonly defectFlatColdSigma: HTMLInputElement;
+  readonly defectFlatFloor: HTMLInputElement;
+  readonly defectCorrectionRadius: HTMLInputElement;
+  readonly defectCorrectionMinimumNeighbours: HTMLInputElement;
 }
 
 interface RegistrationElements {
@@ -4072,6 +4193,69 @@ function calibrationSettings(
   };
 }
 
+function defectCorrectionSettings(
+  elements: CalibrationElements,
+  model: ReviewViewModel,
+): DefectCorrectionSettings | null {
+  const values = {
+    detectionRadius: elements.defectDetectionRadius.valueAsNumber,
+    detectionMinimumNeighbours:
+      elements.defectDetectionMinimumNeighbours.valueAsNumber,
+    darkHotSigma: elements.defectDarkHotSigma.valueAsNumber,
+    darkColdSigma: elements.defectDarkColdSigma.valueAsNumber,
+    darkFloor: elements.defectDarkFloor.valueAsNumber,
+    flatHotSigma: elements.defectFlatHotSigma.valueAsNumber,
+    flatColdSigma: elements.defectFlatColdSigma.valueAsNumber,
+    flatFloor: elements.defectFlatFloor.valueAsNumber,
+    correctionRadius: elements.defectCorrectionRadius.valueAsNumber,
+    correctionMinimumNeighbours:
+      elements.defectCorrectionMinimumNeighbours.valueAsNumber,
+  };
+  if (
+    !Object.values(values).every(Number.isFinite) ||
+    !Number.isSafeInteger(values.detectionRadius) ||
+    values.detectionRadius < 1 ||
+    values.detectionRadius > 8 ||
+    !Number.isSafeInteger(values.detectionMinimumNeighbours) ||
+    values.detectionMinimumNeighbours < 1 ||
+    values.darkHotSigma <= 0 ||
+    values.darkColdSigma <= 0 ||
+    values.darkFloor < 0 ||
+    values.flatHotSigma <= 0 ||
+    values.flatColdSigma <= 0 ||
+    values.flatFloor < 0 ||
+    !Number.isSafeInteger(values.correctionRadius) ||
+    values.correctionRadius < 1 ||
+    values.correctionRadius > 8 ||
+    !Number.isSafeInteger(values.correctionMinimumNeighbours) ||
+    values.correctionMinimumNeighbours < 1
+  ) {
+    return null;
+  }
+  const current = model.calibration.defectCorrection.settings;
+  return {
+    ...current,
+    darkDetection: {
+      radius: values.detectionRadius,
+      stride: current.darkDetection.stride,
+      minimumNeighbours: values.detectionMinimumNeighbours,
+      hotSigma: values.darkHotSigma,
+      coldSigma: values.darkColdSigma,
+      minimumAbsoluteDeviation: values.darkFloor,
+    },
+    flatDetection: {
+      radius: values.detectionRadius,
+      stride: current.flatDetection.stride,
+      minimumNeighbours: values.detectionMinimumNeighbours,
+      hotSigma: values.flatHotSigma,
+      coldSigma: values.flatColdSigma,
+      minimumAbsoluteDeviation: values.flatFloor,
+    },
+    correctionRadius: values.correctionRadius,
+    correctionMinimumNeighbours: values.correctionMinimumNeighbours,
+  };
+}
+
 function renderCalibration(
   elements: CalibrationElements,
   model: ReviewViewModel,
@@ -4101,8 +4285,12 @@ function renderCalibration(
   const normalizationBusy =
     model.localNormalization.state === "running" ||
     model.localNormalization.state === "cancelling";
-  const executionBusy =
+  const otherExecutionBusy =
     masterBusy || lightBusy || registrationBusy || normalizationBusy;
+  const defectBusy =
+    calibration.defectCorrection.state === "running" ||
+    calibration.defectCorrection.state === "cancelling";
+  const executionBusy = otherExecutionBusy || defectBusy;
   elements.refreshMasterPlan.disabled =
     calibration.state === "loading" ||
     !model.reviewSessionReady ||
@@ -4138,6 +4326,7 @@ function renderCalibration(
   elements.cancelLightPlan.disabled = lightExecution.state === "cancelling";
   renderMasterExecution(elements, model);
   renderLightExecution(elements, model);
+  renderDefectCorrection(elements, model, otherExecutionBusy);
   const plan = calibration.plan;
   elements.calibrationDigest.textContent = plan
     ? `PLAN ${plan.planSha256.slice(0, 12)}`
@@ -4166,6 +4355,76 @@ function renderCalibration(
   }
   elements.calibrationProducts.replaceChildren(...nodes);
   renderLightAssociations(elements, plan);
+}
+
+function renderDefectCorrection(
+  elements: CalibrationElements,
+  model: ReviewViewModel,
+  otherExecutionBusy: boolean,
+): void {
+  const correction = model.calibration.defectCorrection;
+  const settings = correction.settings;
+  const busy =
+    correction.state === "running" || correction.state === "cancelling";
+  const hasInputs =
+    (model.calibration.lightExecution.result?.calibratedFrames.length ?? 0) >
+      0 && (model.calibration.execution.result?.products.length ?? 0) > 0;
+  elements.defectCorrection.dataset.state = correction.state;
+  elements.defectCorrectionMessage.textContent = correction.message;
+  elements.defectCorrectionOutput.textContent = correction.result
+    ? correction.result.correctedOutputPath
+    : correction.outputDirectory
+      ? correction.outputDirectory
+      : "Destination selected at run time";
+  elements.defectCorrectionOutput.title =
+    correction.result?.correctedOutputPath ?? correction.outputDirectory ?? "";
+  elements.defectCorrectionEvidence.textContent = correction.result
+    ? `${correction.result.correctedSamples} corrected · ${correction.result.insufficientSupportSamples} insufficient support · seal ${correction.result.parametersSha256.slice(0, 12)}`
+    : "No correction evidence published";
+  elements.executeDefectCorrection.disabled =
+    !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
+  elements.executeDefectCorrection.hidden = busy;
+  elements.cancelDefectCorrection.hidden = !busy;
+  elements.cancelDefectCorrection.disabled = correction.state === "cancelling";
+
+  elements.defectDetectionRadius.value = String(settings.darkDetection.radius);
+  elements.defectDetectionMinimumNeighbours.value = String(
+    settings.darkDetection.minimumNeighbours,
+  );
+  elements.defectDarkHotSigma.value = String(settings.darkDetection.hotSigma);
+  elements.defectDarkColdSigma.value = String(settings.darkDetection.coldSigma);
+  elements.defectDarkFloor.value = String(
+    settings.darkDetection.minimumAbsoluteDeviation,
+  );
+  elements.defectFlatHotSigma.value = String(settings.flatDetection.hotSigma);
+  elements.defectFlatColdSigma.value = String(settings.flatDetection.coldSigma);
+  elements.defectFlatFloor.value = String(
+    settings.flatDetection.minimumAbsoluteDeviation,
+  );
+  elements.defectCorrectionRadius.value = String(settings.correctionRadius);
+  elements.defectCorrectionMinimumNeighbours.value = String(
+    settings.correctionMinimumNeighbours,
+  );
+  for (const button of elements.defectStrideButtons) {
+    const selected =
+      Number(button.dataset.defectStride) === settings.correctionStride;
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = busy || otherExecutionBusy;
+  }
+  for (const input of [
+    elements.defectDetectionRadius,
+    elements.defectDetectionMinimumNeighbours,
+    elements.defectDarkHotSigma,
+    elements.defectDarkColdSigma,
+    elements.defectDarkFloor,
+    elements.defectFlatHotSigma,
+    elements.defectFlatColdSigma,
+    elements.defectFlatFloor,
+    elements.defectCorrectionRadius,
+    elements.defectCorrectionMinimumNeighbours,
+  ]) {
+    input.disabled = busy || otherExecutionBusy;
+  }
 }
 
 function renderLightAssociations(
@@ -5315,6 +5574,45 @@ function shellMarkup(): string {
                   <p data-light-execution-message></p>
                   <progress data-light-execution-progress aria-label="Light calibration progress" hidden></progress>
                   <code data-light-execution-output></code>
+                </section>
+                <section class="defect-console" data-defect-correction data-state="idle" aria-labelledby="defect-correction-heading">
+                  <header class="defect-console__heading">
+                    <div>
+                      <p class="eyebrow">Detector laboratory</p>
+                      <h4 id="defect-correction-heading">HOT / COLD correction</h4>
+                    </div>
+                    <span class="experimental-badge">Advanced · experimental</span>
+                  </header>
+                  <p class="defect-console__intro">Derive immutable defect evidence from the exact Dark and normalized Flat selected by the Light plan. The corrected Light and reason map publish together or not at all.</p>
+                  <div class="defect-console__lattice" role="group" aria-label="Detector sampling lattice">
+                    <span>Sampling lattice</span>
+                    <button type="button" data-action="select-defect-stride" data-defect-stride="2" aria-pressed="true">CFA phase · 2 px</button>
+                    <button type="button" data-action="select-defect-stride" data-defect-stride="1" aria-pressed="false">Mono · 1 px</button>
+                  </div>
+                  <details class="defect-console__advanced">
+                    <summary>Detection and replacement controls</summary>
+                    <div class="defect-console__grid">
+                      <label><span>Detection radius</span><input data-defect-detection-radius type="number" min="1" max="8" step="1" inputmode="numeric" /></label>
+                      <label><span>Minimum neighbours</span><input data-defect-detection-minimum-neighbours type="number" min="1" step="1" inputmode="numeric" /></label>
+                      <label><span>Dark HOT σ</span><input data-defect-dark-hot-sigma type="number" min="0.01" step="0.1" inputmode="decimal" /></label>
+                      <label><span>Dark COLD σ</span><input data-defect-dark-cold-sigma type="number" min="0.01" step="0.1" inputmode="decimal" /></label>
+                      <label><span>Dark residual floor</span><input data-defect-dark-floor type="number" min="0" step="0.01" inputmode="decimal" /></label>
+                      <label><span>Flat HOT σ</span><input data-defect-flat-hot-sigma type="number" min="0.01" step="0.1" inputmode="decimal" /></label>
+                      <label><span>Flat COLD σ</span><input data-defect-flat-cold-sigma type="number" min="0.01" step="0.1" inputmode="decimal" /></label>
+                      <label><span>Flat residual floor</span><input data-defect-flat-floor type="number" min="0" step="0.000001" inputmode="decimal" /></label>
+                      <label><span>Repair radius</span><input data-defect-correction-radius type="number" min="1" max="8" step="1" inputmode="numeric" /></label>
+                      <label><span>Repair neighbours</span><input data-defect-correction-minimum-neighbours type="number" min="1" step="1" inputmode="numeric" /></label>
+                    </div>
+                  </details>
+                  <div class="defect-console__status">
+                    <p data-defect-correction-message></p>
+                    <output data-defect-correction-evidence>No correction evidence published</output>
+                    <code data-defect-correction-output></code>
+                  </div>
+                  <div class="defect-console__actions">
+                    <button class="button button--primary" type="button" data-action="execute-defect-correction" disabled>Correct selected Light</button>
+                    <button class="button button--danger" type="button" data-action="cancel-defect-correction" hidden>Cancel correction</button>
+                  </div>
                 </section>
               </section>
             </section>
