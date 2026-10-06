@@ -450,6 +450,8 @@ export function executeDefectCorrection(
     readonly groupId: string;
     readonly expectedManifestSha256: string;
     readonly expectedLightPlanSha256: string;
+    readonly expectedBatchPlanSha256: string;
+    readonly batchItemIndex: number;
   } & DefectCorrectionSettings,
   onProgress: (progress: DefectExecutionProgress) => void,
 ): Promise<DefectCorrectionResult> {

@@ -244,6 +244,8 @@ describe("native calibration bridge", () => {
       groupId: "light-uvir",
       expectedManifestSha256: "a".repeat(64),
       expectedLightPlanSha256: "c".repeat(64),
+      expectedBatchPlanSha256: "d".repeat(64),
+      batchItemIndex: 0,
       darkDetection: {
         radius: 2,
         stride: 2 as const,

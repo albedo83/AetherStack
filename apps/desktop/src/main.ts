@@ -4307,6 +4307,8 @@ async function executeDefectQueue(
           groupId: input.frame.groupId,
           expectedManifestSha256: input.manifestSha256,
           expectedLightPlanSha256: input.lightPlanSha256,
+          expectedBatchPlanSha256: batchReport.planSha256,
+          batchItemIndex: index,
           ...execution.settings,
         },
         onProgress,

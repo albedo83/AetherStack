@@ -117,7 +117,7 @@ const SOURCE_VERIFICATION_PROGRESS_BYTES: u64 = 8 * 1_024 * 1_024;
 const MAX_INTERACTIVE_IMPORT_PARALLELISM: usize = 8;
 static REPORT_TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FitsPreviewRequest {
     path: PathBuf,
@@ -1801,6 +1801,18 @@ struct DesktopCalibrationExecutionState {
 #[derive(Debug, Default)]
 struct DesktopCalibrationArtifactState {
     artifacts: Mutex<Option<PublishedCalibrationArtifacts>>,
+    defect_batch: Mutex<Option<ReviewedDefectBatch>>,
+}
+
+#[derive(Clone, Debug)]
+struct ReviewedDefectBatch {
+    plan_sha256: String,
+    parameters_sha256: String,
+    manifest_sha256: String,
+    light_plan_sha256: String,
+    memory_limit_bytes: u64,
+    next_item_index: usize,
+    items: Vec<DefectBatchPreviewItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -1897,7 +1909,7 @@ struct DefectDetectionSettings {
     minimum_absolute_deviation: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DefectCorrectionCommandRequest {
     source_frame_id: String,
@@ -1906,6 +1918,8 @@ struct DefectCorrectionCommandRequest {
     group_id: String,
     expected_manifest_sha256: String,
     expected_light_plan_sha256: String,
+    expected_batch_plan_sha256: String,
+    batch_item_index: usize,
     dark_detection: DefectDetectionSettings,
     flat_detection: DefectDetectionSettings,
     correction_radius: usize,
@@ -1914,7 +1928,7 @@ struct DefectCorrectionCommandRequest {
     memory_limit_bytes: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DefectBatchPreviewRequest {
     output_directory: PathBuf,
@@ -5907,6 +5921,7 @@ async fn import_session_directory(
         )
     })??;
     *lock_calibration_artifacts(&artifact_state)? = None;
+    *lock_reviewed_defect_batch(&artifact_state)? = None;
     install_imported_session(&session_state, &review_state, imported)
 }
 
@@ -6145,6 +6160,7 @@ fn record_master_artifacts(
     state: &DesktopCalibrationArtifactState,
     result: &MasterPlanExecutionResponse,
 ) -> Result<(), PreviewCommandError> {
+    *lock_reviewed_defect_batch(state)? = None;
     let mut masters = BTreeMap::new();
     for product in &result.products {
         let path = PathBuf::from(&product.output_path);
@@ -6167,6 +6183,7 @@ fn record_light_artifacts(
     state: &DesktopCalibrationArtifactState,
     result: &LightPlanExecutionResponse,
 ) -> Result<(), PreviewCommandError> {
+    *lock_reviewed_defect_batch(state)? = None;
     let mut guard = lock_calibration_artifacts(state)?;
     let artifacts = guard
         .as_mut()
@@ -6216,7 +6233,28 @@ fn preview_defect_batch(
     let artifacts = lock_calibration_artifacts(&artifact_state)?
         .clone()
         .ok_or_else(calibration_artifact_state_error)?;
-    preview_defect_batch_sync(&session, &artifacts, request)
+    let reviewed_request = request.clone();
+    let response = preview_defect_batch_sync(&session, &artifacts, request)?;
+    record_reviewed_defect_batch(&artifact_state, &reviewed_request, &response)?;
+    Ok(response)
+}
+
+fn record_reviewed_defect_batch(
+    state: &DesktopCalibrationArtifactState,
+    request: &DefectBatchPreviewRequest,
+    response: &DefectBatchPreviewResponse,
+) -> Result<(), PreviewCommandError> {
+    let reviewed = response.ready.then(|| ReviewedDefectBatch {
+        plan_sha256: response.plan_sha256.clone(),
+        parameters_sha256: response.parameters_sha256.clone(),
+        manifest_sha256: request.expected_manifest_sha256.clone(),
+        light_plan_sha256: request.expected_light_plan_sha256.clone(),
+        memory_limit_bytes: request.memory_limit_bytes,
+        next_item_index: 0,
+        items: response.items.clone(),
+    });
+    *lock_reviewed_defect_batch(state)? = reviewed;
+    Ok(())
 }
 
 fn preview_defect_batch_sync(
@@ -6453,12 +6491,14 @@ async fn execute_defect_correction(
     artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
 ) -> Result<DefectCorrectionResponse, PreviewCommandError> {
     validate_defect_command_paths(&request)?;
+    validate_reviewed_defect_item(&artifact_state, &request)?;
     let session = lock_session_state(&session_state)?
         .clone()
         .ok_or_else(session_state_missing_error)?;
     let artifacts = lock_calibration_artifacts(&artifact_state)?
         .clone()
         .ok_or_else(calibration_artifact_state_error)?;
+    let reviewed_request = request.clone();
     let cancellation = begin_calibration_execution(&execution_state)?;
     let worker_cancellation = cancellation.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
@@ -6474,12 +6514,14 @@ async fn execute_defect_correction(
     })
     .await;
     finish_calibration_execution(&execution_state)?;
-    execution.map_err(|_| {
+    let response = execution.map_err(|_| {
         PreviewCommandError::new(
             "defect_correction_interrupted",
             "The detector-defect worker stopped before producing a result.",
         )
-    })?
+    })??;
+    advance_reviewed_defect_batch(&artifact_state, &reviewed_request)?;
+    Ok(response)
 }
 
 #[tauri::command]
@@ -6499,6 +6541,90 @@ fn validate_defect_command_paths(
         return Err(defect_correction_configuration_error());
     }
     Ok(())
+}
+
+fn validate_reviewed_defect_item(
+    state: &DesktopCalibrationArtifactState,
+    request: &DefectCorrectionCommandRequest,
+) -> Result<(), PreviewCommandError> {
+    let guard = lock_reviewed_defect_batch(state)?;
+    let batch = guard.as_ref().ok_or_else(defect_batch_stale_error)?;
+    let item = batch
+        .items
+        .get(request.batch_item_index)
+        .ok_or_else(defect_batch_stale_error)?;
+    let corrected = request
+        .corrected_output_path
+        .to_str()
+        .ok_or_else(defect_batch_stale_error)?;
+    let map = request
+        .map_output_path
+        .to_str()
+        .ok_or_else(defect_batch_stale_error)?;
+    let parameters_sha256 = defect_request_parameters_sha256(request)?;
+    if request.expected_batch_plan_sha256 != batch.plan_sha256
+        || request.batch_item_index != batch.next_item_index
+        || request.expected_manifest_sha256 != batch.manifest_sha256
+        || request.expected_light_plan_sha256 != batch.light_plan_sha256
+        || request.memory_limit_bytes != batch.memory_limit_bytes
+        || parameters_sha256 != batch.parameters_sha256
+        || request.source_frame_id != item.source_frame_id
+        || request.group_id != item.group_id
+        || corrected != item.corrected_output_path
+        || map != item.map_output_path
+        || item.blocked_by_existing_output
+    {
+        return Err(defect_batch_stale_error());
+    }
+    Ok(())
+}
+
+fn advance_reviewed_defect_batch(
+    state: &DesktopCalibrationArtifactState,
+    request: &DefectCorrectionCommandRequest,
+) -> Result<(), PreviewCommandError> {
+    let mut guard = lock_reviewed_defect_batch(state)?;
+    let batch = guard.as_mut().ok_or_else(defect_batch_stale_error)?;
+    if batch.plan_sha256 != request.expected_batch_plan_sha256
+        || batch.next_item_index != request.batch_item_index
+    {
+        return Err(defect_batch_stale_error());
+    }
+    batch.next_item_index = batch
+        .next_item_index
+        .checked_add(1)
+        .ok_or_else(defect_batch_stale_error)?;
+    Ok(())
+}
+
+fn defect_request_parameters_sha256(
+    request: &DefectCorrectionCommandRequest,
+) -> Result<String, PreviewCommandError> {
+    let correction = DefectCorrectionParameters::new(
+        request.correction_radius,
+        request.correction_stride,
+        request.correction_minimum_neighbours,
+    )
+    .map_err(|_| defect_correction_configuration_error())?;
+    let references = [
+        DefectReferenceParameters::new(
+            DefectReferenceKind::Dark,
+            defect_detection_parameters(request.dark_detection)?,
+        ),
+        DefectReferenceParameters::new(
+            DefectReferenceKind::Flat,
+            defect_detection_parameters(request.flat_detection)?,
+        ),
+    ];
+    strict_defect_parameters_sha256(&references, correction)
+        .map_err(|_| defect_correction_configuration_error())
+}
+
+const fn defect_batch_stale_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_batch_stale",
+        "The detector-correction request no longer matches the reviewed native batch.",
+    )
 }
 
 fn defect_detection_parameters(
@@ -7240,6 +7366,17 @@ fn lock_calibration_artifacts(
         PreviewCommandError::new(
             "calibration_artifact_state_unavailable",
             "Published calibration artifacts are unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
+fn lock_reviewed_defect_batch(
+    state: &DesktopCalibrationArtifactState,
+) -> Result<MutexGuard<'_, Option<ReviewedDefectBatch>>, PreviewCommandError> {
+    state.defect_batch.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "defect_batch_state_unavailable",
+            "The reviewed detector-correction batch is unavailable after an internal synchronization failure.",
         )
     })
 }
@@ -9284,6 +9421,8 @@ mod tests {
             group_id: "light-uvir".to_owned(),
             expected_manifest_sha256: "a".repeat(64),
             expected_light_plan_sha256: "b".repeat(64),
+            expected_batch_plan_sha256: "c".repeat(64),
+            batch_item_index: 0,
             dark_detection: detection,
             flat_detection: detection,
             correction_radius: 2,
@@ -9385,6 +9524,36 @@ mod tests {
                 .corrected_output_path
                 .ends_with("light-uvir-0010-corrected.fits")
         );
+        let state = DesktopCalibrationArtifactState::default();
+        record_reviewed_defect_batch(&state, &request(), &preview)?;
+        let mut execution = defect_command_request();
+        execution.source_frame_id = preview.items[0].source_frame_id.clone();
+        execution.group_id = preview.items[0].group_id.clone();
+        execution.corrected_output_path = PathBuf::from(&preview.items[0].corrected_output_path);
+        execution.map_output_path = PathBuf::from(&preview.items[0].map_output_path);
+        execution.expected_manifest_sha256 = manifest_sha256.clone();
+        execution.expected_light_plan_sha256 = "b".repeat(64);
+        execution.expected_batch_plan_sha256 = preview.plan_sha256.clone();
+        validate_reviewed_defect_item(&state, &execution)?;
+        let mut tampered = defect_command_request();
+        tampered.source_frame_id = execution.source_frame_id.clone();
+        tampered.group_id = execution.group_id.clone();
+        tampered.corrected_output_path = execution.corrected_output_path.clone();
+        tampered.map_output_path = output.join("foreign-map.fits");
+        tampered.expected_manifest_sha256 = execution.expected_manifest_sha256.clone();
+        tampered.expected_light_plan_sha256 = execution.expected_light_plan_sha256.clone();
+        tampered.expected_batch_plan_sha256 = execution.expected_batch_plan_sha256.clone();
+        let tamper_error = match validate_reviewed_defect_item(&state, &tampered) {
+            Err(error) => error,
+            Ok(()) => return Err("foreign destination was accepted".into()),
+        };
+        assert_eq!(tamper_error.code, "defect_batch_stale");
+        advance_reviewed_defect_batch(&state, &execution)?;
+        let replay_error = match validate_reviewed_defect_item(&state, &execution) {
+            Err(error) => error,
+            Ok(()) => return Err("completed item replay was accepted".into()),
+        };
+        assert_eq!(replay_error.code, "defect_batch_stale");
         let mut other_focus = request();
         other_focus.focus_frame_id = other_id.clone();
         let reordered = preview_defect_batch_sync(&session, &artifacts, other_focus)?;
