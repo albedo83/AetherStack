@@ -2017,6 +2017,11 @@ safety reasoning. They do not narrate obvious syntax.
      requested height and payload ceilings. Half-open bounds cover every row
      exactly once in top-to-bottom order; inability to fit one row fails before
      pixel decoding with its exact required byte count.
+194. Execute and publish complete Drizzle outputs without full-frame heap buffers.
+     Completed horizontal bands transpose through private disk-backed planar
+     storage, then stream in canonical FITS order to science, weight, and exact
+     support products. Checksums and dimensions are read back before one atomic
+     create-new set transaction; cancellation or any failure publishes nothing.
 
 ## 11. Stable-release definition
 

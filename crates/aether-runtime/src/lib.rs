@@ -6,6 +6,7 @@
 mod cancellation;
 mod demosaic;
 mod drizzle;
+mod drizzle_spool;
 mod light_plan;
 mod local_normalization;
 mod master_plan;
@@ -23,12 +24,14 @@ pub use demosaic::{
 pub use drizzle::{
     DRIZZLE_SCIENCE_ALGORITHM_ID, DRIZZLE_SUPPORT_ALGORITHM_ID, DRIZZLE_WEIGHT_ALGORITHM_ID,
     DrizzleBandPlan, DrizzleBandPlanError, DrizzleFitsAccumulationError, DrizzleFitsFrame,
-    DrizzleFitsStackError, DrizzleFitsTileEvidence, DrizzleFitsWindowEvidence, DrizzlePlannedBand,
+    DrizzleFitsStackError, DrizzleFitsTileEvidence, DrizzleFitsWindowEvidence,
+    DrizzleOutputExecutionError, DrizzleOutputExecutionResult, DrizzlePlannedBand,
     DrizzleProductDestinations, DrizzleProductKind, DrizzleProductProvenance,
-    DrizzlePublicationError, DrizzlePublicationResult, DrizzleTileExecutionError,
-    DrizzleTileExecutionResult, DrizzleTileMemoryEstimate, accumulate_fits_cfa_frames,
-    accumulate_fits_cfa_tile, estimate_drizzle_fits_tile_memory, plan_drizzle_fits_bands,
-    publish_drizzle_products, run_drizzle_fits_tile,
+    DrizzlePublicationError, DrizzlePublicationResult, DrizzleSpoolError,
+    DrizzleTileExecutionError, DrizzleTileExecutionResult, DrizzleTileMemoryEstimate,
+    accumulate_fits_cfa_frames, accumulate_fits_cfa_tile, estimate_drizzle_fits_tile_memory,
+    plan_drizzle_fits_bands, publish_drizzle_products, run_drizzle_fits_output,
+    run_drizzle_fits_tile,
 };
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,

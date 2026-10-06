@@ -151,6 +151,13 @@ the caller's height cap and memory ceiling. The plan covers every output row
 exactly once in top-to-bottom order and records each exact preflight estimate.
 If one full-width row cannot fit, planning fails before any pixel is decoded.
 
+Complete execution keeps only one band in heap memory. Finished bands are
+transposed into private disk-backed planar storage, then streamed in canonical
+FITS plane order through independent science, weight, and exact-support writers.
+All three private streams are checksum-verified before one create-new product-set
+transaction makes them visible. Cancellation or any band, spool, conversion,
+encoding, or verification failure removes private state and publishes nothing.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

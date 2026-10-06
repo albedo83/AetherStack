@@ -4,7 +4,7 @@ use std::io::{Read, Seek};
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
-use aether_core::{CompensatedSum, PixelFlags};
+use aether_core::{CompensatedSum, Dimensions, PixelFlags};
 use aether_drizzle::{
     DrizzleError, DrizzleFrameError, DrizzleFrameEvidence, DrizzleOutputBounds, DrizzleParameters,
     DrizzleSourceWindow, DrizzleTileAccumulator, DrizzleTileBounds, DrizzleTileEvidence,
@@ -18,6 +18,8 @@ use aether_fits::{
 use aether_metadata::BayerPattern;
 use aether_registration::ProjectiveTransform;
 
+use crate::drizzle_spool::DrizzlePlanarSpool;
+pub use crate::drizzle_spool::DrizzleSpoolError;
 use crate::{CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError};
 
 /// Provenance identity of the normalized Drizzle science image.
@@ -29,6 +31,7 @@ pub const DRIZZLE_SUPPORT_ALGORITHM_ID: &str = "drizzle-support-v1";
 
 const SUPPORT_CONVERSION_CHUNK: usize = 4_096;
 const MAX_EXACT_BINARY64_INTEGER: u64 = 1_u64 << 53;
+const DRIZZLE_STREAM_CHUNK: usize = 1_024;
 
 /// Evidence for one bounded FITS region accumulated into a Drizzle tile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -782,6 +785,260 @@ pub fn plan_drizzle_fits_bands<R: Read + Seek>(
     Ok(DrizzleBandPlan { bands, peak_bytes })
 }
 
+/// Published products and execution plan for one complete Drizzle output.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrizzleOutputExecutionResult {
+    publication: DrizzlePublicationResult,
+    plan: DrizzleBandPlan,
+}
+
+impl DrizzleOutputExecutionResult {
+    /// Coherently published science, weight, and support products.
+    #[must_use]
+    pub const fn publication(&self) -> &DrizzlePublicationResult {
+        &self.publication
+    }
+
+    /// Exact adaptive band plan used by the execution.
+    #[must_use]
+    pub const fn plan(&self) -> &DrizzleBandPlan {
+        &self.plan
+    }
+}
+
+/// Failure while executing and publishing a complete banded Drizzle output.
+#[derive(Debug)]
+pub enum DrizzleOutputExecutionError {
+    /// Cancellation was observed before public visibility.
+    Cancelled(Cancelled),
+    /// Adaptive band planning failed before pixel work.
+    Plan(DrizzleBandPlanError),
+    /// A private band failed and was discarded.
+    Band {
+        /// Zero-based top-to-bottom band index.
+        index: usize,
+        /// Typed tile execution failure.
+        source: DrizzleTileExecutionError,
+    },
+    /// Private planar transposition storage failed.
+    Spool(DrizzleSpoolError),
+    /// Output dimensions could not be represented by the core image model.
+    OutputDimensions,
+    /// Provenance source count does not match the ordered source set.
+    InvalidProvenance,
+    /// Tile evidence aggregation overflowed.
+    Evidence(aether_drizzle::DrizzleAccumulationError),
+    /// FITS staging, verification, or atomic publication failed.
+    Publication(DrizzlePublicationError),
+}
+
+impl Display for DrizzleOutputExecutionError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled(error) => Display::fmt(error, formatter),
+            Self::Plan(error) => Display::fmt(error, formatter),
+            Self::Band { index, source } => {
+                write!(formatter, "Drizzle output band {index} failed: {source}")
+            }
+            Self::Spool(error) => Display::fmt(error, formatter),
+            Self::OutputDimensions => {
+                formatter.write_str("Drizzle output dimensions are unrepresentable")
+            }
+            Self::InvalidProvenance => {
+                formatter.write_str("Drizzle provenance does not match the ordered source set")
+            }
+            Self::Evidence(error) => Display::fmt(error, formatter),
+            Self::Publication(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl Error for DrizzleOutputExecutionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Cancelled(error) => Some(error),
+            Self::Plan(error) => Some(error),
+            Self::Band { source, .. } => Some(source),
+            Self::Spool(error) => Some(error),
+            Self::Evidence(error) => Some(error),
+            Self::Publication(error) => Some(error),
+            Self::OutputDimensions | Self::InvalidProvenance => None,
+        }
+    }
+}
+
+/// Executes all adaptive bands and atomically publishes the complete product set.
+///
+/// Completed horizontal bands are transposed through private disk-backed planar
+/// storage, so peak heap use remains bounded by one tile. Public destinations
+/// remain absent until every band, spool sample, FITS checksum, and readback
+/// verification succeeds. Cancellation at any checkpoint removes all private
+/// state without publishing a partial product.
+#[allow(clippy::too_many_arguments)]
+pub fn run_drizzle_fits_output<R: Read + Seek>(
+    frames: &mut [DrizzleFitsFrame<R>],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    maximum_band_height: u32,
+    destinations: DrizzleProductDestinations,
+    provenance: &DrizzleProductProvenance,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError> {
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleOutputExecutionError::Cancelled)?;
+    let source_count =
+        u32::try_from(frames.len()).map_err(|_| DrizzleOutputExecutionError::InvalidProvenance)?;
+    if source_count == 0
+        || provenance.science().source_count() != source_count
+        || provenance.weight().source_count() != source_count
+        || provenance.support().source_count() != source_count
+    {
+        return Err(DrizzleOutputExecutionError::InvalidProvenance);
+    }
+    let plan = plan_drizzle_fits_bands(
+        frames,
+        parameters,
+        output,
+        maximum_band_height,
+        memory.available(),
+    )
+    .map_err(DrizzleOutputExecutionError::Plan)?;
+    let dimensions = Dimensions::new(output.width() as usize, output.height() as usize, 3)
+        .map_err(|_| DrizzleOutputExecutionError::OutputDimensions)?;
+    let mut science = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        destinations.science(),
+        dimensions,
+        provenance.science(),
+    )
+    .map_err(|source| publication_stage_error(DrizzleProductKind::Science, source))?;
+    let mut weight = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        destinations.weight(),
+        dimensions,
+        provenance.weight(),
+    )
+    .map_err(|source| publication_stage_error(DrizzleProductKind::Weight, source))?;
+    let mut support = AtomicF64PrimaryStreamWriter::create_with_provenance(
+        destinations.support(),
+        dimensions,
+        provenance.support(),
+    )
+    .map_err(|source| publication_stage_error(DrizzleProductKind::Support, source))?;
+    let mut spool = DrizzlePlanarSpool::create(dimensions.width(), dimensions.height())
+        .map_err(DrizzleOutputExecutionError::Spool)?;
+    let mut tile_evidence = DrizzleTileEvidence::default();
+    for (index, band) in plan.bands().iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(DrizzleOutputExecutionError::Cancelled)?;
+        let executed = run_drizzle_fits_tile(
+            band.bounds(),
+            frames,
+            parameters,
+            output,
+            cancellation,
+            memory,
+        )
+        .map_err(|source| DrizzleOutputExecutionError::Band { index, source })?;
+        tile_evidence = tile_evidence
+            .checked_add(executed.result().evidence())
+            .map_err(DrizzleOutputExecutionError::Evidence)?;
+        spool
+            .write_band(executed.result())
+            .map_err(DrizzleOutputExecutionError::Spool)?;
+    }
+    let mut spool = spool.finish().map_err(DrizzleOutputExecutionError::Spool)?;
+    let mut science_values = [0.0_f64; DRIZZLE_STREAM_CHUNK];
+    let mut science_flags = [PixelFlags::CLEAR; DRIZZLE_STREAM_CHUNK];
+    let mut weight_values = [0.0_f64; DRIZZLE_STREAM_CHUNK];
+    let mut support_counts = [0_u64; DRIZZLE_STREAM_CHUNK];
+    let mut support_values = [0.0_f64; DRIZZLE_STREAM_CHUNK];
+    let clear_flags = [PixelFlags::CLEAR; DRIZZLE_STREAM_CHUNK];
+    while spool.remaining_samples() != 0 {
+        cancellation
+            .checkpoint()
+            .map_err(DrizzleOutputExecutionError::Cancelled)?;
+        let count = spool
+            .read_chunk(
+                &mut science_values,
+                &mut science_flags,
+                &mut weight_values,
+                &mut support_counts,
+            )
+            .map_err(DrizzleOutputExecutionError::Spool)?;
+        for (destination, count) in support_values[..count]
+            .iter_mut()
+            .zip(&support_counts[..count])
+        {
+            *destination =
+                exact_support_value(*count).map_err(DrizzleOutputExecutionError::Publication)?;
+        }
+        science
+            .write_samples(&science_values[..count], &science_flags[..count])
+            .map_err(|source| publication_stage_error(DrizzleProductKind::Science, source))?;
+        weight
+            .write_samples(&weight_values[..count], &clear_flags[..count])
+            .map_err(|source| publication_stage_error(DrizzleProductKind::Weight, source))?;
+        support
+            .write_samples(&support_values[..count], &clear_flags[..count])
+            .map_err(|source| publication_stage_error(DrizzleProductKind::Support, source))?;
+    }
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleOutputExecutionError::Cancelled)?;
+    let science = science
+        .finish()
+        .map_err(|source| publication_stage_error(DrizzleProductKind::Science, source))?;
+    let weight = weight
+        .finish()
+        .map_err(|source| publication_stage_error(DrizzleProductKind::Weight, source))?;
+    let support = support
+        .finish()
+        .map_err(|source| publication_stage_error(DrizzleProductKind::Support, source))?;
+    validate_staged(&science, dimensions, DrizzleProductKind::Science)
+        .map_err(DrizzleOutputExecutionError::Publication)?;
+    validate_staged(&weight, dimensions, DrizzleProductKind::Weight)
+        .map_err(DrizzleOutputExecutionError::Publication)?;
+    validate_staged(&support, dimensions, DrizzleProductKind::Support)
+        .map_err(DrizzleOutputExecutionError::Publication)?;
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleOutputExecutionError::Cancelled)?;
+    let mut staged = Vec::new();
+    staged.try_reserve_exact(3).map_err(|_| {
+        DrizzleOutputExecutionError::Publication(DrizzlePublicationError::AllocationFailed)
+    })?;
+    staged.push(science);
+    staged.push(weight);
+    staged.push(support);
+    let summaries = publish_atomic_fits_set(staged)
+        .map_err(DrizzlePublicationError::Publish)
+        .map_err(DrizzleOutputExecutionError::Publication)?;
+    let [science, weight, support] = summaries.as_slice() else {
+        return Err(DrizzleOutputExecutionError::Publication(
+            DrizzlePublicationError::AllocationFailed,
+        ));
+    };
+    Ok(DrizzleOutputExecutionResult {
+        publication: DrizzlePublicationResult {
+            destinations,
+            science: *science,
+            weight: *weight,
+            support: *support,
+            evidence: tile_evidence,
+        },
+        plan,
+    })
+}
+
+fn publication_stage_error(
+    kind: DrizzleProductKind,
+    source: AtomicFitsWriteError,
+) -> DrizzleOutputExecutionError {
+    DrizzleOutputExecutionError::Publication(DrizzlePublicationError::Stage { kind, source })
+}
+
 /// Stable role of one companion in a Drizzle product set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrizzleProductKind {
@@ -1269,6 +1526,10 @@ mod tests {
         DrizzleProductProvenance::new("a".repeat(64), "b".repeat(64), "c".repeat(64), "lights", 2)
     }
 
+    fn single_source_provenance() -> Result<DrizzleProductProvenance, FitsProvenanceError> {
+        DrizzleProductProvenance::new("a".repeat(64), "b".repeat(64), "c".repeat(64), "lights", 1)
+    }
+
     fn destinations(root: &Path) -> Result<DrizzleProductDestinations, DrizzlePublicationError> {
         DrizzleProductDestinations::new(
             root.join("science.fits"),
@@ -1693,6 +1954,167 @@ mod tests {
                 limit
             }) if actual == required && limit == required - 1
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn complete_banded_output_is_atomic_and_band_height_independent() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let first_root = directory.0.join("one-row");
+        let second_root = directory.0.join("three-rows");
+        let oracle_root = directory.0.join("full-frame-oracle");
+        fs::create_dir(&first_root)?;
+        fs::create_dir(&second_root)?;
+        fs::create_dir(&oracle_root)?;
+        let first_destinations = destinations(&first_root)?;
+        let second_destinations = destinations(&second_root)?;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(4, 3, 1)?,
+            (0..12).map(|value| f64::from(value) + 0.375).collect(),
+        )?;
+        let bytes = fits_bytes(&image)?;
+        let build_frame = || -> Result<_, ImageReadError> {
+            Ok(DrizzleFitsFrame::new(
+                PrimaryImageReader::open(Cursor::new(bytes.clone()), HeaderReadOptions::default())?,
+                ProjectiveTransform::IDENTITY,
+                BayerPattern::Rggb,
+                1.0,
+            ))
+        };
+        let output = DrizzleOutputBounds::new(4, 3, 4)?;
+        let parameters = DrizzleParameters::new(1, 1.0)?;
+        let provenance = single_source_provenance()?;
+        let memory = crate::MemoryBudget::new(1_048_576)?;
+        let mut first_frames = [build_frame()?];
+        let first = run_drizzle_fits_output(
+            &mut first_frames,
+            parameters,
+            output,
+            1,
+            first_destinations.clone(),
+            &provenance,
+            &CancellationToken::new(),
+            &memory,
+        )?;
+        let mut second_frames = [build_frame()?];
+        let second = run_drizzle_fits_output(
+            &mut second_frames,
+            parameters,
+            output,
+            3,
+            second_destinations.clone(),
+            &provenance,
+            &CancellationToken::new(),
+            &memory,
+        )?;
+        let mut oracle_accumulator =
+            DrizzleTileAccumulator::new(DrizzleTileBounds::new(0, 0, 4, 3, 3)?)?;
+        accumulate_cfa_frame(
+            &mut oracle_accumulator,
+            &image,
+            ProjectiveTransform::IDENTITY,
+            parameters,
+            &BayerPattern::Rggb,
+            1.0,
+            output,
+        )?;
+        let oracle = publish_drizzle_products(
+            &oracle_accumulator.finish()?,
+            destinations(&oracle_root)?,
+            &provenance,
+        )?;
+
+        assert_eq!(first.plan().bands().len(), 3);
+        assert_eq!(second.plan().bands().len(), 1);
+        for select in [
+            DrizzleProductKind::Science,
+            DrizzleProductKind::Weight,
+            DrizzleProductKind::Support,
+        ] {
+            let first_path = match select {
+                DrizzleProductKind::Science => first.publication().destinations().science(),
+                DrizzleProductKind::Weight => first.publication().destinations().weight(),
+                DrizzleProductKind::Support => first.publication().destinations().support(),
+            };
+            let second_path = match select {
+                DrizzleProductKind::Science => second.publication().destinations().science(),
+                DrizzleProductKind::Weight => second.publication().destinations().weight(),
+                DrizzleProductKind::Support => second.publication().destinations().support(),
+            };
+            assert_eq!(fs::read(first_path)?, fs::read(second_path)?);
+            let oracle_path = match select {
+                DrizzleProductKind::Science => oracle.destinations().science(),
+                DrizzleProductKind::Weight => oracle.destinations().weight(),
+                DrizzleProductKind::Support => oracle.destinations().support(),
+            };
+            assert_eq!(fs::read(first_path)?, fs::read(oracle_path)?);
+        }
+        assert_eq!(memory.used(), 0);
+        assert_eq!(first.publication().science_summary().samples_written(), 36);
+        assert_eq!(first.publication().weight_summary().samples_written(), 36);
+        assert_eq!(first.publication().support_summary().samples_written(), 36);
+        Ok(())
+    }
+
+    #[test]
+    fn complete_output_cancellation_and_provenance_mismatch_publish_nothing() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let cancelled_root = directory.0.join("cancelled");
+        let mismatch_root = directory.0.join("mismatch");
+        fs::create_dir(&cancelled_root)?;
+        fs::create_dir(&mismatch_root)?;
+        let image = ScientificImage::from_pixels(Dimensions::new(2, 2, 1)?, vec![1.0; 4])?;
+        let bytes = fits_bytes(&image)?;
+        let build_frame = || -> Result<_, ImageReadError> {
+            Ok(DrizzleFitsFrame::new(
+                PrimaryImageReader::open(Cursor::new(bytes.clone()), HeaderReadOptions::default())?,
+                ProjectiveTransform::IDENTITY,
+                BayerPattern::Rggb,
+                1.0,
+            ))
+        };
+        let output = DrizzleOutputBounds::new(2, 2, 4)?;
+        let parameters = DrizzleParameters::new(1, 1.0)?;
+        let memory = crate::MemoryBudget::new(1_048_576)?;
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+        let cancelled_destinations = destinations(&cancelled_root)?;
+        let mut cancelled_frames = [build_frame()?];
+        assert!(matches!(
+            run_drizzle_fits_output(
+                &mut cancelled_frames,
+                parameters,
+                output,
+                2,
+                cancelled_destinations.clone(),
+                &single_source_provenance()?,
+                &cancellation,
+                &memory,
+            ),
+            Err(DrizzleOutputExecutionError::Cancelled(_))
+        ));
+        assert!(!cancelled_destinations.science().exists());
+        assert!(!cancelled_destinations.weight().exists());
+        assert!(!cancelled_destinations.support().exists());
+
+        let mismatch_destinations = destinations(&mismatch_root)?;
+        let mut mismatch_frames = [build_frame()?];
+        assert!(matches!(
+            run_drizzle_fits_output(
+                &mut mismatch_frames,
+                parameters,
+                output,
+                2,
+                mismatch_destinations.clone(),
+                &provenance()?,
+                &CancellationToken::new(),
+                &memory,
+            ),
+            Err(DrizzleOutputExecutionError::InvalidProvenance)
+        ));
+        assert!(!mismatch_destinations.science().exists());
+        assert!(!mismatch_destinations.weight().exists());
+        assert!(!mismatch_destinations.support().exists());
         Ok(())
     }
 

@@ -142,6 +142,36 @@ impl DrizzleTileEvidence {
     pub const fn unsupported_pixels(self) -> u64 {
         self.unsupported_pixels
     }
+
+    /// Checked sum of independent tile-execution counters.
+    ///
+    /// This is intended for aggregating disjoint tiles. Counters describing
+    /// inspected geometry remain execution totals, while accumulated support
+    /// and unsupported output pixels are disjoint by tile ownership.
+    pub fn checked_add(self, other: Self) -> Result<Self, DrizzleAccumulationError> {
+        Ok(Self {
+            depositions_seen: self
+                .depositions_seen
+                .checked_add(other.depositions_seen)
+                .ok_or(DrizzleAccumulationError::CounterOverflow)?,
+            contributions_seen: self
+                .contributions_seen
+                .checked_add(other.contributions_seen)
+                .ok_or(DrizzleAccumulationError::CounterOverflow)?,
+            contributions_accumulated: self
+                .contributions_accumulated
+                .checked_add(other.contributions_accumulated)
+                .ok_or(DrizzleAccumulationError::CounterOverflow)?,
+            contributions_outside: self
+                .contributions_outside
+                .checked_add(other.contributions_outside)
+                .ok_or(DrizzleAccumulationError::CounterOverflow)?,
+            unsupported_pixels: self
+                .unsupported_pixels
+                .checked_add(other.unsupported_pixels)
+                .ok_or(DrizzleAccumulationError::CounterOverflow)?,
+        })
+    }
 }
 
 /// Bounded deterministic accumulator for one output tile.
