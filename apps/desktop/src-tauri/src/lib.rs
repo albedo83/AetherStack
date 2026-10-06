@@ -1815,6 +1815,7 @@ struct PublishedCalibrationArtifacts {
 #[derive(Clone, Debug)]
 struct PublishedCalibratedFrame {
     path: PathBuf,
+    source_index: usize,
     dark_group_id: String,
     flat_group_id: String,
 }
@@ -1911,6 +1912,35 @@ struct DefectCorrectionCommandRequest {
     correction_stride: usize,
     correction_minimum_neighbours: usize,
     memory_limit_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DefectBatchPreviewRequest {
+    output_directory: PathBuf,
+    focus_frame_id: String,
+    expected_manifest_sha256: String,
+    expected_light_plan_sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectBatchPreviewItem {
+    source_frame_id: String,
+    group_id: String,
+    source_index: usize,
+    corrected_output_path: String,
+    map_output_path: String,
+    blocked_by_existing_output: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectBatchPreviewResponse {
+    ready: bool,
+    item_count: usize,
+    blocked_item_count: usize,
+    items: Vec<DefectBatchPreviewItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -6147,6 +6177,7 @@ fn record_light_artifacts(
             (frame.group_id.clone(), frame.source_frame_id.clone()),
             PublishedCalibratedFrame {
                 path,
+                source_index: frame.source_index,
                 dark_group_id: frame.dark_group_id.clone(),
                 flat_group_id: frame.flat_group_id.clone(),
             },
@@ -6161,6 +6192,157 @@ const fn calibration_artifact_state_error() -> PreviewCommandError {
     PreviewCommandError::new(
         "calibration_artifact_state_invalid",
         "Published calibration artifacts do not match the current native plan.",
+    )
+}
+
+#[tauri::command]
+fn preview_defect_batch(
+    request: DefectBatchPreviewRequest,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
+) -> Result<DefectBatchPreviewResponse, PreviewCommandError> {
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let artifacts = lock_calibration_artifacts(&artifact_state)?
+        .clone()
+        .ok_or_else(calibration_artifact_state_error)?;
+    preview_defect_batch_sync(&session, &artifacts, request)
+}
+
+fn preview_defect_batch_sync(
+    session: &ImportedNativeSession,
+    artifacts: &PublishedCalibrationArtifacts,
+    request: DefectBatchPreviewRequest,
+) -> Result<DefectBatchPreviewResponse, PreviewCommandError> {
+    let metadata = fs::symlink_metadata(&request.output_directory)
+        .map_err(|_| defect_batch_preflight_error())?;
+    if !request.output_directory.is_absolute()
+        || metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+    {
+        return Err(defect_batch_preflight_error());
+    }
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| defect_batch_preflight_error())?;
+    if manifest_sha256 != request.expected_manifest_sha256
+        || artifacts.manifest_sha256 != request.expected_manifest_sha256
+        || artifacts.light_plan_sha256.as_deref()
+            != Some(request.expected_light_plan_sha256.as_str())
+    {
+        return Err(PreviewCommandError::new(
+            "defect_batch_stale",
+            "The detector-correction queue no longer matches the native Light artifacts.",
+        ));
+    }
+
+    let mut candidates: Vec<_> = artifacts.calibrated_frames.iter().collect();
+    candidates.sort_by(|left, right| {
+        left.1
+            .source_index
+            .cmp(&right.1.source_index)
+            .then_with(|| left.0.cmp(right.0))
+    });
+    let Some(focus_index) = candidates
+        .iter()
+        .position(|((_, frame_id), _)| *frame_id == request.focus_frame_id)
+    else {
+        return Err(calibration_artifact_state_error());
+    };
+    let focus = candidates.remove(focus_index);
+    candidates.insert(0, focus);
+
+    let mut destinations = BTreeSet::new();
+    let mut items = Vec::new();
+    items
+        .try_reserve_exact(candidates.len())
+        .map_err(|_| defect_batch_preflight_error())?;
+    let mut blocked_item_count = 0_usize;
+    for ((group_id, source_frame_id), frame) in candidates {
+        if !artifacts
+            .masters
+            .contains_key(&("dark".to_owned(), frame.dark_group_id.clone()))
+            || !artifacts
+                .masters
+                .contains_key(&("flat".to_owned(), frame.flat_group_id.clone()))
+        {
+            return Err(calibration_artifact_state_error());
+        }
+        let corrected_output = defect_batch_output_path(
+            &request.output_directory,
+            group_id,
+            frame.source_index,
+            "corrected",
+        );
+        let map_output = defect_batch_output_path(
+            &request.output_directory,
+            group_id,
+            frame.source_index,
+            "defects",
+        );
+        if !destinations.insert(corrected_output.clone())
+            || !destinations.insert(map_output.clone())
+            || corrected_output == frame.path
+            || map_output == frame.path
+        {
+            return Err(defect_batch_preflight_error());
+        }
+        let blocked = corrected_output
+            .try_exists()
+            .and_then(|corrected| map_output.try_exists().map(|map| corrected || map))
+            .map_err(|_| defect_batch_preflight_error())?;
+        blocked_item_count += usize::from(blocked);
+        items.push(DefectBatchPreviewItem {
+            source_frame_id: source_frame_id.clone(),
+            group_id: group_id.clone(),
+            source_index: frame.source_index,
+            corrected_output_path: corrected_output
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(defect_batch_preflight_error)?,
+            map_output_path: map_output
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(defect_batch_preflight_error)?,
+            blocked_by_existing_output: blocked,
+        });
+    }
+    Ok(DefectBatchPreviewResponse {
+        ready: !items.is_empty() && blocked_item_count == 0,
+        item_count: items.len(),
+        blocked_item_count,
+        items,
+    })
+}
+
+fn defect_batch_output_path(
+    directory: &Path,
+    group_id: &str,
+    source_index: usize,
+    suffix: &str,
+) -> PathBuf {
+    let group: String = group_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    directory.join(format!(
+        "{group}-{:04}-{suffix}.fits",
+        source_index.saturating_add(1)
+    ))
+}
+
+const fn defect_batch_preflight_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_batch_preflight_failed",
+        "The detector-correction queue could not be safely preflighted.",
     )
 }
 
@@ -8955,6 +9137,7 @@ pub fn run() -> Result<(), tauri::Error> {
             preview_quality_cache_maintenance,
             preview_master_plan,
             preview_frame_selection,
+            preview_defect_batch,
             preview_registration_plan,
             preview_registered_weights,
             render_fits_preview,
@@ -9033,6 +9216,74 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn defect_batch_preflight_is_native_ordered_and_collision_complete() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let session_root = directory.path().join("session");
+        let output = directory.path().join("corrected");
+        fs::create_dir(&session_root)?;
+        fs::create_dir(&output)?;
+        let session = planning_session(&session_root)?;
+        let manifest_sha256 = session.manifest.canonical_sha256()?;
+        let focus_id = "f".repeat(64);
+        let other_id = "e".repeat(64);
+        let mut calibrated_frames = BTreeMap::new();
+        for (source_index, frame_id) in [(4, other_id.clone()), (9, focus_id.clone())] {
+            calibrated_frames.insert(
+                ("light-uvir".to_owned(), frame_id),
+                PublishedCalibratedFrame {
+                    path: directory
+                        .path()
+                        .join(format!("calibrated-{source_index}.fits")),
+                    source_index,
+                    dark_group_id: "dark-2s".to_owned(),
+                    flat_group_id: "flat-uvir".to_owned(),
+                },
+            );
+        }
+        let artifacts = PublishedCalibrationArtifacts {
+            manifest_sha256: manifest_sha256.clone(),
+            master_plan_sha256: "c".repeat(64),
+            light_plan_sha256: Some("b".repeat(64)),
+            masters: BTreeMap::from([
+                (
+                    ("dark".to_owned(), "dark-2s".to_owned()),
+                    directory.path().join("master-dark.fits"),
+                ),
+                (
+                    ("flat".to_owned(), "flat-uvir".to_owned()),
+                    directory.path().join("master-flat.fits"),
+                ),
+            ]),
+            calibrated_frames,
+        };
+        let request = || DefectBatchPreviewRequest {
+            output_directory: output.clone(),
+            focus_frame_id: focus_id.clone(),
+            expected_manifest_sha256: manifest_sha256.clone(),
+            expected_light_plan_sha256: "b".repeat(64),
+        };
+
+        let preview = preview_defect_batch_sync(&session, &artifacts, request())?;
+        assert!(preview.ready);
+        assert_eq!(preview.item_count, 2);
+        assert_eq!(preview.items[0].source_frame_id, focus_id);
+        assert_eq!(preview.items[0].source_index, 9);
+        assert_eq!(preview.items[1].source_frame_id, other_id);
+        assert!(
+            preview.items[0]
+                .corrected_output_path
+                .ends_with("light-uvir-0010-corrected.fits")
+        );
+
+        fs::write(&preview.items[1].map_output_path, b"existing")?;
+        let blocked = preview_defect_batch_sync(&session, &artifacts, request())?;
+        assert!(!blocked.ready);
+        assert_eq!(blocked.blocked_item_count, 1);
+        assert!(blocked.items[1].blocked_by_existing_output);
+        Ok(())
     }
 
     #[test]
