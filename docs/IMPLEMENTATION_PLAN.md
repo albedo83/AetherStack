@@ -2012,6 +2012,11 @@ safety reasoning. They do not narrate obvious syntax.
      normalization. The exact estimated peak is reserved across all allocations;
      every failure drops unpublished state and releases the guard, while success
      returns one complete tile with source and memory evidence.
+193. Plan complete outputs as adaptive full-width horizontal bands. A monotone
+     binary search at each first row selects the tallest candidate within the
+     requested height and payload ceilings. Half-open bounds cover every row
+     exactly once in top-to-bottom order; inability to fit one row fails before
+     pixel decoding with its exact required byte count.
 
 ## 11. Stable-release definition
 

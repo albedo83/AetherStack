@@ -606,6 +606,182 @@ pub fn run_drizzle_fits_tile<R: Read + Seek>(
     })
 }
 
+/// One full-width horizontal output band and its exact payload estimate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrizzlePlannedBand {
+    bounds: DrizzleTileBounds,
+    memory: DrizzleTileMemoryEstimate,
+}
+
+impl DrizzlePlannedBand {
+    /// Half-open global output bounds owned by this band.
+    #[must_use]
+    pub const fn bounds(self) -> DrizzleTileBounds {
+        self.bounds
+    }
+
+    /// Exact heap-element payload preflight for this band.
+    #[must_use]
+    pub const fn memory_estimate(self) -> DrizzleTileMemoryEstimate {
+        self.memory
+    }
+}
+
+/// Complete top-to-bottom plan of disjoint full-width Drizzle bands.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DrizzleBandPlan {
+    bands: Vec<DrizzlePlannedBand>,
+    peak_bytes: usize,
+}
+
+impl DrizzleBandPlan {
+    /// Bands in deterministic top-to-bottom order.
+    #[must_use]
+    pub fn bands(&self) -> &[DrizzlePlannedBand] {
+        &self.bands
+    }
+
+    /// Largest per-band heap-element payload in the plan.
+    #[must_use]
+    pub const fn peak_bytes(&self) -> usize {
+        self.peak_bytes
+    }
+}
+
+/// Failure while choosing memory-bounded full-width output bands.
+#[derive(Debug)]
+pub enum DrizzleBandPlanError {
+    /// Maximum requested band height or memory limit is zero.
+    InvalidLimit,
+    /// Even a one-row full-width band exceeds the supplied payload ceiling.
+    InsufficientMemory {
+        /// First output row that cannot be planned.
+        origin_y: u32,
+        /// Exact bytes needed by the one-row candidate.
+        required: usize,
+        /// Caller-supplied payload ceiling.
+        limit: usize,
+    },
+    /// Tile-bound construction failed.
+    Bounds(aether_drizzle::DrizzleAccumulationError),
+    /// FITS geometry or source-window preflight failed.
+    Sources(DrizzleFitsStackError),
+    /// Plan bookkeeping could not be represented or allocated.
+    PlanCapacity,
+}
+
+impl Display for DrizzleBandPlanError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLimit => {
+                formatter.write_str("Drizzle band height and memory limit must be positive")
+            }
+            Self::InsufficientMemory {
+                origin_y,
+                required,
+                limit,
+            } => write!(
+                formatter,
+                "Drizzle output row {origin_y} needs {required} bytes within a {limit}-byte limit"
+            ),
+            Self::Bounds(error) => Display::fmt(error, formatter),
+            Self::Sources(error) => Display::fmt(error, formatter),
+            Self::PlanCapacity => formatter.write_str("cannot allocate Drizzle band plan"),
+        }
+    }
+}
+
+impl Error for DrizzleBandPlanError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Bounds(error) => Some(error),
+            Self::Sources(error) => Some(error),
+            Self::InvalidLimit | Self::InsufficientMemory { .. } | Self::PlanCapacity => None,
+        }
+    }
+}
+
+/// Plans the tallest full-width band that fits at each output row.
+///
+/// Candidate height is monotone at a fixed origin: both output storage and the
+/// conservative inverse-mapped detector rectangle can only stay equal or grow.
+/// Binary search therefore selects the largest fitting height without a linear
+/// scan. Adjacent half-open bands cover every output row exactly once.
+pub fn plan_drizzle_fits_bands<R: Read + Seek>(
+    frames: &[DrizzleFitsFrame<R>],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    maximum_band_height: u32,
+    memory_limit: usize,
+) -> Result<DrizzleBandPlan, DrizzleBandPlanError> {
+    if maximum_band_height == 0 || memory_limit == 0 {
+        return Err(DrizzleBandPlanError::InvalidLimit);
+    }
+    let estimated_bands = output
+        .height()
+        .checked_add(maximum_band_height - 1)
+        .ok_or(DrizzleBandPlanError::PlanCapacity)?
+        / maximum_band_height;
+    let mut bands = Vec::new();
+    bands
+        .try_reserve_exact(
+            usize::try_from(estimated_bands).map_err(|_| DrizzleBandPlanError::PlanCapacity)?,
+        )
+        .map_err(|_| DrizzleBandPlanError::PlanCapacity)?;
+    let mut origin_y = 0_u32;
+    let mut peak_bytes = 0_usize;
+    while origin_y < output.height() {
+        let remaining = output.height() - origin_y;
+        let mut low = 1_u32;
+        let mut high = maximum_band_height.min(remaining);
+        let mut accepted = None;
+        while low <= high {
+            let height = low + (high - low) / 2;
+            let bounds = DrizzleTileBounds::new(0, origin_y, output.width(), height, 3)
+                .map_err(DrizzleBandPlanError::Bounds)?;
+            let memory = estimate_drizzle_fits_tile_memory(bounds, frames, parameters, output)
+                .map_err(DrizzleBandPlanError::Sources)?;
+            if memory.peak_bytes() <= memory_limit {
+                accepted = Some(DrizzlePlannedBand { bounds, memory });
+                if height == high {
+                    break;
+                }
+                low = height + 1;
+            } else {
+                if height == 1 {
+                    high = 0;
+                } else {
+                    high = height - 1;
+                }
+            }
+        }
+        let Some(band) = accepted else {
+            let bounds = DrizzleTileBounds::new(0, origin_y, output.width(), 1, 3)
+                .map_err(DrizzleBandPlanError::Bounds)?;
+            let required = estimate_drizzle_fits_tile_memory(bounds, frames, parameters, output)
+                .map_err(DrizzleBandPlanError::Sources)?
+                .peak_bytes();
+            return Err(DrizzleBandPlanError::InsufficientMemory {
+                origin_y,
+                required,
+                limit: memory_limit,
+            });
+        };
+        peak_bytes = peak_bytes.max(band.memory.peak_bytes());
+        origin_y = origin_y
+            .checked_add(
+                u32::try_from(band.bounds.dimensions().height())
+                    .map_err(|_| DrizzleBandPlanError::PlanCapacity)?,
+            )
+            .ok_or(DrizzleBandPlanError::PlanCapacity)?;
+        bands
+            .try_reserve(1)
+            .map_err(|_| DrizzleBandPlanError::PlanCapacity)?;
+        bands.push(band);
+    }
+    Ok(DrizzleBandPlan { bands, peak_bytes })
+}
+
 /// Stable role of one companion in a Drizzle product set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrizzleProductKind {
@@ -1465,6 +1641,58 @@ mod tests {
         ));
         assert_eq!(memory.used(), 0);
         assert_eq!(memory.peak(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn adaptive_band_plan_covers_output_within_memory_limit() -> TestResult {
+        let image = ScientificImage::from_pixels(Dimensions::new(4, 5, 1)?, vec![1.0; 20])?;
+        let frame = DrizzleFitsFrame::new(
+            PrimaryImageReader::open(
+                Cursor::new(fits_bytes(&image)?),
+                HeaderReadOptions::default(),
+            )?,
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        );
+        let frames = [frame];
+        let parameters = DrizzleParameters::new(1, 1.0)?;
+        let output = DrizzleOutputBounds::new(4, 5, 4)?;
+        let mut one_row_limit = 0_usize;
+        for origin_y in 0..output.height() {
+            let bounds = DrizzleTileBounds::new(0, origin_y, output.width(), 1, 3)?;
+            one_row_limit = one_row_limit.max(
+                estimate_drizzle_fits_tile_memory(bounds, &frames, parameters, output)?
+                    .peak_bytes(),
+            );
+        }
+
+        let plan = plan_drizzle_fits_bands(&frames, parameters, output, 4, one_row_limit)?;
+        assert!(!plan.bands().is_empty());
+        assert!(plan.peak_bytes() <= one_row_limit);
+        let mut expected_y = 0_u32;
+        for band in plan.bands() {
+            assert_eq!(band.bounds().origin_x(), 0);
+            assert_eq!(band.bounds().origin_y(), expected_y);
+            assert_eq!(band.bounds().dimensions().width(), 4);
+            assert_eq!(band.bounds().dimensions().planes(), 3);
+            assert!(band.memory_estimate().peak_bytes() <= one_row_limit);
+            expected_y += u32::try_from(band.bounds().dimensions().height())?;
+        }
+        assert_eq!(expected_y, output.height());
+
+        let first_row = DrizzleTileBounds::new(0, 0, output.width(), 1, 3)?;
+        let required =
+            estimate_drizzle_fits_tile_memory(first_row, &frames, parameters, output)?.peak_bytes();
+        assert!(matches!(
+            plan_drizzle_fits_bands(&frames, parameters, output, 4, required - 1),
+            Err(DrizzleBandPlanError::InsufficientMemory {
+                origin_y: 0,
+                required: actual,
+                limit
+            }) if actual == required && limit == required - 1
+        ));
         Ok(())
     }
 

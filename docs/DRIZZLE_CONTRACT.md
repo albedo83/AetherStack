@@ -145,6 +145,12 @@ for the complete lifetime of the accumulator and final buffers. Cancellation,
 source failure, allocation failure, or finalization failure drops the private
 state and releases the reservation; only a complete tile can leave this boundary.
 
+Whole outputs are partitioned into full-width, half-open horizontal bands. At
+each first row, a monotone binary search chooses the tallest band within both
+the caller's height cap and memory ceiling. The plan covers every output row
+exactly once in top-to-bottom order and records each exact preflight estimate.
+If one full-width row cannot fit, planning fails before any pixel is decoded.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with
