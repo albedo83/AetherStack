@@ -515,6 +515,33 @@ pub struct SigmaClippedIntegration {
     support: Vec<ClippedPixelSupport>,
 }
 
+/// Linear-fit-clipped image and exact per-pixel rejection accounting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinearFitClippedIntegration {
+    image: ScientificImage,
+    support: Vec<ClippedPixelSupport>,
+}
+
+impl LinearFitClippedIntegration {
+    /// Integrated image after ordered-sample linear-fit rejection.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Exact accepted and rejected counts in planar sample order.
+    #[must_use]
+    pub fn support(&self) -> &[ClippedPixelSupport] {
+        &self.support
+    }
+
+    /// Consumes the result into its scientific image and evidence map.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, Vec<ClippedPixelSupport>) {
+        (self.image, self.support)
+    }
+}
+
 impl SigmaClippedIntegration {
     /// Integrated image after iterative population-sigma rejection.
     #[must_use]
@@ -1329,6 +1356,240 @@ pub fn integrate_winsorized_sigma_clipped_mean(
     parameters: SigmaClipParameters,
 ) -> Result<SigmaClippedIntegration, IntegrationError> {
     integrate_iterative_sigma_clipped_mean(inputs, parameters, true)
+}
+
+/// Integrates equal-sized images after one ordered-sample linear-fit decision.
+///
+/// At each output pixel, usable finite samples are sorted once. Their values
+/// are normalized by the largest magnitude and fitted against symmetric rank
+/// coordinates in `(-1, 1)`. Population deviation is measured from the fitted
+/// line, then samples strictly outside the asymmetric residual limits are
+/// rejected. If that decision would cross `minimum_retained`, it is discarded
+/// in full. The final value is the strict mean of original retained samples;
+/// no fitted or normalized value enters the science output.
+///
+/// This oracle intentionally performs one fit. Changing it to iterative
+/// refitting would be a different scientific algorithm and requires a new
+/// identifier.
+pub fn integrate_linear_fit_clipped_mean(
+    inputs: &[&ScientificImage],
+    parameters: LinearFitClipParameters,
+) -> Result<LinearFitClippedIntegration, IntegrationError> {
+    let Some(first) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let dimensions = first.dimensions();
+    for (input_index, input) in inputs.iter().enumerate().skip(1) {
+        let actual = input.dimensions();
+        if actual != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual,
+            });
+        }
+    }
+
+    let mut output =
+        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: dimensions.pixel_count(),
+        })?;
+    support.resize(dimensions.pixel_count(), ClippedPixelSupport::default());
+    let mut finite = Vec::new();
+    finite.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+
+    let minimum_retained = usize::try_from(parameters.minimum_retained).unwrap_or(usize::MAX);
+    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
+    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut support)
+        .enumerate()
+    {
+        finite.clear();
+        let mut combined_rejected_flags = PixelFlags::CLEAR;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if !flags.is_clear() {
+                output_support.masked += 1;
+                combined_rejected_flags |= flags;
+            } else if !value.is_finite() {
+                output_support.non_finite += 1;
+            } else {
+                finite.push(value);
+            }
+        }
+
+        if finite.is_empty() {
+            *output = f64::NAN;
+            let mut flags = combined_rejected_flags | PixelFlags::MISSING;
+            if output_support.non_finite > 0 {
+                flags |= PixelFlags::INVALID;
+            }
+            *output_flags = flags;
+        } else {
+            finite.sort_by(f64::total_cmp);
+            let fit = ordered_sample_linear_fit(&finite);
+            let mut low_rejected = 0_usize;
+            let mut high_rejected = 0_usize;
+            if let Some(fit) = fit {
+                for (rank, value) in finite.iter().copied().enumerate() {
+                    match classify_linear_fit_residual(value, rank, finite.len(), fit, parameters) {
+                        LinearFitDecision::Retain => {}
+                        LinearFitDecision::RejectLow => low_rejected += 1,
+                        LinearFitDecision::RejectHigh => high_rejected += 1,
+                    }
+                }
+            }
+            if finite
+                .len()
+                .saturating_sub(low_rejected)
+                .saturating_sub(high_rejected)
+                < minimum_retained
+            {
+                low_rejected = 0;
+                high_rejected = 0;
+            } else if let Some(fit) = fit {
+                let sample_count = finite.len();
+                let mut rank = 0_usize;
+                finite.retain(|value| {
+                    let decision =
+                        classify_linear_fit_residual(*value, rank, sample_count, fit, parameters);
+                    rank += 1;
+                    decision == LinearFitDecision::Retain
+                });
+            }
+
+            output_support.low_rejected =
+                u32::try_from(low_rejected).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            output_support.high_rejected =
+                u32::try_from(high_rejected).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            output_support.accepted =
+                u32::try_from(finite.len()).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            *output = stable_mean(&finite);
+            *output_flags = PixelFlags::CLEAR;
+        }
+
+        if output_support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: output_support.total(),
+            });
+        }
+    }
+
+    Ok(LinearFitClippedIntegration {
+        image: output,
+        support,
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OrderedLinearFit {
+    scale: f64,
+    intercept: f64,
+    slope: f64,
+    residual_sigma: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinearFitDecision {
+    Retain,
+    RejectLow,
+    RejectHigh,
+}
+
+fn ordered_sample_linear_fit(values: &[f64]) -> Option<OrderedLinearFit> {
+    if values.len() < 3 {
+        return None;
+    }
+    let scale = values
+        .iter()
+        .fold(0.0_f64, |maximum, value| maximum.max(value.abs()));
+    if scale == 0.0 {
+        return None;
+    }
+    let divisor = values.len() as f64;
+    let mut mean = CompensatedSum::new();
+    let mut covariance = CompensatedSum::new();
+    let mut rank_variance = CompensatedSum::new();
+    for (rank, value) in values.iter().copied().enumerate() {
+        let x = symmetric_rank(rank, values.len());
+        let y = value / scale;
+        mean.add(y / divisor);
+        covariance.add((x * y) / divisor);
+        rank_variance.add((x * x) / divisor);
+    }
+    let rank_variance = rank_variance.total();
+    if !rank_variance.is_finite() || rank_variance <= 0.0 {
+        return None;
+    }
+    let intercept = mean.total();
+    let slope = covariance.total() / rank_variance;
+    let mut squared_residuals = CompensatedSum::new();
+    for (rank, value) in values.iter().copied().enumerate() {
+        let fitted = intercept + slope * symmetric_rank(rank, values.len());
+        let residual = value / scale - fitted;
+        squared_residuals.add((residual * residual) / divisor);
+    }
+    let residual_sigma = squared_residuals.total().max(0.0).sqrt();
+    if !intercept.is_finite() || !slope.is_finite() || !residual_sigma.is_finite() {
+        return None;
+    }
+    Some(OrderedLinearFit {
+        scale,
+        intercept,
+        slope,
+        residual_sigma,
+    })
+}
+
+fn classify_linear_fit_residual(
+    value: f64,
+    rank: usize,
+    sample_count: usize,
+    fit: OrderedLinearFit,
+    parameters: LinearFitClipParameters,
+) -> LinearFitDecision {
+    if fit.residual_sigma == 0.0 {
+        return LinearFitDecision::Retain;
+    }
+    let fitted = fit.intercept + fit.slope * symmetric_rank(rank, sample_count);
+    let residual = value / fit.scale - fitted;
+    if residual < -parameters.low_sigma * fit.residual_sigma {
+        LinearFitDecision::RejectLow
+    } else if residual > parameters.high_sigma * fit.residual_sigma {
+        LinearFitDecision::RejectHigh
+    } else {
+        LinearFitDecision::Retain
+    }
+}
+
+fn symmetric_rank(rank: usize, sample_count: usize) -> f64 {
+    let numerator = 2.0 * rank as f64 + 1.0 - sample_count as f64;
+    numerator / sample_count as f64
 }
 
 fn integrate_iterative_sigma_clipped_mean(
