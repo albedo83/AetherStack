@@ -12,6 +12,7 @@ import {
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type DefectExecutionProgress,
+  type DefectCorrectionResult,
   type ExecutedCalibratedLightFrame,
   type LightExecutionProgress,
   type MasterExecutionProgress,
@@ -21,6 +22,11 @@ import {
   bindCalibratedLightFrames,
   frameArtifactKey,
 } from "./calibrated-review.ts";
+import {
+  defectBatchProgressMessage,
+  defectOutputPath,
+  orderDefectFrames,
+} from "./defect-batch.ts";
 import {
   cancelLocalNormalization,
   executeLocalNormalization,
@@ -495,6 +501,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onExecuteDefectCorrection() {
     void executeSelectedDefectCorrection();
+  },
+  onExecuteAllDefectCorrections() {
+    void executeAllDefectCorrections();
   },
   onCancelDefectCorrection() {
     void cancelSelectedDefectCorrection();
@@ -4011,45 +4020,50 @@ async function cancelLights(): Promise<void> {
   }
 }
 
-function selectedDefectInputs(): {
+interface DefectFrameInputs {
   readonly frame: ExecutedCalibratedLightFrame;
   readonly manifestSha256: string;
   readonly lightPlanSha256: string;
-} | null {
+}
+
+function eligibleDefectInputs(): readonly DefectFrameInputs[] {
   const masterResult = model.calibration.execution.result;
   const lightResult = model.calibration.lightExecution.result;
   const lightPlan = model.calibration.plan?.lightPlan;
-  if (!masterResult || !lightResult || !lightPlan) return null;
-  const frame =
-    lightResult.calibratedFrames.find(
-      (candidate) => candidate.sourceFrameId === model.selectedFrameId,
-    ) ?? lightResult.calibratedFrames[0];
-  if (!frame) return null;
-  const association = lightPlan.products.find(
-    (candidate) =>
-      candidate.groupId === frame.groupId &&
-      candidate.dark.selectedGroupId !== null &&
-      candidate.flat.selectedGroupId !== null,
+  if (
+    !masterResult ||
+    !lightResult ||
+    !lightPlan ||
+    masterResult.products.length === 0
+  )
+    return [];
+  const eligibleGroups = new Set(
+    lightPlan.products
+      .filter(
+        (product) =>
+          product.dark.selectedGroupId !== null &&
+          product.flat.selectedGroupId !== null,
+      )
+      .map((product) => product.groupId),
   );
-  if (!association || masterResult.products.length === 0) return null;
-  return {
-    frame,
-    manifestSha256: lightResult.manifestSha256,
-    lightPlanSha256: lightResult.lightPlanSha256,
-  };
+  return lightResult.calibratedFrames
+    .filter((frame) => eligibleGroups.has(frame.groupId))
+    .map((frame) => ({
+      frame,
+      manifestSha256: lightResult.manifestSha256,
+      lightPlanSha256: lightResult.lightPlanSha256,
+    }));
 }
 
-function defectOutputPath(
-  directory: string,
-  frame: ExecutedCalibratedLightFrame,
-  suffix: string,
-): string {
-  const separator =
-    directory.includes("\\") && !directory.includes("/") ? "\\" : "/";
-  const root = directory.replace(/[\\/]$/, "");
-  const group = frame.groupId.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const sequence = String(frame.sourceIndex + 1).padStart(4, "0");
-  return `${root}${separator}${group}-${sequence}-${suffix}.fits`;
+function selectedDefectInputs(): DefectFrameInputs | null {
+  const eligible = eligibleDefectInputs();
+  return (
+    eligible.find(
+      (candidate) => candidate.frame.sourceFrameId === model.selectedFrameId,
+    ) ??
+    eligible[0] ??
+    null
+  );
 }
 
 function clearDefectPreview(): void {
@@ -4162,9 +4176,23 @@ async function loadDefectPreview(
 
 async function executeSelectedDefectCorrection(): Promise<void> {
   const inputs = selectedDefectInputs();
+  if (inputs) await executeDefectQueue([inputs]);
+}
+
+async function executeAllDefectCorrections(): Promise<void> {
+  const eligible = orderDefectFrames(
+    eligibleDefectInputs(),
+    model.selectedFrameId,
+  );
+  if (eligible.length > 0) await executeDefectQueue(eligible);
+}
+
+async function executeDefectQueue(
+  inputs: readonly DefectFrameInputs[],
+): Promise<void> {
   const execution = model.calibration.defectCorrection;
   if (
-    !inputs ||
+    inputs.length === 0 ||
     isActiveExecutionState(execution.state) ||
     isActiveExecutionState(model.calibration.execution.state) ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
@@ -4174,19 +4202,17 @@ async function executeSelectedDefectCorrection(): Promise<void> {
     return;
   }
   const outputDirectory = await selectDefectOutputDirectory();
-  if (!outputDirectory || selectedDefectInputs()?.frame !== inputs.frame)
+  const currentIds = new Set(
+    eligibleDefectInputs().map((candidate) => candidate.frame.sourceFrameId),
+  );
+  if (
+    !outputDirectory ||
+    inputs.some((candidate) => !currentIds.has(candidate.frame.sourceFrameId))
+  )
     return;
   const ticket = ++defectCorrectionTicket;
-  const correctedOutputPath = defectOutputPath(
-    outputDirectory,
-    inputs.frame,
-    "corrected",
-  );
-  const mapOutputPath = defectOutputPath(
-    outputDirectory,
-    inputs.frame,
-    "defects",
-  );
+  const focus = inputs[0];
+  if (!focus) return;
   clearDefectPreview();
   update({
     ...model,
@@ -4196,48 +4222,86 @@ async function executeSelectedDefectCorrection(): Promise<void> {
         ...execution,
         state: "running",
         outputDirectory,
-        sourceFrameId: inputs.frame.sourceFrameId,
+        sourceFrameId: focus.frame.sourceFrameId,
         progress: null,
         result: null,
         previewState: "idle",
         previewView: "after",
         preview: null,
         previewMessage: "Correction is running; publication is still closed",
-        message: "Verifying masters and deriving exact HOT/COLD evidence…",
+        message: `Preparing ${inputs.length} atomic correction ${inputs.length === 1 ? "pair" : "pairs"}…`,
       },
     },
   });
-  const onProgress = (progress: DefectExecutionProgress): void => {
-    if (ticket !== defectCorrectionTicket) return;
-    const state = model.calibration.defectCorrection.state;
-    if (state !== "running" && state !== "cancelling") return;
-    update({
-      ...model,
-      calibration: {
-        ...model.calibration,
-        defectCorrection: {
-          ...model.calibration.defectCorrection,
-          state,
-          progress,
-          message: defectProgressMessage(progress),
-        },
-      },
-    });
-  };
+  let completed = 0;
+  let focusResult: DefectCorrectionResult | null = null;
+  let lastResult: DefectCorrectionResult | null = null;
   try {
-    const result = await executeDefectCorrection(
-      {
-        sourceFrameId: inputs.frame.sourceFrameId,
-        correctedOutputPath,
-        mapOutputPath,
-        groupId: inputs.frame.groupId,
-        expectedManifestSha256: inputs.manifestSha256,
-        expectedLightPlanSha256: inputs.lightPlanSha256,
-        ...execution.settings,
-      },
-      onProgress,
-    );
+    for (const [index, input] of inputs.entries()) {
+      if (model.calibration.defectCorrection.state === "cancelling") break;
+      const onProgress = (progress: DefectExecutionProgress): void => {
+        if (ticket !== defectCorrectionTicket) return;
+        const state = model.calibration.defectCorrection.state;
+        if (state !== "running" && state !== "cancelling") return;
+        update({
+          ...model,
+          calibration: {
+            ...model.calibration,
+            defectCorrection: {
+              ...model.calibration.defectCorrection,
+              state,
+              progress,
+              message: defectBatchProgressMessage(
+                index,
+                inputs.length,
+                progress,
+              ),
+            },
+          },
+        });
+      };
+      const result = await executeDefectCorrection(
+        {
+          sourceFrameId: input.frame.sourceFrameId,
+          correctedOutputPath: defectOutputPath(
+            outputDirectory,
+            input.frame,
+            "corrected",
+          ),
+          mapOutputPath: defectOutputPath(
+            outputDirectory,
+            input.frame,
+            "defects",
+          ),
+          groupId: input.frame.groupId,
+          expectedManifestSha256: input.manifestSha256,
+          expectedLightPlanSha256: input.lightPlanSha256,
+          ...execution.settings,
+        },
+        onProgress,
+      );
+      completed += 1;
+      lastResult = result;
+      if (input.frame.sourceFrameId === focus.frame.sourceFrameId) {
+        focusResult = result;
+      }
+    }
     if (ticket !== defectCorrectionTicket) return;
+    const result = focusResult ?? lastResult;
+    if (!result) {
+      update({
+        ...model,
+        calibration: {
+          ...model.calibration,
+          defectCorrection: {
+            ...model.calibration.defectCorrection,
+            state: "idle",
+            message: "Correction queue cancelled before the first publication",
+          },
+        },
+      });
+      return;
+    }
     update({
       ...model,
       calibration: {
@@ -4246,14 +4310,17 @@ async function executeSelectedDefectCorrection(): Promise<void> {
           ...model.calibration.defectCorrection,
           state: "completed",
           outputDirectory,
-          sourceFrameId: inputs.frame.sourceFrameId,
+          sourceFrameId: focus.frame.sourceFrameId,
           result,
           progress: model.calibration.defectCorrection.progress,
           previewState: "idle",
           previewView: "after",
           preview: null,
           previewMessage: "Corrected pixels published · preparing comparison",
-          message: `${result.correctedSamples}/${result.requestedSamples} detector samples corrected · peak ${formatMemory(result.reservedBytes)}`,
+          message:
+            inputs.length === 1
+              ? `${result.correctedSamples}/${result.requestedSamples} detector samples corrected · peak ${formatMemory(result.reservedBytes)}`
+              : `${completed}/${inputs.length} atomic Light + map pairs published · peak ${formatMemory(result.reservedBytes)}`,
         },
       },
     });
@@ -4268,30 +4335,15 @@ async function executeSelectedDefectCorrection(): Promise<void> {
         defectCorrection: {
           ...model.calibration.defectCorrection,
           state: cancelled ? "idle" : "error",
-          result: null,
+          result: focusResult,
           progress: model.calibration.defectCorrection.progress,
           message: cancelled
-            ? "Correction cancelled · neither companion product was published"
-            : "Correction failed safely · neither companion product was published",
+            ? `${completed}/${inputs.length} complete pairs retained · active pair cancelled atomically`
+            : `${completed}/${inputs.length} complete pairs retained · failed pair published nothing`,
         },
       },
     });
   }
-}
-
-function defectProgressMessage(progress: DefectExecutionProgress): string {
-  if (progress.state === "cancelled") return "Cancellation acknowledged safely";
-  if (progress.state === "failed")
-    return "Correction stopped before publication";
-  const phase = [
-    "Verifying sources and reserving bounded memory",
-    "Master analysis complete · correcting the calibrated Light",
-    "Correction complete · staging both FITS companions",
-    "Private products staged · validating checksums and sources",
-    "Validation complete · entering atomic publication",
-    "Corrected Light and exact defect map published",
-  ][Math.min(progress.completedUnits, 5)];
-  return `${phase} · ${progress.completedUnits}/${progress.totalUnits ?? 5}`;
 }
 
 async function cancelSelectedDefectCorrection(): Promise<void> {

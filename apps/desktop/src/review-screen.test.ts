@@ -65,6 +65,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onCancelLightPlan: vi.fn(),
     onUpdateDefectCorrectionSettings: vi.fn(),
     onExecuteDefectCorrection: vi.fn(),
+    onExecuteAllDefectCorrections: vi.fn(),
     onCancelDefectCorrection: vi.fn(),
     onSelectDefectPreview: vi.fn(),
     onImportSession: vi.fn(),
@@ -1132,6 +1133,10 @@ describe("frame review workspace", () => {
       getByRole(root, "button", { name: "Correct selected Light" }),
     );
     expect(actions.onExecuteDefectCorrection).toHaveBeenCalledOnce();
+    fireEvent.click(
+      getByRole(root, "button", { name: "Correct all eligible Lights" }),
+    );
+    expect(actions.onExecuteAllDefectCorrections).toHaveBeenCalledOnce();
 
     controller.update({
       ...ready,

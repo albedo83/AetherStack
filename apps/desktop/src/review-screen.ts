@@ -685,6 +685,10 @@ export function mountReviewScreen(
       root,
       '[data-action="execute-defect-correction"]',
     ),
+    executeAllDefectCorrections: required<HTMLButtonElement>(
+      root,
+      '[data-action="execute-all-defect-corrections"]',
+    ),
     cancelDefectCorrection: required<HTMLButtonElement>(
       root,
       '[data-action="cancel-defect-correction"]',
@@ -1189,6 +1193,10 @@ export function mountReviewScreen(
     }
     if (action === "execute-defect-correction") {
       actions.onExecuteDefectCorrection();
+      return;
+    }
+    if (action === "execute-all-defect-corrections") {
+      actions.onExecuteAllDefectCorrections();
       return;
     }
     if (action === "cancel-defect-correction") {
@@ -2826,6 +2834,7 @@ interface CalibrationElements {
   readonly defectCorrectionOutput: HTMLElement;
   readonly defectCorrectionEvidence: HTMLElement;
   readonly executeDefectCorrection: HTMLButtonElement;
+  readonly executeAllDefectCorrections: HTMLButtonElement;
   readonly cancelDefectCorrection: HTMLButtonElement;
   readonly defectStrideButtons: readonly HTMLButtonElement[];
   readonly defectDetectionRadius: HTMLInputElement;
@@ -4451,6 +4460,9 @@ function renderDefectCorrection(
   elements.executeDefectCorrection.disabled =
     !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
   elements.executeDefectCorrection.hidden = busy;
+  elements.executeAllDefectCorrections.disabled =
+    !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
+  elements.executeAllDefectCorrections.hidden = busy;
   elements.cancelDefectCorrection.hidden = !busy;
   elements.cancelDefectCorrection.disabled = correction.state === "cancelling";
 
@@ -5696,6 +5708,7 @@ function shellMarkup(): string {
                   </section>
                   <div class="defect-console__actions">
                     <button class="button button--primary" type="button" data-action="execute-defect-correction" disabled>Correct selected Light</button>
+                    <button class="button" type="button" data-action="execute-all-defect-corrections" disabled>Correct all eligible Lights</button>
                     <button class="button button--danger" type="button" data-action="cancel-defect-correction" hidden>Cancel correction</button>
                   </div>
                 </section>

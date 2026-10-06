@@ -485,6 +485,7 @@ export interface ReviewActions {
     settings: DefectCorrectionSettings,
   ) => void;
   readonly onExecuteDefectCorrection: () => void;
+  readonly onExecuteAllDefectCorrections: () => void;
   readonly onCancelDefectCorrection: () => void;
   readonly onSelectDefectPreview: (view: "before" | "after" | "map") => void;
   readonly onImportSession: () => void;
