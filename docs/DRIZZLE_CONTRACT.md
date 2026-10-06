@@ -124,6 +124,13 @@ rectangle. Two-dimensional arrays and three-dimensional arrays with exactly one
 plane are accepted. A disjoint source returns before pixel decoding, while all
 other read and accumulation failures retain their typed cause.
 
+Multiple opened sources are reduced into a tile strictly in their declared
+order. Every source retains its own projective transform, CFA origin, and
+positive weight. Aggregate evidence distinguishes examined from intersecting
+frames and checked-sums every per-frame sample category. A failure names the
+stable source index; because earlier sources may already have contributed, the
+caller discards the private accumulator rather than publishing partial work.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

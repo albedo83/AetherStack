@@ -1995,6 +1995,12 @@ safety reasoning. They do not narrate obvious syntax.
      rectangle otherwise, and preserves typed planning, read, and accumulation
      failures. Returned evidence records both the exact window and its complete
      per-sample accounting.
+190. Reduce ordered FITS source sets into one private Drizzle tile. Each opened
+     source carries independent projective geometry, CFA phase, and frame weight,
+     and completes before the next begins so I/O scheduling cannot change numeric
+     order. Checked aggregate evidence separates examined and intersecting frames;
+     typed failures identify the stable source index and require the caller to
+     discard the unpublished accumulator.
 
 ## 11. Stable-release definition
 

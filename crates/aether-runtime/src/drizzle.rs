@@ -152,6 +152,211 @@ pub fn accumulate_fits_cfa_tile<R: Read + Seek>(
     Ok(Some(DrizzleFitsWindowEvidence { window, frame }))
 }
 
+/// One opened CFA source and its immutable Drizzle controls.
+pub struct DrizzleFitsFrame<R> {
+    reader: PrimaryImageReader<R>,
+    transform: ProjectiveTransform,
+    pattern: BayerPattern,
+    frame_weight: f64,
+}
+
+impl<R> DrizzleFitsFrame<R> {
+    /// Binds an opened FITS source to its reviewed geometry and weight.
+    #[must_use]
+    pub fn new(
+        reader: PrimaryImageReader<R>,
+        transform: ProjectiveTransform,
+        pattern: BayerPattern,
+        frame_weight: f64,
+    ) -> Self {
+        Self {
+            reader,
+            transform,
+            pattern,
+            frame_weight,
+        }
+    }
+
+    /// Reviewed source-to-reference projective transform.
+    #[must_use]
+    pub const fn transform(&self) -> ProjectiveTransform {
+        self.transform
+    }
+
+    /// Physical mosaic pattern at detector coordinate `(0, 0)`.
+    #[must_use]
+    pub const fn pattern(&self) -> &BayerPattern {
+        &self.pattern
+    }
+
+    /// Positive source weight supplied to geometric deposition.
+    #[must_use]
+    pub const fn frame_weight(&self) -> f64 {
+        self.frame_weight
+    }
+
+    /// Returns the opened FITS reader after accumulation is complete.
+    #[must_use]
+    pub fn into_reader(self) -> PrimaryImageReader<R> {
+        self.reader
+    }
+}
+
+/// Aggregate accounting for all FITS sources visited for one output tile.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DrizzleFitsTileEvidence {
+    source_frames: u64,
+    intersecting_frames: u64,
+    source_samples: u64,
+    masked_samples: u64,
+    nonfinite_samples: u64,
+    deposited_samples: u64,
+    outside_output_samples: u64,
+    geometric_contributions: u64,
+}
+
+impl DrizzleFitsTileEvidence {
+    /// Number of sources examined in stable slice order.
+    #[must_use]
+    pub const fn source_frames(self) -> u64 {
+        self.source_frames
+    }
+
+    /// Sources whose conservative detector window was non-empty.
+    #[must_use]
+    pub const fn intersecting_frames(self) -> u64 {
+        self.intersecting_frames
+    }
+
+    /// Detector samples decoded across all intersecting windows.
+    #[must_use]
+    pub const fn source_samples(self) -> u64 {
+        self.source_samples
+    }
+
+    /// Samples excluded by pre-existing quality flags.
+    #[must_use]
+    pub const fn masked_samples(self) -> u64 {
+        self.masked_samples
+    }
+
+    /// Clear samples excluded because their values were non-finite.
+    #[must_use]
+    pub const fn nonfinite_samples(self) -> u64 {
+        self.nonfinite_samples
+    }
+
+    /// Clear finite samples passed to geometric deposition.
+    #[must_use]
+    pub const fn deposited_samples(self) -> u64 {
+        self.deposited_samples
+    }
+
+    /// Deposited samples whose footprints missed the global output.
+    #[must_use]
+    pub const fn outside_output_samples(self) -> u64 {
+        self.outside_output_samples
+    }
+
+    /// Geometric contributions before tile ownership filtering.
+    #[must_use]
+    pub const fn geometric_contributions(self) -> u64 {
+        self.geometric_contributions
+    }
+
+    fn add_frame(&mut self, frame: DrizzleFrameEvidence) -> Result<(), DrizzleFitsStackError> {
+        self.intersecting_frames = checked_sum(self.intersecting_frames, 1)?;
+        self.source_samples = checked_sum(self.source_samples, frame.source_samples())?;
+        self.masked_samples = checked_sum(self.masked_samples, frame.masked_samples())?;
+        self.nonfinite_samples = checked_sum(self.nonfinite_samples, frame.nonfinite_samples())?;
+        self.deposited_samples = checked_sum(self.deposited_samples, frame.deposited_samples())?;
+        self.outside_output_samples =
+            checked_sum(self.outside_output_samples, frame.outside_output_samples())?;
+        self.geometric_contributions = checked_sum(
+            self.geometric_contributions,
+            frame.geometric_contributions(),
+        )?;
+        Ok(())
+    }
+}
+
+/// Failure while accumulating an ordered FITS source set into one tile.
+#[derive(Debug)]
+pub enum DrizzleFitsStackError {
+    /// A specific source failed during planning, decoding, or accumulation.
+    Source {
+        /// Zero-based stable source-order index.
+        index: usize,
+        /// Underlying typed source failure.
+        source: DrizzleFitsAccumulationError,
+    },
+    /// Aggregate evidence exceeded its representable integer domain.
+    CounterOverflow,
+}
+
+impl Display for DrizzleFitsStackError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source { index, source } => {
+                write!(
+                    formatter,
+                    "cannot accumulate Drizzle FITS source {index}: {source}"
+                )
+            }
+            Self::CounterOverflow => formatter.write_str("Drizzle FITS tile evidence overflowed"),
+        }
+    }
+}
+
+impl Error for DrizzleFitsStackError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Source { source, .. } => Some(source),
+            Self::CounterOverflow => None,
+        }
+    }
+}
+
+/// Accumulates an ordered set of opened FITS sources into one bounded tile.
+///
+/// Each source is completely processed before the next source begins, fixing
+/// floating-point reduction order independently of I/O scheduling. Callers must
+/// discard the accumulator after an error because earlier sources can already
+/// have contributed when a later source fails.
+pub fn accumulate_fits_cfa_frames<R: Read + Seek>(
+    accumulator: &mut DrizzleTileAccumulator,
+    frames: &mut [DrizzleFitsFrame<R>],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+) -> Result<DrizzleFitsTileEvidence, DrizzleFitsStackError> {
+    let mut evidence = DrizzleFitsTileEvidence {
+        source_frames: u64::try_from(frames.len())
+            .map_err(|_| DrizzleFitsStackError::CounterOverflow)?,
+        ..DrizzleFitsTileEvidence::default()
+    };
+    for (index, frame) in frames.iter_mut().enumerate() {
+        let result = accumulate_fits_cfa_tile(
+            accumulator,
+            &mut frame.reader,
+            frame.transform,
+            parameters,
+            &frame.pattern,
+            frame.frame_weight,
+            output,
+        )
+        .map_err(|source| DrizzleFitsStackError::Source { index, source })?;
+        if let Some(result) = result {
+            evidence.add_frame(result.frame())?;
+        }
+    }
+    Ok(evidence)
+}
+
+fn checked_sum(left: u64, right: u64) -> Result<u64, DrizzleFitsStackError> {
+    left.checked_add(right)
+        .ok_or(DrizzleFitsStackError::CounterOverflow)
+}
+
 /// Stable role of one companion in a Drizzle product set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrizzleProductKind {
@@ -759,6 +964,161 @@ mod tests {
             complete.contribution_counts()
         );
         assert_eq!(bounded.flags(), complete.flags());
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_fits_sources_match_complete_frame_reduction() -> TestResult {
+        let width = 8_u32;
+        let height = 6_u32;
+        let first = ScientificImage::from_pixels(
+            Dimensions::new(width as usize, height as usize, 1)?,
+            (0..width * height)
+                .map(|index| f64::from(index) + 0.25)
+                .collect(),
+        )?;
+        let second = ScientificImage::from_pixels(
+            Dimensions::new(width as usize, height as usize, 1)?,
+            (0..width * height)
+                .map(|index| f64::from(index) * 1.5 + 4.0)
+                .collect(),
+        )?;
+        let first_transform = ProjectiveTransform::new([
+            [0.99, -0.03, 0.4],
+            [0.02, 1.01, -0.2],
+            [0.0005, -0.0003, 1.0],
+        ])?;
+        let second_transform = ProjectiveTransform::new([
+            [1.01, 0.02, -0.3],
+            [-0.01, 0.98, 0.25],
+            [-0.0004, 0.0002, 1.0],
+        ])?;
+        let parameters = DrizzleParameters::new(1, 0.8)?;
+        let tile = DrizzleTileBounds::new(3, 2, 2, 2, 3)?;
+        let output = DrizzleOutputBounds::new(width, height, 16)?;
+
+        let mut complete = DrizzleTileAccumulator::new(tile)?;
+        accumulate_cfa_frame(
+            &mut complete,
+            &first,
+            first_transform,
+            parameters,
+            &BayerPattern::Rggb,
+            1.25,
+            output,
+        )?;
+        accumulate_cfa_frame(
+            &mut complete,
+            &second,
+            second_transform,
+            parameters,
+            &BayerPattern::Rggb,
+            0.75,
+            output,
+        )?;
+        let complete = complete.finish()?;
+
+        let mut frames = [
+            DrizzleFitsFrame::new(
+                PrimaryImageReader::open(
+                    Cursor::new(fits_bytes(&first)?),
+                    HeaderReadOptions::default(),
+                )?,
+                first_transform,
+                BayerPattern::Rggb,
+                1.25,
+            ),
+            DrizzleFitsFrame::new(
+                PrimaryImageReader::open(
+                    Cursor::new(fits_bytes(&second)?),
+                    HeaderReadOptions::default(),
+                )?,
+                second_transform,
+                BayerPattern::Rggb,
+                0.75,
+            ),
+        ];
+        let mut bounded = DrizzleTileAccumulator::new(tile)?;
+        let evidence = accumulate_fits_cfa_frames(&mut bounded, &mut frames, parameters, output)?;
+        assert_eq!(evidence.source_frames(), 2);
+        assert_eq!(evidence.intersecting_frames(), 2);
+        assert_eq!(
+            evidence.source_samples(),
+            evidence
+                .masked_samples()
+                .checked_add(evidence.nonfinite_samples())
+                .and_then(|value| value.checked_add(evidence.deposited_samples()))
+                .ok_or("test evidence overflow")?
+        );
+        let bounded = bounded.finish()?;
+
+        assert_eq!(
+            bounded
+                .values()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            complete
+                .values()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded
+                .weights()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            complete
+                .weights()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded.contribution_counts(),
+            complete.contribution_counts()
+        );
+        assert_eq!(bounded.flags(), complete.flags());
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_fits_failure_reports_the_stable_source_index() -> TestResult {
+        let image = ScientificImage::from_pixels(Dimensions::new(2, 2, 1)?, vec![1.0; 4])?;
+        let bytes = fits_bytes(&image)?;
+        let mut frames = [
+            DrizzleFitsFrame::new(
+                PrimaryImageReader::open(Cursor::new(bytes.clone()), HeaderReadOptions::default())?,
+                ProjectiveTransform::IDENTITY,
+                BayerPattern::Rggb,
+                1.0,
+            ),
+            DrizzleFitsFrame::new(
+                PrimaryImageReader::open(Cursor::new(bytes), HeaderReadOptions::default())?,
+                ProjectiveTransform::IDENTITY,
+                BayerPattern::Other("unsupported".to_owned()),
+                1.0,
+            ),
+        ];
+        let mut accumulator = DrizzleTileAccumulator::new(DrizzleTileBounds::new(0, 0, 2, 2, 3)?)?;
+        let error = accumulate_fits_cfa_frames(
+            &mut accumulator,
+            &mut frames,
+            DrizzleParameters::new(1, 1.0)?,
+            DrizzleOutputBounds::new(2, 2, 4)?,
+        );
+
+        assert!(matches!(
+            error,
+            Err(DrizzleFitsStackError::Source {
+                index: 1,
+                source: DrizzleFitsAccumulationError::Accumulation(DrizzleFrameError::Geometry(
+                    DrizzleError::UnsupportedCfaPattern
+                ))
+            })
+        ));
         Ok(())
     }
 
