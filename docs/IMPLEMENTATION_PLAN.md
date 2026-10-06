@@ -2031,6 +2031,10 @@ safety reasoning. They do not narrate obvious syntax.
      runtime starts before validation, fixes the exact total after adaptive band
      planning, advances for every completed band and planar stream chunk, and
      terminates with a stable completed, cancelled, or failed event.
+197. Derive path-private Drizzle plan and parameter identities in Rust. Bind
+     source bytes, stable order, transforms, CFA phases, weights, scale, drop,
+     output geometry, and the contribution ceiling; refuse caller provenance
+     unless all three product roles carry both exact canonical digests.
 
 ## 11. Stable-release definition
 

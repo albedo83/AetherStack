@@ -18,6 +18,7 @@ use aether_fits::{
 };
 use aether_metadata::BayerPattern;
 use aether_registration::ProjectiveTransform;
+use sha2::{Digest, Sha256};
 
 use crate::drizzle_spool::DrizzlePlanarSpool;
 pub use crate::drizzle_spool::DrizzleSpoolError;
@@ -864,6 +865,77 @@ impl StrictDrizzleSource {
     }
 }
 
+/// Derives the canonical, path-private identity of an ordered strict source set.
+///
+/// The digest binds exact source bytes, source order, reviewed projective
+/// transforms, CFA phases, and frame weights. Local paths are deliberately
+/// excluded so moving an unchanged session does not alter scientific identity.
+pub fn strict_drizzle_plan_sha256(
+    sources: &[StrictDrizzleSource],
+) -> Result<String, DrizzleOutputExecutionError> {
+    let count =
+        u32::try_from(sources.len()).map_err(|_| DrizzleOutputExecutionError::WorkSizeOverflow)?;
+    if count == 0 {
+        return Err(DrizzleOutputExecutionError::InvalidProvenance);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"aetherstack-strict-drizzle-plan-v1\0");
+    hasher.update(count.to_be_bytes());
+    for (index, source) in sources.iter().enumerate() {
+        let pattern = strict_pattern_tag(&source.pattern)
+            .ok_or(DrizzleOutputExecutionError::InvalidSourceConfiguration { index })?;
+        if !source.frame_weight.is_finite() || source.frame_weight <= 0.0 {
+            return Err(DrizzleOutputExecutionError::InvalidSourceConfiguration { index });
+        }
+        let fingerprint = source.source.fingerprint();
+        hasher.update(fingerprint.byte_length().to_be_bytes());
+        hasher.update(fingerprint.sha256().as_bytes());
+        for coefficient in source.transform.coefficients().iter().flatten() {
+            hasher.update(coefficient.to_bits().to_be_bytes());
+        }
+        hasher.update([pattern]);
+        hasher.update(source.frame_weight.to_bits().to_be_bytes());
+    }
+    Ok(encode_digest(hasher.finalize().as_slice()))
+}
+
+/// Derives the canonical identity of Drizzle controls that affect output.
+pub fn strict_drizzle_parameters_sha256(
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+) -> Result<String, DrizzleOutputExecutionError> {
+    let maximum_contributions = u64::try_from(output.maximum_contributions())
+        .map_err(|_| DrizzleOutputExecutionError::WorkSizeOverflow)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"aetherstack-strict-drizzle-parameters-v1\0");
+    hasher.update(parameters.scale().to_be_bytes());
+    hasher.update(parameters.drop_shrink().to_bits().to_be_bytes());
+    hasher.update(output.width().to_be_bytes());
+    hasher.update(output.height().to_be_bytes());
+    hasher.update(maximum_contributions.to_be_bytes());
+    Ok(encode_digest(hasher.finalize().as_slice()))
+}
+
+const fn strict_pattern_tag(pattern: &BayerPattern) -> Option<u8> {
+    match pattern {
+        BayerPattern::Rggb => Some(0),
+        BayerPattern::Bggr => Some(1),
+        BayerPattern::Grbg => Some(2),
+        BayerPattern::Gbrg => Some(3),
+        BayerPattern::Other(_) => None,
+    }
+}
+
+fn encode_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 /// Failure while executing and publishing a complete banded Drizzle output.
 #[derive(Debug)]
 pub enum DrizzleOutputExecutionError {
@@ -1346,6 +1418,20 @@ where
     cancellation
         .checkpoint()
         .map_err(DrizzleOutputExecutionError::Cancelled)?;
+    let plan_sha256 = strict_drizzle_plan_sha256(sources)?;
+    let parameters_sha256 = strict_drizzle_parameters_sha256(parameters, output)?;
+    if [
+        provenance.science(),
+        provenance.weight(),
+        provenance.support(),
+    ]
+    .iter()
+    .any(|product| {
+        product.plan_sha256() != Some(plan_sha256.as_str())
+            || product.parameters_sha256() != Some(parameters_sha256.as_str())
+    }) {
+        return Err(DrizzleOutputExecutionError::InvalidProvenance);
+    }
     let mut frames: Vec<DrizzleFitsFrame<File>> = Vec::new();
     frames
         .try_reserve_exact(sources.len())
@@ -1910,6 +1996,20 @@ mod tests {
 
     fn single_source_provenance() -> Result<DrizzleProductProvenance, FitsProvenanceError> {
         DrizzleProductProvenance::new("a".repeat(64), "b".repeat(64), "c".repeat(64), "lights", 1)
+    }
+
+    fn strict_provenance(
+        sources: &[StrictDrizzleSource],
+        parameters: DrizzleParameters,
+        output: DrizzleOutputBounds,
+    ) -> Result<DrizzleProductProvenance, Box<dyn Error>> {
+        Ok(DrizzleProductProvenance::new(
+            "a".repeat(64),
+            strict_drizzle_plan_sha256(sources)?,
+            strict_drizzle_parameters_sha256(parameters, output)?,
+            "lights",
+            u32::try_from(sources.len())?,
+        )?)
     }
 
     fn destinations(root: &Path) -> Result<DrizzleProductDestinations, DrizzlePublicationError> {
@@ -2520,13 +2620,16 @@ mod tests {
             BayerPattern::Rggb,
             1.0,
         );
+        let parameters = DrizzleParameters::new(1, 1.0)?;
+        let output = DrizzleOutputBounds::new(3, 2, 4)?;
+        let provenance = strict_provenance(std::slice::from_ref(&source), parameters, output)?;
         let published = run_strict_drizzle_output(
-            &[source],
-            DrizzleParameters::new(1, 1.0)?,
-            DrizzleOutputBounds::new(3, 2, 4)?,
+            std::slice::from_ref(&source),
+            parameters,
+            output,
             1,
             destinations(&output_root)?,
-            &single_source_provenance()?,
+            &provenance,
             &CancellationToken::new(),
             &crate::MemoryBudget::new(1_048_576)?,
         )?;
@@ -2543,12 +2646,12 @@ mod tests {
         );
         assert!(matches!(
             run_strict_drizzle_output(
-                &[stale],
-                DrizzleParameters::new(1, 1.0)?,
-                DrizzleOutputBounds::new(3, 2, 4)?,
+                std::slice::from_ref(&stale),
+                parameters,
+                output,
                 1,
                 rejected_destinations.clone(),
-                &single_source_provenance()?,
+                &strict_provenance(std::slice::from_ref(&stale), parameters, output)?,
                 &CancellationToken::new(),
                 &crate::MemoryBudget::new(1_048_576)?,
             ),
@@ -2559,6 +2662,56 @@ mod tests {
         assert!(!rejected_destinations.science().exists());
         assert!(!rejected_destinations.weight().exists());
         assert!(!rejected_destinations.support().exists());
+        Ok(())
+    }
+
+    #[test]
+    fn strict_digests_bind_scientific_inputs_but_exclude_local_paths() -> TestResult {
+        let fingerprint_a = SourceFingerprint::new(10, "a".repeat(64))?;
+        let fingerprint_b = SourceFingerprint::new(20, "b".repeat(64))?;
+        let source_a = StrictDrizzleSource::new(
+            PipelineSource::new(
+                PathBuf::from("/first/location/a.fits"),
+                fingerprint_a.clone(),
+            ),
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        );
+        let moved_a = StrictDrizzleSource::new(
+            PipelineSource::new(PathBuf::from("/moved/a.fits"), fingerprint_a),
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        );
+        let source_b = StrictDrizzleSource::new(
+            PipelineSource::new(PathBuf::from("/first/location/b.fits"), fingerprint_b),
+            ProjectiveTransform::new([[1.0, 0.0, 0.25], [0.0, 1.0, -0.5], [0.0, 0.0, 1.0]])?,
+            BayerPattern::Bggr,
+            0.75,
+        );
+        assert_eq!(
+            strict_drizzle_plan_sha256(std::slice::from_ref(&source_a))?,
+            strict_drizzle_plan_sha256(std::slice::from_ref(&moved_a))?
+        );
+        assert_ne!(
+            strict_drizzle_plan_sha256(&[source_a.clone(), source_b.clone()])?,
+            strict_drizzle_plan_sha256(&[source_b, source_a])?
+        );
+
+        let output = DrizzleOutputBounds::new(100, 80, 16)?;
+        let baseline = strict_drizzle_parameters_sha256(DrizzleParameters::new(2, 0.8)?, output)?;
+        assert_ne!(
+            baseline,
+            strict_drizzle_parameters_sha256(DrizzleParameters::new(2, 0.7)?, output)?
+        );
+        assert_ne!(
+            baseline,
+            strict_drizzle_parameters_sha256(
+                DrizzleParameters::new(2, 0.8)?,
+                DrizzleOutputBounds::new(100, 81, 16)?,
+            )?
+        );
         Ok(())
     }
 
@@ -2582,14 +2735,17 @@ mod tests {
             BayerPattern::Rggb,
             1.0,
         );
+        let parameters = DrizzleParameters::new(1, 1.0)?;
+        let output = DrizzleOutputBounds::new(3, 2, 4)?;
+        let provenance = strict_provenance(std::slice::from_ref(&source), parameters, output)?;
         let mut events = Vec::new();
         run_strict_drizzle_output_with_progress(
             std::slice::from_ref(&source),
-            DrizzleParameters::new(1, 1.0)?,
-            DrizzleOutputBounds::new(3, 2, 4)?,
+            parameters,
+            output,
             1,
             destinations(&output_root)?,
-            &single_source_provenance()?,
+            &provenance,
             &CancellationToken::new(),
             &crate::MemoryBudget::new(1_048_576)?,
             |event| events.push(event),
@@ -2623,11 +2779,11 @@ mod tests {
         assert!(matches!(
             run_strict_drizzle_output_with_progress(
                 &[source],
-                DrizzleParameters::new(1, 1.0)?,
-                DrizzleOutputBounds::new(3, 2, 4)?,
+                parameters,
+                output,
                 1,
                 destinations(&cancelled_root)?,
-                &single_source_provenance()?,
+                &provenance,
                 &cancellation,
                 &crate::MemoryBudget::new(1_048_576)?,
                 |event| cancelled_events.push(event),

@@ -165,6 +165,13 @@ and repeats every source fingerprint after private product readback immediately
 before publication. A source changed during execution therefore publishes no
 science or diagnostic companion.
 
+Strict provenance is derived, not accepted as a UI assertion. The plan digest
+binds ordered source fingerprints, canonical projective transforms, CFA phases,
+and frame weights while excluding local paths. A separate parameter digest
+binds scale, drop shrink, output geometry, and the per-drop contribution bound.
+Execution rejects any science, weight, or support provenance that does not carry
+both exact digests.
+
 Strict execution exposes one canonical `drizzle-output` progress stream. It
 starts before source verification with an unknown total, publishes the exact
 total after adaptive planning, then advances once per completed output band and
