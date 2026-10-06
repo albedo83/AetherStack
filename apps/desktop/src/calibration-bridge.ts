@@ -333,6 +333,8 @@ export interface ActiveDefectBatch {
   readonly correctedSamples: number;
   readonly insufficientSupportSamples: number;
   readonly blockedBySourceMaskSamples: number;
+  readonly hotSamples: number;
+  readonly coldSamples: number;
   readonly defectiveSamples: number;
   readonly conflictingSamples: number;
   readonly peakReservedBytes: number;

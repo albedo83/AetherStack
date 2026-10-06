@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendDefectBatchResult,
   defectBatchProgressMessage,
+  reconcileActiveDefectBatch,
   reconcileDefectBatchPreview,
   startDefectBatchReport,
 } from "./defect-batch.ts";
@@ -170,5 +171,49 @@ describe("detector correction batch helpers", () => {
     ).toBe(
       "Light 2/4 · Private products staged · validating checksums and sources · 3/5",
     );
+  });
+
+  it("accepts a resume only when the native cursor and aggregates match", () => {
+    const report = {
+      ...startDefectBatchReport({
+        ready: true,
+        planSha256: "a".repeat(64),
+        parametersSha256: "b".repeat(64),
+        itemCount: 3,
+        blockedItemCount: 0,
+        items: [],
+      }),
+      completedItems: 1,
+      requestedSamples: 7,
+      correctedSamples: 5,
+      insufficientSupportSamples: 1,
+      blockedBySourceMaskSamples: 1,
+      conflictingSamples: 2,
+      peakReservedBytes: 2048,
+    };
+    const native = {
+      planSha256: report.planSha256,
+      parametersSha256: report.parametersSha256,
+      nextItemIndex: 1,
+      totalItems: 3,
+      complete: false,
+      requestedSamples: 7,
+      correctedSamples: 5,
+      insufficientSupportSamples: 1,
+      blockedBySourceMaskSamples: 1,
+      hotSamples: 0,
+      coldSamples: 0,
+      defectiveSamples: 7,
+      conflictingSamples: 2,
+      peakReservedBytes: 2048,
+    };
+
+    expect(() => reconcileActiveDefectBatch(report, native, 1)).not.toThrow();
+    expect(() =>
+      reconcileActiveDefectBatch(report, { ...native, correctedSamples: 6 }, 1),
+    ).toThrow("no longer matches");
+    expect(() =>
+      reconcileActiveDefectBatch(report, { ...native, complete: true }, 1),
+    ).toThrow("no longer matches");
   });
 });

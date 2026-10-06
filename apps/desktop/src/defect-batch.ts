@@ -1,4 +1,5 @@
 import type {
+  ActiveDefectBatch,
   DefectBatchPreview,
   DefectBatchPreviewItem,
   DefectCorrectionResult,
@@ -15,6 +16,64 @@ type DefectFrameIdentity = Pick<
 export interface ReconciledDefectBatchItem<T> {
   readonly input: T;
   readonly destination: DefectBatchPreviewItem;
+}
+
+/**
+ * Proves that the browser resume cursor still describes the active native
+ * batch. Every persisted aggregate is compared before another pair may run.
+ */
+export function reconcileActiveDefectBatch(
+  report: DefectBatchReport,
+  native: ActiveDefectBatch,
+  expectedNextItemIndex: number,
+): void {
+  const counters = [
+    report.totalItems,
+    report.completedItems,
+    report.requestedSamples,
+    report.correctedSamples,
+    report.insufficientSupportSamples,
+    report.blockedBySourceMaskSamples,
+    report.conflictingSamples,
+    report.peakReservedBytes,
+    native.nextItemIndex,
+    native.totalItems,
+    native.requestedSamples,
+    native.correctedSamples,
+    native.insufficientSupportSamples,
+    native.blockedBySourceMaskSamples,
+    native.hotSamples,
+    native.coldSamples,
+    native.defectiveSamples,
+    native.conflictingSamples,
+    native.peakReservedBytes,
+    expectedNextItemIndex,
+  ];
+  if (
+    counters.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    !/^[0-9a-f]{64}$/.test(report.planSha256) ||
+    !/^[0-9a-f]{64}$/.test(report.parametersSha256) ||
+    report.planSha256 !== native.planSha256 ||
+    report.parametersSha256 !== native.parametersSha256 ||
+    report.completedItems !== expectedNextItemIndex ||
+    native.nextItemIndex !== expectedNextItemIndex ||
+    report.totalItems !== native.totalItems ||
+    native.complete ||
+    native.nextItemIndex >= native.totalItems ||
+    report.requestedSamples !== native.requestedSamples ||
+    report.requestedSamples !== native.defectiveSamples ||
+    report.correctedSamples !== native.correctedSamples ||
+    report.insufficientSupportSamples !== native.insufficientSupportSamples ||
+    report.blockedBySourceMaskSamples !== native.blockedBySourceMaskSamples ||
+    report.hotSamples !== native.hotSamples ||
+    report.coldSamples !== native.coldSamples ||
+    report.conflictingSamples !== native.conflictingSamples ||
+    report.peakReservedBytes !== native.peakReservedBytes
+  ) {
+    throw new Error(
+      "The native correction batch no longer matches the resume state",
+    );
+  }
 }
 
 /** Starts an inspectable report tied to the exact reviewed native plan. */

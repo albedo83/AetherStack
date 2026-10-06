@@ -6,6 +6,7 @@ import {
   cancelMasterPlan,
   executeDefectCorrection,
   exportDefectBatchReport,
+  inspectActiveDefectBatch,
   inspectDefectBatchReport,
   executeLightPlan,
   executeMasterPlan,
@@ -30,6 +31,7 @@ import {
 import {
   appendDefectBatchResult,
   defectBatchProgressMessage,
+  reconcileActiveDefectBatch,
   reconcileDefectBatchPreview,
   startDefectBatchReport,
   type ReconciledDefectBatchItem,
@@ -4566,6 +4568,32 @@ async function resumeDefectBatch(): Promise<void> {
     !report ||
     report.planSha256 !== resume.batchReport.planSha256
   ) {
+    return;
+  }
+  try {
+    const native = await inspectActiveDefectBatch(report.planSha256);
+    if (defectBatchResume !== resume) return;
+    reconcileActiveDefectBatch(
+      resume.batchReport,
+      native,
+      resume.nextItemIndex,
+    );
+  } catch {
+    if (defectBatchResume !== resume) return;
+    defectBatchResume = null;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          state: "error",
+          resumeAvailable: false,
+          message:
+            "Resume refused · native cursor or scientific totals no longer match",
+        },
+      },
+    });
     return;
   }
   await executeDefectQueue(

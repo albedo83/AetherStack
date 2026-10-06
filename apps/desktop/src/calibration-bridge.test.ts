@@ -427,6 +427,8 @@ describe("native calibration bridge", () => {
       correctedSamples: 19,
       insufficientSupportSamples: 1,
       blockedBySourceMaskSamples: 0,
+      hotSamples: 22,
+      coldSamples: 0,
       defectiveSamples: 20,
       conflictingSamples: 2,
       peakReservedBytes: 123_456,
