@@ -306,6 +306,20 @@ export interface DefectBatchReportExport {
   readonly itemCount: number;
 }
 
+export interface DefectBatchReportInspection {
+  readonly schemaVersion: number;
+  readonly algorithmId: string;
+  readonly reportSha256: string;
+  readonly planSha256: string;
+  readonly parametersSha256: string;
+  readonly completedItems: number;
+  readonly totalItems: number;
+  readonly correctedSamples: number;
+  readonly requestedSamples: number;
+  readonly conflictingSamples: number;
+  readonly peakReservedBytes: number;
+}
+
 export interface DefectExecutionProgress {
   readonly sequence: number;
   readonly stage: string;
@@ -499,5 +513,25 @@ export function exportDefectBatchReport(
   return invoke<DefectBatchReportExport>("export_defect_batch_report", {
     path,
     expectedBatchPlanSha256,
+  });
+}
+
+/** Chooses one previously exported detector-correction JSON envelope. */
+export async function selectDefectBatchReportSource(): Promise<string | null> {
+  const path = await open({
+    directory: false,
+    multiple: false,
+    title: "Inspect a detector correction report",
+    filters: [{ name: "JSON report", extensions: ["json"] }],
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/** Reopens and verifies a report entirely in native code. */
+export function inspectDefectBatchReport(
+  path: string,
+): Promise<DefectBatchReportInspection> {
+  return invoke<DefectBatchReportInspection>("inspect_defect_batch_report", {
+    path,
   });
 }

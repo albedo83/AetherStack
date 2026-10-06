@@ -10,10 +10,12 @@ import {
   executeLightPlan,
   executeMasterPlan,
   exportDefectBatchReport,
+  inspectDefectBatchReport,
   previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
   selectDefectBatchReportDestination,
+  selectDefectBatchReportSource,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type LightExecutionProgress,
@@ -373,6 +375,40 @@ describe("native calibration bridge", () => {
     expect(invoke).toHaveBeenLastCalledWith("export_defect_batch_report", {
       path: "/session/defect-report.json",
       expectedBatchPlanSha256: "a".repeat(64),
+    });
+  });
+
+  it("selects and verifies an existing native defect report", async () => {
+    vi.mocked(open).mockResolvedValue("/session/defect-report.json");
+    const expected = {
+      schemaVersion: 1,
+      algorithmId: "aetherstack-defect-batch-report-v1",
+      reportSha256: "a".repeat(64),
+      planSha256: "b".repeat(64),
+      parametersSha256: "c".repeat(64),
+      completedItems: 2,
+      totalItems: 2,
+      correctedSamples: 42,
+      requestedSamples: 43,
+      conflictingSamples: 1,
+      peakReservedBytes: 123_456,
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+
+    await expect(selectDefectBatchReportSource()).resolves.toBe(
+      "/session/defect-report.json",
+    );
+    expect(open).toHaveBeenCalledWith({
+      directory: false,
+      multiple: false,
+      title: "Inspect a detector correction report",
+      filters: [{ name: "JSON report", extensions: ["json"] }],
+    });
+    await expect(
+      inspectDefectBatchReport("/session/defect-report.json"),
+    ).resolves.toBe(expected);
+    expect(invoke).toHaveBeenLastCalledWith("inspect_defect_batch_report", {
+      path: "/session/defect-report.json",
     });
   });
 });
