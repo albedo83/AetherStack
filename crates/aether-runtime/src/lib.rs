@@ -32,6 +32,7 @@ pub use drizzle::{
     StrictDrizzleSource, accumulate_fits_cfa_frames, accumulate_fits_cfa_tile,
     estimate_drizzle_fits_tile_memory, plan_drizzle_fits_bands, publish_drizzle_products,
     run_drizzle_fits_output, run_drizzle_fits_tile, run_strict_drizzle_output,
+    run_strict_drizzle_output_with_progress,
 };
 pub use light_plan::{
     CalibratedLightFrameExecutionResult, CalibratedLightPlanExecutionResult,

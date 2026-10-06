@@ -2027,6 +2027,10 @@ safety reasoning. They do not narrate obvious syntax.
      controls and invalid weights fail before output work. Every fingerprint is
      recomputed after private product readback and immediately before atomic set
      publication, so mutation during a long run leaves no public products.
+196. Report strict Drizzle progress using deterministic bounded work units. The
+     runtime starts before validation, fixes the exact total after adaptive band
+     planning, advances for every completed band and planar stream chunk, and
+     terminates with a stable completed, cancelled, or failed event.
 
 ## 11. Stable-release definition
 

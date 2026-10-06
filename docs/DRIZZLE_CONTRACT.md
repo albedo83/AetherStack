@@ -165,6 +165,13 @@ and repeats every source fingerprint after private product readback immediately
 before publication. A source changed during execution therefore publishes no
 science or diagnostic companion.
 
+Strict execution exposes one canonical `drizzle-output` progress stream. It
+starts before source verification with an unknown total, publishes the exact
+total after adaptive planning, then advances once per completed output band and
+once per completed planar FITS streaming chunk. Sequence numbers are monotonic;
+success reaches the declared total exactly, and cancellation or failure ends
+with a stable machine-readable code.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

@@ -24,6 +24,7 @@ pub use crate::drizzle_spool::DrizzleSpoolError;
 use crate::pipeline::{open_reader, verify_source};
 use crate::{
     CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, PipelineInput, PipelineSource,
+    ProgressEvent, ProgressEventError, ProgressSequence, ProgressState, StageId, StageIdError,
     StrictPipelineError,
 };
 
@@ -37,6 +38,7 @@ pub const DRIZZLE_SUPPORT_ALGORITHM_ID: &str = "drizzle-support-v1";
 const SUPPORT_CONVERSION_CHUNK: usize = 4_096;
 const MAX_EXACT_BINARY64_INTEGER: u64 = 1_u64 << 53;
 const DRIZZLE_STREAM_CHUNK: usize = 1_024;
+const DRIZZLE_OUTPUT_STAGE_ID: &str = "drizzle-output";
 
 /// Evidence for one bounded FITS region accumulated into a Drizzle tile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -891,6 +893,12 @@ pub enum DrizzleOutputExecutionError {
     Input(StrictPipelineError),
     /// Opened-source bookkeeping could not be allocated.
     SourceAllocation,
+    /// Deterministic progress work-unit accounting overflowed.
+    WorkSizeOverflow,
+    /// The fixed stage identifier unexpectedly failed validation.
+    StageId(StageIdError),
+    /// A machine-readable progress event violated its invariant.
+    Progress(ProgressEventError),
     /// Tile evidence aggregation overflowed.
     Evidence(aether_drizzle::DrizzleAccumulationError),
     /// FITS staging, verification, or atomic publication failed.
@@ -919,6 +927,11 @@ impl Display for DrizzleOutputExecutionError {
             Self::SourceAllocation => {
                 formatter.write_str("cannot allocate opened Drizzle source bookkeeping")
             }
+            Self::WorkSizeOverflow => {
+                formatter.write_str("Drizzle progress work size cannot be represented")
+            }
+            Self::StageId(error) => write!(formatter, "invalid Drizzle output stage: {error}"),
+            Self::Progress(error) => write!(formatter, "invalid Drizzle output progress: {error}"),
             Self::Evidence(error) => Display::fmt(error, formatter),
             Self::Publication(error) => Display::fmt(error, formatter),
         }
@@ -935,10 +948,34 @@ impl Error for DrizzleOutputExecutionError {
             Self::Evidence(error) => Some(error),
             Self::Publication(error) => Some(error),
             Self::Input(error) => Some(error),
+            Self::StageId(error) => Some(error),
+            Self::Progress(error) => Some(error),
             Self::OutputDimensions
             | Self::InvalidProvenance
             | Self::InvalidSourceConfiguration { .. }
-            | Self::SourceAllocation => None,
+            | Self::SourceAllocation
+            | Self::WorkSizeOverflow => None,
+        }
+    }
+}
+
+impl DrizzleOutputExecutionError {
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Cancelled(_) => "cancelled",
+            Self::Plan(_) => "drizzle-plan",
+            Self::Band { .. } => "drizzle-band",
+            Self::Spool(_) => "drizzle-spool",
+            Self::OutputDimensions => "drizzle-output-dimensions",
+            Self::InvalidProvenance => "drizzle-provenance",
+            Self::InvalidSourceConfiguration { .. } => "drizzle-source-configuration",
+            Self::Input(_) => "drizzle-input",
+            Self::SourceAllocation => "drizzle-source-allocation",
+            Self::WorkSizeOverflow => "drizzle-work-size",
+            Self::StageId(_) => "drizzle-stage",
+            Self::Progress(_) => "drizzle-progress",
+            Self::Evidence(_) => "drizzle-evidence",
+            Self::Publication(_) => "drizzle-publication",
         }
     }
 }
@@ -971,11 +1008,18 @@ pub fn run_drizzle_fits_output<R: Read + Seek>(
         cancellation,
         memory,
         || Ok(()),
+        |_| Ok(()),
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DrizzleProgressMoment {
+    Planned { total_units: u64 },
+    Advanced,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn run_drizzle_fits_output_inner<R: Read + Seek, F>(
+fn run_drizzle_fits_output_inner<R: Read + Seek, F, G>(
     frames: &mut [DrizzleFitsFrame<R>],
     parameters: DrizzleParameters,
     output: DrizzleOutputBounds,
@@ -985,9 +1029,11 @@ fn run_drizzle_fits_output_inner<R: Read + Seek, F>(
     cancellation: &CancellationToken,
     memory: &MemoryBudget,
     before_publish: F,
+    mut progress: G,
 ) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError>
 where
     F: FnOnce() -> Result<(), DrizzleOutputExecutionError>,
+    G: FnMut(DrizzleProgressMoment) -> Result<(), DrizzleOutputExecutionError>,
 {
     cancellation
         .checkpoint()
@@ -1011,6 +1057,18 @@ where
     .map_err(DrizzleOutputExecutionError::Plan)?;
     let dimensions = Dimensions::new(output.width() as usize, output.height() as usize, 3)
         .map_err(|_| DrizzleOutputExecutionError::OutputDimensions)?;
+    let stream_chunks = dimensions
+        .pixel_count()
+        .checked_add(DRIZZLE_STREAM_CHUNK - 1)
+        .ok_or(DrizzleOutputExecutionError::WorkSizeOverflow)?
+        / DRIZZLE_STREAM_CHUNK;
+    let total_units = plan
+        .bands()
+        .len()
+        .checked_add(stream_chunks)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(DrizzleOutputExecutionError::WorkSizeOverflow)?;
+    progress(DrizzleProgressMoment::Planned { total_units })?;
     let mut science = AtomicF64PrimaryStreamWriter::create_with_provenance(
         destinations.science(),
         dimensions,
@@ -1051,6 +1109,7 @@ where
         spool
             .write_band(executed.result())
             .map_err(DrizzleOutputExecutionError::Spool)?;
+        progress(DrizzleProgressMoment::Advanced)?;
     }
     let mut spool = spool.finish().map_err(DrizzleOutputExecutionError::Spool)?;
     let mut science_values = [0.0_f64; DRIZZLE_STREAM_CHUNK];
@@ -1087,6 +1146,7 @@ where
         support
             .write_samples(&support_values[..count], &clear_flags[..count])
             .map_err(|source| publication_stage_error(DrizzleProductKind::Support, source))?;
+        progress(DrizzleProgressMoment::Advanced)?;
     }
     cancellation
         .checkpoint()
@@ -1157,6 +1217,132 @@ pub fn run_strict_drizzle_output(
     cancellation: &CancellationToken,
     memory: &MemoryBudget,
 ) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError> {
+    run_strict_drizzle_output_with_progress(
+        sources,
+        parameters,
+        output,
+        maximum_band_height,
+        destinations,
+        provenance,
+        cancellation,
+        memory,
+        |_| {},
+    )
+}
+
+/// Executes strict Drizzle while reporting deterministic bounded work units.
+///
+/// The first event starts with an unknown total because source validation and
+/// adaptive planning have not completed. The first running event publishes the
+/// exact total number of output bands plus planar streaming chunks. Each later
+/// running event completes exactly one of those units; success ends at the
+/// declared total, while failures and cancellation carry stable codes.
+#[allow(clippy::too_many_arguments)]
+pub fn run_strict_drizzle_output_with_progress<F>(
+    sources: &[StrictDrizzleSource],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    maximum_band_height: u32,
+    destinations: DrizzleProductDestinations,
+    provenance: &DrizzleProductProvenance,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    mut progress: F,
+) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let stage =
+        StageId::new(DRIZZLE_OUTPUT_STAGE_ID).map_err(DrizzleOutputExecutionError::StageId)?;
+    let sequence = ProgressSequence::new();
+    emit_drizzle_progress(
+        &sequence,
+        &stage,
+        ProgressState::Started,
+        0,
+        None,
+        None,
+        &mut progress,
+    )?;
+    let mut completed = 0_u64;
+    let mut total = None;
+    let execution = execute_strict_drizzle_output(
+        sources,
+        parameters,
+        output,
+        maximum_band_height,
+        destinations,
+        provenance,
+        cancellation,
+        memory,
+        |moment| {
+            match moment {
+                DrizzleProgressMoment::Planned { total_units } => total = Some(total_units),
+                DrizzleProgressMoment::Advanced => {
+                    completed = completed
+                        .checked_add(1)
+                        .ok_or(DrizzleOutputExecutionError::WorkSizeOverflow)?;
+                }
+            }
+            emit_drizzle_progress(
+                &sequence,
+                &stage,
+                ProgressState::Running,
+                completed,
+                total,
+                None,
+                &mut progress,
+            )
+        },
+    );
+    match execution {
+        Ok(result) => {
+            emit_drizzle_progress(
+                &sequence,
+                &stage,
+                ProgressState::Completed,
+                completed,
+                total,
+                None,
+                &mut progress,
+            )?;
+            Ok(result)
+        }
+        Err(error) => {
+            let state = if matches!(error, DrizzleOutputExecutionError::Cancelled(_)) {
+                ProgressState::Cancelled
+            } else {
+                ProgressState::Failed
+            };
+            let _ignored = emit_drizzle_progress(
+                &sequence,
+                &stage,
+                state,
+                completed,
+                total,
+                Some(error.code().to_owned()),
+                &mut progress,
+            );
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_strict_drizzle_output<F>(
+    sources: &[StrictDrizzleSource],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    maximum_band_height: u32,
+    destinations: DrizzleProductDestinations,
+    provenance: &DrizzleProductProvenance,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    progress: F,
+) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError>
+where
+    F: FnMut(DrizzleProgressMoment) -> Result<(), DrizzleOutputExecutionError>,
+{
     cancellation
         .checkpoint()
         .map_err(DrizzleOutputExecutionError::Cancelled)?;
@@ -1203,7 +1389,28 @@ pub fn run_strict_drizzle_output(
             }
             Ok(())
         },
+        progress,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_drizzle_progress<F>(
+    sequence: &ProgressSequence,
+    stage: &StageId,
+    state: ProgressState,
+    completed: u64,
+    total: Option<u64>,
+    code: Option<String>,
+    progress: &mut F,
+) -> Result<(), DrizzleOutputExecutionError>
+where
+    F: FnMut(ProgressEvent),
+{
+    let event = sequence
+        .next(stage.clone(), state, completed, total, code)
+        .map_err(DrizzleOutputExecutionError::Progress)?;
+    progress(event);
+    Ok(())
 }
 
 fn publication_stage_error(
@@ -2356,6 +2563,90 @@ mod tests {
     }
 
     #[test]
+    fn strict_output_progress_has_exact_units_and_terminal_states() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let source_path = directory.0.join("source.fits");
+        let output_root = directory.0.join("progress-output");
+        let cancelled_root = directory.0.join("cancelled-output");
+        fs::create_dir(&output_root)?;
+        fs::create_dir(&cancelled_root)?;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(3, 2, 1)?,
+            (0..6).map(|value| f64::from(value) + 0.25).collect(),
+        )?;
+        fs::write(&source_path, fits_bytes(&image)?)?;
+        let fingerprint = fingerprint_reader(&mut File::open(&source_path)?)?;
+        let source = StrictDrizzleSource::new(
+            PipelineSource::new(source_path, fingerprint),
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        );
+        let mut events = Vec::new();
+        run_strict_drizzle_output_with_progress(
+            std::slice::from_ref(&source),
+            DrizzleParameters::new(1, 1.0)?,
+            DrizzleOutputBounds::new(3, 2, 4)?,
+            1,
+            destinations(&output_root)?,
+            &single_source_provenance()?,
+            &CancellationToken::new(),
+            &crate::MemoryBudget::new(1_048_576)?,
+            |event| events.push(event),
+        )?;
+        assert_eq!(events.len(), 6);
+        assert_eq!(
+            events.first().map(ProgressEvent::state),
+            Some(ProgressState::Started)
+        );
+        assert_eq!(events.first().and_then(ProgressEvent::total_units), None);
+        assert_eq!(
+            events.last().map(ProgressEvent::state),
+            Some(ProgressState::Completed)
+        );
+        assert_eq!(events.last().map(ProgressEvent::completed_units), Some(3));
+        assert_eq!(events.last().and_then(ProgressEvent::total_units), Some(3));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.stage().as_str() == DRIZZLE_OUTPUT_STAGE_ID)
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[1].sequence() == pair[0].sequence() + 1)
+        );
+
+        let cancellation = CancellationToken::new();
+        assert!(cancellation.cancel());
+        let mut cancelled_events = Vec::new();
+        assert!(matches!(
+            run_strict_drizzle_output_with_progress(
+                &[source],
+                DrizzleParameters::new(1, 1.0)?,
+                DrizzleOutputBounds::new(3, 2, 4)?,
+                1,
+                destinations(&cancelled_root)?,
+                &single_source_provenance()?,
+                &cancellation,
+                &crate::MemoryBudget::new(1_048_576)?,
+                |event| cancelled_events.push(event),
+            ),
+            Err(DrizzleOutputExecutionError::Cancelled(_))
+        ));
+        assert_eq!(cancelled_events.len(), 2);
+        assert_eq!(
+            cancelled_events.last().map(ProgressEvent::state),
+            Some(ProgressState::Cancelled)
+        );
+        assert_eq!(
+            cancelled_events.last().and_then(ProgressEvent::code),
+            Some("cancelled")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn source_mutation_after_private_staging_blocks_every_product() -> TestResult {
         let directory = TestDirectory::new()?;
         let source_path = directory.0.join("source.fits");
@@ -2392,6 +2683,7 @@ mod tests {
                 verify_source(&pipeline_source, PipelineInput::Signal { index: 0 })
                     .map_err(DrizzleOutputExecutionError::Input)
             },
+            |_| Ok(()),
         ) {
             Ok(_) => return Err("late source mutation unexpectedly published products".into()),
             Err(error) => error,
