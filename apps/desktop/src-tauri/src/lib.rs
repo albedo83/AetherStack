@@ -6179,6 +6179,22 @@ fn defect_detection_parameters(
     .map_err(|_| defect_correction_configuration_error())
 }
 
+fn validate_defect_lattice(
+    bayer_pattern: Option<&BayerPattern>,
+    dark: DefectDetectionSettings,
+    flat: DefectDetectionSettings,
+    correction_stride: usize,
+) -> Result<(), PreviewCommandError> {
+    let expected = if bayer_pattern.is_some() { 2 } else { 1 };
+    if dark.stride != expected || flat.stride != expected || correction_stride != expected {
+        return Err(PreviewCommandError::new(
+            "defect_correction_lattice_mismatch",
+            "Detector correction sampling does not match the Light group's CFA metadata.",
+        ));
+    }
+    Ok(())
+}
+
 fn fingerprint_pipeline_source(path: PathBuf) -> Result<PipelineSource, PreviewCommandError> {
     let mut source = File::open(&path).map_err(|_| defect_correction_input_error())?;
     let fingerprint =
@@ -6216,6 +6232,18 @@ fn execute_defect_correction_sync(
         .calibrated_frames
         .get(&(request.group_id.clone(), request.source_frame_id.clone()))
         .ok_or_else(calibration_artifact_state_error)?;
+    let group = session
+        .manifest
+        .groups()
+        .iter()
+        .find(|group| group.id() == request.group_id)
+        .ok_or_else(calibration_artifact_state_error)?;
+    validate_defect_lattice(
+        group.key().bayer_pattern(),
+        request.dark_detection,
+        request.flat_detection,
+        request.correction_stride,
+    )?;
     let dark_master_path = artifacts
         .masters
         .get(&("dark".to_owned(), frame.dark_group_id.clone()))
@@ -8893,6 +8921,29 @@ mod tests {
             1.0_f64.to_bits()
         );
         Ok(())
+    }
+
+    #[test]
+    fn defect_lattice_must_match_cfa_metadata() {
+        let bayer = defect_command_request().dark_detection;
+        assert!(validate_defect_lattice(Some(&BayerPattern::Rggb), bayer, bayer, 2).is_ok());
+        assert!(matches!(
+            validate_defect_lattice(Some(&BayerPattern::Rggb), bayer, bayer, 1),
+            Err(PreviewCommandError {
+                code: "defect_correction_lattice_mismatch",
+                ..
+            })
+        ));
+
+        let mono = DefectDetectionSettings { stride: 1, ..bayer };
+        assert!(validate_defect_lattice(None, mono, mono, 1).is_ok());
+        assert!(matches!(
+            validate_defect_lattice(None, bayer, bayer, 2),
+            Err(PreviewCommandError {
+                code: "defect_correction_lattice_mismatch",
+                ..
+            })
+        ));
     }
 
     #[test]

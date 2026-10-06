@@ -2126,6 +2126,10 @@ safety reasoning. They do not narrate obvious syntax.
      in Advanced mode, and reports the published parameter seal and conservative
      replacement counts. Camera-specific automatic profiles remain gated on
      representative corpus validation.
+213. Make the detector lattice a native metadata invariant. CFA Light groups
+     require same-phase stride two for Dark detection, Flat detection, and
+     replacement; monochrome groups require stride one. A visible desktop
+     choice can never override the imported manifest silently.
 
 ## 11. Stable-release definition
 
