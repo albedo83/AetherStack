@@ -2135,6 +2135,27 @@ safety reasoning. They do not narrate obvious syntax.
      FITS pixels, preventing per-view stretching from disguising differences.
      Browser object URLs are revoked on rerun, replanning, session replacement,
      view replacement, and shutdown.
+215. Render the exact HOT/COLD companion as categorical evidence. Power-of-two
+     reduction uses bitwise union rather than a numerical mean, so an isolated
+     defect cannot disappear at overview scale and a reduced block preserves
+     contradictory evidence. The decoder fails closed outside `0`, `4`, `8`,
+     and `12`; fixed orange, cyan, and violet categories never use a scientific
+     display stretch.
+216. Carry detector evidence through the complete desktop boundary. Per-role
+     examined, unsupported, unavailable, HOT, and COLD totals accompany unique
+     merged HOT/COLD/conflict counts. The detector laboratory displays these
+     decisions beside an accessible categorical legend instead of reducing the
+     result to one corrected-pixel total.
+217. Stream one validated native correction lifecycle. Five deterministic work
+     units cover reference analysis, science correction, private staging,
+     readback/source revalidation, and atomic publication. Sequence, terminal
+     state, failure code, and total invariants use the shared runtime progress
+     contract and feed a native desktop channel.
+218. Queue all eligible calibrated Lights from one destination choice. The
+     reviewed Light runs first and remaining native order stays stable. Each
+     corrected-Light plus map pair is independently atomic; completed pairs are
+     retained after cancellation or a later-frame failure, and the interface
+     reports this scope explicitly rather than claiming whole-queue atomicity.
 
 ## 11. Stable-release definition
 

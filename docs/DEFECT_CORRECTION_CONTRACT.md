@@ -39,7 +39,7 @@ output becomes canonical NaN and retains the HOT or COLD reason with MISSING.
 After a successful replacement the corrected image is usable, while the returned
 defect map permanently retains the original HOT or COLD evidence.
 
-## Evidence and future runtime integration
+## Evidence
 
 Detection reports examined, unsupported, unavailable, hot, and cold totals.
 Correction reports requested, corrected, unsupported, and source-mask-blocked
@@ -78,3 +78,18 @@ foreign-bit samples. Corrected science and its map are privately completed,
 checksum-verified, source-revalidated, and exposed by one create-new product-set
 publication. A companion collision leaves the corrected destination absent and
 does not alter the existing file.
+
+## Desktop inspection and queues
+
+The desktop retains per-reference detection evidence and exact unique merged
+HOT, COLD, and conflict counts. The companion preview is categorical: reduction
+ORs source bits, clear samples are black, HOT is orange, COLD is cyan, and
+combined evidence is violet. It never averages mask values or applies a display
+stretch. Before and after science previews continue to share one transform
+derived from the calibrated input.
+
+One queue may process every calibrated Light whose reviewed group has both Dark
+and Flat associations. The currently reviewed Light runs first, then native
+calibration order resumes. Atomicity is deliberately scoped to each Light/map
+pair so memory remains bounded and successfully published pairs survive a later
+failure or user cancellation. No individual pair can be partially published.

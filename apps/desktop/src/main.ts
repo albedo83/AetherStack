@@ -4302,13 +4302,16 @@ async function executeDefectQueue(
       });
       return;
     }
+    const stoppedEarly =
+      completed < inputs.length &&
+      model.calibration.defectCorrection.state === "cancelling";
     update({
       ...model,
       calibration: {
         ...model.calibration,
         defectCorrection: {
           ...model.calibration.defectCorrection,
-          state: "completed",
+          state: stoppedEarly ? "idle" : "completed",
           outputDirectory,
           sourceFrameId: focus.frame.sourceFrameId,
           result,
@@ -4317,8 +4320,9 @@ async function executeDefectQueue(
           previewView: "after",
           preview: null,
           previewMessage: "Corrected pixels published · preparing comparison",
-          message:
-            inputs.length === 1
+          message: stoppedEarly
+            ? `${completed}/${inputs.length} complete pairs retained · queue stopped between Lights`
+            : inputs.length === 1
               ? `${result.correctedSamples}/${result.requestedSamples} detector samples corrected · peak ${formatMemory(result.reservedBytes)}`
               : `${completed}/${inputs.length} atomic Light + map pairs published · peak ${formatMemory(result.reservedBytes)}`,
         },
@@ -4361,7 +4365,22 @@ async function cancelSelectedDefectCorrection(): Promise<void> {
   });
   try {
     await cancelDefectCorrection();
-  } catch {
+  } catch (error) {
+    if (nativeErrorCode(error) === "defect_correction_missing") {
+      update({
+        ...model,
+        calibration: {
+          ...model.calibration,
+          defectCorrection: {
+            ...model.calibration.defectCorrection,
+            state: "cancelling",
+            message:
+              "Cancellation latched between Lights · no new pair will start",
+          },
+        },
+      });
+      return;
+    }
     update({
       ...model,
       calibration: {

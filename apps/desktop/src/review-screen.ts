@@ -4435,10 +4435,9 @@ function renderDefectCorrection(
     : "No correction evidence published";
   for (const button of elements.defectPreviewButtons) {
     const view = button.dataset.defectPreview;
-    button.setAttribute(
-      "aria-selected",
-      String(view === correction.previewView),
-    );
+    const selected = view === correction.previewView;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
     button.disabled =
       !correction.result || correction.previewState === "loading";
   }
@@ -4463,6 +4462,9 @@ function renderDefectCorrection(
   elements.executeAllDefectCorrections.disabled =
     !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
   elements.executeAllDefectCorrections.hidden = busy;
+  const eligibleCount =
+    model.calibration.lightExecution.result?.calibratedFrames.length ?? 0;
+  elements.executeAllDefectCorrections.textContent = `Correct all ${eligibleCount} eligible ${eligibleCount === 1 ? "Light" : "Lights"}`;
   elements.cancelDefectCorrection.hidden = !busy;
   elements.cancelDefectCorrection.disabled = correction.state === "cancelling";
 
@@ -5684,23 +5686,23 @@ function shellMarkup(): string {
                     </div>
                   </details>
                   <div class="defect-console__status">
-                    <p data-defect-correction-message></p>
+                    <p data-defect-correction-message role="status" aria-live="polite"></p>
                     <progress data-defect-correction-progress aria-label="Detector correction progress" hidden></progress>
                     <output data-defect-correction-evidence>No correction evidence published</output>
                     <code data-defect-correction-output></code>
                   </div>
                   <section class="defect-preview" aria-label="Detector correction comparison">
                     <div class="defect-preview__tabs" role="tablist" aria-label="Correction inputs, output, and defect map">
-                      <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="before" aria-selected="false" disabled>Before</button>
-                      <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="after" aria-selected="true" disabled>After</button>
-                      <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="map" aria-selected="false" disabled>Map</button>
+                      <button type="button" role="tab" aria-controls="defect-preview-panel" data-action="select-defect-preview" data-defect-preview="before" aria-selected="false" disabled>Before</button>
+                      <button type="button" role="tab" aria-controls="defect-preview-panel" data-action="select-defect-preview" data-defect-preview="after" aria-selected="true" disabled>After</button>
+                      <button type="button" role="tab" aria-controls="defect-preview-panel" data-action="select-defect-preview" data-defect-preview="map" aria-selected="false" disabled>Map</button>
                     </div>
                     <div class="defect-preview__legend" aria-label="Defect map color legend">
                       <span data-kind="hot"><i aria-hidden="true"></i>HOT</span>
                       <span data-kind="cold"><i aria-hidden="true"></i>COLD</span>
                       <span data-kind="conflict"><i aria-hidden="true"></i>CONFLICT</span>
                     </div>
-                    <div class="defect-preview__stage">
+                    <div class="defect-preview__stage" id="defect-preview-panel" role="tabpanel" tabindex="0">
                       <img data-defect-preview-image alt="" hidden />
                       <div data-defect-preview-placeholder>Publish one correction to unlock the shared before / after view</div>
                     </div>
@@ -5708,7 +5710,7 @@ function shellMarkup(): string {
                   </section>
                   <div class="defect-console__actions">
                     <button class="button button--primary" type="button" data-action="execute-defect-correction" disabled>Correct selected Light</button>
-                    <button class="button" type="button" data-action="execute-all-defect-corrections" disabled>Correct all eligible Lights</button>
+                    <button class="button" type="button" data-action="execute-all-defect-corrections" disabled>Correct all 0 eligible Lights</button>
                     <button class="button button--danger" type="button" data-action="cancel-defect-correction" hidden>Cancel correction</button>
                   </div>
                 </section>

@@ -1134,7 +1134,9 @@ describe("frame review workspace", () => {
     );
     expect(actions.onExecuteDefectCorrection).toHaveBeenCalledOnce();
     fireEvent.click(
-      getByRole(root, "button", { name: "Correct all eligible Lights" }),
+      getByRole(root, "button", {
+        name: /Correct all \d+ eligible Lights?/,
+      }),
     );
     expect(actions.onExecuteAllDefectCorrections).toHaveBeenCalledOnce();
 
@@ -1226,6 +1228,7 @@ describe("frame review workspace", () => {
       name: "Before",
     });
     expect(before.disabled).toBe(false);
+    expect(before.tabIndex).toBe(-1);
     fireEvent.click(before);
     expect(actions.onSelectDefectPreview).toHaveBeenCalledWith("before");
     const map = getByRole<HTMLButtonElement>(root, "tab", { name: "Map" });
