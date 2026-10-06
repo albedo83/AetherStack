@@ -55,7 +55,10 @@ pub use light_plan::{
     LightProductExecutionResult, run_calibrated_light_plan, run_demosaiced_light_plan,
     run_light_plan,
 };
-pub use linear_defect::{LinearDefectParameterSealError, strict_linear_defect_parameters_sha256};
+pub use linear_defect::{
+    LinearDefectMemoryEstimate, LinearDefectMemoryEstimateError, LinearDefectParameterSealError,
+    estimate_linear_defect_memory, strict_linear_defect_parameters_sha256,
+};
 pub use local_normalization::{
     LocalNormalizationCellDiagnostic, LocalNormalizationControlPoint,
     LocalNormalizationMemoryEstimate, LocalNormalizationPipelineError, LocalNormalizationRequest,
