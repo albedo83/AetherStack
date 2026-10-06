@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 export type FlatPedestalPolicy =
   "require_matched_dark" | "require_bias" | "prefer_matched_dark_then_bias";
@@ -300,6 +300,12 @@ export interface DefectCorrectionResult {
   readonly mapSummary: DefectMapSummary;
 }
 
+export interface DefectBatchReportExport {
+  readonly path: string;
+  readonly reportSha256: string;
+  readonly itemCount: number;
+}
+
 export interface DefectExecutionProgress {
   readonly sequence: number;
   readonly stage: string;
@@ -471,4 +477,27 @@ export function executeDefectCorrection(
 /** Requests cooperative cancellation before the atomic publication boundary. */
 export function cancelDefectCorrection(): Promise<boolean> {
   return invoke<boolean>("cancel_defect_correction");
+}
+
+/** Chooses a create-new JSON destination for the completed native report. */
+export async function selectDefectBatchReportDestination(
+  planSha256: string,
+): Promise<string | null> {
+  const path = await save({
+    title: "Export verified detector correction report",
+    defaultPath: `aetherstack-defect-${planSha256.slice(0, 12)}.json`,
+    filters: [{ name: "JSON report", extensions: ["json"] }],
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/** Publishes the completed native aggregate with its canonical SHA-256. */
+export function exportDefectBatchReport(
+  path: string,
+  expectedBatchPlanSha256: string,
+): Promise<DefectBatchReportExport> {
+  return invoke<DefectBatchReportExport>("export_defect_batch_report", {
+    path,
+    expectedBatchPlanSha256,
+  });
 }

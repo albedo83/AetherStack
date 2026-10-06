@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,9 +9,11 @@ import {
   executeDefectCorrection,
   executeLightPlan,
   executeMasterPlan,
+  exportDefectBatchReport,
   previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
+  selectDefectBatchReportDestination,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type LightExecutionProgress,
@@ -27,7 +29,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     this.onmessage = undefined;
   }),
 }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
 afterEach(() => vi.clearAllMocks());
 
@@ -346,5 +348,31 @@ describe("native calibration bridge", () => {
 
     await expect(previewDefectBatch(request)).resolves.toBe(expected);
     expect(invoke).toHaveBeenCalledWith("preview_defect_batch", { request });
+  });
+
+  it("selects and publishes a verified native defect report", async () => {
+    vi.mocked(save).mockResolvedValue("/session/defect-report.json");
+    const expected = {
+      path: "/session/defect-report.json",
+      reportSha256: "f".repeat(64),
+      itemCount: 2,
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+
+    await expect(
+      selectDefectBatchReportDestination("a".repeat(64)),
+    ).resolves.toBe("/session/defect-report.json");
+    expect(save).toHaveBeenCalledWith({
+      title: "Export verified detector correction report",
+      defaultPath: "aetherstack-defect-aaaaaaaaaaaa.json",
+      filters: [{ name: "JSON report", extensions: ["json"] }],
+    });
+    await expect(
+      exportDefectBatchReport("/session/defect-report.json", "a".repeat(64)),
+    ).resolves.toBe(expected);
+    expect(invoke).toHaveBeenLastCalledWith("export_defect_batch_report", {
+      path: "/session/defect-report.json",
+      expectedBatchPlanSha256: "a".repeat(64),
+    });
   });
 });

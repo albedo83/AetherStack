@@ -503,6 +503,7 @@ export interface ReviewActions {
   ) => void;
   readonly onExecuteDefectCorrection: () => void;
   readonly onExecuteAllDefectCorrections: () => void;
+  readonly onExportDefectBatchReport: () => void;
   readonly onCancelDefectCorrection: () => void;
   readonly onSelectDefectPreview: (view: "before" | "after" | "map") => void;
   readonly onImportSession: () => void;

@@ -1813,6 +1813,14 @@ struct ReviewedDefectBatch {
     memory_limit_bytes: u64,
     next_item_index: usize,
     items: Vec<DefectBatchPreviewItem>,
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+    conflicting_samples: usize,
+    peak_reserved_bytes: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -1991,6 +1999,43 @@ struct DefectCorrectionResponse {
     dark_detection: DefectDetectionResponse,
     flat_detection: DefectDetectionResponse,
     map_summary: DefectMapSummaryResponse,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectBatchReport {
+    algorithm_id: &'static str,
+    plan_sha256: String,
+    parameters_sha256: String,
+    manifest_sha256: String,
+    light_plan_sha256: String,
+    memory_limit_bytes: u64,
+    completed_items: usize,
+    total_items: usize,
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+    conflicting_samples: usize,
+    peak_reserved_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectBatchReportEnvelope {
+    schema_version: u32,
+    report_sha256: String,
+    report: DefectBatchReport,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectBatchReportExportResponse {
+    path: String,
+    report_sha256: String,
+    item_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -6257,6 +6302,14 @@ fn record_reviewed_defect_batch(
         memory_limit_bytes: request.memory_limit_bytes,
         next_item_index: 0,
         items: response.items.clone(),
+        requested_samples: 0,
+        corrected_samples: 0,
+        insufficient_support_samples: 0,
+        blocked_by_source_mask_samples: 0,
+        hot_samples: 0,
+        cold_samples: 0,
+        conflicting_samples: 0,
+        peak_reserved_bytes: 0,
     });
     *lock_reviewed_defect_batch(state)? = reviewed;
     Ok(())
@@ -6525,7 +6578,11 @@ async fn execute_defect_correction(
             "The detector-defect worker stopped before producing a result.",
         )
     })??;
-    let batch = advance_reviewed_defect_batch(&artifact_state, &reviewed_request)?;
+    let batch = advance_reviewed_defect_batch(
+        &artifact_state,
+        &reviewed_request,
+        DefectBatchEvidence::from(&response),
+    )?;
     response.batch_completed_items = batch.completed_items;
     response.batch_total_items = batch.total_items;
     response.batch_complete = batch.complete;
@@ -6537,6 +6594,105 @@ fn cancel_defect_correction(
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
 ) -> Result<bool, PreviewCommandError> {
     cancel_calibration_execution(&execution_state, "defect_correction_missing")
+}
+
+#[tauri::command]
+fn export_defect_batch_report(
+    path: PathBuf,
+    expected_batch_plan_sha256: String,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
+) -> Result<DefectBatchReportExportResponse, PreviewCommandError> {
+    export_defect_batch_report_sync(&path, &expected_batch_plan_sha256, &artifact_state)
+}
+
+fn export_defect_batch_report_sync(
+    path: &Path,
+    expected_batch_plan_sha256: &str,
+    state: &DesktopCalibrationArtifactState,
+) -> Result<DefectBatchReportExportResponse, PreviewCommandError> {
+    if !path.is_absolute()
+        || path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(defect_batch_report_error());
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => return Err(defect_batch_report_exists_error()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(defect_batch_report_error()),
+    }
+    let batch = lock_reviewed_defect_batch(state)?
+        .clone()
+        .ok_or_else(defect_batch_stale_error)?;
+    if batch.plan_sha256 != expected_batch_plan_sha256
+        || batch.next_item_index != batch.items.len()
+        || batch.items.is_empty()
+    {
+        return Err(defect_batch_stale_error());
+    }
+    let report = DefectBatchReport {
+        algorithm_id: "aetherstack-defect-batch-report-v1",
+        plan_sha256: batch.plan_sha256,
+        parameters_sha256: batch.parameters_sha256,
+        manifest_sha256: batch.manifest_sha256,
+        light_plan_sha256: batch.light_plan_sha256,
+        memory_limit_bytes: batch.memory_limit_bytes,
+        completed_items: batch.next_item_index,
+        total_items: batch.items.len(),
+        requested_samples: batch.requested_samples,
+        corrected_samples: batch.corrected_samples,
+        insufficient_support_samples: batch.insufficient_support_samples,
+        blocked_by_source_mask_samples: batch.blocked_by_source_mask_samples,
+        hot_samples: batch.hot_samples,
+        cold_samples: batch.cold_samples,
+        conflicting_samples: batch.conflicting_samples,
+        peak_reserved_bytes: batch.peak_reserved_bytes,
+    };
+    let canonical = serde_json::to_vec(&report).map_err(|_| defect_batch_report_error())?;
+    let report_sha256 = lowercase_hex(&Sha256::digest(&canonical));
+    let item_count = report.total_items;
+    let envelope = DefectBatchReportEnvelope {
+        schema_version: 1,
+        report_sha256: report_sha256.clone(),
+        report,
+    };
+    let mut encoded =
+        serde_json::to_vec_pretty(&envelope).map_err(|_| defect_batch_report_error())?;
+    encoded.push(b'\n');
+    if encoded.len() > 1_048_576 {
+        return Err(defect_batch_report_error());
+    }
+    publish_immutable_report(path, &encoded).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            defect_batch_report_exists_error()
+        } else {
+            defect_batch_report_error()
+        }
+    })?;
+    Ok(DefectBatchReportExportResponse {
+        path: path
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(defect_batch_report_error)?,
+        report_sha256,
+        item_count,
+    })
+}
+
+const fn defect_batch_report_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_batch_report_failed",
+        "The detector-correction batch report could not be published.",
+    )
+}
+
+const fn defect_batch_report_exists_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_batch_report_exists",
+        "The detector-correction batch report destination already exists.",
+    )
 }
 
 fn validate_defect_command_paths(
@@ -6614,6 +6770,7 @@ fn validate_reviewed_defect_item(
 fn advance_reviewed_defect_batch(
     state: &DesktopCalibrationArtifactState,
     request: &DefectCorrectionCommandRequest,
+    evidence: DefectBatchEvidence,
 ) -> Result<DefectBatchAdvance, PreviewCommandError> {
     let mut guard = lock_reviewed_defect_batch(state)?;
     let batch = guard.as_mut().ok_or_else(defect_batch_stale_error)?;
@@ -6626,6 +6783,35 @@ fn advance_reviewed_defect_batch(
         .next_item_index
         .checked_add(1)
         .ok_or_else(defect_batch_stale_error)?;
+    batch.requested_samples = batch
+        .requested_samples
+        .checked_add(evidence.requested_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.corrected_samples = batch
+        .corrected_samples
+        .checked_add(evidence.corrected_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.insufficient_support_samples = batch
+        .insufficient_support_samples
+        .checked_add(evidence.insufficient_support_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.blocked_by_source_mask_samples = batch
+        .blocked_by_source_mask_samples
+        .checked_add(evidence.blocked_by_source_mask_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.hot_samples = batch
+        .hot_samples
+        .checked_add(evidence.hot_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.cold_samples = batch
+        .cold_samples
+        .checked_add(evidence.cold_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.conflicting_samples = batch
+        .conflicting_samples
+        .checked_add(evidence.conflicting_samples)
+        .ok_or_else(defect_batch_stale_error)?;
+    batch.peak_reserved_bytes = batch.peak_reserved_bytes.max(evidence.reserved_bytes);
     Ok(DefectBatchAdvance {
         completed_items: batch.next_item_index,
         total_items: batch.items.len(),
@@ -6638,6 +6824,33 @@ struct DefectBatchAdvance {
     completed_items: usize,
     total_items: usize,
     complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DefectBatchEvidence {
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+    conflicting_samples: usize,
+    reserved_bytes: usize,
+}
+
+impl From<&DefectCorrectionResponse> for DefectBatchEvidence {
+    fn from(response: &DefectCorrectionResponse) -> Self {
+        Self {
+            requested_samples: response.requested_samples,
+            corrected_samples: response.corrected_samples,
+            insufficient_support_samples: response.insufficient_support_samples,
+            blocked_by_source_mask_samples: response.blocked_by_source_mask_samples,
+            hot_samples: response.map_summary.hot_samples,
+            cold_samples: response.map_summary.cold_samples,
+            conflicting_samples: response.map_summary.conflicting_samples,
+            reserved_bytes: response.reserved_bytes,
+        }
+    }
 }
 
 fn defect_request_parameters_sha256(
@@ -9409,6 +9622,7 @@ pub fn run() -> Result<(), tauri::Error> {
             execute_registration_plan,
             execute_registered_stack,
             export_session_diagnostics,
+            export_defect_batch_report,
             import_session_directory,
             inspect_frame_quality,
             inspect_fits_statistics,
@@ -9596,7 +9810,7 @@ mod tests {
             Ok(()) => return Err("foreign destination was accepted".into()),
         };
         assert_eq!(tamper_error.code, "defect_batch_stale");
-        advance_reviewed_defect_batch(&state, &execution)?;
+        advance_reviewed_defect_batch(&state, &execution, DefectBatchEvidence::default())?;
         let replay_error = match validate_reviewed_defect_item(&state, &execution) {
             Err(error) => error,
             Ok(()) => return Err("completed item replay was accepted".into()),
@@ -9616,12 +9830,41 @@ mod tests {
         assert_ne!(reordered.plan_sha256, preview.plan_sha256);
         assert_eq!(reordered.items[0].source_frame_id, other_id);
 
-        let mut single = request();
-        single.all_eligible = false;
-        let single = preview_defect_batch_sync(&session, &artifacts, single)?;
+        let mut single_request = request();
+        single_request.all_eligible = false;
+        let single = preview_defect_batch_sync(&session, &artifacts, single_request.clone())?;
         assert!(single.ready);
         assert_eq!(single.item_count, 1);
         assert_eq!(single.items[0].source_frame_id, focus_id);
+        record_reviewed_defect_batch(&state, &single_request, &single)?;
+        execution.expected_batch_plan_sha256 = single.plan_sha256.clone();
+        advance_reviewed_defect_batch(
+            &state,
+            &execution,
+            DefectBatchEvidence {
+                requested_samples: 11,
+                corrected_samples: 9,
+                insufficient_support_samples: 1,
+                blocked_by_source_mask_samples: 1,
+                hot_samples: 5,
+                cold_samples: 4,
+                conflicting_samples: 2,
+                reserved_bytes: 123_456,
+            },
+        )?;
+        let report_path = output.join("defect-report.json");
+        let exported = export_defect_batch_report_sync(&report_path, &single.plan_sha256, &state)?;
+        assert_eq!(exported.item_count, 1);
+        assert_eq!(exported.report_sha256.len(), 64);
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(&report_path)?)?;
+        assert_eq!(report["report"]["correctedSamples"], 9);
+        assert_eq!(report["report"]["peakReservedBytes"], 123_456);
+        assert_eq!(
+            export_defect_batch_report_sync(&report_path, &single.plan_sha256, &state)
+                .err()
+                .map(|error| error.code),
+            Some("defect_batch_report_exists")
+        );
 
         fs::write(&preview.items[1].map_output_path, b"existing")?;
         let blocked = preview_defect_batch_sync(&session, &artifacts, request())?;

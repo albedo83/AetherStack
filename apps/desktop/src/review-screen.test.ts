@@ -66,6 +66,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUpdateDefectCorrectionSettings: vi.fn(),
     onExecuteDefectCorrection: vi.fn(),
     onExecuteAllDefectCorrections: vi.fn(),
+    onExportDefectBatchReport: vi.fn(),
     onCancelDefectCorrection: vi.fn(),
     onSelectDefectPreview: vi.fn(),
     onImportSession: vi.fn(),
@@ -1279,6 +1280,12 @@ describe("frame review workspace", () => {
     expect(
       root.querySelector<HTMLElement>("[data-defect-batch-report]")?.title,
     ).toContain("parameters SHA-256");
+    const exportReport = getByRole<HTMLButtonElement>(root, "button", {
+      name: "Export verified report",
+    });
+    expect(exportReport.disabled).toBe(false);
+    fireEvent.click(exportReport);
+    expect(actions.onExportDefectBatchReport).toHaveBeenCalledOnce();
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {

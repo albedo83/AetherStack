@@ -693,6 +693,10 @@ export function mountReviewScreen(
       root,
       '[data-action="execute-all-defect-corrections"]',
     ),
+    exportDefectBatchReport: required<HTMLButtonElement>(
+      root,
+      '[data-action="export-defect-batch-report"]',
+    ),
     cancelDefectCorrection: required<HTMLButtonElement>(
       root,
       '[data-action="cancel-defect-correction"]',
@@ -1201,6 +1205,10 @@ export function mountReviewScreen(
     }
     if (action === "execute-all-defect-corrections") {
       actions.onExecuteAllDefectCorrections();
+      return;
+    }
+    if (action === "export-defect-batch-report") {
+      actions.onExportDefectBatchReport();
       return;
     }
     if (action === "cancel-defect-correction") {
@@ -2840,6 +2848,7 @@ interface CalibrationElements {
   readonly defectBatchReport: HTMLElement;
   readonly executeDefectCorrection: HTMLButtonElement;
   readonly executeAllDefectCorrections: HTMLButtonElement;
+  readonly exportDefectBatchReport: HTMLButtonElement;
   readonly cancelDefectCorrection: HTMLButtonElement;
   readonly defectStrideButtons: readonly HTMLButtonElement[];
   readonly defectDetectionRadius: HTMLInputElement;
@@ -4484,6 +4493,9 @@ function renderDefectCorrection(
   elements.executeAllDefectCorrections.disabled =
     !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
   elements.executeAllDefectCorrections.hidden = busy;
+  elements.exportDefectBatchReport.hidden = busy;
+  elements.exportDefectBatchReport.disabled =
+    correction.batchReport?.state !== "completed" || otherExecutionBusy;
   const eligibleCount =
     model.calibration.lightExecution.result?.calibratedFrames.length ?? 0;
   elements.executeAllDefectCorrections.textContent = `Correct all ${eligibleCount} eligible ${eligibleCount === 1 ? "Light" : "Lights"}`;
@@ -5734,6 +5746,7 @@ function shellMarkup(): string {
                   <div class="defect-console__actions">
                     <button class="button button--primary" type="button" data-action="execute-defect-correction" disabled>Correct selected Light</button>
                     <button class="button" type="button" data-action="execute-all-defect-corrections" disabled>Correct all 0 eligible Lights</button>
+                    <button class="button" type="button" data-action="export-defect-batch-report" disabled>Export verified report</button>
                     <button class="button button--danger" type="button" data-action="cancel-defect-correction" hidden>Cancel correction</button>
                   </div>
                 </section>

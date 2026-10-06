@@ -5,11 +5,13 @@ import {
   cancelLightPlan,
   cancelMasterPlan,
   executeDefectCorrection,
+  exportDefectBatchReport,
   executeLightPlan,
   executeMasterPlan,
   previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
+  selectDefectBatchReportDestination,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type DefectExecutionProgress,
@@ -508,6 +510,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onExecuteAllDefectCorrections() {
     void executeAllDefectCorrections();
+  },
+  onExportDefectBatchReport() {
+    void exportCompletedDefectBatchReport();
   },
   onCancelDefectCorrection() {
     void cancelSelectedDefectCorrection();
@@ -4397,6 +4402,40 @@ async function executeDefectQueue(
           message: cancelled
             ? `${completed}/${sealedBatch.length} complete pairs retained · active pair cancelled atomically`
             : `${completed}/${sealedBatch.length} complete pairs retained · failed pair published nothing`,
+        },
+      },
+    });
+  }
+}
+
+async function exportCompletedDefectBatchReport(): Promise<void> {
+  const report = model.calibration.defectCorrection.batchReport;
+  if (!report || report.state !== "completed") return;
+  const path = await selectDefectBatchReportDestination(report.planSha256);
+  if (!path) return;
+  const current = model.calibration.defectCorrection.batchReport;
+  if (!current || current.planSha256 !== report.planSha256) return;
+  try {
+    const exported = await exportDefectBatchReport(path, report.planSha256);
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          message: `Verified report exported · ${exported.itemCount} pairs · SHA-256 ${exported.reportSha256.slice(0, 12)}…`,
+        },
+      },
+    });
+  } catch {
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          message:
+            "Report export refused · use a new JSON destination and keep the completed native batch active",
         },
       },
     });
