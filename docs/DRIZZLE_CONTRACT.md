@@ -131,6 +131,14 @@ frames and checked-sums every per-frame sample category. A failure names the
 stable source index; because earlier sources may already have contributed, the
 caller discards the private accumulator rather than publishing partial work.
 
+Before allocating a tile, the runtime can compute its exact element-payload
+peak. The estimate includes both compensated accumulation arrays and support,
+then adds the larger of final science/weight/flag allocation or the largest
+single decoded FITS window. Regional images are processed sequentially and are
+therefore maximized, not summed. Fixed stack scratch, vector control blocks,
+allocator metadata, and open-file buffering remain explicitly outside this
+payload figure and must be covered by process headroom.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

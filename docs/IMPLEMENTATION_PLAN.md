@@ -2001,6 +2001,12 @@ safety reasoning. They do not narrate obvious syntax.
      order. Checked aggregate evidence separates examined and intersecting frames;
      typed failures identify the stable source index and require the caller to
      discard the unpublished accumulator.
+191. Preflight the exact heap-element payload peak for a Drizzle tile. Checked
+     arithmetic accounts for compensated flux, compensated weight, support,
+     final science/weight/flags, and the largest conservative FITS window. Since
+     sources decode sequentially, regional payloads are maximized rather than
+     summed; documented process headroom covers allocator metadata, vector
+     control blocks, fixed stack scratch, and open-file buffering.
 
 ## 11. Stable-release definition
 

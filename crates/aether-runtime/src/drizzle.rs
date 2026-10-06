@@ -1,18 +1,19 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Seek};
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
-use aether_core::PixelFlags;
+use aether_core::{CompensatedSum, PixelFlags};
 use aether_drizzle::{
     DrizzleError, DrizzleFrameError, DrizzleFrameEvidence, DrizzleOutputBounds, DrizzleParameters,
-    DrizzleSourceWindow, DrizzleTileAccumulator, DrizzleTileEvidence, DrizzleTileResult,
-    accumulate_cfa_window, plan_drizzle_source_window,
+    DrizzleSourceWindow, DrizzleTileAccumulator, DrizzleTileBounds, DrizzleTileEvidence,
+    DrizzleTileResult, accumulate_cfa_window, plan_drizzle_source_window,
 };
 use aether_fits::{
     AtomicF64PrimaryStreamWriter, AtomicFitsSetWriteError, AtomicFitsWriteError,
     FitsOutputProvenance, FitsProvenanceError, FitsWriteSummary, HeaderReadOptions, ImageReadError,
-    ImageRegion, PrimaryImageReader, publish_atomic_fits_set,
+    ImageRegion, PrimaryImageReader, SampleStatus, publish_atomic_fits_set,
 };
 use aether_metadata::BayerPattern;
 use aether_registration::ProjectiveTransform;
@@ -103,19 +104,7 @@ pub fn accumulate_fits_cfa_tile<R: Read + Seek>(
     frame_weight: f64,
     output: DrizzleOutputBounds,
 ) -> Result<Option<DrizzleFitsWindowEvidence>, DrizzleFitsAccumulationError> {
-    let (source_width, source_height) = match reader.descriptor().axes() {
-        [width, height] | [width, height, 1] => (
-            u32::try_from(*width)
-                .ok()
-                .filter(|value| *value != 0)
-                .ok_or(DrizzleFitsAccumulationError::InvalidSourceDimensions)?,
-            u32::try_from(*height)
-                .ok()
-                .filter(|value| *value != 0)
-                .ok_or(DrizzleFitsAccumulationError::InvalidSourceDimensions)?,
-        ),
-        _ => return Err(DrizzleFitsAccumulationError::InvalidSourceDimensions),
-    };
+    let (source_width, source_height) = fits_detector_dimensions(reader)?;
     let Some(window) = plan_drizzle_source_window(
         source_width,
         source_height,
@@ -150,6 +139,24 @@ pub fn accumulate_fits_cfa_tile<R: Read + Seek>(
     )
     .map_err(DrizzleFitsAccumulationError::Accumulation)?;
     Ok(Some(DrizzleFitsWindowEvidence { window, frame }))
+}
+
+fn fits_detector_dimensions<R: Read + Seek>(
+    reader: &PrimaryImageReader<R>,
+) -> Result<(u32, u32), DrizzleFitsAccumulationError> {
+    match reader.descriptor().axes() {
+        [width, height] | [width, height, 1] => Ok((
+            u32::try_from(*width)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or(DrizzleFitsAccumulationError::InvalidSourceDimensions)?,
+            u32::try_from(*height)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or(DrizzleFitsAccumulationError::InvalidSourceDimensions)?,
+        )),
+        _ => Err(DrizzleFitsAccumulationError::InvalidSourceDimensions),
+    }
 }
 
 /// One opened CFA source and its immutable Drizzle controls.
@@ -200,6 +207,109 @@ impl<R> DrizzleFitsFrame<R> {
     pub fn into_reader(self) -> PrimaryImageReader<R> {
         self.reader
     }
+}
+
+/// Heap-payload estimate for one bounded multi-source Drizzle tile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrizzleTileMemoryEstimate {
+    accumulator_bytes: usize,
+    finalization_bytes: usize,
+    maximum_region_bytes: usize,
+    peak_bytes: usize,
+}
+
+impl DrizzleTileMemoryEstimate {
+    /// Compensated flux, compensated weight, and support-count payloads.
+    #[must_use]
+    pub const fn accumulator_bytes(self) -> usize {
+        self.accumulator_bytes
+    }
+
+    /// Science, weight, and flag payloads allocated during finalization.
+    #[must_use]
+    pub const fn finalization_bytes(self) -> usize {
+        self.finalization_bytes
+    }
+
+    /// Largest decoded regional-image payload for any one source.
+    #[must_use]
+    pub const fn maximum_region_bytes(self) -> usize {
+        self.maximum_region_bytes
+    }
+
+    /// Maximum concurrent payload reserved for execution of this tile.
+    #[must_use]
+    pub const fn peak_bytes(self) -> usize {
+        self.peak_bytes
+    }
+}
+
+/// Computes the allocation payload required to execute and finalize one tile.
+///
+/// FITS sources are decoded sequentially, so only the largest planned regional
+/// image contributes to the peak. Vector control blocks, allocator metadata,
+/// open-file buffering, and fixed stack scratch are deliberately excluded; the
+/// returned value accounts exactly for heap element payloads owned by this path.
+pub fn estimate_drizzle_fits_tile_memory<R: Read + Seek>(
+    tile: DrizzleTileBounds,
+    frames: &[DrizzleFitsFrame<R>],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+) -> Result<DrizzleTileMemoryEstimate, DrizzleFitsStackError> {
+    let tile_elements = tile.dimensions().pixel_count();
+    let accumulator_element_bytes = size_of::<CompensatedSum>()
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(size_of::<u64>()))
+        .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+    let finalization_element_bytes = size_of::<f64>()
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(size_of::<PixelFlags>()))
+        .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+    let region_element_bytes = size_of::<f64>()
+        .checked_add(size_of::<PixelFlags>())
+        .and_then(|value| value.checked_add(size_of::<SampleStatus>()))
+        .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+    let accumulator_bytes = tile_elements
+        .checked_mul(accumulator_element_bytes)
+        .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+    let finalization_bytes = tile_elements
+        .checked_mul(finalization_element_bytes)
+        .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+
+    let mut maximum_region_bytes = 0_usize;
+    for (index, frame) in frames.iter().enumerate() {
+        let (source_width, source_height) = fits_detector_dimensions(&frame.reader)
+            .map_err(|source| DrizzleFitsStackError::Source { index, source })?;
+        let window = plan_drizzle_source_window(
+            source_width,
+            source_height,
+            frame.transform,
+            parameters,
+            tile,
+            output,
+        )
+        .map_err(|error| DrizzleFitsStackError::Source {
+            index,
+            source: DrizzleFitsAccumulationError::Planning(error),
+        })?;
+        if let Some(window) = window {
+            let elements = usize::try_from(u64::from(window.width()) * u64::from(window.height()))
+                .map_err(|_| DrizzleFitsStackError::CounterOverflow)?;
+            let bytes = elements
+                .checked_mul(region_element_bytes)
+                .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+            maximum_region_bytes = maximum_region_bytes.max(bytes);
+        }
+    }
+    let peak_bytes = accumulator_bytes
+        .checked_add(finalization_bytes.max(maximum_region_bytes))
+        .ok_or(DrizzleFitsStackError::CounterOverflow)?;
+    Ok(DrizzleTileMemoryEstimate {
+        accumulator_bytes,
+        finalization_bytes,
+        maximum_region_bytes,
+        peak_bytes,
+    })
 }
 
 /// Aggregate accounting for all FITS sources visited for one output tile.
@@ -1081,6 +1191,66 @@ mod tests {
             complete.contribution_counts()
         );
         assert_eq!(bounded.flags(), complete.flags());
+        Ok(())
+    }
+
+    #[test]
+    fn tile_memory_preflight_uses_the_largest_region_not_their_sum() -> TestResult {
+        let width = 8_u32;
+        let height = 6_u32;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(width as usize, height as usize, 1)?,
+            vec![1.0; width as usize * height as usize],
+        )?;
+        let bytes = fits_bytes(&image)?;
+        let transform = ProjectiveTransform::new([
+            [0.99, -0.03, 0.4],
+            [0.02, 1.01, -0.2],
+            [0.0005, -0.0003, 1.0],
+        ])?;
+        let parameters = DrizzleParameters::new(1, 0.8)?;
+        let tile = DrizzleTileBounds::new(3, 2, 2, 2, 3)?;
+        let output = DrizzleOutputBounds::new(width, height, 16)?;
+        let frame = || -> Result<_, ImageReadError> {
+            Ok(DrizzleFitsFrame::new(
+                PrimaryImageReader::open(Cursor::new(bytes.clone()), HeaderReadOptions::default())?,
+                transform,
+                BayerPattern::Rggb,
+                1.0,
+            ))
+        };
+        let frames = [frame()?, frame()?];
+
+        let estimate = estimate_drizzle_fits_tile_memory(tile, &frames, parameters, output)?;
+        let tile_elements = tile.dimensions().pixel_count();
+        assert_eq!(
+            estimate.accumulator_bytes(),
+            tile_elements * (size_of::<CompensatedSum>() * 2 + size_of::<u64>())
+        );
+        assert_eq!(
+            estimate.finalization_bytes(),
+            tile_elements * (size_of::<f64>() * 2 + size_of::<PixelFlags>())
+        );
+        let window =
+            plan_drizzle_source_window(width, height, transform, parameters, tile, output)?
+                .ok_or("test tile unexpectedly missed the detector")?;
+        let region_elements = window.width() as usize * window.height() as usize;
+        assert_eq!(
+            estimate.maximum_region_bytes(),
+            region_elements
+                * (size_of::<f64>() + size_of::<PixelFlags>() + size_of::<SampleStatus>())
+        );
+        assert_eq!(
+            estimate.peak_bytes(),
+            estimate.accumulator_bytes()
+                + estimate
+                    .finalization_bytes()
+                    .max(estimate.maximum_region_bytes())
+        );
+        let budget = crate::MemoryBudget::new(estimate.peak_bytes())?;
+        let reservation = budget.try_reserve(estimate.peak_bytes())?;
+        assert_eq!(reservation.bytes(), estimate.peak_bytes());
+        drop(reservation);
         Ok(())
     }
 
