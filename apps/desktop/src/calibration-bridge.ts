@@ -323,6 +323,21 @@ export interface DefectBatchReportInspection {
   readonly repairEfficiencyPpm: number | null;
 }
 
+export interface ActiveDefectBatch {
+  readonly planSha256: string;
+  readonly parametersSha256: string;
+  readonly nextItemIndex: number;
+  readonly totalItems: number;
+  readonly complete: boolean;
+  readonly requestedSamples: number;
+  readonly correctedSamples: number;
+  readonly insufficientSupportSamples: number;
+  readonly blockedBySourceMaskSamples: number;
+  readonly defectiveSamples: number;
+  readonly conflictingSamples: number;
+  readonly peakReservedBytes: number;
+}
+
 export interface DefectExecutionProgress {
   readonly sequence: number;
   readonly stage: string;
@@ -536,5 +551,14 @@ export function inspectDefectBatchReport(
 ): Promise<DefectBatchReportInspection> {
   return invoke<DefectBatchReportInspection>("inspect_defect_batch_report", {
     path,
+  });
+}
+
+/** Reads the native anti-replay cursor before an in-process resume. */
+export function inspectActiveDefectBatch(
+  expectedBatchPlanSha256: string,
+): Promise<ActiveDefectBatch> {
+  return invoke<ActiveDefectBatch>("inspect_active_defect_batch", {
+    expectedBatchPlanSha256,
   });
 }

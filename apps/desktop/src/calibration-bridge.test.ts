@@ -11,6 +11,7 @@ import {
   executeMasterPlan,
   exportDefectBatchReport,
   inspectDefectBatchReport,
+  inspectActiveDefectBatch,
   previewDefectBatch,
   previewMasterPlan,
   selectDefectOutputDirectory,
@@ -412,6 +413,31 @@ describe("native calibration bridge", () => {
     ).resolves.toBe(expected);
     expect(invoke).toHaveBeenLastCalledWith("inspect_defect_batch_report", {
       path: "/session/defect-report.json",
+    });
+  });
+
+  it("reads the native anti-replay cursor for resume", async () => {
+    const expected = {
+      planSha256: "a".repeat(64),
+      parametersSha256: "b".repeat(64),
+      nextItemIndex: 1,
+      totalItems: 3,
+      complete: false,
+      requestedSamples: 20,
+      correctedSamples: 19,
+      insufficientSupportSamples: 1,
+      blockedBySourceMaskSamples: 0,
+      defectiveSamples: 20,
+      conflictingSamples: 2,
+      peakReservedBytes: 123_456,
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+
+    await expect(inspectActiveDefectBatch("a".repeat(64))).resolves.toBe(
+      expected,
+    );
+    expect(invoke).toHaveBeenCalledWith("inspect_active_defect_batch", {
+      expectedBatchPlanSha256: "a".repeat(64),
     });
   });
 });

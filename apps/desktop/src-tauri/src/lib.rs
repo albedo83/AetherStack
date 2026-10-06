@@ -2059,6 +2059,23 @@ struct DefectBatchReportInspectionResponse {
     repair_efficiency_ppm: Option<u32>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveDefectBatchResponse {
+    plan_sha256: String,
+    parameters_sha256: String,
+    next_item_index: usize,
+    total_items: usize,
+    complete: bool,
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+    defective_samples: usize,
+    conflicting_samples: usize,
+    peak_reserved_bytes: usize,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DefectExecutionProgress {
@@ -6337,6 +6354,42 @@ fn record_reviewed_defect_batch(
     Ok(())
 }
 
+#[tauri::command]
+fn inspect_active_defect_batch(
+    expected_batch_plan_sha256: String,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
+) -> Result<ActiveDefectBatchResponse, PreviewCommandError> {
+    inspect_active_defect_batch_sync(&expected_batch_plan_sha256, &artifact_state)
+}
+
+fn inspect_active_defect_batch_sync(
+    expected_batch_plan_sha256: &str,
+    state: &DesktopCalibrationArtifactState,
+) -> Result<ActiveDefectBatchResponse, PreviewCommandError> {
+    let batch = lock_reviewed_defect_batch(state)?;
+    let batch = batch.as_ref().ok_or_else(defect_batch_stale_error)?;
+    if batch.plan_sha256 != expected_batch_plan_sha256
+        || batch.items.is_empty()
+        || batch.next_item_index > batch.items.len()
+    {
+        return Err(defect_batch_stale_error());
+    }
+    Ok(ActiveDefectBatchResponse {
+        plan_sha256: batch.plan_sha256.clone(),
+        parameters_sha256: batch.parameters_sha256.clone(),
+        next_item_index: batch.next_item_index,
+        total_items: batch.items.len(),
+        complete: batch.next_item_index == batch.items.len(),
+        requested_samples: batch.requested_samples,
+        corrected_samples: batch.corrected_samples,
+        insufficient_support_samples: batch.insufficient_support_samples,
+        blocked_by_source_mask_samples: batch.blocked_by_source_mask_samples,
+        defective_samples: batch.defective_samples,
+        conflicting_samples: batch.conflicting_samples,
+        peak_reserved_bytes: batch.peak_reserved_bytes,
+    })
+}
+
 fn preview_defect_batch_sync(
     session: &ImportedNativeSession,
     artifacts: &PublishedCalibrationArtifacts,
@@ -9786,6 +9839,7 @@ pub fn run() -> Result<(), tauri::Error> {
             import_session_directory,
             inspect_frame_quality,
             inspect_defect_batch_report,
+            inspect_active_defect_batch,
             inspect_fits_statistics,
             inspect_rejection_histogram,
             inspect_session_diagnostics_report,
@@ -9972,6 +10026,10 @@ mod tests {
         };
         assert_eq!(tamper_error.code, "defect_batch_stale");
         advance_reviewed_defect_batch(&state, &execution, DefectBatchEvidence::default())?;
+        let active = inspect_active_defect_batch_sync(&preview.plan_sha256, &state)?;
+        assert_eq!(active.next_item_index, 1);
+        assert_eq!(active.total_items, 2);
+        assert!(!active.complete);
         let replay_error = match validate_reviewed_defect_item(&state, &execution) {
             Err(error) => error,
             Ok(()) => return Err("completed item replay was accepted".into()),
@@ -10014,6 +10072,10 @@ mod tests {
                 reserved_bytes: 123_456,
             },
         )?;
+        let complete = inspect_active_defect_batch_sync(&single.plan_sha256, &state)?;
+        assert!(complete.complete);
+        assert_eq!(complete.corrected_samples, 9);
+        assert_eq!(complete.defective_samples, 11);
         let report_path = output.join("defect-report.json");
         let exported = export_defect_batch_report_sync(&report_path, &single.plan_sha256, &state)?;
         assert_eq!(exported.item_count, 1);
