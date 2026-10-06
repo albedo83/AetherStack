@@ -10093,6 +10093,49 @@ mod tests {
         assert_eq!(inspected.corrected_samples, 9);
         assert_eq!(inspected.unresolved_samples, 2);
         assert_eq!(inspected.repair_efficiency_ppm, Some(818_181));
+
+        let mut zero: DefectBatchReportEnvelope = serde_json::from_slice(&fs::read(&report_path)?)?;
+        zero.report.requested_samples = 0;
+        zero.report.corrected_samples = 0;
+        zero.report.insufficient_support_samples = 0;
+        zero.report.blocked_by_source_mask_samples = 0;
+        zero.report.hot_samples = 0;
+        zero.report.cold_samples = 0;
+        zero.report.conflicting_samples = 0;
+        zero.report.defective_samples = 0;
+        zero.report.peak_reserved_bytes = 0;
+        zero.report_sha256 = lowercase_hex(&Sha256::digest(serde_json::to_vec(&zero.report)?));
+        let mut zero_bytes = serde_json::to_vec_pretty(&zero)?;
+        zero_bytes.push(b'\n');
+        let zero_path = output.join("defect-report-zero.json");
+        fs::write(&zero_path, &zero_bytes)?;
+        let zero_inspection = inspect_defect_batch_report_sync(&zero_path)?;
+        assert_eq!(zero_inspection.unresolved_samples, 0);
+        assert_eq!(zero_inspection.repair_efficiency_ppm, None);
+
+        let compact_path = output.join("defect-report-compact.json");
+        let mut compact_bytes = serde_json::to_vec(&zero)?;
+        compact_bytes.push(b'\n');
+        fs::write(&compact_path, compact_bytes)?;
+        assert_eq!(
+            inspect_defect_batch_report_sync(&compact_path)
+                .err()
+                .map(|error| error.code),
+            Some("defect_batch_report_invalid")
+        );
+
+        let unknown_path = output.join("defect-report-unknown.json");
+        let mut unknown: serde_json::Value = serde_json::from_slice(&zero_bytes)?;
+        unknown["unexpected"] = serde_json::Value::Bool(true);
+        let mut unknown_bytes = serde_json::to_vec_pretty(&unknown)?;
+        unknown_bytes.push(b'\n');
+        fs::write(&unknown_path, unknown_bytes)?;
+        assert_eq!(
+            inspect_defect_batch_report_sync(&unknown_path)
+                .err()
+                .map(|error| error.code),
+            Some("defect_batch_report_invalid")
+        );
         assert_eq!(
             export_defect_batch_report_sync(&report_path, &single.plan_sha256, &state)
                 .err()
