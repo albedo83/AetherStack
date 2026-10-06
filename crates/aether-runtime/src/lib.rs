@@ -4,6 +4,7 @@
 //! executors and exposes the first deliberately narrow strict CPU pipeline.
 
 mod cancellation;
+mod defect;
 mod demosaic;
 mod drizzle;
 mod drizzle_spool;
@@ -17,6 +18,10 @@ mod registered_stack;
 mod registration;
 
 pub use cancellation::{CancellationToken, Cancelled};
+pub use defect::{
+    DefectParameterSealError, DefectReferenceKind, DefectReferenceParameters,
+    strict_defect_parameters_sha256,
+};
 pub use demosaic::{
     DemosaicPipelineError, StrictDemosaicRequest, StrictDemosaicResult,
     run_strict_demosaic_pipeline,
