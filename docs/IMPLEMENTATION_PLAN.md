@@ -2156,6 +2156,25 @@ safety reasoning. They do not narrate obvious syntax.
      corrected-Light plus map pair is independently atomic; completed pairs are
      retained after cancellation or a later-frame failure, and the interface
      reports this scope explicitly rather than claiming whole-queue atomicity.
+219. Preflight the complete correction queue in the native artifact registry.
+     Rust derives every eligible Light, verifies its Dark and Flat masters,
+     enforces the imported CFA/mono lattice, creates both destination names, and
+     reports every existing-product collision before the first pixel is read.
+     Single-Light and all-eligible scopes remain explicit.
+220. Seal the ordered correction batch. A domain-separated canonical SHA-256
+     binds the current manifest and Light plan, strict parameter seal, memory
+     limit, ordered source identities and indices, and both native-owned output
+     paths. Changing focus, order, controls, or destinations changes the seal.
+221. Reconcile native batch authority at the webview boundary. Browser code no
+     longer constructs order or filenames; it requires exact membership,
+     identities, group and source-index agreement, distinct collision-free
+     paths, executable status, and lowercase SHA-256 identities before invoking
+     any correction.
+222. Preserve an inspectable aggregate batch report. Whole-queue progress is
+     derived from completed pairs plus the current five-unit native lifecycle.
+     The report retains the plan and parameter seals, completed pair count,
+     requested and corrected samples, insufficient support, source-mask blocks,
+     HOT/COLD/conflict evidence, terminal state, and worst reserved-memory peak.
 
 ## 11. Stable-release definition
 

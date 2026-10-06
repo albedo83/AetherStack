@@ -89,7 +89,22 @@ stretch. Before and after science previews continue to share one transform
 derived from the calibrated input.
 
 One queue may process every calibrated Light whose reviewed group has both Dark
-and Flat associations. The currently reviewed Light runs first, then native
-calibration order resumes. Atomicity is deliberately scoped to each Light/map
-pair so memory remains bounded and successfully published pairs survive a later
-failure or user cancellation. No individual pair can be partially published.
+and Flat associations, or explicitly limit execution to the reviewed Light.
+Rust resolves the complete scope from the current artifact registry, places the
+reviewed Light first, then resumes native calibration order. It verifies every
+master and lattice, assigns both output names, rejects aliases and duplicates,
+and reports all existing-destination collisions before correction begins.
+
+The preflight returns a domain-separated SHA-256 plan identity covering the
+current manifest and Light plan, strict parameter seal, memory limit, ordered
+source identities and indices, and both destination paths. Browser code must
+reconcile exact membership and identity metadata and uses the returned order and
+paths verbatim; it cannot synthesize a queue or filename. An incomplete,
+foreign, blocked, duplicated, or malformed plan fails closed.
+
+Atomicity is deliberately scoped to each Light/map pair so memory remains
+bounded and successfully published pairs survive a later failure or user
+cancellation. No individual pair can be partially published. The desktop shows
+whole-queue progress while retaining the current pair's five native stages. Its
+terminal report preserves both seals, completion count, replacement accounting,
+HOT/COLD/conflict evidence, and the worst observed reserved-memory peak.
