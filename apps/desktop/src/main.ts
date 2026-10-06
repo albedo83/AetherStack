@@ -3973,8 +3973,6 @@ async function cancelLights(): Promise<void> {
 
 function selectedDefectInputs(): {
   readonly frame: ExecutedCalibratedLightFrame;
-  readonly darkMasterPath: string;
-  readonly flatMasterPath: string;
   readonly manifestSha256: string;
   readonly lightPlanSha256: string;
 } | null {
@@ -3988,22 +3986,14 @@ function selectedDefectInputs(): {
     ) ?? lightResult.calibratedFrames[0];
   if (!frame) return null;
   const association = lightPlan.products.find(
-    (candidate) => candidate.groupId === frame.groupId,
+    (candidate) =>
+      candidate.groupId === frame.groupId &&
+      candidate.dark.selectedGroupId !== null &&
+      candidate.flat.selectedGroupId !== null,
   );
-  const darkGroupId = association?.dark.selectedGroupId;
-  const flatGroupId = association?.flat.selectedGroupId;
-  if (!darkGroupId || !flatGroupId) return null;
-  const darkMaster = masterResult.products.find(
-    (product) => product.kind === "dark" && product.groupId === darkGroupId,
-  );
-  const flatMaster = masterResult.products.find(
-    (product) => product.kind === "flat" && product.groupId === flatGroupId,
-  );
-  if (!darkMaster || !flatMaster) return null;
+  if (!association || masterResult.products.length === 0) return null;
   return {
     frame,
-    darkMasterPath: darkMaster.outputPath,
-    flatMasterPath: flatMaster.outputPath,
     manifestSha256: lightResult.manifestSha256,
     lightPlanSha256: lightResult.lightPlanSha256,
   };
@@ -4065,9 +4055,7 @@ async function executeSelectedDefectCorrection(): Promise<void> {
   });
   try {
     const result = await executeDefectCorrection({
-      calibratedLightPath: inputs.frame.outputPath,
-      darkMasterPath: inputs.darkMasterPath,
-      flatMasterPath: inputs.flatMasterPath,
+      sourceFrameId: inputs.frame.sourceFrameId,
       correctedOutputPath,
       mapOutputPath,
       groupId: inputs.frame.groupId,

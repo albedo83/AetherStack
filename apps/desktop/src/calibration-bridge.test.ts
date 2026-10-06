@@ -217,9 +217,7 @@ describe("native calibration bridge", () => {
     };
     vi.mocked(invoke).mockResolvedValue(expected);
     const request = {
-      calibratedLightPath: "/session/lights/light-0001.fits",
-      darkMasterPath: "/session/masters/dark.fits",
-      flatMasterPath: "/session/masters/flat.fits",
+      sourceFrameId: "f".repeat(64),
       correctedOutputPath: expected.correctedOutputPath,
       mapOutputPath: expected.mapOutputPath,
       groupId: "light-uvir",
@@ -251,6 +249,10 @@ describe("native calibration bridge", () => {
     expect(invoke).toHaveBeenCalledWith("execute_defect_correction", {
       request,
     });
+    const payload = JSON.stringify(vi.mocked(invoke).mock.calls[0]?.[1]);
+    expect(payload).not.toContain("calibratedLightPath");
+    expect(payload).not.toContain("darkMasterPath");
+    expect(payload).not.toContain("flatMasterPath");
   });
 
   it("selects a defect destination and exposes cooperative cancellation", async () => {

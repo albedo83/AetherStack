@@ -2112,10 +2112,13 @@ safety reasoning. They do not narrate obvious syntax.
      exposed together with create-new semantics only after final source
      revalidation. A companion collision publishes no corrected product.
 211. Expose the strict defect transaction through the desktop shell. The
-     adapter accepts only absolute, non-aliasing inputs and outputs, fingerprints
-     every generated Light and master again, binds both companion products to
-     the current manifest and Light-plan digests, shares the single cancellable
-     heavy-work slot, and returns path-free correction accounting.
+     native artifact registry retains only products published by the current
+     session and resolves one stable frame identity back to its exact calibrated
+     Light, Dark, and Flat without accepting their paths from the webview. The
+     adapter requires absolute non-aliasing outputs, fingerprints every input
+     again, binds both companions to the current manifest and Light-plan digests,
+     shares the single cancellable heavy-work slot, and returns path-free
+     correction accounting.
 212. Add the detector laboratory to the Calibration workspace. It resolves the
      selected calibrated Light back to the exact Dark and normalized Flat from
      the reviewed native plan, labels the initial controls experimental, keeps

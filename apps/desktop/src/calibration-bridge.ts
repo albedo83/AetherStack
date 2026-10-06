@@ -375,14 +375,13 @@ export async function selectDefectOutputDirectory(): Promise<string | null> {
 
 /**
  * Runs strict native defect analysis and publishes the corrected Light and its
- * exact HOT/COLD map together. Paths identify already-published native
- * artifacts; the backend fingerprints and revalidates every byte.
+ * exact HOT/COLD map together. The webview supplies only the stable imported
+ * frame identity; the backend resolves every generated input from its native
+ * artifact registry, then fingerprints and revalidates every byte.
  */
 export function executeDefectCorrection(
   request: {
-    readonly calibratedLightPath: string;
-    readonly darkMasterPath: string;
-    readonly flatMasterPath: string;
+    readonly sourceFrameId: string;
     readonly correctedOutputPath: string;
     readonly mapOutputPath: string;
     readonly groupId: string;

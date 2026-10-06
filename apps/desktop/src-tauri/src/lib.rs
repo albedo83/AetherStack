@@ -1792,6 +1792,31 @@ struct DesktopCalibrationExecutionState {
     cancellation: Mutex<Option<CancellationToken>>,
 }
 
+/// Native-only registry of products published by the current imported session.
+///
+/// The webview may choose a frame identity, but it cannot substitute arbitrary
+/// filesystem paths for a generated Light or master.
+#[derive(Debug, Default)]
+struct DesktopCalibrationArtifactState {
+    artifacts: Mutex<Option<PublishedCalibrationArtifacts>>,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedCalibrationArtifacts {
+    manifest_sha256: String,
+    master_plan_sha256: String,
+    light_plan_sha256: Option<String>,
+    masters: BTreeMap<(String, String), PathBuf>,
+    calibrated_frames: BTreeMap<(String, String), PublishedCalibratedFrame>,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedCalibratedFrame {
+    path: PathBuf,
+    dark_group_id: String,
+    flat_group_id: String,
+}
+
 #[derive(Clone, Debug)]
 struct ImportedNativeSession {
     root: PathBuf,
@@ -1872,9 +1897,7 @@ struct DefectDetectionSettings {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DefectCorrectionCommandRequest {
-    calibrated_light_path: PathBuf,
-    dark_master_path: PathBuf,
-    flat_master_path: PathBuf,
+    source_frame_id: String,
     corrected_output_path: PathBuf,
     map_output_path: PathBuf,
     group_id: String,
@@ -2042,6 +2065,10 @@ struct LightPlanExecutionResponse {
 #[serde(rename_all = "camelCase")]
 struct ExecutedCalibratedLightFrame {
     group_id: String,
+    #[serde(skip_serializing)]
+    dark_group_id: String,
+    #[serde(skip_serializing)]
+    flat_group_id: String,
     source_index: usize,
     source_frame_id: String,
     source_label: String,
@@ -5751,6 +5778,7 @@ async fn import_session_directory(
     review_state: tauri::State<'_, DesktopReviewState>,
     session_state: tauri::State<'_, DesktopSessionState>,
     import_state: tauri::State<'_, DesktopSessionImportState>,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
 ) -> Result<ImportedSession, PreviewCommandError> {
     if !path.is_absolute() {
         return Err(PreviewCommandError::new(
@@ -5792,6 +5820,7 @@ async fn import_session_directory(
             "The session import worker stopped before producing a result.",
         )
     })??;
+    *lock_calibration_artifacts(&artifact_state)? = None;
     install_imported_session(&session_state, &review_state, imported)
 }
 
@@ -5946,6 +5975,7 @@ async fn execute_master_plan(
     on_progress: tauri::ipc::Channel<MasterExecutionProgress>,
     session_state: tauri::State<'_, DesktopSessionState>,
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
 ) -> Result<MasterPlanExecutionResponse, PreviewCommandError> {
     if !request.output_directory.is_absolute() {
         return Err(PreviewCommandError::new(
@@ -5968,12 +5998,14 @@ async fn execute_master_plan(
     })
     .await;
     finish_calibration_execution(&execution_state)?;
-    execution.map_err(|_| {
+    let result = execution.map_err(|_| {
         PreviewCommandError::new(
             "master_execution_interrupted",
             "The master-build worker stopped before producing a result.",
         )
-    })?
+    })??;
+    record_master_artifacts(&artifact_state, &result)?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -5989,6 +6021,7 @@ async fn execute_light_plan(
     on_progress: tauri::ipc::Channel<LightExecutionProgress>,
     session_state: tauri::State<'_, DesktopSessionState>,
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
 ) -> Result<LightPlanExecutionResponse, PreviewCommandError> {
     if !request.master_directory.is_absolute() || !request.output_directory.is_absolute() {
         return Err(light_execution_configuration_error());
@@ -6005,12 +6038,14 @@ async fn execute_light_plan(
     })
     .await;
     finish_calibration_execution(&execution_state)?;
-    execution.map_err(|_| {
+    let result = execution.map_err(|_| {
         PreviewCommandError::new(
             "light_execution_interrupted",
             "The Light calibration worker stopped before producing a result.",
         )
-    })?
+    })??;
+    record_light_artifacts(&artifact_state, &result)?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -6020,20 +6055,86 @@ fn cancel_light_plan(
     cancel_calibration_execution(&execution_state, "light_execution_missing")
 }
 
+fn record_master_artifacts(
+    state: &DesktopCalibrationArtifactState,
+    result: &MasterPlanExecutionResponse,
+) -> Result<(), PreviewCommandError> {
+    let mut masters = BTreeMap::new();
+    for product in &result.products {
+        let path = PathBuf::from(&product.output_path);
+        if !path.is_absolute() {
+            return Err(calibration_artifact_state_error());
+        }
+        masters.insert((product.kind.to_owned(), product.group_id.clone()), path);
+    }
+    *lock_calibration_artifacts(state)? = Some(PublishedCalibrationArtifacts {
+        manifest_sha256: result.manifest_sha256.clone(),
+        master_plan_sha256: result.plan_sha256.clone(),
+        light_plan_sha256: None,
+        masters,
+        calibrated_frames: BTreeMap::new(),
+    });
+    Ok(())
+}
+
+fn record_light_artifacts(
+    state: &DesktopCalibrationArtifactState,
+    result: &LightPlanExecutionResponse,
+) -> Result<(), PreviewCommandError> {
+    let mut guard = lock_calibration_artifacts(state)?;
+    let artifacts = guard
+        .as_mut()
+        .ok_or_else(calibration_artifact_state_error)?;
+    if artifacts.manifest_sha256 != result.manifest_sha256
+        || artifacts.master_plan_sha256 != result.master_plan_sha256
+    {
+        return Err(calibration_artifact_state_error());
+    }
+    let mut calibrated_frames = BTreeMap::new();
+    for frame in &result.calibrated_frames {
+        let path = PathBuf::from(&frame.output_path);
+        if !path.is_absolute() {
+            return Err(calibration_artifact_state_error());
+        }
+        calibrated_frames.insert(
+            (frame.group_id.clone(), frame.source_frame_id.clone()),
+            PublishedCalibratedFrame {
+                path,
+                dark_group_id: frame.dark_group_id.clone(),
+                flat_group_id: frame.flat_group_id.clone(),
+            },
+        );
+    }
+    artifacts.light_plan_sha256 = Some(result.light_plan_sha256.clone());
+    artifacts.calibrated_frames = calibrated_frames;
+    Ok(())
+}
+
+const fn calibration_artifact_state_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "calibration_artifact_state_invalid",
+        "Published calibration artifacts do not match the current native plan.",
+    )
+}
+
 #[tauri::command]
 async fn execute_defect_correction(
     request: DefectCorrectionCommandRequest,
     session_state: tauri::State<'_, DesktopSessionState>,
     execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+    artifact_state: tauri::State<'_, DesktopCalibrationArtifactState>,
 ) -> Result<DefectCorrectionResponse, PreviewCommandError> {
     validate_defect_command_paths(&request)?;
     let session = lock_session_state(&session_state)?
         .clone()
         .ok_or_else(session_state_missing_error)?;
+    let artifacts = lock_calibration_artifacts(&artifact_state)?
+        .clone()
+        .ok_or_else(calibration_artifact_state_error)?;
     let cancellation = begin_calibration_execution(&execution_state)?;
     let worker_cancellation = cancellation.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
-        execute_defect_correction_sync(&session, request, &worker_cancellation)
+        execute_defect_correction_sync(&session, &artifacts, request, &worker_cancellation)
     })
     .await;
     finish_calibration_execution(&execution_state)?;
@@ -6055,18 +6156,9 @@ fn cancel_defect_correction(
 fn validate_defect_command_paths(
     request: &DefectCorrectionCommandRequest,
 ) -> Result<(), PreviewCommandError> {
-    let inputs = [
-        &request.calibrated_light_path,
-        &request.dark_master_path,
-        &request.flat_master_path,
-    ];
     let outputs = [&request.corrected_output_path, &request.map_output_path];
-    if inputs
-        .iter()
-        .chain(outputs.iter())
-        .any(|path| !path.is_absolute())
+    if outputs.iter().any(|path| !path.is_absolute())
         || request.corrected_output_path == request.map_output_path
-        || inputs.iter().any(|input| outputs.contains(input))
     {
         return Err(defect_correction_configuration_error());
     }
@@ -6096,6 +6188,7 @@ fn fingerprint_pipeline_source(path: PathBuf) -> Result<PipelineSource, PreviewC
 
 fn execute_defect_correction_sync(
     session: &ImportedNativeSession,
+    artifacts: &PublishedCalibrationArtifacts,
     request: DefectCorrectionCommandRequest,
     cancellation: &CancellationToken,
 ) -> Result<DefectCorrectionResponse, PreviewCommandError> {
@@ -6109,6 +6202,41 @@ fn execute_defect_correction_sync(
             "defect_correction_stale",
             "The imported session changed after detector correction was reviewed.",
         ));
+    }
+    if artifacts.manifest_sha256 != request.expected_manifest_sha256
+        || artifacts.light_plan_sha256.as_deref()
+            != Some(request.expected_light_plan_sha256.as_str())
+    {
+        return Err(PreviewCommandError::new(
+            "defect_correction_stale",
+            "The published calibration artifacts do not match the reviewed Light plan.",
+        ));
+    }
+    let frame = artifacts
+        .calibrated_frames
+        .get(&(request.group_id.clone(), request.source_frame_id.clone()))
+        .ok_or_else(calibration_artifact_state_error)?;
+    let dark_master_path = artifacts
+        .masters
+        .get(&("dark".to_owned(), frame.dark_group_id.clone()))
+        .cloned()
+        .ok_or_else(calibration_artifact_state_error)?;
+    let flat_master_path = artifacts
+        .masters
+        .get(&("flat".to_owned(), frame.flat_group_id.clone()))
+        .cloned()
+        .ok_or_else(calibration_artifact_state_error)?;
+    if [
+        frame.path.as_path(),
+        dark_master_path.as_path(),
+        flat_master_path.as_path(),
+    ]
+    .iter()
+    .any(|input| {
+        *input == request.corrected_output_path.as_path()
+            || *input == request.map_output_path.as_path()
+    }) {
+        return Err(defect_correction_configuration_error());
     }
     let memory_limit = usize::try_from(request.memory_limit_bytes)
         .map_err(|_| defect_correction_configuration_error())?;
@@ -6133,11 +6261,11 @@ fn execute_defect_correction_sync(
             .map_err(|_| defect_correction_configuration_error())?;
     let references = vec![
         DefectFitsReference::new(
-            fingerprint_pipeline_source(request.dark_master_path)?,
+            fingerprint_pipeline_source(dark_master_path)?,
             dark_parameters,
         ),
         DefectFitsReference::new(
-            fingerprint_pipeline_source(request.flat_master_path)?,
+            fingerprint_pipeline_source(flat_master_path)?,
             flat_parameters,
         ),
     ];
@@ -6172,7 +6300,7 @@ fn execute_defect_correction_sync(
     .and_then(|value| value.with_parameters_sha256(&parameters_sha256))
     .map_err(|_| defect_correction_configuration_error())?;
     let execution = StrictDefectCorrectionRequest::new(
-        fingerprint_pipeline_source(request.calibrated_light_path)?,
+        fingerprint_pipeline_source(frame.path.clone())?,
         references,
         request.corrected_output_path,
         request.map_output_path,
@@ -6710,6 +6838,17 @@ fn lock_session_state(
     })
 }
 
+fn lock_calibration_artifacts(
+    state: &DesktopCalibrationArtifactState,
+) -> Result<MutexGuard<'_, Option<PublishedCalibrationArtifacts>>, PreviewCommandError> {
+    state.artifacts.lock().map_err(|_| {
+        PreviewCommandError::new(
+            "calibration_artifact_state_unavailable",
+            "Published calibration artifacts are unavailable after an internal synchronization failure.",
+        )
+    })
+}
+
 fn lock_session_import(
     state: &DesktopSessionImportState,
 ) -> Result<MutexGuard<'_, Option<DirectoryScanCancellation>>, PreviewCommandError> {
@@ -7162,6 +7301,21 @@ where
     {
         return Err(light_plan_stale_error());
     }
+    let mut selected_masters = BTreeMap::new();
+    for product in light_plan.products() {
+        let dark_group_id = match product.dark() {
+            LightMasterAssociation::Matched { group_id, .. } => group_id.clone(),
+            LightMasterAssociation::Unresolved { .. } => return Err(light_plan_generation_error()),
+        };
+        let flat_group_id = match product.flat() {
+            LightMasterAssociation::Matched { group_id, .. } => group_id.clone(),
+            LightMasterAssociation::Unresolved { .. } => return Err(light_plan_generation_error()),
+        };
+        selected_masters.insert(
+            product.source_group_id().to_owned(),
+            (dark_group_id, flat_group_id),
+        );
+    }
     let should_demosaic = light_plan_has_only_standard_cfa(&session.manifest, &light_plan);
     let execution_request = LightPlanExecutionRequest::new_shared(
         session.root.clone(),
@@ -7287,6 +7441,10 @@ where
                 .try_reserve_exact(result.frames().len())
                 .map_err(|_| light_execution_allocation_error())?;
             for frame in result.frames() {
+                let (dark_group_id, flat_group_id) = selected_masters
+                    .get(frame.group_id())
+                    .cloned()
+                    .ok_or_else(light_plan_generation_error)?;
                 let (source_frame_id, source_label) = calibrated_source_identity(
                     &session.manifest,
                     frame.group_id(),
@@ -7307,6 +7465,8 @@ where
                     .transpose()?;
                 calibrated_frames.push(ExecutedCalibratedLightFrame {
                     group_id: frame.group_id().to_owned(),
+                    dark_group_id,
+                    flat_group_id,
                     source_index: frame.source_index(),
                     source_frame_id,
                     source_label,
@@ -8601,6 +8761,7 @@ const fn preview_worker_error() -> PreviewCommandError {
 pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(DesktopCalibrationArtifactState::default())
         .manage(DesktopCalibrationExecutionState::default())
         .manage(DesktopSessionImportState::default())
         .manage(DesktopReviewState::default())
@@ -8681,9 +8842,7 @@ mod tests {
             minimum_absolute_deviation: 1.0,
         };
         DefectCorrectionCommandRequest {
-            calibrated_light_path: PathBuf::from("/session/lights/light.fits"),
-            dark_master_path: PathBuf::from("/session/masters/dark.fits"),
-            flat_master_path: PathBuf::from("/session/masters/flat.fits"),
+            source_frame_id: "f".repeat(64),
             corrected_output_path: PathBuf::from("/session/corrected/light.fits"),
             map_output_path: PathBuf::from("/session/corrected/light-map.fits"),
             group_id: "light-uvir".to_owned(),
@@ -8699,21 +8858,11 @@ mod tests {
     }
 
     #[test]
-    fn defect_command_rejects_relative_and_aliasing_paths() {
+    fn defect_command_rejects_relative_and_duplicate_outputs() {
         let mut relative = defect_command_request();
         relative.map_output_path = PathBuf::from("map.fits");
         assert!(matches!(
             validate_defect_command_paths(&relative),
-            Err(PreviewCommandError {
-                code: "defect_correction_configuration_invalid",
-                ..
-            })
-        ));
-
-        let mut aliases_input = defect_command_request();
-        aliases_input.corrected_output_path = aliases_input.calibrated_light_path.clone();
-        assert!(matches!(
-            validate_defect_command_paths(&aliases_input),
             Err(PreviewCommandError {
                 code: "defect_correction_configuration_invalid",
                 ..
@@ -8742,6 +8891,111 @@ mod tests {
         assert_eq!(
             parameters.minimum_absolute_deviation().to_bits(),
             1.0_f64.to_bits()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_artifact_registry_resolves_defect_inputs_by_identity() -> Result<(), Box<dyn Error>> {
+        let state = DesktopCalibrationArtifactState::default();
+        let master = MasterPlanExecutionResponse {
+            manifest_sha256: "a".repeat(64),
+            plan_sha256: "b".repeat(64),
+            memory_limit_bytes: 1_024,
+            peak_reserved_bytes: 512,
+            products: vec![
+                ExecutedMasterProduct {
+                    group_id: "dark-group".to_owned(),
+                    kind: "dark",
+                    output_path: "/products/dark.fits".to_owned(),
+                    total_samples: 1,
+                    usable_samples: 1,
+                    masked_samples: 0,
+                    non_finite_samples: 0,
+                    minimum: 0.0,
+                    maximum: 0.0,
+                    mean: 0.0,
+                    population_standard_deviation: 0.0,
+                    samples_written: 1,
+                    substituted_samples: 0,
+                    bytes_written: 5_760,
+                    normalization: None,
+                },
+                ExecutedMasterProduct {
+                    group_id: "flat-group".to_owned(),
+                    kind: "flat",
+                    output_path: "/products/flat.fits".to_owned(),
+                    total_samples: 1,
+                    usable_samples: 1,
+                    masked_samples: 0,
+                    non_finite_samples: 0,
+                    minimum: 1.0,
+                    maximum: 1.0,
+                    mean: 1.0,
+                    population_standard_deviation: 0.0,
+                    samples_written: 1,
+                    substituted_samples: 0,
+                    bytes_written: 5_760,
+                    normalization: Some(1.0),
+                },
+            ],
+        };
+        record_master_artifacts(&state, &master)?;
+        let light = LightPlanExecutionResponse {
+            manifest_sha256: "a".repeat(64),
+            master_plan_sha256: "b".repeat(64),
+            light_plan_sha256: "c".repeat(64),
+            memory_limit_bytes: 1_024,
+            peak_reserved_bytes: 512,
+            output_mode: "calibrated_frames",
+            products: Vec::new(),
+            calibrated_frames: vec![ExecutedCalibratedLightFrame {
+                group_id: "light-group".to_owned(),
+                dark_group_id: "dark-group".to_owned(),
+                flat_group_id: "flat-group".to_owned(),
+                source_index: 0,
+                source_frame_id: "f".repeat(64),
+                source_label: "light.fits".to_owned(),
+                source_sha256: "d".repeat(64),
+                output_path: "/products/light.fits".to_owned(),
+                rgb_output_path: None,
+                total_samples: 1,
+                usable_samples: 1,
+                masked_samples: 0,
+                non_finite_samples: 0,
+                minimum: 1.0,
+                maximum: 1.0,
+                mean: 1.0,
+                population_standard_deviation: 0.0,
+                samples_written: 1,
+                substituted_samples: 0,
+                bytes_written: 5_760,
+                tiles_processed: 1,
+                tiles_reused: 0,
+            }],
+        };
+        record_light_artifacts(&state, &light)?;
+
+        let registry = lock_calibration_artifacts(&state)?;
+        let artifacts = registry.as_ref().ok_or("artifact registry is empty")?;
+        let frame = artifacts
+            .calibrated_frames
+            .get(&("light-group".to_owned(), "f".repeat(64)))
+            .ok_or("calibrated frame identity is missing")?;
+        assert_eq!(frame.path, PathBuf::from("/products/light.fits"));
+        assert_eq!(frame.dark_group_id, "dark-group");
+        assert_eq!(frame.flat_group_id, "flat-group");
+        assert_eq!(
+            artifacts
+                .masters
+                .get(&("dark".to_owned(), frame.dark_group_id.clone())),
+            Some(&PathBuf::from("/products/dark.fits"))
+        );
+        assert_eq!(
+            artifacts
+                .masters
+                .get(&("flat".to_owned(), frame.flat_group_id.clone())),
+            Some(&PathBuf::from("/products/flat.fits"))
         );
         Ok(())
     }
