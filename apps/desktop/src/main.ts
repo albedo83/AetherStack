@@ -24,8 +24,10 @@ import {
   frameArtifactKey,
 } from "./calibrated-review.ts";
 import {
+  appendDefectBatchResult,
   defectBatchProgressMessage,
   reconcileDefectBatchPreview,
+  startDefectBatchReport,
   type ReconciledDefectBatchItem,
 } from "./defect-batch.ts";
 import {
@@ -42,6 +44,7 @@ import {
 import { demoReviewModel } from "./demo-data.ts";
 import type {
   DrizzleProductView,
+  DefectBatchReport,
   FitsStatistics,
   FrameRole,
   LightFrameView,
@@ -4216,6 +4219,7 @@ async function executeDefectQueue(
   if (!requestedFocus) return;
   const ticket = ++defectCorrectionTicket;
   let sealedBatch: readonly ReconciledDefectBatchItem<DefectFrameInputs>[];
+  let batchReport: DefectBatchReport;
   try {
     const preview = await previewDefectBatch({
       outputDirectory,
@@ -4227,6 +4231,7 @@ async function executeDefectQueue(
     });
     if (ticket !== defectCorrectionTicket) return;
     sealedBatch = reconcileDefectBatchPreview(preview, inputs);
+    batchReport = startDefectBatchReport(preview);
   } catch {
     if (ticket !== defectCorrectionTicket) return;
     update({
@@ -4257,6 +4262,7 @@ async function executeDefectQueue(
         sourceFrameId: focus.frame.sourceFrameId,
         progress: null,
         result: null,
+        batchReport,
         previewState: "idle",
         previewView: "after",
         preview: null,
@@ -4306,10 +4312,21 @@ async function executeDefectQueue(
         onProgress,
       );
       completed += 1;
+      batchReport = appendDefectBatchResult(batchReport, result);
       lastResult = result;
       if (input.frame.sourceFrameId === focus.frame.sourceFrameId) {
         focusResult = result;
       }
+      update({
+        ...model,
+        calibration: {
+          ...model.calibration,
+          defectCorrection: {
+            ...model.calibration.defectCorrection,
+            batchReport,
+          },
+        },
+      });
     }
     if (ticket !== defectCorrectionTicket) return;
     const result = focusResult ?? lastResult;
@@ -4321,6 +4338,7 @@ async function executeDefectQueue(
           defectCorrection: {
             ...model.calibration.defectCorrection,
             state: "idle",
+            batchReport: { ...batchReport, state: "cancelled" },
             message: "Correction queue cancelled before the first publication",
           },
         },
@@ -4337,6 +4355,10 @@ async function executeDefectQueue(
         defectCorrection: {
           ...model.calibration.defectCorrection,
           state: stoppedEarly ? "idle" : "completed",
+          batchReport: {
+            ...batchReport,
+            state: stoppedEarly ? "cancelled" : "completed",
+          },
           outputDirectory,
           sourceFrameId: focus.frame.sourceFrameId,
           result,
@@ -4364,6 +4386,10 @@ async function executeDefectQueue(
         defectCorrection: {
           ...model.calibration.defectCorrection,
           state: cancelled ? "idle" : "error",
+          batchReport: {
+            ...batchReport,
+            state: cancelled ? "cancelled" : "failed",
+          },
           result: focusResult,
           progress: model.calibration.defectCorrection.progress,
           message: cancelled

@@ -681,6 +681,10 @@ export function mountReviewScreen(
       root,
       "[data-defect-correction-evidence]",
     ),
+    defectBatchReport: required<HTMLElement>(
+      root,
+      "[data-defect-batch-report]",
+    ),
     executeDefectCorrection: required<HTMLButtonElement>(
       root,
       '[data-action="execute-defect-correction"]',
@@ -2833,6 +2837,7 @@ interface CalibrationElements {
   readonly defectCorrectionProgress: HTMLProgressElement;
   readonly defectCorrectionOutput: HTMLElement;
   readonly defectCorrectionEvidence: HTMLElement;
+  readonly defectBatchReport: HTMLElement;
   readonly executeDefectCorrection: HTMLButtonElement;
   readonly executeAllDefectCorrections: HTMLButtonElement;
   readonly cancelDefectCorrection: HTMLButtonElement;
@@ -4433,6 +4438,23 @@ function renderDefectCorrection(
   elements.defectCorrectionEvidence.textContent = correction.result
     ? `Dark H${correction.result.darkDetection.hotSamples} / C${correction.result.darkDetection.coldSamples} · Flat H${correction.result.flatDetection.hotSamples} / C${correction.result.flatDetection.coldSamples} · Map ${correction.result.mapSummary.defectiveSamples} unique, ${correction.result.mapSummary.conflictingSamples} conflicts · ${correction.result.correctedSamples} corrected`
     : "No correction evidence published";
+  const report = correction.batchReport;
+  elements.defectBatchReport.hidden = report === null;
+  elements.defectBatchReport.textContent = report
+    ? `${report.state.toUpperCase()} · ${report.completedItems}/${report.totalItems} pairs · ${report.correctedSamples}/${report.requestedSamples} samples repaired · H${report.hotSamples} C${report.coldSamples} conflicts ${report.conflictingSamples} · peak ${formatByteCount(report.peakReservedBytes)} · plan ${report.planSha256.slice(0, 12)}…`
+    : "";
+  elements.defectBatchReport.title = report
+    ? `Plan SHA-256 ${report.planSha256} · parameters SHA-256 ${report.parametersSha256}`
+    : "";
+  if (report && busy) {
+    const currentUnits = Math.min(
+      correction.progress?.completedUnits ?? 0,
+      correction.progress?.totalUnits ?? 5,
+    );
+    elements.defectCorrectionProgress.max = report.totalItems * 5;
+    elements.defectCorrectionProgress.value =
+      report.completedItems * 5 + currentUnits;
+  }
   for (const button of elements.defectPreviewButtons) {
     const view = button.dataset.defectPreview;
     const selected = view === correction.previewView;
@@ -5689,6 +5711,7 @@ function shellMarkup(): string {
                     <p data-defect-correction-message role="status" aria-live="polite"></p>
                     <progress data-defect-correction-progress aria-label="Detector correction progress" hidden></progress>
                     <output data-defect-correction-evidence>No correction evidence published</output>
+                    <output class="defect-console__batch-report" data-defect-batch-report hidden></output>
                     <code data-defect-correction-output></code>
                   </div>
                   <section class="defect-preview" aria-label="Detector correction comparison">

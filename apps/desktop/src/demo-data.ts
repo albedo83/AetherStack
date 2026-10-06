@@ -387,6 +387,7 @@ export const demoReviewModel: ReviewViewModel = {
         memoryLimitBytes: 1_073_741_824,
       },
       result: null,
+      batchReport: null,
       previewState: "idle",
       previewView: "after",
       preview: null,

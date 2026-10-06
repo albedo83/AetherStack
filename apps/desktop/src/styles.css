@@ -2745,6 +2745,14 @@ button:active:not(:disabled) {
   font-size: 0.78rem;
 }
 
+.defect-console__status .defect-console__batch-report {
+  padding-top: 0.45rem;
+  border-top: 1px solid rgb(129 167 177 / 18%);
+  color: #d9c89f;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
 .defect-console__status code {
   overflow: hidden;
   color: var(--text-muted);

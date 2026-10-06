@@ -1155,6 +1155,21 @@ describe("frame review workspace", () => {
             totalUnits: 5,
             code: null,
           },
+          batchReport: {
+            state: "running",
+            planSha256: "a".repeat(64),
+            parametersSha256: "e".repeat(64),
+            totalItems: 4,
+            completedItems: 1,
+            requestedSamples: 31,
+            correctedSamples: 30,
+            insufficientSupportSamples: 1,
+            blockedBySourceMaskSamples: 0,
+            hotSamples: 3,
+            coldSamples: 4,
+            conflictingSamples: 1,
+            peakReservedBytes: 234_020_736,
+          },
           message: "Correction complete · staging both FITS companions · 2/5",
         },
       },
@@ -1166,8 +1181,8 @@ describe("frame review workspace", () => {
         name: "Detector correction progress",
       },
     );
-    expect(correctionProgress.value).toBe(2);
-    expect(correctionProgress.max).toBe(5);
+    expect(correctionProgress.value).toBe(7);
+    expect(correctionProgress.max).toBe(20);
 
     controller.update({
       ...ready,
@@ -1213,6 +1228,21 @@ describe("frame review workspace", () => {
               conflictingSamples: 1,
             },
           },
+          batchReport: {
+            state: "completed",
+            planSha256: "a".repeat(64),
+            parametersSha256: "e".repeat(64),
+            totalItems: 2,
+            completedItems: 2,
+            requestedSamples: 62,
+            correctedSamples: 60,
+            insufficientSupportSamples: 2,
+            blockedBySourceMaskSamples: 0,
+            hotSamples: 6,
+            coldSamples: 8,
+            conflictingSamples: 2,
+            peakReservedBytes: 234_020_736,
+          },
           previewState: "ready",
           previewView: "after",
           preview: {
@@ -1238,6 +1268,12 @@ describe("frame review workspace", () => {
     expect(
       root.querySelector<HTMLImageElement>("[data-defect-preview-image]")?.src,
     ).toContain("blob:after");
+    expect(
+      root.querySelector("[data-defect-batch-report]")?.textContent,
+    ).toContain("2/2 pairs");
+    expect(
+      root.querySelector<HTMLElement>("[data-defect-batch-report]")?.title,
+    ).toContain("parameters SHA-256");
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {

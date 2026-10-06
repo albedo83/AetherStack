@@ -1,9 +1,11 @@
 import type {
   DefectBatchPreview,
   DefectBatchPreviewItem,
+  DefectCorrectionResult,
   DefectExecutionProgress,
   ExecutedCalibratedLightFrame,
 } from "./calibration-bridge.ts";
+import type { DefectBatchReport } from "./model.ts";
 
 type DefectFrameIdentity = Pick<
   ExecutedCalibratedLightFrame,
@@ -13,6 +15,60 @@ type DefectFrameIdentity = Pick<
 export interface ReconciledDefectBatchItem<T> {
   readonly input: T;
   readonly destination: DefectBatchPreviewItem;
+}
+
+/** Starts an inspectable report tied to the exact reviewed native plan. */
+export function startDefectBatchReport(
+  preview: DefectBatchPreview,
+): DefectBatchReport {
+  return {
+    state: "running",
+    planSha256: preview.planSha256,
+    parametersSha256: preview.parametersSha256,
+    totalItems: preview.itemCount,
+    completedItems: 0,
+    requestedSamples: 0,
+    correctedSamples: 0,
+    insufficientSupportSamples: 0,
+    blockedBySourceMaskSamples: 0,
+    hotSamples: 0,
+    coldSamples: 0,
+    conflictingSamples: 0,
+    peakReservedBytes: 0,
+  };
+}
+
+/** Adds native evidence without discarding the worst observed memory peak. */
+export function appendDefectBatchResult(
+  report: DefectBatchReport,
+  result: DefectCorrectionResult,
+): DefectBatchReport {
+  if (
+    report.state !== "running" ||
+    result.parametersSha256 !== report.parametersSha256
+  )
+    throw new Error("Correction evidence does not belong to the sealed batch");
+  return {
+    ...report,
+    completedItems: report.completedItems + 1,
+    requestedSamples: report.requestedSamples + result.requestedSamples,
+    correctedSamples: report.correctedSamples + result.correctedSamples,
+    insufficientSupportSamples:
+      report.insufficientSupportSamples + result.insufficientSupportSamples,
+    blockedBySourceMaskSamples:
+      report.blockedBySourceMaskSamples + result.blockedBySourceMaskSamples,
+    hotSamples:
+      report.hotSamples +
+      result.darkDetection.hotSamples +
+      result.flatDetection.hotSamples,
+    coldSamples:
+      report.coldSamples +
+      result.darkDetection.coldSamples +
+      result.flatDetection.coldSamples,
+    conflictingSamples:
+      report.conflictingSamples + result.mapSummary.conflictingSamples,
+    peakReservedBytes: Math.max(report.peakReservedBytes, result.reservedBytes),
+  };
 }
 
 /**
@@ -35,7 +91,9 @@ export function reconcileDefectBatchPreview<
   ) {
     throw new Error("The native correction plan is not executable");
   }
-  const byId = new Map(inputs.map((input) => [input.frame.sourceFrameId, input]));
+  const byId = new Map(
+    inputs.map((input) => [input.frame.sourceFrameId, input]),
+  );
   if (byId.size !== inputs.length)
     throw new Error("The correction inputs contain duplicate identities");
   const destinations = new Set<string>();
@@ -52,7 +110,9 @@ export function reconcileDefectBatchPreview<
       destinations.has(destination.correctedOutputPath) ||
       destinations.has(destination.mapOutputPath)
     ) {
-      throw new Error("The native correction plan does not match reviewed artifacts");
+      throw new Error(
+        "The native correction plan does not match reviewed artifacts",
+      );
     }
     seen.add(destination.sourceFrameId);
     destinations.add(destination.correctedOutputPath);

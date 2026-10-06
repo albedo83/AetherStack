@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appendDefectBatchResult,
   defectBatchProgressMessage,
   reconcileDefectBatchPreview,
+  startDefectBatchReport,
 } from "./defect-batch.ts";
 
 function frame(id: string, groupId: string, sourceIndex: number) {
@@ -15,10 +17,9 @@ function frame(id: string, groupId: string, sourceIndex: number) {
 
 describe("detector correction batch helpers", () => {
   it("accepts only a complete native-owned order and its destinations", () => {
-    const inputs = [
-      frame("a", "g", 0),
-      frame("b", "g", 1),
-    ].map((candidate) => ({ frame: candidate }));
+    const inputs = [frame("a", "g", 0), frame("b", "g", 1)].map(
+      (candidate) => ({ frame: candidate }),
+    );
     const items = [inputs[1]!, inputs[0]!].map(({ frame: source }) => ({
       sourceFrameId: source.sourceFrameId,
       sourceIndex: source.sourceIndex,
@@ -72,6 +73,78 @@ describe("detector correction batch helpers", () => {
     expect(() =>
       reconcileDefectBatchPreview({ ...preview, ready: false }, inputs),
     ).toThrow("not executable");
+  });
+
+  it("aggregates sealed evidence and retains the highest memory peak", () => {
+    const preview = {
+      ready: true,
+      planSha256: "a".repeat(64),
+      parametersSha256: "b".repeat(64),
+      itemCount: 2,
+      blockedItemCount: 0,
+      items: [],
+    };
+    const result = {
+      correctedOutputPath: "/output/a.fits",
+      mapOutputPath: "/output/a-map.fits",
+      parametersSha256: preview.parametersSha256,
+      reservedBytes: 100,
+      requestedSamples: 7,
+      correctedSamples: 5,
+      insufficientSupportSamples: 1,
+      blockedBySourceMaskSamples: 1,
+      correctedSamplesWritten: 10,
+      correctedSubstitutedSamples: 0,
+      correctedBytesWritten: 40,
+      mapSamplesWritten: 10,
+      mapSubstitutedSamples: 0,
+      mapBytesWritten: 40,
+      darkDetection: {
+        examinedSamples: 10,
+        insufficientSupportSamples: 0,
+        unavailableCentreSamples: 0,
+        hotSamples: 2,
+        coldSamples: 1,
+      },
+      flatDetection: {
+        examinedSamples: 10,
+        insufficientSupportSamples: 0,
+        unavailableCentreSamples: 0,
+        hotSamples: 1,
+        coldSamples: 3,
+      },
+      mapSummary: {
+        defectiveSamples: 6,
+        hotSamples: 3,
+        coldSamples: 4,
+        conflictingSamples: 1,
+      },
+    };
+    const first = appendDefectBatchResult(
+      startDefectBatchReport(preview),
+      result,
+    );
+    const second = appendDefectBatchResult(first, {
+      ...result,
+      reservedBytes: 80,
+    });
+    expect(second).toMatchObject({
+      completedItems: 2,
+      requestedSamples: 14,
+      correctedSamples: 10,
+      insufficientSupportSamples: 2,
+      blockedBySourceMaskSamples: 2,
+      hotSamples: 6,
+      coldSamples: 8,
+      conflictingSamples: 2,
+      peakReservedBytes: 100,
+    });
+    expect(() =>
+      appendDefectBatchResult(second, {
+        ...result,
+        parametersSha256: "c".repeat(64),
+      }),
+    ).toThrow("does not belong");
   });
 
   it("reports per-Light progress without claiming batch atomicity", () => {

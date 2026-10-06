@@ -401,11 +401,28 @@ export interface DefectCorrectionViewModel {
   readonly progress: DefectExecutionProgress | null;
   readonly settings: DefectCorrectionSettings;
   readonly result: DefectCorrectionResult | null;
+  readonly batchReport: DefectBatchReport | null;
   readonly previewState: "idle" | "loading" | "ready" | "error";
   readonly previewView: "before" | "after" | "map";
   readonly preview: FramePreview | null;
   readonly previewMessage: string;
   readonly message: string;
+}
+
+export interface DefectBatchReport {
+  readonly state: "running" | "completed" | "cancelled" | "failed";
+  readonly planSha256: string;
+  readonly parametersSha256: string;
+  readonly totalItems: number;
+  readonly completedItems: number;
+  readonly requestedSamples: number;
+  readonly correctedSamples: number;
+  readonly insufficientSupportSamples: number;
+  readonly blockedBySourceMaskSamples: number;
+  readonly hotSamples: number;
+  readonly coldSamples: number;
+  readonly conflictingSamples: number;
+  readonly peakReservedBytes: number;
 }
 
 export type SortField =
