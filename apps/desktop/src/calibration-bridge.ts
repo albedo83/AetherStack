@@ -279,6 +279,11 @@ export interface DefectCorrectionResult {
   readonly correctedOutputPath: string;
   readonly mapOutputPath: string;
   readonly parametersSha256: string;
+  readonly batchPlanSha256: string;
+  readonly batchItemIndex: number;
+  readonly batchCompletedItems: number;
+  readonly batchTotalItems: number;
+  readonly batchComplete: boolean;
   readonly reservedBytes: number;
   readonly requestedSamples: number;
   readonly correctedSamples: number;

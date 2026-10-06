@@ -88,6 +88,11 @@ describe("detector correction batch helpers", () => {
       correctedOutputPath: "/output/a.fits",
       mapOutputPath: "/output/a-map.fits",
       parametersSha256: preview.parametersSha256,
+      batchPlanSha256: preview.planSha256,
+      batchItemIndex: 0,
+      batchCompletedItems: 1,
+      batchTotalItems: 2,
+      batchComplete: false,
       reservedBytes: 100,
       requestedSamples: 7,
       correctedSamples: 5,
@@ -127,6 +132,9 @@ describe("detector correction batch helpers", () => {
     const second = appendDefectBatchResult(first, {
       ...result,
       reservedBytes: 80,
+      batchItemIndex: 1,
+      batchCompletedItems: 2,
+      batchComplete: true,
     });
     expect(second).toMatchObject({
       completedItems: 2,
@@ -143,6 +151,8 @@ describe("detector correction batch helpers", () => {
       appendDefectBatchResult(second, {
         ...result,
         parametersSha256: "c".repeat(64),
+        batchItemIndex: 2,
+        batchCompletedItems: 3,
       }),
     ).toThrow("does not belong");
   });

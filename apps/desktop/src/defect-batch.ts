@@ -43,9 +43,15 @@ export function appendDefectBatchResult(
   report: DefectBatchReport,
   result: DefectCorrectionResult,
 ): DefectBatchReport {
+  const expectedCompleted = report.completedItems + 1;
   if (
     report.state !== "running" ||
-    result.parametersSha256 !== report.parametersSha256
+    result.parametersSha256 !== report.parametersSha256 ||
+    result.batchPlanSha256 !== report.planSha256 ||
+    result.batchItemIndex !== report.completedItems ||
+    result.batchCompletedItems !== expectedCompleted ||
+    result.batchTotalItems !== report.totalItems ||
+    result.batchComplete !== (expectedCompleted === report.totalItems)
   )
     throw new Error("Correction evidence does not belong to the sealed batch");
   return {

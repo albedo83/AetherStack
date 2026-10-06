@@ -1972,6 +1972,11 @@ struct DefectCorrectionResponse {
     corrected_output_path: String,
     map_output_path: String,
     parameters_sha256: String,
+    batch_plan_sha256: String,
+    batch_item_index: usize,
+    batch_completed_items: usize,
+    batch_total_items: usize,
+    batch_complete: bool,
     reserved_bytes: usize,
     requested_samples: usize,
     corrected_samples: usize,
@@ -6514,13 +6519,16 @@ async fn execute_defect_correction(
     })
     .await;
     finish_calibration_execution(&execution_state)?;
-    let response = execution.map_err(|_| {
+    let mut response = execution.map_err(|_| {
         PreviewCommandError::new(
             "defect_correction_interrupted",
             "The detector-defect worker stopped before producing a result.",
         )
     })??;
-    advance_reviewed_defect_batch(&artifact_state, &reviewed_request)?;
+    let batch = advance_reviewed_defect_batch(&artifact_state, &reviewed_request)?;
+    response.batch_completed_items = batch.completed_items;
+    response.batch_total_items = batch.total_items;
+    response.batch_complete = batch.complete;
     Ok(response)
 }
 
@@ -6606,7 +6614,7 @@ fn validate_reviewed_defect_item(
 fn advance_reviewed_defect_batch(
     state: &DesktopCalibrationArtifactState,
     request: &DefectCorrectionCommandRequest,
-) -> Result<(), PreviewCommandError> {
+) -> Result<DefectBatchAdvance, PreviewCommandError> {
     let mut guard = lock_reviewed_defect_batch(state)?;
     let batch = guard.as_mut().ok_or_else(defect_batch_stale_error)?;
     if batch.plan_sha256 != request.expected_batch_plan_sha256
@@ -6618,7 +6626,18 @@ fn advance_reviewed_defect_batch(
         .next_item_index
         .checked_add(1)
         .ok_or_else(defect_batch_stale_error)?;
-    Ok(())
+    Ok(DefectBatchAdvance {
+        completed_items: batch.next_item_index,
+        total_items: batch.items.len(),
+        complete: batch.next_item_index == batch.items.len(),
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DefectBatchAdvance {
+    completed_items: usize,
+    total_items: usize,
+    complete: bool,
 }
 
 fn defect_request_parameters_sha256(
@@ -6855,6 +6874,11 @@ where
         corrected_output_path,
         map_output_path,
         parameters_sha256: result.parameters_sha256().to_owned(),
+        batch_plan_sha256: request.expected_batch_plan_sha256,
+        batch_item_index: request.batch_item_index,
+        batch_completed_items: 0,
+        batch_total_items: 0,
+        batch_complete: false,
         reserved_bytes: result.reserved_bytes(),
         requested_samples: evidence.requested(),
         corrected_samples: evidence.corrected(),
