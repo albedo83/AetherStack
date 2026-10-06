@@ -7,6 +7,7 @@
 
 mod defect;
 mod flat;
+mod linear_defect;
 mod master;
 mod pedestal;
 
@@ -24,6 +25,9 @@ pub use defect::{
 pub use flat::{
     FlatNormalizationError, FlatNormalizationParameters, FlatNormalizationSupport, NormalizedFlat,
     normalize_flat,
+};
+pub use linear_defect::{
+    LinearDefectAxis, LinearDefectDetectionParameters, LinearDefectError, LinearDefectPolarity,
 };
 pub use master::{
     CalibrationMasterKind, MasterIntegrationAlgorithm, StrictMeanMaster,
