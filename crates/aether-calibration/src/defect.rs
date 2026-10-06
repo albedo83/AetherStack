@@ -194,6 +194,24 @@ impl DefectMap {
         &self.mask
     }
 
+    /// Counts the exact unique HOT/COLD categories currently present.
+    ///
+    /// A conflicting sample contributes once to `defective_samples`, once to
+    /// each category total, and once to `conflicting_samples`.
+    #[must_use]
+    pub fn summary(&self) -> DefectMapSummary {
+        let mut summary = DefectMapSummary::default();
+        for flags in self.mask.as_slice() {
+            let hot = flags.contains(PixelFlags::HOT);
+            let cold = flags.contains(PixelFlags::COLD);
+            summary.defective_samples += usize::from(hot || cold);
+            summary.hot_samples += usize::from(hot);
+            summary.cold_samples += usize::from(cold);
+            summary.conflicting_samples += usize::from(hot && cold);
+        }
+        summary
+    }
+
     /// Marks a known defect without erasing existing evidence.
     pub fn insert(
         &mut self,
@@ -268,6 +286,38 @@ impl DefectMap {
             *destination = flags;
         }
         Ok(map)
+    }
+}
+
+/// Exact unique category counts for one merged defect map.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DefectMapSummary {
+    defective_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+    conflicting_samples: usize,
+}
+
+impl DefectMapSummary {
+    /// Unique samples carrying at least one defect reason.
+    #[must_use]
+    pub const fn defective_samples(self) -> usize {
+        self.defective_samples
+    }
+    /// Unique samples carrying HOT evidence.
+    #[must_use]
+    pub const fn hot_samples(self) -> usize {
+        self.hot_samples
+    }
+    /// Unique samples carrying COLD evidence.
+    #[must_use]
+    pub const fn cold_samples(self) -> usize {
+        self.cold_samples
+    }
+    /// Samples carrying both HOT and COLD evidence.
+    #[must_use]
+    pub const fn conflicting_samples(self) -> usize {
+        self.conflicting_samples
     }
 }
 
@@ -1083,6 +1133,15 @@ mod tests {
         assert_eq!(evidence.hot_samples(), 2);
         assert_eq!(evidence.cold_samples(), 2);
         assert_eq!(evidence.conflicting_samples(), 1);
+        assert_eq!(
+            merged.summary(),
+            DefectMapSummary {
+                defective_samples: 3,
+                hot_samples: 2,
+                cold_samples: 2,
+                conflicting_samples: 1,
+            }
+        );
         let conflict = merged.mask().get(1, 0, 0)?;
         assert!(conflict.contains(PixelFlags::HOT));
         assert!(conflict.contains(PixelFlags::COLD));

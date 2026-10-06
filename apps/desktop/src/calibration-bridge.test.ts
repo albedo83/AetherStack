@@ -214,6 +214,26 @@ describe("native calibration bridge", () => {
       mapSamplesWritten: 11_693_168,
       mapSubstitutedSamples: 0,
       mapBytesWritten: 93_548_224,
+      darkDetection: {
+        examinedSamples: 11_685_708,
+        insufficientSupportSamples: 0,
+        unavailableCentreSamples: 0,
+        hotSamples: 30,
+        coldSamples: 2,
+      },
+      flatDetection: {
+        examinedSamples: 11_685_708,
+        insufficientSupportSamples: 0,
+        unavailableCentreSamples: 0,
+        hotSamples: 1,
+        coldSamples: 4,
+      },
+      mapSummary: {
+        defectiveSamples: 35,
+        hotSamples: 31,
+        coldSamples: 6,
+        conflictingSamples: 2,
+      },
     };
     vi.mocked(invoke).mockResolvedValue(expected);
     const request = {

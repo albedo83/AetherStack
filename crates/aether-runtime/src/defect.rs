@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use aether_calibration::{
     DefectCorrectionEvidence, DefectCorrectionParameters, DefectDetectionEvidence,
-    DefectDetectionParameters, DefectMap, DefectMapError, correct_defects, detect_local_defects,
-    merge_defect_maps,
+    DefectDetectionParameters, DefectMap, DefectMapError, DefectMapSummary, correct_defects,
+    detect_local_defects, merge_defect_maps,
 };
 use aether_core::{Dimensions, PixelFlags};
 use aether_fits::{
@@ -281,6 +281,8 @@ pub struct DefectCorrectionPipelineResult {
     corrected: FitsWriteSummary,
     map: FitsWriteSummary,
     correction: DefectCorrectionEvidence,
+    detection: Vec<(DefectReferenceKind, DefectDetectionEvidence)>,
+    map_summary: DefectMapSummary,
     parameters_sha256: String,
     reserved_bytes: usize,
 }
@@ -300,6 +302,16 @@ impl DefectCorrectionPipelineResult {
     #[must_use]
     pub const fn correction(&self) -> DefectCorrectionEvidence {
         self.correction
+    }
+    /// Per-reference detector evidence in request order.
+    #[must_use]
+    pub fn detection(&self) -> &[(DefectReferenceKind, DefectDetectionEvidence)] {
+        &self.detection
+    }
+    /// Unique category counts in the exact published companion map.
+    #[must_use]
+    pub const fn map_summary(&self) -> DefectMapSummary {
+        self.map_summary
     }
     /// Canonical parameter identity embedded in both products.
     #[must_use]
@@ -802,11 +814,19 @@ pub fn run_strict_defect_correction(
     let [corrected_summary, map_summary] = summaries.as_slice() else {
         return Err(DefectCorrectionPipelineError::AllocationFailed);
     };
+    let defect_map_summary = analysis.map().summary();
+    let DefectAnalysisResult {
+        evidence: detection,
+        parameters_sha256,
+        ..
+    } = analysis;
     Ok(DefectCorrectionPipelineResult {
         corrected: *corrected_summary,
         map: *map_summary,
         correction: corrected.evidence(),
-        parameters_sha256: analysis.parameters_sha256().to_owned(),
+        detection,
+        map_summary: defect_map_summary,
+        parameters_sha256,
         reserved_bytes: estimate.reserved_peak_bytes(),
     })
 }
@@ -1171,6 +1191,15 @@ mod tests {
         let result = run_strict_defect_correction(&request, &CancellationToken::new(), &budget)?;
         assert_eq!(result.correction().requested(), 2);
         assert_eq!(result.correction().corrected(), 2);
+        assert_eq!(result.detection().len(), 2);
+        assert_eq!(result.detection()[0].0, DefectReferenceKind::Dark);
+        assert_eq!(result.detection()[0].1.hot(), 1);
+        assert_eq!(result.detection()[1].0, DefectReferenceKind::Flat);
+        assert_eq!(result.detection()[1].1.cold(), 1);
+        assert_eq!(result.map_summary().defective_samples(), 2);
+        assert_eq!(result.map_summary().hot_samples(), 1);
+        assert_eq!(result.map_summary().cold_samples(), 1);
+        assert_eq!(result.map_summary().conflicting_samples(), 0);
         assert_eq!(result.parameters_sha256(), parameter_digest);
         assert_eq!(result.reserved_bytes(), estimate.reserved_peak_bytes());
         assert!(corrected_path.is_file());

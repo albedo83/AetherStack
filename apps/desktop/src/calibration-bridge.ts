@@ -270,6 +270,24 @@ export interface DefectCorrectionResult {
   readonly mapSamplesWritten: number;
   readonly mapSubstitutedSamples: number;
   readonly mapBytesWritten: number;
+  readonly darkDetection: DefectDetectionEvidence;
+  readonly flatDetection: DefectDetectionEvidence;
+  readonly mapSummary: DefectMapSummary;
+}
+
+export interface DefectDetectionEvidence {
+  readonly examinedSamples: number;
+  readonly insufficientSupportSamples: number;
+  readonly unavailableCentreSamples: number;
+  readonly hotSamples: number;
+  readonly coldSamples: number;
+}
+
+export interface DefectMapSummary {
+  readonly defectiveSamples: number;
+  readonly hotSamples: number;
+  readonly coldSamples: number;
+  readonly conflictingSamples: number;
 }
 
 /**

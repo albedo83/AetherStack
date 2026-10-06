@@ -1930,6 +1930,40 @@ struct DefectCorrectionResponse {
     map_samples_written: u64,
     map_substituted_samples: u64,
     map_bytes_written: u64,
+    dark_detection: DefectDetectionResponse,
+    flat_detection: DefectDetectionResponse,
+    map_summary: DefectMapSummaryResponse,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectDetectionResponse {
+    examined_samples: usize,
+    insufficient_support_samples: usize,
+    unavailable_centre_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+}
+
+impl From<aether_calibration::DefectDetectionEvidence> for DefectDetectionResponse {
+    fn from(evidence: aether_calibration::DefectDetectionEvidence) -> Self {
+        Self {
+            examined_samples: evidence.examined(),
+            insufficient_support_samples: evidence.insufficient_support(),
+            unavailable_centre_samples: evidence.unavailable_centres(),
+            hot_samples: evidence.hot(),
+            cold_samples: evidence.cold(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectMapSummaryResponse {
+    defective_samples: usize,
+    hot_samples: usize,
+    cold_samples: usize,
+    conflicting_samples: usize,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -6342,6 +6376,15 @@ fn execute_defect_correction_sync(
     let result = run_strict_defect_correction(&execution, cancellation, &memory)
         .map_err(defect_correction_execution_error)?;
     let evidence = result.correction();
+    let mut dark_detection = DefectDetectionResponse::default();
+    let mut flat_detection = DefectDetectionResponse::default();
+    for (kind, evidence) in result.detection() {
+        match kind {
+            DefectReferenceKind::Dark => dark_detection = (*evidence).into(),
+            DefectReferenceKind::Flat => flat_detection = (*evidence).into(),
+        }
+    }
+    let summary = result.map_summary();
     let corrected = result.corrected();
     let map = result.map();
     Ok(DefectCorrectionResponse {
@@ -6359,6 +6402,14 @@ fn execute_defect_correction_sync(
         map_samples_written: map.samples_written(),
         map_substituted_samples: map.substituted_samples(),
         map_bytes_written: map.bytes_written(),
+        dark_detection,
+        flat_detection,
+        map_summary: DefectMapSummaryResponse {
+            defective_samples: summary.defective_samples(),
+            hot_samples: summary.hot_samples(),
+            cold_samples: summary.cold_samples(),
+            conflicting_samples: summary.conflicting_samples(),
+        },
     })
 }
 

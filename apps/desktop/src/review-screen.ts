@@ -4407,7 +4407,7 @@ function renderDefectCorrection(
   elements.defectCorrectionOutput.title =
     correction.result?.correctedOutputPath ?? correction.outputDirectory ?? "";
   elements.defectCorrectionEvidence.textContent = correction.result
-    ? `${correction.result.correctedSamples} corrected · ${correction.result.insufficientSupportSamples} insufficient support · seal ${correction.result.parametersSha256.slice(0, 12)}`
+    ? `Dark H${correction.result.darkDetection.hotSamples} / C${correction.result.darkDetection.coldSamples} · Flat H${correction.result.flatDetection.hotSamples} / C${correction.result.flatDetection.coldSamples} · Map ${correction.result.mapSummary.defectiveSamples} unique, ${correction.result.mapSummary.conflictingSamples} conflicts · ${correction.result.correctedSamples} corrected`
     : "No correction evidence published";
   for (const button of elements.defectPreviewButtons) {
     const view = button.dataset.defectPreview;
@@ -5666,6 +5666,11 @@ function shellMarkup(): string {
                       <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="before" aria-selected="false" disabled>Before</button>
                       <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="after" aria-selected="true" disabled>After</button>
                       <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="map" aria-selected="false" disabled>Map</button>
+                    </div>
+                    <div class="defect-preview__legend" aria-label="Defect map color legend">
+                      <span data-kind="hot"><i aria-hidden="true"></i>HOT</span>
+                      <span data-kind="cold"><i aria-hidden="true"></i>COLD</span>
+                      <span data-kind="conflict"><i aria-hidden="true"></i>CONFLICT</span>
                     </div>
                     <div class="defect-preview__stage">
                       <img data-defect-preview-image alt="" hidden />
