@@ -1554,7 +1554,12 @@ fn ordered_sample_linear_fit(values: &[f64]) -> Option<OrderedLinearFit> {
         let residual = value / scale - fitted;
         squared_residuals.add((residual * residual) / divisor);
     }
-    let residual_sigma = squared_residuals.total().max(0.0).sqrt();
+    let measured_sigma = squared_residuals.total().max(0.0).sqrt();
+    let residual_sigma = if measured_sigma <= 32.0 * f64::EPSILON {
+        0.0
+    } else {
+        measured_sigma
+    };
     if !intercept.is_finite() || !slope.is_finite() || !residual_sigma.is_finite() {
         return None;
     }
@@ -2585,6 +2590,85 @@ mod tests {
         assert_eq!(parameters.low_sigma().to_bits(), 5.0_f64.to_bits());
         assert_eq!(parameters.high_sigma().to_bits(), 3.5_f64.to_bits());
         assert_eq!(parameters.minimum_retained(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn linear_fit_rejects_asymmetric_tail_outliers_with_exact_evidence() -> TestResult {
+        let mut values = (0_u32..20).map(f64::from).collect::<Vec<_>>();
+        values.push(1_000.0);
+        let inputs = values
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+
+        let result = integrate_linear_fit_clipped_mean(
+            &references,
+            LinearFitClipParameters::new(5.0, 3.5, 3)?,
+        )?;
+
+        assert_eq!(result.image().pixels()[0].to_bits(), 9.5_f64.to_bits());
+        assert_eq!(result.support()[0].accepted(), 20);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].high_rejected(), 1);
+        assert_eq!(result.support()[0].total(), 21);
+        Ok(())
+    }
+
+    #[test]
+    fn linear_fit_is_permutation_invariant_and_preserves_a_perfect_ramp() -> TestResult {
+        let ordered = (0_u32..17).map(f64::from).collect::<Vec<_>>();
+        let permuted = [8, 0, 16, 4, 12, 2, 14, 6, 10, 1, 15, 3, 13, 5, 11, 7, 9]
+            .into_iter()
+            .map(f64::from)
+            .collect::<Vec<_>>();
+        let integrate = |values: &[f64]| -> TestResult<LinearFitClippedIntegration> {
+            let inputs = values
+                .iter()
+                .copied()
+                .map(|value| image(vec![value]))
+                .collect::<Result<Vec<_>, _>>()?;
+            let references = inputs.iter().collect::<Vec<_>>();
+            Ok(integrate_linear_fit_clipped_mean(
+                &references,
+                LinearFitClipParameters::new(2.0, 2.0, 3)?,
+            )?)
+        };
+
+        let first = integrate(&ordered)?;
+        let second = integrate(&permuted)?;
+        assert_eq!(first.image().pixels(), second.image().pixels());
+        assert_eq!(first.support(), second.support());
+        assert_eq!(first.support()[0].accepted(), 17);
+        assert_eq!(first.support()[0].low_rejected(), 0);
+        assert_eq!(first.support()[0].high_rejected(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn linear_fit_support_floor_masks_and_nonfinite_values_fail_closed() -> TestResult {
+        let mut images = (0_u32..5)
+            .map(|value| image(vec![f64::from(value)]))
+            .collect::<Result<Vec<_>, _>>()?;
+        images.push(image(vec![1_000.0])?);
+        let mut masked = image(vec![-1_000.0])?;
+        masked.mask_mut().as_mut_slice()[0] = PixelFlags::SATURATED;
+        images.push(masked);
+        images.push(image(vec![f64::NAN])?);
+        let references = images.iter().collect::<Vec<_>>();
+
+        let result = integrate_linear_fit_clipped_mean(
+            &references,
+            LinearFitClipParameters::new(1.0, 1.0, 6)?,
+        )?;
+
+        assert_eq!(result.support()[0].accepted(), 6);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].high_rejected(), 0);
+        assert_eq!(result.support()[0].masked(), 1);
+        assert_eq!(result.support()[0].non_finite(), 1);
+        assert_eq!(result.support()[0].total(), 8);
         Ok(())
     }
 
