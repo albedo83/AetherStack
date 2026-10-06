@@ -42,6 +42,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUpdateDrizzleSettings: vi.fn(),
     onSelectDrizzleProduct: vi.fn(),
     onInspectDrizzleStatistics: vi.fn(),
+    onInspectDrizzlePixel: vi.fn(),
     onUpdateRegisteredStackSettings: vi.fn(),
     onSelectRegisteredStackProduct: vi.fn(),
     onSetRegisteredStackOverlayOpacity: vi.fn(),

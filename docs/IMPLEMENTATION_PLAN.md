@@ -2060,6 +2060,11 @@ safety reasoning. They do not narrate obvious syntax.
      deterministic three-pass native calculator, cached by canonical plan and
      product role, and shown with complete shape, format, conformance, excluded
      sample, extrema, mean, and deviation evidence.
+202. Add exact coordinate inspection to every Drizzle companion. Bounds come
+     from the sealed output result, native FITS reads preserve plane order and
+     missing values, and stale responses are rejected across product or plan
+     changes. The laboratory reports all RGB-plane values without deriving or
+     rounding scientific data in the browser.
 
 ## 11. Stable-release definition
 

@@ -351,6 +351,8 @@ export interface RegistrationViewModel {
     readonly previewState: "idle" | "loading" | "ready" | "error";
     readonly preview: FramePreview | null;
     readonly selectedProduct: DrizzleProductView;
+    readonly pixelInspectionState: "idle" | "loading" | "ready" | "error";
+    readonly pixelInspection: StackPixelInspection | null;
     readonly message: string;
   };
   readonly resultReview: RegistrationResultReview;
@@ -429,6 +431,7 @@ export interface ReviewActions {
   ) => void;
   readonly onSelectDrizzleProduct: (product: DrizzleProductView) => void;
   readonly onInspectDrizzleStatistics: () => void;
+  readonly onInspectDrizzlePixel: (x: number, y: number) => void;
   readonly onUpdateRegisteredStackSettings: (
     settings: RegisteredStackIntegrationSettings,
   ) => void;

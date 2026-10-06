@@ -174,6 +174,7 @@ let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
 let drizzleTicket = 0;
 let drizzlePreviewTicket = 0;
+let drizzlePixelTicket = 0;
 let localNormalizationTicket = 0;
 let localNormalizationPreviewTicket = 0;
 let localNormalizationStatisticsTicket = 0;
@@ -337,6 +338,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onInspectDrizzleStatistics() {
     void inspectDrizzleStatistics();
+  },
+  onInspectDrizzlePixel(x, y) {
+    void inspectDrizzlePixel(x, y);
   },
   onUpdateRegisteredStackSettings(settings) {
     if (
@@ -1687,6 +1691,8 @@ function idleDrizzle(
     previewState: "idle",
     preview: null,
     selectedProduct: "science",
+    pixelInspectionState: "idle",
+    pixelInspection: null,
     message,
   };
 }
@@ -1957,6 +1963,7 @@ async function executeDrizzleProduct(): Promise<void> {
   }
   const ticket = ++drizzleTicket;
   drizzlePreviewTicket += 1;
+  drizzlePixelTicket += 1;
   releaseDrizzlePreview();
   update({
     ...model,
@@ -2088,6 +2095,7 @@ function selectDrizzleProduct(product: DrizzleProductView): void {
     return;
   }
   drizzlePreviewTicket += 1;
+  drizzlePixelTicket += 1;
   statisticsTicket += 1;
   releaseDrizzlePreview();
   update({
@@ -2100,6 +2108,8 @@ function selectDrizzleProduct(product: DrizzleProductView): void {
         selectedProduct: product,
         previewState: "loading",
         preview: null,
+        pixelInspectionState: "idle",
+        pixelInspection: null,
       },
     },
   });
@@ -2256,6 +2266,78 @@ async function inspectDrizzleStatistics(): Promise<void> {
         statistics: null,
         message:
           "Exact statistics could not be calculated for this Drizzle product.",
+      },
+    });
+  }
+}
+
+async function inspectDrizzlePixel(x: number, y: number): Promise<void> {
+  const drizzle = model.registration.drizzle;
+  const result = drizzle.result;
+  if (
+    !result ||
+    drizzle.state !== "completed" ||
+    !Number.isSafeInteger(x) ||
+    !Number.isSafeInteger(y) ||
+    x < 0 ||
+    y < 0 ||
+    x >= result.width ||
+    y >= result.height
+  ) {
+    return;
+  }
+  const product = drizzle.selectedProduct;
+  const path = drizzleProductPath(result, product);
+  const ticket = ++drizzlePixelTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      drizzle: {
+        ...model.registration.drizzle,
+        pixelInspectionState: "loading",
+        pixelInspection: null,
+      },
+    },
+  });
+  try {
+    const inspection = await inspectStackPixel({
+      sciencePath: path,
+      lowRejectionPath: null,
+      highRejectionPath: null,
+      x,
+      y,
+    });
+    if (
+      ticket !== drizzlePixelTicket ||
+      model.registration.drizzle.result?.drizzlePlanSha256 !==
+        result.drizzlePlanSha256 ||
+      model.registration.drizzle.selectedProduct !== product
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          pixelInspectionState: "ready",
+          pixelInspection: inspection,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== drizzlePixelTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        drizzle: {
+          ...model.registration.drizzle,
+          pixelInspectionState: "error",
+          pixelInspection: null,
+        },
       },
     });
   }
@@ -4642,6 +4724,7 @@ function clearRegistrationPreviewResources(): void {
   registrationPreviewCache.clear();
   clearRegisteredStackPreviewResources();
   drizzlePreviewTicket += 1;
+  drizzlePixelTicket += 1;
   releaseDrizzlePreview();
   stopRegistrationBlinkTimer();
 }

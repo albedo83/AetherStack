@@ -986,6 +986,60 @@ button:active:not(:disabled) {
   object-fit: contain;
 }
 
+.drizzle-console__pixel-controls {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.7fr) minmax(70px, 0.7fr) 1.4fr;
+  gap: 7px;
+}
+
+.drizzle-console__pixel-controls label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 8px;
+  background: #080d14;
+  border: 1px solid #2b3d50;
+  border-radius: 7px;
+  box-shadow: inset 0 2px 6px #000b;
+}
+
+.drizzle-console__pixel-controls label span {
+  color: #6f849b;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.drizzle-console__pixel-controls input {
+  min-width: 0;
+  width: 100%;
+  min-height: 30px;
+  color: #d9edff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: right;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.drizzle-console__pixel-readout {
+  min-height: 30px;
+  padding: 8px 10px;
+  color: #8399af;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.5;
+  background: #070b11;
+  border-left: 2px solid #345f88;
+}
+
+.drizzle-console__pixel-readout[data-state="error"] {
+  color: #f0a5ae;
+  border-left-color: #a64f5d;
+}
+
 .drizzle-console__actions .button {
   flex: 1;
 }

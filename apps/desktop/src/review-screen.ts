@@ -262,6 +262,16 @@ export function mountReviewScreen(
       root,
       '[data-action="inspect-drizzle-statistics"]',
     ),
+    drizzlePixelX: required<HTMLInputElement>(root, "[data-drizzle-pixel-x]"),
+    drizzlePixelY: required<HTMLInputElement>(root, "[data-drizzle-pixel-y]"),
+    inspectDrizzlePixel: required<HTMLButtonElement>(
+      root,
+      '[data-action="inspect-drizzle-pixel"]',
+    ),
+    drizzlePixelReadout: required<HTMLElement>(
+      root,
+      "[data-drizzle-pixel-readout]",
+    ),
     registrationStatus: required<HTMLElement>(
       root,
       "[data-registration-status]",
@@ -1018,6 +1028,13 @@ export function mountReviewScreen(
     }
     if (action === "inspect-drizzle-statistics") {
       actions.onInspectDrizzleStatistics();
+      return;
+    }
+    if (action === "inspect-drizzle-pixel") {
+      actions.onInspectDrizzlePixel(
+        elements.drizzlePixelX.valueAsNumber,
+        elements.drizzlePixelY.valueAsNumber,
+      );
       return;
     }
     if (action === "execute-registered-stack") {
@@ -2682,6 +2699,10 @@ interface RegistrationElements {
   readonly drizzlePreviewImage: HTMLImageElement;
   readonly drizzlePreviewPlaceholder: HTMLElement;
   readonly inspectDrizzleStatistics: HTMLButtonElement;
+  readonly drizzlePixelX: HTMLInputElement;
+  readonly drizzlePixelY: HTMLInputElement;
+  readonly inspectDrizzlePixel: HTMLButtonElement;
+  readonly drizzlePixelReadout: HTMLElement;
   readonly registrationStatus: HTMLElement;
   readonly registrationRms: HTMLElement;
   readonly registrationInliers: HTMLElement;
@@ -3011,6 +3032,7 @@ function renderRegistration(
         : "The atomic Drizzle product set will appear here";
   elements.inspectDrizzleStatistics.disabled =
     drizzle.result === null || drizzleBusy;
+  renderDrizzlePixelReadout(elements, drizzle);
   const registeredSetReady =
     registration.execution.state === "completed" &&
     registration.execution.result?.planSha256 === registration.plan?.planSha256;
@@ -3652,6 +3674,41 @@ function renderStackPixelReadout(
   const counts = (source: readonly (number | null)[] | null) =>
     source?.map((value) => value ?? "missing").join(" / ") ?? "not published";
   readout.textContent = `x ${inspection.x} · y ${inspection.y} · science ${values} · low ${counts(inspection.lowRejectionCounts)} · high ${counts(inspection.highRejectionCounts)}`;
+}
+
+function renderDrizzlePixelReadout(
+  elements: RegistrationElements,
+  drizzle: ReviewViewModel["registration"]["drizzle"],
+): void {
+  const result = drizzle.result;
+  const available = result !== null && drizzle.state === "completed";
+  elements.drizzlePixelX.disabled = !available;
+  elements.drizzlePixelY.disabled = !available;
+  elements.inspectDrizzlePixel.disabled = !available;
+  elements.drizzlePixelX.max = result ? String(result.width - 1) : "0";
+  elements.drizzlePixelY.max = result ? String(result.height - 1) : "0";
+  const readout = elements.drizzlePixelReadout;
+  readout.dataset.state = drizzle.pixelInspectionState;
+  if (drizzle.pixelInspectionState === "loading") {
+    readout.textContent = "Reading the exact Drizzle coordinate…";
+    return;
+  }
+  if (drizzle.pixelInspectionState === "error") {
+    readout.textContent =
+      "Exact coordinate inspection failed; the published product remains valid.";
+    return;
+  }
+  const inspection = drizzle.pixelInspection;
+  if (!inspection) {
+    readout.textContent = "Enter an output coordinate to inspect every plane.";
+    return;
+  }
+  elements.drizzlePixelX.value = String(inspection.x);
+  elements.drizzlePixelY.value = String(inspection.y);
+  const values = inspection.scienceValues
+    .map((value) => (value === null ? "missing" : value.toPrecision(10)))
+    .join(" / ");
+  readout.textContent = `x ${inspection.x} · y ${inspection.y} · ${drizzle.selectedProduct} ${values}`;
 }
 
 function renderRegisteredResult(
@@ -4841,6 +4898,12 @@ function shellMarkup(): string {
                   <img data-drizzle-preview-image alt="" hidden />
                   <div data-drizzle-preview-placeholder>The atomic Drizzle product set will appear here</div>
                 </div>
+                <div class="drizzle-console__pixel-controls" aria-label="Exact Drizzle FITS coordinate">
+                  <label><span>X</span><input data-drizzle-pixel-x aria-label="Drizzle X" type="number" min="0" max="0" step="1" value="0" inputmode="numeric" disabled /></label>
+                  <label><span>Y</span><input data-drizzle-pixel-y aria-label="Drizzle Y" type="number" min="0" max="0" step="1" value="0" inputmode="numeric" disabled /></label>
+                  <button class="button button--quiet" type="button" data-action="inspect-drizzle-pixel" aria-label="Inspect Drizzle pixel" disabled>Inspect pixel</button>
+                </div>
+                <output class="drizzle-console__pixel-readout" data-drizzle-pixel-readout aria-live="polite">Enter an output coordinate to inspect every plane.</output>
                 <div class="drizzle-console__actions">
                   <button class="button button--quiet" type="button" data-action="inspect-drizzle-statistics" disabled>Exact statistics</button>
                   <button class="button button--primary" type="button" data-action="execute-drizzle" disabled>Build Drizzle set</button>
