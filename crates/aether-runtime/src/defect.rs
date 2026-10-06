@@ -1,10 +1,18 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use aether_calibration::{DefectCorrectionParameters, DefectDetectionParameters};
+use aether_calibration::{
+    DefectCorrectionParameters, DefectDetectionEvidence, DefectDetectionParameters, DefectMap,
+    DefectMapError, detect_local_defects, merge_defect_maps,
+};
 use aether_core::{Dimensions, PixelFlags};
-use aether_fits::SampleStatus;
+use aether_fits::{HeaderReadOptions, ImageReadError, ImageRegion, SampleStatus, ValidationMode};
 use sha2::{Digest, Sha256};
+
+use crate::{
+    CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, PipelineInput, PipelineSource,
+    StrictPipelineError,
+};
 
 const PARAMETER_DOMAIN: &[u8] = b"aetherstack-defect-parameters-v1\0";
 const MAX_NEIGHBOUR_SAMPLES: usize = 288;
@@ -128,6 +136,174 @@ impl Display for DefectMemoryEstimateError {
 
 impl Error for DefectMemoryEstimateError {}
 
+/// One immutable master FITS source and its role-specific detection policy.
+#[derive(Clone, Debug)]
+pub struct DefectFitsReference {
+    source: PipelineSource,
+    parameters: DefectReferenceParameters,
+}
+
+impl DefectFitsReference {
+    /// Binds one manifest fingerprint to one master role and policy.
+    #[must_use]
+    pub fn new(source: PipelineSource, parameters: DefectReferenceParameters) -> Self {
+        Self { source, parameters }
+    }
+
+    /// Immutable local source.
+    #[must_use]
+    pub const fn source(&self) -> &PipelineSource {
+        &self.source
+    }
+
+    /// Master role and detection parameters.
+    #[must_use]
+    pub const fn parameters(&self) -> DefectReferenceParameters {
+        self.parameters
+    }
+}
+
+/// Complete in-memory result of verified master defect analysis.
+#[derive(Clone, Debug)]
+pub struct DefectAnalysisResult {
+    map: DefectMap,
+    evidence: Vec<(DefectReferenceKind, DefectDetectionEvidence)>,
+    parameters_sha256: String,
+    reserved_bytes: usize,
+}
+
+impl DefectAnalysisResult {
+    /// Union of all master-derived HOT/COLD evidence.
+    #[must_use]
+    pub const fn map(&self) -> &DefectMap {
+        &self.map
+    }
+
+    /// Per-master evidence in caller order.
+    #[must_use]
+    pub fn evidence(&self) -> &[(DefectReferenceKind, DefectDetectionEvidence)] {
+        &self.evidence
+    }
+
+    /// Canonical path-free scientific parameter identity.
+    #[must_use]
+    pub fn parameters_sha256(&self) -> &str {
+        &self.parameters_sha256
+    }
+
+    /// Bytes reserved before opening any image pixels.
+    #[must_use]
+    pub const fn reserved_bytes(&self) -> usize {
+        self.reserved_bytes
+    }
+}
+
+/// Failure while deriving one map from immutable FITS masters.
+#[derive(Debug)]
+pub enum DefectAnalysisError {
+    /// Reference parameter sealing failed.
+    Parameters(DefectParameterSealError),
+    /// Cancellation was observed at a deterministic boundary.
+    Cancelled(Cancelled),
+    /// Header, fingerprint, or input opening failed.
+    Input(StrictPipelineError),
+    /// Embedded FITS checksums were absent or invalid.
+    ChecksumNotVerified {
+        /// Stable reference index.
+        index: usize,
+    },
+    /// FITS pixel decoding failed.
+    Read {
+        /// Stable reference index.
+        index: usize,
+        /// Decoder failure.
+        source: ImageReadError,
+    },
+    /// Reference dimensions differ.
+    DimensionMismatch {
+        /// Stable reference index.
+        index: usize,
+        /// First-reference dimensions.
+        expected: Dimensions,
+        /// Mismatched dimensions.
+        actual: Dimensions,
+    },
+    /// Only one-plane calibration masters can define detector defects.
+    UnsupportedPlaneCount {
+        /// Stable reference index.
+        index: usize,
+        /// Received plane count.
+        planes: usize,
+    },
+    /// Defect detection or map merging failed.
+    Defect(DefectMapError),
+    /// The exact memory estimate overflowed.
+    MemoryEstimate(DefectMemoryEstimateError),
+    /// The shared runtime budget rejected the complete peak.
+    Memory(MemoryBudgetError),
+    /// Evidence storage could not be allocated.
+    AllocationFailed,
+}
+
+impl Display for DefectAnalysisError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parameters(error) => Display::fmt(error, formatter),
+            Self::Cancelled(error) => Display::fmt(error, formatter),
+            Self::Input(error) => Display::fmt(error, formatter),
+            Self::ChecksumNotVerified { index } => write!(
+                formatter,
+                "defect reference {index} does not have fully verified FITS checksums"
+            ),
+            Self::Read { index, source } => {
+                write!(formatter, "cannot read defect reference {index}: {source}")
+            }
+            Self::DimensionMismatch {
+                index,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "defect reference {index} dimensions {}x{}x{} do not match {}x{}x{}",
+                actual.width(),
+                actual.height(),
+                actual.planes(),
+                expected.width(),
+                expected.height(),
+                expected.planes()
+            ),
+            Self::UnsupportedPlaneCount { index, planes } => write!(
+                formatter,
+                "defect reference {index} has {planes} planes; exactly one is required"
+            ),
+            Self::Defect(error) => Display::fmt(error, formatter),
+            Self::MemoryEstimate(error) => Display::fmt(error, formatter),
+            Self::Memory(error) => Display::fmt(error, formatter),
+            Self::AllocationFailed => {
+                formatter.write_str("cannot allocate defect-analysis evidence")
+            }
+        }
+    }
+}
+
+impl Error for DefectAnalysisError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Parameters(error) => Some(error),
+            Self::Cancelled(error) => Some(error),
+            Self::Input(error) => Some(error),
+            Self::Read { source, .. } => Some(source),
+            Self::Defect(error) => Some(error),
+            Self::MemoryEstimate(error) => Some(error),
+            Self::Memory(error) => Some(error),
+            Self::ChecksumNotVerified { .. }
+            | Self::DimensionMismatch { .. }
+            | Self::UnsupportedPlaneCount { .. }
+            | Self::AllocationFailed => None,
+        }
+    }
+}
+
 /// Calculates the complete full-frame reservation before pixel I/O.
 pub fn estimate_defect_memory(
     dimensions: Dimensions,
@@ -157,7 +333,7 @@ pub fn estimate_defect_memory(
         .and_then(|bytes| bytes.checked_add(map_bytes))
         .ok_or(DefectMemoryEstimateError)?;
     let detection_peak_bytes = image_bytes
-        .checked_add(map_bytes.checked_mul(2).ok_or(DefectMemoryEstimateError)?)
+        .checked_add(map_bytes.checked_mul(3).ok_or(DefectMemoryEstimateError)?)
         .and_then(|bytes| bytes.checked_add(detection_scratch))
         .ok_or(DefectMemoryEstimateError)?;
     let correction_peak_bytes = image_bytes
@@ -179,6 +355,146 @@ pub fn estimate_defect_memory(
         publication_buffer_bytes: PUBLICATION_BUFFER_BYTES,
         reserved_peak_bytes,
     })
+}
+
+/// Reads, verifies, detects, and merges one or two master-derived defect maps.
+pub fn analyze_defect_references(
+    references: &[DefectFitsReference],
+    correction: DefectCorrectionParameters,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+) -> Result<DefectAnalysisResult, DefectAnalysisError> {
+    let mut parameter_refs = Vec::new();
+    parameter_refs
+        .try_reserve_exact(references.len())
+        .map_err(|_| DefectAnalysisError::AllocationFailed)?;
+    parameter_refs.extend(references.iter().map(DefectFitsReference::parameters));
+    let parameters_sha256 = strict_defect_parameters_sha256(&parameter_refs, correction)
+        .map_err(DefectAnalysisError::Parameters)?;
+    cancellation
+        .checkpoint()
+        .map_err(DefectAnalysisError::Cancelled)?;
+    for (index, reference) in references.iter().enumerate() {
+        crate::pipeline::verify_source(
+            reference.source(),
+            reference_input(reference.parameters().kind(), index),
+        )
+        .map_err(DefectAnalysisError::Input)?;
+    }
+
+    let first = references.first().ok_or(DefectAnalysisError::Parameters(
+        DefectParameterSealError::NoReferences,
+    ))?;
+    let first_input = reference_input(first.parameters().kind(), 0);
+    let first_reader = crate::pipeline::open_reader(
+        first.source().path(),
+        first_input,
+        HeaderReadOptions::default(),
+        ValidationMode::Strict,
+    )
+    .map_err(DefectAnalysisError::Input)?;
+    let dimensions =
+        crate::pipeline::dimensions_from_axes(first_input, first_reader.descriptor().axes())
+            .map_err(DefectAnalysisError::Input)?;
+    validate_single_plane(dimensions, 0)?;
+    drop(first_reader);
+    let estimate =
+        estimate_defect_memory(dimensions).map_err(DefectAnalysisError::MemoryEstimate)?;
+    let _reservation = memory
+        .try_reserve(estimate.reserved_peak_bytes())
+        .map_err(DefectAnalysisError::Memory)?;
+    let mut merged: Option<DefectMap> = None;
+    let mut evidence = Vec::new();
+    evidence
+        .try_reserve_exact(references.len())
+        .map_err(|_| DefectAnalysisError::AllocationFailed)?;
+
+    for (index, reference) in references.iter().enumerate() {
+        cancellation
+            .checkpoint()
+            .map_err(DefectAnalysisError::Cancelled)?;
+        let input = reference_input(reference.parameters().kind(), index);
+        let mut reader = crate::pipeline::open_reader(
+            reference.source().path(),
+            input,
+            HeaderReadOptions::default(),
+            ValidationMode::Strict,
+        )
+        .map_err(DefectAnalysisError::Input)?;
+        let actual = crate::pipeline::dimensions_from_axes(input, reader.descriptor().axes())
+            .map_err(DefectAnalysisError::Input)?;
+        validate_single_plane(actual, index)?;
+        if actual != dimensions {
+            return Err(DefectAnalysisError::DimensionMismatch {
+                index,
+                expected: dimensions,
+                actual,
+            });
+        }
+        if !reader
+            .verify_checksums()
+            .map_err(|source| DefectAnalysisError::Read { index, source })?
+            .is_fully_verified()
+        {
+            return Err(DefectAnalysisError::ChecksumNotVerified { index });
+        }
+        let width = u64::try_from(dimensions.width())
+            .map_err(|_| DefectAnalysisError::MemoryEstimate(DefectMemoryEstimateError))?;
+        let height = u64::try_from(dimensions.height())
+            .map_err(|_| DefectAnalysisError::MemoryEstimate(DefectMemoryEstimateError))?;
+        let image = reader
+            .read_region_image(ImageRegion::new(0, 0, 0, width, height))
+            .map_err(|source| DefectAnalysisError::Read { index, source })?;
+        let (detected, detected_evidence) =
+            detect_local_defects(&image, reference.parameters().detection())
+                .map_err(DefectAnalysisError::Defect)?;
+        merged = Some(match merged.take() {
+            Some(existing) => {
+                merge_defect_maps(&[&existing, &detected])
+                    .map_err(DefectAnalysisError::Defect)?
+                    .0
+            }
+            None => detected,
+        });
+        evidence.push((reference.parameters().kind(), detected_evidence));
+    }
+
+    cancellation
+        .checkpoint()
+        .map_err(DefectAnalysisError::Cancelled)?;
+    for (index, reference) in references.iter().enumerate() {
+        crate::pipeline::verify_source(
+            reference.source(),
+            reference_input(reference.parameters().kind(), index),
+        )
+        .map_err(DefectAnalysisError::Input)?;
+    }
+    let map = merged.ok_or(DefectAnalysisError::Parameters(
+        DefectParameterSealError::NoReferences,
+    ))?;
+    Ok(DefectAnalysisResult {
+        map,
+        evidence,
+        parameters_sha256,
+        reserved_bytes: estimate.reserved_peak_bytes(),
+    })
+}
+
+fn validate_single_plane(dimensions: Dimensions, index: usize) -> Result<(), DefectAnalysisError> {
+    if dimensions.planes() != 1 {
+        return Err(DefectAnalysisError::UnsupportedPlaneCount {
+            index,
+            planes: dimensions.planes(),
+        });
+    }
+    Ok(())
+}
+
+fn reference_input(kind: DefectReferenceKind, index: usize) -> PipelineInput {
+    match kind {
+        DefectReferenceKind::Dark => PipelineInput::Dark,
+        DefectReferenceKind::Flat => PipelineInput::MasterSource { index },
+    }
 }
 
 /// Hashes the complete detection and correction policy in canonical role order.
@@ -249,9 +565,38 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{self, File};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use aether_core::ScientificImage;
+    use aether_fits::write_f64_primary_atomic_new;
+    use aether_session::fingerprint_reader;
+
     use super::*;
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> std::io::Result<Self> {
+            let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "aether-defect-runtime-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir(&path)?;
+            Ok(Self(path))
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ignored = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn detection(
         hot: f64,
@@ -261,6 +606,17 @@ mod tests {
 
     fn correction() -> Result<DefectCorrectionParameters, aether_calibration::DefectMapError> {
         DefectCorrectionParameters::new(2, 2, 8)
+    }
+
+    fn fits_source(
+        directory: &TestDirectory,
+        name: &str,
+        image: &ScientificImage,
+    ) -> Result<PipelineSource, Box<dyn Error>> {
+        let path = directory.0.join(name);
+        write_f64_primary_atomic_new(&path, image)?;
+        let fingerprint = fingerprint_reader(&mut File::open(&path)?)?;
+        Ok(PipelineSource::new(path, fingerprint))
     }
 
     #[test]
@@ -325,6 +681,42 @@ mod tests {
                 .max(estimate.correction_peak_bytes())
                 + estimate.publication_buffer_bytes()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn verified_fits_references_produce_one_merged_map() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let dimensions = Dimensions::new(9, 9, 1)?;
+        let mut dark = ScientificImage::filled(dimensions, 100.0)?;
+        dark.pixels_mut()[4 * 9 + 4] = 1_000.0;
+        let mut flat = ScientificImage::filled(dimensions, 1_000.0)?;
+        flat.pixels_mut()[6 * 9 + 6] = 100.0;
+        let detection = DefectDetectionParameters::new(2, 1, 8, 5.0, 5.0, 10.0)?;
+        let references = [
+            DefectFitsReference::new(
+                fits_source(&directory, "dark.fits", &dark)?,
+                DefectReferenceParameters::new(DefectReferenceKind::Dark, detection),
+            ),
+            DefectFitsReference::new(
+                fits_source(&directory, "flat.fits", &flat)?,
+                DefectReferenceParameters::new(DefectReferenceKind::Flat, detection),
+            ),
+        ];
+        let estimate = estimate_defect_memory(dimensions)?;
+        let budget = MemoryBudget::new(estimate.reserved_peak_bytes())?;
+        let result = analyze_defect_references(
+            &references,
+            DefectCorrectionParameters::new(2, 1, 8)?,
+            &CancellationToken::new(),
+            &budget,
+        )?;
+        assert!(result.map().mask().get(4, 4, 0)?.contains(PixelFlags::HOT));
+        assert!(result.map().mask().get(6, 6, 0)?.contains(PixelFlags::COLD));
+        assert_eq!(result.evidence().len(), 2);
+        assert_eq!(result.parameters_sha256().len(), 64);
+        assert_eq!(result.reserved_bytes(), estimate.reserved_peak_bytes());
+        assert_eq!(budget.used(), 0);
         Ok(())
     }
 }
