@@ -2754,6 +2754,13 @@ button:active:not(:disabled) {
 }
 
 .defect-console__report-inspection {
+  display: grid;
+  gap: 0.48rem;
+  margin-top: 0.2rem;
+  padding: 0.72rem;
+  border: 1px solid rgb(129 167 177 / 16%);
+  border-radius: 10px;
+  background: linear-gradient(145deg, rgb(17 29 33 / 72%), rgb(4 9 11 / 78%));
   color: var(--text-muted);
 }
 
@@ -2763,6 +2770,82 @@ button:active:not(:disabled) {
 
 .defect-console__report-inspection[data-state="error"] {
   color: #ffb3a9;
+}
+
+.defect-report-verdict__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.48rem;
+}
+
+.defect-report-verdict__heading strong {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+}
+
+.defect-report-verdict__badge {
+  padding: 0.16rem 0.42rem;
+  border: 1px solid rgb(114 226 179 / 38%);
+  border-radius: 999px;
+  background: rgb(42 118 87 / 24%);
+  color: #aaf1ca;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.defect-console__report-inspection[data-verdict="partial"] {
+  border-color: rgb(238 184 94 / 34%);
+}
+
+.defect-console__report-inspection[data-verdict="partial"]
+  .defect-report-verdict__badge {
+  border-color: rgb(238 184 94 / 42%);
+  background: rgb(123 81 22 / 28%);
+  color: #f6d395;
+}
+
+.defect-report-verdict__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.4rem, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.defect-report-verdict__metrics div {
+  display: grid;
+  gap: 0.08rem;
+  padding: 0.38rem 0.44rem;
+  border: 1px solid rgb(129 167 177 / 14%);
+  border-radius: 7px;
+  background: rgb(3 8 10 / 44%);
+}
+
+.defect-report-verdict__metrics dt {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.defect-report-verdict__metrics dd {
+  margin: 0;
+  color: #e8f2ef;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.defect-console__report-inspection p,
+.defect-console__report-inspection small {
+  margin: 0;
+}
+
+.defect-console__report-inspection small {
+  color: var(--text-muted);
+  font-size: 0.66rem;
 }
 
 .defect-console__status code {

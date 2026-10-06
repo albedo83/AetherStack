@@ -31,6 +31,7 @@ import type {
   SortDirection,
   SortField,
 } from "./model.ts";
+import { defectReportVerdict } from "./defect-batch.ts";
 
 export interface ReviewScreen {
   readonly update: (model: ReviewViewModel) => void;
@@ -4487,9 +4488,65 @@ function renderDefectCorrection(
         : "";
   elements.defectReportInspection.dataset.state =
     correction.reportInspectionState;
-  elements.defectReportInspection.textContent = inspection
-    ? `${correction.reportInspectionMessage} · defects ${inspection.defectiveSamples} · ${repairEfficiency} · unresolved ${inspection.unresolvedSamples} · conflicts ${inspection.conflictingSamples} · peak ${formatByteCount(inspection.peakReservedBytes)}`
-    : correction.reportInspectionMessage;
+  elements.defectReportInspection.replaceChildren();
+  if (inspection) {
+    const verdict = defectReportVerdict(
+      inspection.defectiveSamples,
+      inspection.unresolvedSamples,
+    );
+    elements.defectReportInspection.dataset.verdict = verdict.tone;
+    const heading = document.createElement("div");
+    heading.className = "defect-report-verdict__heading";
+    const badge = document.createElement("span");
+    badge.className = "defect-report-verdict__badge";
+    badge.textContent = "Verified";
+    const label = document.createElement("strong");
+    label.textContent = verdict.label;
+    heading.append(badge, label);
+    const summary = document.createElement("p");
+    summary.textContent = verdict.summary;
+    const metrics = document.createElement("dl");
+    metrics.className = "defect-report-verdict__metrics";
+    const appendMetric = (name: string, value: string, key: string): void => {
+      const item = document.createElement("div");
+      item.dataset.metric = key;
+      const term = document.createElement("dt");
+      term.textContent = name;
+      const description = document.createElement("dd");
+      description.textContent = value;
+      item.append(term, description);
+      metrics.append(item);
+    };
+    appendMetric("Mapped", String(inspection.defectiveSamples), "mapped");
+    appendMetric("Efficiency", repairEfficiency, "efficiency");
+    appendMetric(
+      "Unresolved",
+      String(inspection.unresolvedSamples),
+      "unresolved",
+    );
+    appendMetric(
+      "Conflicts",
+      String(inspection.conflictingSamples),
+      "conflicts",
+    );
+    appendMetric(
+      "Memory peak",
+      formatByteCount(inspection.peakReservedBytes),
+      "memory",
+    );
+    const provenance = document.createElement("small");
+    provenance.textContent = correction.reportInspectionMessage;
+    elements.defectReportInspection.append(
+      heading,
+      summary,
+      metrics,
+      provenance,
+    );
+  } else {
+    delete elements.defectReportInspection.dataset.verdict;
+    elements.defectReportInspection.textContent =
+      correction.reportInspectionMessage;
+  }
   elements.defectReportInspection.title = inspection
     ? `Plan SHA-256 ${inspection.planSha256} · parameters SHA-256 ${inspection.parametersSha256}`
     : "";
@@ -5766,7 +5823,7 @@ function shellMarkup(): string {
                     <progress data-defect-correction-progress aria-label="Detector correction progress" hidden></progress>
                     <output data-defect-correction-evidence>No correction evidence published</output>
                     <output class="defect-console__batch-report" data-defect-batch-report hidden></output>
-                    <output class="defect-console__report-inspection" data-defect-report-inspection data-state="idle">Inspect an exported report independently</output>
+                    <section class="defect-console__report-inspection" data-defect-report-inspection data-state="idle" role="status" aria-live="polite" aria-atomic="true">Inspect an exported report independently</section>
                     <code data-defect-correction-output></code>
                   </div>
                   <section class="defect-preview" aria-label="Detector correction comparison">

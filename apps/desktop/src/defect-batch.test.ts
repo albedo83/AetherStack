@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendDefectBatchResult,
   defectBatchProgressMessage,
+  defectReportVerdict,
   reconcileActiveDefectBatch,
   reconcileDefectBatchPreview,
   startDefectBatchReport,
@@ -17,6 +18,17 @@ function frame(id: string, groupId: string, sourceIndex: number) {
 }
 
 describe("detector correction batch helpers", () => {
+  it("classifies verified reports without hiding unresolved samples", () => {
+    expect(defectReportVerdict(0, 0)).toMatchObject({ tone: "clean" });
+    expect(defectReportVerdict(10, 0)).toMatchObject({ tone: "complete" });
+    expect(defectReportVerdict(10, 2)).toEqual({
+      tone: "partial",
+      label: "Review unresolved samples",
+      summary: "2 of 10 mapped detector samples remain unresolved.",
+    });
+    expect(() => defectReportVerdict(1, 2)).toThrow("inconsistent");
+  });
+
   it("accepts only a complete native-owned order and its destinations", () => {
     const inputs = [frame("a", "g", 0), frame("b", "g", 1)].map(
       (candidate) => ({ frame: candidate }),

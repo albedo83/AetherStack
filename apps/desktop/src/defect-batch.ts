@@ -8,6 +8,12 @@ import type {
 } from "./calibration-bridge.ts";
 import type { DefectBatchReport } from "./model.ts";
 
+export interface DefectReportVerdict {
+  readonly tone: "clean" | "complete" | "partial";
+  readonly label: string;
+  readonly summary: string;
+}
+
 type DefectFrameIdentity = Pick<
   ExecutedCalibratedLightFrame,
   "sourceFrameId" | "sourceIndex" | "groupId"
@@ -16,6 +22,41 @@ type DefectFrameIdentity = Pick<
 export interface ReconciledDefectBatchItem<T> {
   readonly input: T;
   readonly destination: DefectBatchPreviewItem;
+}
+
+/** Converts verified counts into a short, non-ambiguous operator verdict. */
+export function defectReportVerdict(
+  defectiveSamples: number,
+  unresolvedSamples: number,
+): DefectReportVerdict {
+  if (
+    !Number.isSafeInteger(defectiveSamples) ||
+    !Number.isSafeInteger(unresolvedSamples) ||
+    defectiveSamples < 0 ||
+    unresolvedSamples < 0 ||
+    unresolvedSamples > defectiveSamples
+  ) {
+    throw new Error("Verified defect counts are inconsistent");
+  }
+  if (defectiveSamples === 0) {
+    return {
+      tone: "clean",
+      label: "No mapped defects",
+      summary: "The verified map contains no detector samples to repair.",
+    };
+  }
+  if (unresolvedSamples === 0) {
+    return {
+      tone: "complete",
+      label: "Repair complete",
+      summary: `All ${defectiveSamples} mapped detector samples were repaired.`,
+    };
+  }
+  return {
+    tone: "partial",
+    label: "Review unresolved samples",
+    summary: `${unresolvedSamples} of ${defectiveSamples} mapped detector samples remain unresolved.`,
+  };
 }
 
 /**

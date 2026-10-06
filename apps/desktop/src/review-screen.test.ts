@@ -1352,9 +1352,18 @@ describe("frame review workspace", () => {
         },
       },
     });
+    const inspectedReport = root.querySelector<HTMLElement>(
+      "[data-defect-report-inspection]",
+    );
+    expect(inspectedReport?.dataset.verdict).toBe("partial");
+    expect(inspectedReport?.getAttribute("aria-live")).toBe("polite");
+    expect(inspectedReport?.textContent).toContain("Review unresolved samples");
     expect(
-      root.querySelector("[data-defect-report-inspection]")?.textContent,
-    ).toContain("96.77% repaired · unresolved 2");
+      inspectedReport?.querySelector('[data-metric="efficiency"]')?.textContent,
+    ).toContain("96.77% repaired");
+    expect(
+      inspectedReport?.querySelector('[data-metric="unresolved"]')?.textContent,
+    ).toContain("2");
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {
