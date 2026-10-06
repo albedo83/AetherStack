@@ -730,6 +730,23 @@ export function mountReviewScreen(
       root,
       "[data-defect-correction-minimum-neighbours]",
     ),
+    defectPreviewButtons: Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-action="select-defect-preview"]',
+      ),
+    ),
+    defectPreviewImage: required<HTMLImageElement>(
+      root,
+      "[data-defect-preview-image]",
+    ),
+    defectPreviewPlaceholder: required<HTMLElement>(
+      root,
+      "[data-defect-preview-placeholder]",
+    ),
+    defectPreviewMessage: required<HTMLElement>(
+      root,
+      "[data-defect-preview-message]",
+    ),
     sessionName: required<HTMLElement>(root, "[data-session-name]"),
     sessionStatus: required<HTMLElement>(root, "[data-session-status]"),
     sessionStatusLabel: required<HTMLElement>(
@@ -1184,6 +1201,13 @@ export function mountReviewScreen(
           flatDetection: { ...settings.flatDetection, stride },
           correctionStride: stride,
         });
+      }
+      return;
+    }
+    if (action === "select-defect-preview") {
+      const view = actionElement.dataset.defectPreview;
+      if (view === "before" || view === "after") {
+        actions.onSelectDefectPreview(view);
       }
       return;
     }
@@ -2809,6 +2833,10 @@ interface CalibrationElements {
   readonly defectFlatFloor: HTMLInputElement;
   readonly defectCorrectionRadius: HTMLInputElement;
   readonly defectCorrectionMinimumNeighbours: HTMLInputElement;
+  readonly defectPreviewButtons: readonly HTMLButtonElement[];
+  readonly defectPreviewImage: HTMLImageElement;
+  readonly defectPreviewPlaceholder: HTMLElement;
+  readonly defectPreviewMessage: HTMLElement;
 }
 
 interface RegistrationElements {
@@ -4381,6 +4409,30 @@ function renderDefectCorrection(
   elements.defectCorrectionEvidence.textContent = correction.result
     ? `${correction.result.correctedSamples} corrected · ${correction.result.insufficientSupportSamples} insufficient support · seal ${correction.result.parametersSha256.slice(0, 12)}`
     : "No correction evidence published";
+  for (const button of elements.defectPreviewButtons) {
+    const view = button.dataset.defectPreview;
+    button.setAttribute(
+      "aria-selected",
+      String(view === correction.previewView),
+    );
+    button.disabled =
+      !correction.result || correction.previewState === "loading";
+  }
+  const previewReady =
+    correction.previewState === "ready" && correction.preview !== null;
+  elements.defectPreviewImage.hidden = !previewReady;
+  elements.defectPreviewPlaceholder.hidden = previewReady;
+  elements.defectPreviewPlaceholder.textContent =
+    correction.previewState === "loading"
+      ? "Rendering native FITS pixels…"
+      : correction.previewState === "error"
+        ? "Preview validation failed"
+        : "Publish one correction to unlock the shared before / after view";
+  elements.defectPreviewImage.src = correction.preview?.url ?? "";
+  elements.defectPreviewImage.alt = previewReady
+    ? `${correction.previewView === "before" ? "Calibrated input" : "Corrected output"} display preview`
+    : "";
+  elements.defectPreviewMessage.textContent = correction.previewMessage;
   elements.executeDefectCorrection.disabled =
     !hasInputs || otherExecutionBusy || busy || !model.reviewSessionReady;
   elements.executeDefectCorrection.hidden = busy;
@@ -5609,6 +5661,17 @@ function shellMarkup(): string {
                     <output data-defect-correction-evidence>No correction evidence published</output>
                     <code data-defect-correction-output></code>
                   </div>
+                  <section class="defect-preview" aria-label="Detector correction comparison">
+                    <div class="defect-preview__tabs" role="tablist" aria-label="Before and after correction">
+                      <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="before" aria-selected="false" disabled>Before</button>
+                      <button type="button" role="tab" data-action="select-defect-preview" data-defect-preview="after" aria-selected="true" disabled>After</button>
+                    </div>
+                    <div class="defect-preview__stage">
+                      <img data-defect-preview-image alt="" hidden />
+                      <div data-defect-preview-placeholder>Publish one correction to unlock the shared before / after view</div>
+                    </div>
+                    <p data-defect-preview-message>Publish one correction to compare native FITS pixels</p>
+                  </section>
                   <div class="defect-console__actions">
                     <button class="button button--primary" type="button" data-action="execute-defect-correction" disabled>Correct selected Light</button>
                     <button class="button button--danger" type="button" data-action="cancel-defect-correction" hidden>Cancel correction</button>

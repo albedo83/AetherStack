@@ -66,6 +66,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onUpdateDefectCorrectionSettings: vi.fn(),
     onExecuteDefectCorrection: vi.fn(),
     onCancelDefectCorrection: vi.fn(),
+    onSelectDefectPreview: vi.fn(),
     onImportSession: vi.fn(),
     onExportDiagnostics: vi.fn(),
     onInspectDiagnosticsReport: vi.fn(),
@@ -1106,7 +1107,7 @@ describe("frame review workspace", () => {
         },
       },
     };
-    const { root, actions } = fixture(ready);
+    const { root, actions, controller } = fixture(ready);
 
     expect(
       getByRole<HTMLButtonElement>(root, "button", {
@@ -1131,6 +1132,51 @@ describe("frame review workspace", () => {
       getByRole(root, "button", { name: "Correct selected Light" }),
     );
     expect(actions.onExecuteDefectCorrection).toHaveBeenCalledOnce();
+
+    controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        defectCorrection: {
+          ...ready.calibration.defectCorrection,
+          state: "completed",
+          sourceFrameId,
+          result: {
+            correctedOutputPath: "/corrected/light.fits",
+            mapOutputPath: "/corrected/light-map.fits",
+            parametersSha256: "e".repeat(64),
+            reservedBytes: 234_020_736,
+            requestedSamples: 31,
+            correctedSamples: 30,
+            insufficientSupportSamples: 1,
+            blockedBySourceMaskSamples: 0,
+            correctedSamplesWritten: 8,
+            correctedSubstitutedSamples: 0,
+            correctedBytesWritten: 5_760,
+            mapSamplesWritten: 8,
+            mapSubstitutedSamples: 0,
+            mapBytesWritten: 5_760,
+          },
+          previewState: "ready",
+          previewView: "after",
+          preview: {
+            frameId: `defect-after-${sourceFrameId}`,
+            url: "blob:after",
+          },
+          previewMessage: "Corrected output · shared native stretch",
+          message: "30/31 detector samples corrected",
+        },
+      },
+    });
+    const before = getByRole<HTMLButtonElement>(root, "tab", {
+      name: "Before",
+    });
+    expect(before.disabled).toBe(false);
+    fireEvent.click(before);
+    expect(actions.onSelectDefectPreview).toHaveBeenCalledWith("before");
+    expect(
+      root.querySelector<HTMLImageElement>("[data-defect-preview-image]")?.src,
+    ).toContain("blob:after");
   });
 
   it("presents an accepted registration plan with exact common crop evidence", () => {

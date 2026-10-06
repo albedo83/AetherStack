@@ -399,6 +399,10 @@ export interface DefectCorrectionViewModel {
   readonly sourceFrameId: string | null;
   readonly settings: DefectCorrectionSettings;
   readonly result: DefectCorrectionResult | null;
+  readonly previewState: "idle" | "loading" | "ready" | "error";
+  readonly previewView: "before" | "after";
+  readonly preview: FramePreview | null;
+  readonly previewMessage: string;
   readonly message: string;
 }
 
@@ -480,6 +484,7 @@ export interface ReviewActions {
   ) => void;
   readonly onExecuteDefectCorrection: () => void;
   readonly onCancelDefectCorrection: () => void;
+  readonly onSelectDefectPreview: (view: "before" | "after") => void;
   readonly onImportSession: () => void;
   readonly onExportDiagnostics: () => void;
   readonly onInspectDiagnosticsReport: () => void;

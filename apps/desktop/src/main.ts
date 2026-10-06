@@ -201,6 +201,9 @@ let registeredStackDiagnosticPreviewResource: PreviewResource | null = null;
 let drizzlePreviewResource: PreviewResource | null = null;
 let localNormalizationPreviewResource: PreviewResource | null = null;
 let localNormalizationSharedTransform: EstimatedDisplayTransform | null = null;
+let defectPreviewResource: PreviewResource | null = null;
+let defectSharedTransform: EstimatedDisplayTransform | null = null;
+let defectPreviewTicket = 0;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -470,6 +473,7 @@ const screen = mountReviewScreen(root, model, {
   onUpdateDefectCorrectionSettings(settings) {
     if (isActiveExecutionState(model.calibration.defectCorrection.state))
       return;
+    clearDefectPreview();
     update({
       ...model,
       calibration: {
@@ -478,6 +482,10 @@ const screen = mountReviewScreen(root, model, {
           ...model.calibration.defectCorrection,
           settings,
           result: null,
+          previewState: "idle",
+          preview: null,
+          previewMessage:
+            "Run the updated controls to compare native FITS pixels",
           message: "Settings changed · run correction to publish new evidence",
         },
       },
@@ -488,6 +496,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onCancelDefectCorrection() {
     void cancelSelectedDefectCorrection();
+  },
+  onSelectDefectPreview(view) {
+    void loadDefectPreview(view);
   },
   onImportSession() {
     void importSession();
@@ -883,10 +894,12 @@ function installImportedSession(session: ImportedSession): void {
   masterPlanTicket += 1;
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
+  defectCorrectionTicket += 1;
   registrationExecutionTicket += 1;
   registeredStackTicket += 1;
   registrationTicket += 1;
   clearRegistrationPreviewResources();
+  clearDefectPreview();
   localNormalizationTicket += 1;
   clearLocalNormalizationPreview();
 
@@ -994,6 +1007,10 @@ function installImportedSession(session: ImportedSession): void {
         outputDirectory: null,
         sourceFrameId: null,
         result: null,
+        previewState: "idle",
+        previewView: "after",
+        preview: null,
+        previewMessage: "Publish one correction to compare native FITS pixels",
         message: "Export calibrated frames to unlock detector correction",
       },
     },
@@ -1528,6 +1545,7 @@ async function analyzeRegistration(): Promise<void> {
 
   const ticket = ++registrationTicket;
   clearRegistrationPreviewResources();
+  clearDefectPreview();
   const referenceId = reference.id;
   const sourceId = source.id;
   update({
@@ -3559,6 +3577,7 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
     return;
   }
   clearRegistrationPreviewResources();
+  clearDefectPreview();
   update({
     ...model,
     registration: {
@@ -3601,6 +3620,10 @@ function updateCalibrationSettings(settings: MasterPlanSettings): void {
         outputDirectory: null,
         sourceFrameId: null,
         result: null,
+        previewState: "idle",
+        previewView: "after",
+        preview: null,
+        previewMessage: "Publish fresh calibrated frames before comparison",
         message: "Plan changed · publish fresh calibrated frames first",
       },
     },
@@ -3644,6 +3667,7 @@ async function executeMasters(): Promise<void> {
     return;
   }
   const ticket = ++masterExecutionTicket;
+  clearDefectPreview();
   update({
     ...model,
     calibration: {
@@ -3661,6 +3685,10 @@ async function executeMasters(): Promise<void> {
         outputDirectory: null,
         sourceFrameId: null,
         result: null,
+        previewState: "idle",
+        previewView: "after",
+        preview: null,
+        previewMessage: "Master rebuild invalidated the previous comparison",
         message: "Master rebuild in progress · correction reset",
       },
     },
@@ -3801,6 +3829,7 @@ async function executeLights(): Promise<void> {
   }
   const ticket = ++lightExecutionTicket;
   clearRegistrationPreviewResources();
+  clearDefectPreview();
   const outputMode = model.calibration.lightSettings.outputMode;
   const leavingCalibratedView = model.lightFrameView === "calibrated";
   const rawFrames = leavingCalibratedView
@@ -3869,6 +3898,11 @@ async function executeLights(): Promise<void> {
         outputDirectory: null,
         sourceFrameId: null,
         result: null,
+        previewState: "idle",
+        previewView: "after",
+        preview: null,
+        previewMessage:
+          "Fresh Light calibration invalidated the previous comparison",
         message: "Fresh Light calibration in progress · correction reset",
       },
     },
@@ -4012,6 +4046,95 @@ function defectOutputPath(
   return `${root}${separator}${group}-${sequence}-${suffix}.fits`;
 }
 
+function clearDefectPreview(): void {
+  defectPreviewTicket += 1;
+  defectPreviewResource?.revoke();
+  defectPreviewResource = null;
+  defectSharedTransform = null;
+}
+
+async function loadDefectPreview(view: "before" | "after"): Promise<void> {
+  const correction = model.calibration.defectCorrection;
+  const result = correction.result;
+  const sourceFrameId = correction.sourceFrameId;
+  const frame = model.calibration.lightExecution.result?.calibratedFrames.find(
+    (candidate) => candidate.sourceFrameId === sourceFrameId,
+  );
+  if (!result || !frame || correction.previewState === "loading") return;
+  const path =
+    view === "before" ? frame.outputPath : result.correctedOutputPath;
+  const ticket = ++defectPreviewTicket;
+  update({
+    ...model,
+    calibration: {
+      ...model.calibration,
+      defectCorrection: {
+        ...correction,
+        previewView: view,
+        previewState: "loading",
+        preview: null,
+        previewMessage: `Rendering ${view === "before" ? "calibrated input" : "corrected output"} with the shared native stretch…`,
+      },
+    },
+  });
+  try {
+    let transform = defectSharedTransform;
+    if (!transform) {
+      transform = await estimateFitsPreviewTransform({
+        path: frame.outputPath,
+        content: { kind: "scalar", plane: 0 },
+        ...previewBounds,
+      });
+      if (ticket !== defectPreviewTicket) return;
+      defectSharedTransform = transform;
+    }
+    const resource = await requestFitsPreview({
+      frameId: `defect-${view}-${sourceFrameId}`,
+      path,
+      content: { kind: "scalar", plane: 0 },
+      ...previewBounds,
+      blackPoint: transform.blackPoint,
+      whitePoint: transform.whitePoint,
+      midtone: transform.midtone,
+      transfer: { kind: "midtones" },
+    });
+    if (ticket !== defectPreviewTicket) {
+      resource.revoke();
+      return;
+    }
+    defectPreviewResource?.revoke();
+    defectPreviewResource = resource;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          previewView: view,
+          previewState: "ready",
+          preview: resource.preview,
+          previewMessage: `${view === "before" ? "Calibrated input" : "Corrected output"} · shared ${transform.algorithmId}`,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== defectPreviewTicket) return;
+    update({
+      ...model,
+      calibration: {
+        ...model.calibration,
+        defectCorrection: {
+          ...model.calibration.defectCorrection,
+          previewView: view,
+          previewState: "error",
+          preview: null,
+          previewMessage: "Native FITS preview validation failed",
+        },
+      },
+    });
+  }
+}
+
 async function executeSelectedDefectCorrection(): Promise<void> {
   const inputs = selectedDefectInputs();
   const execution = model.calibration.defectCorrection;
@@ -4039,6 +4162,7 @@ async function executeSelectedDefectCorrection(): Promise<void> {
     inputs.frame,
     "defects",
   );
+  clearDefectPreview();
   update({
     ...model,
     calibration: {
@@ -4049,6 +4173,10 @@ async function executeSelectedDefectCorrection(): Promise<void> {
         outputDirectory,
         sourceFrameId: inputs.frame.sourceFrameId,
         result: null,
+        previewState: "idle",
+        previewView: "after",
+        preview: null,
+        previewMessage: "Correction is running; publication is still closed",
         message: "Verifying masters and deriving exact HOT/COLD evidence…",
       },
     },
@@ -4074,10 +4202,15 @@ async function executeSelectedDefectCorrection(): Promise<void> {
           outputDirectory,
           sourceFrameId: inputs.frame.sourceFrameId,
           result,
+          previewState: "idle",
+          previewView: "after",
+          preview: null,
+          previewMessage: "Corrected pixels published · preparing comparison",
           message: `${result.correctedSamples}/${result.requestedSamples} detector samples corrected · peak ${formatMemory(result.reservedBytes)}`,
         },
       },
     });
+    void loadDefectPreview("after");
   } catch (error) {
     if (ticket !== defectCorrectionTicket) return;
     const cancelled = nativeErrorCode(error) === "defect_correction_cancelled";
@@ -5077,6 +5210,7 @@ function disposeRuntimeResources(): void {
   masterPlanTicket += 1;
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
+  defectCorrectionTicket += 1;
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling"
@@ -5088,6 +5222,9 @@ function disposeRuntimeResources(): void {
     model.calibration.lightExecution.state === "cancelling"
   ) {
     void cancelLightPlan();
+  }
+  if (isActiveExecutionState(model.calibration.defectCorrection.state)) {
+    void cancelDefectCorrection();
   }
   if (isActiveExecutionState(model.registration.execution.state)) {
     void cancelRegistrationPlan();
@@ -5105,6 +5242,7 @@ function disposeRuntimeResources(): void {
   clearPreviewResources();
   clearRegistrationPreviewResources();
   clearLocalNormalizationPreview();
+  clearDefectPreview();
 }
 
 function update(next: ReviewViewModel): void {

@@ -2130,6 +2130,11 @@ safety reasoning. They do not narrate obvious syntax.
      require same-phase stride two for Dark detection, Flat detection, and
      replacement; monochrome groups require stride one. A visible desktop
      choice can never override the imported manifest silently.
+214. Add a native before/after correction viewer. Both calibrated input and
+     corrected output use one display transform estimated from the original
+     FITS pixels, preventing per-view stretching from disguising differences.
+     Browser object URLs are revoked on rerun, replanning, session replacement,
+     view replacement, and shutdown.
 
 ## 11. Stable-release definition
 
