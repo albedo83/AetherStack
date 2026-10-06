@@ -186,6 +186,7 @@ let masterPlanTicket = 0;
 let masterExecutionTicket = 0;
 let lightExecutionTicket = 0;
 let defectCorrectionTicket = 0;
+let defectBatchResume: DefectBatchResume | null = null;
 let registrationTicket = 0;
 let registrationExecutionTicket = 0;
 let registeredStackTicket = 0;
@@ -484,6 +485,7 @@ const screen = mountReviewScreen(root, model, {
     void cancelLights();
   },
   onUpdateDefectCorrectionSettings(settings) {
+    defectBatchResume = null;
     if (isActiveExecutionState(model.calibration.defectCorrection.state))
       return;
     clearDefectPreview();
@@ -496,6 +498,7 @@ const screen = mountReviewScreen(root, model, {
           settings,
           progress: null,
           result: null,
+          resumeAvailable: false,
           previewState: "idle",
           preview: null,
           previewMessage:
@@ -513,6 +516,9 @@ const screen = mountReviewScreen(root, model, {
   },
   onExportDefectBatchReport() {
     void exportCompletedDefectBatchReport();
+  },
+  onResumeDefectBatch() {
+    void resumeDefectBatch();
   },
   onCancelDefectCorrection() {
     void cancelSelectedDefectCorrection();
@@ -915,6 +921,7 @@ function installImportedSession(session: ImportedSession): void {
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
   defectCorrectionTicket += 1;
+  defectBatchResume = null;
   registrationExecutionTicket += 1;
   registeredStackTicket += 1;
   registrationTicket += 1;
@@ -4035,6 +4042,14 @@ interface DefectFrameInputs {
   readonly lightPlanSha256: string;
 }
 
+interface DefectBatchResume {
+  readonly sealedBatch: readonly ReconciledDefectBatchItem<DefectFrameInputs>[];
+  readonly nextItemIndex: number;
+  readonly batchReport: DefectBatchReport;
+  readonly focus: DefectFrameInputs;
+  readonly outputDirectory: string;
+}
+
 function eligibleDefectInputs(): readonly DefectFrameInputs[] {
   const masterResult = model.calibration.execution.result;
   const lightResult = model.calibration.lightExecution.result;
@@ -4196,6 +4211,7 @@ async function executeAllDefectCorrections(): Promise<void> {
 async function executeDefectQueue(
   inputs: readonly DefectFrameInputs[],
   allEligible: boolean,
+  resume: DefectBatchResume | null = null,
 ): Promise<void> {
   const execution = model.calibration.defectCorrection;
   if (
@@ -4208,52 +4224,65 @@ async function executeDefectQueue(
   ) {
     return;
   }
-  const outputDirectory = await selectDefectOutputDirectory();
   const currentIds = new Set(
     eligibleDefectInputs().map((candidate) => candidate.frame.sourceFrameId),
   );
   if (
-    !outputDirectory ||
     inputs.some((candidate) => !currentIds.has(candidate.frame.sourceFrameId))
   )
     return;
+  const outputDirectory =
+    resume?.outputDirectory ?? (await selectDefectOutputDirectory());
+  if (!outputDirectory) return;
   const requestedFocus =
+    resume?.focus ??
     inputs.find(
       (candidate) => candidate.frame.sourceFrameId === model.selectedFrameId,
-    ) ?? inputs[0];
+    ) ??
+    inputs[0];
   if (!requestedFocus) return;
   const ticket = ++defectCorrectionTicket;
   let sealedBatch: readonly ReconciledDefectBatchItem<DefectFrameInputs>[];
   let batchReport: DefectBatchReport;
-  try {
-    const preview = await previewDefectBatch({
-      outputDirectory,
-      focusFrameId: requestedFocus.frame.sourceFrameId,
-      allEligible,
-      expectedManifestSha256: requestedFocus.manifestSha256,
-      expectedLightPlanSha256: requestedFocus.lightPlanSha256,
-      ...execution.settings,
-    });
-    if (ticket !== defectCorrectionTicket) return;
-    sealedBatch = reconcileDefectBatchPreview(preview, inputs);
-    batchReport = startDefectBatchReport(preview);
-  } catch {
-    if (ticket !== defectCorrectionTicket) return;
-    update({
-      ...model,
-      calibration: {
-        ...model.calibration,
-        defectCorrection: {
-          ...execution,
-          state: "error",
-          outputDirectory,
-          message:
-            "Native batch preflight refused the queue · inspect destination collisions and reviewed artifacts",
+  let startItemIndex = 0;
+  if (resume) {
+    sealedBatch = resume.sealedBatch;
+    batchReport = { ...resume.batchReport, state: "running" };
+    startItemIndex = resume.nextItemIndex;
+  } else {
+    try {
+      defectBatchResume = null;
+      const preview = await previewDefectBatch({
+        outputDirectory,
+        focusFrameId: requestedFocus.frame.sourceFrameId,
+        allEligible,
+        expectedManifestSha256: requestedFocus.manifestSha256,
+        expectedLightPlanSha256: requestedFocus.lightPlanSha256,
+        ...execution.settings,
+      });
+      if (ticket !== defectCorrectionTicket) return;
+      sealedBatch = reconcileDefectBatchPreview(preview, inputs);
+      batchReport = startDefectBatchReport(preview);
+    } catch {
+      if (ticket !== defectCorrectionTicket) return;
+      update({
+        ...model,
+        calibration: {
+          ...model.calibration,
+          defectCorrection: {
+            ...execution,
+            state: "error",
+            resumeAvailable: false,
+            outputDirectory,
+            message:
+              "Native batch preflight refused the queue · inspect destination collisions and reviewed artifacts",
+          },
         },
-      },
-    });
-    return;
+      });
+      return;
+    }
   }
+  defectBatchResume = null;
   const focus = requestedFocus;
   clearDefectPreview();
   update({
@@ -4268,6 +4297,7 @@ async function executeDefectQueue(
         progress: null,
         result: null,
         batchReport,
+        resumeAvailable: false,
         previewState: "idle",
         previewView: "after",
         preview: null,
@@ -4276,11 +4306,15 @@ async function executeDefectQueue(
       },
     },
   });
-  let completed = 0;
-  let focusResult: DefectCorrectionResult | null = null;
-  let lastResult: DefectCorrectionResult | null = null;
+  let completed = startItemIndex;
+  let focusResult: DefectCorrectionResult | null = resume
+    ? execution.result
+    : null;
+  let lastResult: DefectCorrectionResult | null = focusResult;
   try {
-    for (const [index, item] of sealedBatch.entries()) {
+    for (let index = startItemIndex; index < sealedBatch.length; index += 1) {
+      const item = sealedBatch[index];
+      if (!item) throw new Error("Sealed correction item is missing");
       const { input, destination } = item;
       if (model.calibration.defectCorrection.state === "cancelling") break;
       const onProgress = (progress: DefectExecutionProgress): void => {
@@ -4338,6 +4372,13 @@ async function executeDefectQueue(
     if (ticket !== defectCorrectionTicket) return;
     const result = focusResult ?? lastResult;
     if (!result) {
+      defectBatchResume = {
+        sealedBatch,
+        nextItemIndex: completed,
+        batchReport,
+        focus,
+        outputDirectory,
+      };
       update({
         ...model,
         calibration: {
@@ -4346,6 +4387,7 @@ async function executeDefectQueue(
             ...model.calibration.defectCorrection,
             state: "idle",
             batchReport: { ...batchReport, state: "cancelled" },
+            resumeAvailable: true,
             message: "Correction queue cancelled before the first publication",
           },
         },
@@ -4355,6 +4397,15 @@ async function executeDefectQueue(
     const stoppedEarly =
       completed < sealedBatch.length &&
       model.calibration.defectCorrection.state === "cancelling";
+    defectBatchResume = stoppedEarly
+      ? {
+          sealedBatch,
+          nextItemIndex: completed,
+          batchReport,
+          focus,
+          outputDirectory,
+        }
+      : null;
     update({
       ...model,
       calibration: {
@@ -4366,6 +4417,7 @@ async function executeDefectQueue(
             ...batchReport,
             state: stoppedEarly ? "cancelled" : "completed",
           },
+          resumeAvailable: stoppedEarly,
           outputDirectory,
           sourceFrameId: focus.frame.sourceFrameId,
           result,
@@ -4386,6 +4438,13 @@ async function executeDefectQueue(
   } catch (error) {
     if (ticket !== defectCorrectionTicket) return;
     const cancelled = nativeErrorCode(error) === "defect_correction_cancelled";
+    defectBatchResume = {
+      sealedBatch,
+      nextItemIndex: completed,
+      batchReport,
+      focus,
+      outputDirectory,
+    };
     update({
       ...model,
       calibration: {
@@ -4397,6 +4456,7 @@ async function executeDefectQueue(
             ...batchReport,
             state: cancelled ? "cancelled" : "failed",
           },
+          resumeAvailable: true,
           result: focusResult,
           progress: model.calibration.defectCorrection.progress,
           message: cancelled
@@ -4440,6 +4500,24 @@ async function exportCompletedDefectBatchReport(): Promise<void> {
       },
     });
   }
+}
+
+async function resumeDefectBatch(): Promise<void> {
+  const resume = defectBatchResume;
+  const report = model.calibration.defectCorrection.batchReport;
+  if (
+    !resume ||
+    !model.calibration.defectCorrection.resumeAvailable ||
+    !report ||
+    report.planSha256 !== resume.batchReport.planSha256
+  ) {
+    return;
+  }
+  await executeDefectQueue(
+    resume.sealedBatch.map(({ input }) => input),
+    true,
+    resume,
+  );
 }
 
 async function cancelSelectedDefectCorrection(): Promise<void> {
@@ -5437,6 +5515,7 @@ function disposeRuntimeResources(): void {
   masterExecutionTicket += 1;
   lightExecutionTicket += 1;
   defectCorrectionTicket += 1;
+  defectBatchResume = null;
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling"

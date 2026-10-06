@@ -402,6 +402,7 @@ export interface DefectCorrectionViewModel {
   readonly settings: DefectCorrectionSettings;
   readonly result: DefectCorrectionResult | null;
   readonly batchReport: DefectBatchReport | null;
+  readonly resumeAvailable: boolean;
   readonly previewState: "idle" | "loading" | "ready" | "error";
   readonly previewView: "before" | "after" | "map";
   readonly preview: FramePreview | null;
@@ -504,6 +505,7 @@ export interface ReviewActions {
   readonly onExecuteDefectCorrection: () => void;
   readonly onExecuteAllDefectCorrections: () => void;
   readonly onExportDefectBatchReport: () => void;
+  readonly onResumeDefectBatch: () => void;
   readonly onCancelDefectCorrection: () => void;
   readonly onSelectDefectPreview: (view: "before" | "after" | "map") => void;
   readonly onImportSession: () => void;

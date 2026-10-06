@@ -67,6 +67,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
     onExecuteDefectCorrection: vi.fn(),
     onExecuteAllDefectCorrections: vi.fn(),
     onExportDefectBatchReport: vi.fn(),
+    onResumeDefectBatch: vi.fn(),
     onCancelDefectCorrection: vi.fn(),
     onSelectDefectPreview: vi.fn(),
     onImportSession: vi.fn(),
@@ -1184,6 +1185,39 @@ describe("frame review workspace", () => {
     );
     expect(correctionProgress.value).toBe(7);
     expect(correctionProgress.max).toBe(20);
+
+    controller.update({
+      ...ready,
+      calibration: {
+        ...ready.calibration,
+        defectCorrection: {
+          ...ready.calibration.defectCorrection,
+          state: "error",
+          resumeAvailable: true,
+          batchReport: {
+            state: "failed",
+            planSha256: "a".repeat(64),
+            parametersSha256: "e".repeat(64),
+            totalItems: 4,
+            completedItems: 1,
+            requestedSamples: 31,
+            correctedSamples: 30,
+            insufficientSupportSamples: 1,
+            blockedBySourceMaskSamples: 0,
+            hotSamples: 3,
+            coldSamples: 4,
+            conflictingSamples: 1,
+            peakReservedBytes: 234_020_736,
+          },
+        },
+      },
+    });
+    const resume = getByRole<HTMLButtonElement>(root, "button", {
+      name: "Resume remaining Lights",
+    });
+    expect(resume.disabled).toBe(false);
+    fireEvent.click(resume);
+    expect(actions.onResumeDefectBatch).toHaveBeenCalledOnce();
 
     controller.update({
       ...ready,

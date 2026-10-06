@@ -108,3 +108,22 @@ cancellation. No individual pair can be partially published. The desktop shows
 whole-queue progress while retaining the current pair's five native stages. Its
 terminal report preserves both seals, completion count, replacement accounting,
 HOT/COLD/conflict evidence, and the worst observed reserved-memory peak.
+
+The reviewed plan also lives in native state. Each execution request must match
+the plan seal and exact next index as well as its identity, group, destinations,
+controls, memory limit, manifest, and Light-plan identities. Immediately before
+launch, Rust rechecks that both destinations are absent in the same real,
+non-symbolic directory. The native cursor advances only after atomic pair
+publication, so an item cannot be skipped or replayed.
+
+Every successful response attests the plan seal, item index, completed count,
+total count, and completion flag. Desktop aggregation rejects a discontinuity.
+After cancellation or failure, the current process may explicitly resume at the
+first unpublished item; changing controls or replacing the session discards
+that capability. Completed products are never recomputed during a resume.
+
+Once the native cursor reaches the end, the user can export a bounded JSON
+report. Rust aggregates correction and categorical-map evidence and the worst
+reserved-memory peak, computes SHA-256 over canonical report bytes, and wraps
+the report and digest in a versioned envelope. Publication is create-new and
+never overwrites an existing file.

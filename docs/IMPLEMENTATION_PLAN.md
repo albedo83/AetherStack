@@ -2175,6 +2175,25 @@ safety reasoning. They do not narrate obvious syntax.
      The report retains the plan and parameter seals, completed pair count,
      requested and corrected samples, insufficient support, source-mask blocks,
      HOT/COLD/conflict evidence, terminal state, and worst reserved-memory peak.
+223. Retain the reviewed correction batch in native state. Every pair must name
+     the exact batch seal and next item index; Rust rechecks identity, group,
+     destinations, controls, memory, manifest, and Light plan. The cursor moves
+     only after successful atomic publication, preventing skips and replay.
+224. Revalidate destinations at the last safe boundary. Before each worker
+     starts, both outputs must remain absent and share the original real,
+     non-symbolic directory. Late collisions or directory replacement fail the
+     item without reading scientific pixels.
+225. Return a native batch acknowledgement with every corrected pair. The plan
+     seal, item index, completed count, total count, and terminal flag must form
+     the exact next sequence before browser aggregation accepts the evidence.
+226. Export a durable native correction report. Rust aggregates replacement and
+     map evidence plus the worst reserved-memory peak, permits export only for a
+     complete reviewed batch, wraps canonical report bytes with their SHA-256,
+     and publishes JSON with create-new semantics.
+227. Resume an interrupted in-memory queue explicitly. Cancellation and failed
+     pairs retain completed atomic products and the sealed native cursor; the UI
+     offers a distinct resume action that starts at the first unpublished item.
+     Changing controls or replacing the session invalidates the resume state.
 
 ## 11. Stable-release definition
 

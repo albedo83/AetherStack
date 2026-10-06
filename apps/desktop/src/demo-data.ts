@@ -388,6 +388,7 @@ export const demoReviewModel: ReviewViewModel = {
       },
       result: null,
       batchReport: null,
+      resumeAvailable: false,
       previewState: "idle",
       previewView: "after",
       preview: null,
