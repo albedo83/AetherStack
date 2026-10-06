@@ -2194,6 +2194,26 @@ safety reasoning. They do not narrate obvious syntax.
      pairs retain completed atomic products and the sealed native cursor; the UI
      offers a distinct resume action that starts at the first unpublished item.
      Changing controls or replacing the session invalidates the resume state.
+228. Reopen detector-correction reports through a strict native reader. Rust
+     accepts only bounded regular files, denies unknown fields, requires exact
+     canonical pretty encoding, verifies all SHA-256 identities, and recomputes
+     the report digest before exposing evidence to the desktop.
+229. Prove unique detector accounting across the durable boundary. HOT plus
+     COLD minus conflicts equals both the unique defect total and requested
+     replacements, while corrected, unsupported, and source-mask-blocked
+     samples form a complete partition without overflow.
+230. Quantify repair outcome without floating-point ambiguity. The inspector
+     returns unresolved samples and an integer parts-per-million efficiency;
+     the efficiency is absent for a zero-defect map rather than presenting an
+     undefined ratio as perfect performance.
+231. Reconcile resumable browser state with the native anti-replay cursor.
+     Before another Light runs, both sides must agree on plan and parameter
+     seals, next and total indices, every scientific aggregate, and the peak
+     memory reservation. Any mismatch permanently closes that resume attempt.
+232. Present verified report evidence as an accessible operator verdict. Clean,
+     complete, and partial outcomes remain distinct from integrity status, and
+     mapped, efficiency, unresolved, conflict, memory, and provenance evidence
+     stays visible in a responsive live region.
 
 ## 11. Stable-release definition
 

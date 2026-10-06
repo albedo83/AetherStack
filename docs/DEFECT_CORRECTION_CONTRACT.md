@@ -127,3 +127,30 @@ report. Rust aggregates correction and categorical-map evidence and the worst
 reserved-memory peak, computes SHA-256 over canonical report bytes, and wraps
 the report and digest in a versioned envelope. Publication is create-new and
 never overwrites an existing file.
+
+An exported report can be reopened independently. Inspection accepts only a
+regular, non-symbolic file of at most one mebibyte, requires the exact pretty
+JSON encoding with one trailing newline, denies unknown fields, and recomputes
+the canonical report digest. The reader rejects incomplete batches, malformed
+digests, memory peaks above the sealed limit, arithmetic overflow, and any
+replacement or map-accounting inconsistency.
+
+Unique defect accounting is normative: `HOT + COLD - conflicts` must equal both
+the unique defect count and the requested replacement count. Corrected,
+insufficient-support, and source-mask-blocked samples must form an exact
+partition of that same count. The displayed repair efficiency is derived with
+integer arithmetic in parts per million; it is deliberately absent when the
+map contains no defects, because zero divided by zero is not a meaningful
+quality score.
+
+Before an interrupted queue resumes, the desktop reads the active native batch
+again. Plan and parameter identities, next index, total items, every scientific
+counter, and the peak reservation must match the retained browser report. A
+completed native cursor, unsafe integer, stale identity, or any aggregate
+divergence invalidates the resume capability instead of attempting recovery.
+
+The inspection surface separates cryptographic verification from scientific
+outcome. It presents an accessible verdict for a clean map, complete repair, or
+remaining unresolved samples, followed by mapped, efficiency, unresolved,
+conflict, and memory metrics. A partial repair is visible and reviewable; it is
+never relabelled as a failed integrity check.
