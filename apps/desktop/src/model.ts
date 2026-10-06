@@ -428,6 +428,7 @@ export interface ReviewActions {
     settings: DrizzleExecutionSettings,
   ) => void;
   readonly onSelectDrizzleProduct: (product: DrizzleProductView) => void;
+  readonly onInspectDrizzleStatistics: () => void;
   readonly onUpdateRegisteredStackSettings: (
     settings: RegisteredStackIntegrationSettings,
   ) => void;

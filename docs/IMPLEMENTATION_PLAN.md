@@ -2055,6 +2055,11 @@ safety reasoning. They do not narrate obvious syntax.
      robust display transform. Object URLs are revoked on product changes,
      reruns, session changes, and shutdown; stale asynchronous previews cannot
      replace the product selected for the current canonical plan.
+201. Reuse the exact FITS statistics instrument for Drizzle science, weight,
+     and support products. The selected companion is streamed through the
+     deterministic three-pass native calculator, cached by canonical plan and
+     product role, and shown with complete shape, format, conformance, excluded
+     sample, extrema, mean, and deviation evidence.
 
 ## 11. Stable-release definition
 

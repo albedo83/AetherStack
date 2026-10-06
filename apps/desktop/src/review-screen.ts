@@ -258,6 +258,10 @@ export function mountReviewScreen(
       root,
       "[data-drizzle-preview-placeholder]",
     ),
+    inspectDrizzleStatistics: required<HTMLButtonElement>(
+      root,
+      '[data-action="inspect-drizzle-statistics"]',
+    ),
     registrationStatus: required<HTMLElement>(
       root,
       "[data-registration-status]",
@@ -1010,6 +1014,10 @@ export function mountReviewScreen(
       ) {
         actions.onSelectDrizzleProduct(product);
       }
+      return;
+    }
+    if (action === "inspect-drizzle-statistics") {
+      actions.onInspectDrizzleStatistics();
       return;
     }
     if (action === "execute-registered-stack") {
@@ -2673,6 +2681,7 @@ interface RegistrationElements {
   readonly drizzleProducts: readonly HTMLButtonElement[];
   readonly drizzlePreviewImage: HTMLImageElement;
   readonly drizzlePreviewPlaceholder: HTMLElement;
+  readonly inspectDrizzleStatistics: HTMLButtonElement;
   readonly registrationStatus: HTMLElement;
   readonly registrationRms: HTMLElement;
   readonly registrationInliers: HTMLElement;
@@ -3000,6 +3009,8 @@ function renderRegistration(
       : drizzle.previewState === "error"
         ? "The FITS product is valid, but its display preview is unavailable"
         : "The atomic Drizzle product set will appear here";
+  elements.inspectDrizzleStatistics.disabled =
+    drizzle.result === null || drizzleBusy;
   const registeredSetReady =
     registration.execution.state === "completed" &&
     registration.execution.result?.planSha256 === registration.plan?.planSha256;
@@ -4831,6 +4842,7 @@ function shellMarkup(): string {
                   <div data-drizzle-preview-placeholder>The atomic Drizzle product set will appear here</div>
                 </div>
                 <div class="drizzle-console__actions">
+                  <button class="button button--quiet" type="button" data-action="inspect-drizzle-statistics" disabled>Exact statistics</button>
                   <button class="button button--primary" type="button" data-action="execute-drizzle" disabled>Build Drizzle set</button>
                   <button class="button button--danger" type="button" data-action="cancel-drizzle" hidden>Cancel</button>
                 </div>

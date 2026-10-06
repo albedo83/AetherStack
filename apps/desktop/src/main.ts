@@ -335,6 +335,9 @@ const screen = mountReviewScreen(root, model, {
   onSelectDrizzleProduct(product) {
     selectDrizzleProduct(product);
   },
+  onInspectDrizzleStatistics() {
+    void inspectDrizzleStatistics();
+  },
   onUpdateRegisteredStackSettings(settings) {
     if (
       model.registration.stack.state === "running" ||
@@ -2085,9 +2088,11 @@ function selectDrizzleProduct(product: DrizzleProductView): void {
     return;
   }
   drizzlePreviewTicket += 1;
+  statisticsTicket += 1;
   releaseDrizzlePreview();
   update({
     ...model,
+    statisticsPanel: closedStatisticsPanel(),
     registration: {
       ...model.registration,
       drizzle: {
@@ -2179,6 +2184,80 @@ function drizzleProductPath(
       return result.weightPath;
     case "support":
       return result.supportPath;
+  }
+}
+
+async function inspectDrizzleStatistics(): Promise<void> {
+  const drizzle = model.registration.drizzle;
+  const result = drizzle.result;
+  if (!result || drizzle.state !== "completed") return;
+  const product = drizzle.selectedProduct;
+  const path = drizzleProductPath(result, product);
+  const identity = `${result.drizzlePlanSha256}:${product}`;
+  const cached = statisticsCache.get(identity);
+  if (cached) {
+    update({
+      ...model,
+      statisticsPanel: {
+        open: true,
+        frameId: identity,
+        frameLabel: `Drizzle ${product}`,
+        state: "ready",
+        statistics: cached,
+        message: null,
+      },
+    });
+    return;
+  }
+  const ticket = ++statisticsTicket;
+  update({
+    ...model,
+    statisticsPanel: {
+      open: true,
+      frameId: identity,
+      frameLabel: `Drizzle ${product}`,
+      state: "loading",
+      statistics: null,
+      message:
+        "Reading the complete Drizzle product in three deterministic passes…",
+    },
+  });
+  try {
+    const statistics = await inspectFitsStatistics(path);
+    if (
+      ticket !== statisticsTicket ||
+      model.registration.drizzle.result?.drizzlePlanSha256 !==
+        result.drizzlePlanSha256 ||
+      model.registration.drizzle.selectedProduct !== product
+    ) {
+      return;
+    }
+    statisticsCache.set(identity, statistics);
+    update({
+      ...model,
+      statisticsPanel: {
+        open: true,
+        frameId: identity,
+        frameLabel: `Drizzle ${product}`,
+        state: "ready",
+        statistics,
+        message: null,
+      },
+    });
+  } catch {
+    if (ticket !== statisticsTicket) return;
+    update({
+      ...model,
+      statisticsPanel: {
+        open: true,
+        frameId: identity,
+        frameLabel: `Drizzle ${product}`,
+        state: "error",
+        statistics: null,
+        message:
+          "Exact statistics could not be calculated for this Drizzle product.",
+      },
+    });
   }
 }
 
