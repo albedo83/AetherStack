@@ -2022,6 +2022,11 @@ safety reasoning. They do not narrate obvious syntax.
      storage, then stream in canonical FITS order to science, weight, and exact
      support products. Checksums and dimensions are read back before one atomic
      create-new set transaction; cancellation or any failure publishes nothing.
+195. Bind complete Drizzle execution to immutable local sources. Each input is
+     fingerprinted before strict FITS header acceptance, while unsupported CFA
+     controls and invalid weights fail before output work. Every fingerprint is
+     recomputed after private product readback and immediately before atomic set
+     publication, so mutation during a long run leaves no public products.
 
 ## 11. Stable-release definition
 

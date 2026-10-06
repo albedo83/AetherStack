@@ -158,6 +158,13 @@ All three private streams are checksum-verified before one create-new product-se
 transaction makes them visible. Cancellation or any band, spool, conversion,
 encoding, or verification failure removes private state and publishes nothing.
 
+The strict path accepts only fingerprint-bound local sources. It verifies each
+complete byte stream before opening the FITS primary array in strict validation
+mode, rejects invalid weights and unsupported CFA patterns before output work,
+and repeats every source fingerprint after private product readback immediately
+before publication. A source changed during execution therefore publishes no
+science or diagnostic companion.
+
 ## FITS product publication
 
 A complete origin-aligned result publishes as one create-new transaction with

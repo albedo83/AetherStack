@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::fs::File;
 use std::io::{Read, Seek};
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
@@ -13,14 +14,18 @@ use aether_drizzle::{
 use aether_fits::{
     AtomicF64PrimaryStreamWriter, AtomicFitsSetWriteError, AtomicFitsWriteError,
     FitsOutputProvenance, FitsProvenanceError, FitsWriteSummary, HeaderReadOptions, ImageReadError,
-    ImageRegion, PrimaryImageReader, SampleStatus, publish_atomic_fits_set,
+    ImageRegion, PrimaryImageReader, SampleStatus, ValidationMode, publish_atomic_fits_set,
 };
 use aether_metadata::BayerPattern;
 use aether_registration::ProjectiveTransform;
 
 use crate::drizzle_spool::DrizzlePlanarSpool;
 pub use crate::drizzle_spool::DrizzleSpoolError;
-use crate::{CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError};
+use crate::pipeline::{open_reader, verify_source};
+use crate::{
+    CancellationToken, Cancelled, MemoryBudget, MemoryBudgetError, PipelineInput, PipelineSource,
+    StrictPipelineError,
+};
 
 /// Provenance identity of the normalized Drizzle science image.
 pub const DRIZZLE_SCIENCE_ALGORITHM_ID: &str = "drizzle-science-v1";
@@ -806,6 +811,57 @@ impl DrizzleOutputExecutionResult {
     }
 }
 
+/// One immutable path-bound CFA source for strict Drizzle execution.
+#[derive(Clone, Debug)]
+pub struct StrictDrizzleSource {
+    source: PipelineSource,
+    transform: ProjectiveTransform,
+    pattern: BayerPattern,
+    frame_weight: f64,
+}
+
+impl StrictDrizzleSource {
+    /// Binds a fingerprinted local source to reviewed Drizzle controls.
+    #[must_use]
+    pub fn new(
+        source: PipelineSource,
+        transform: ProjectiveTransform,
+        pattern: BayerPattern,
+        frame_weight: f64,
+    ) -> Self {
+        Self {
+            source,
+            transform,
+            pattern,
+            frame_weight,
+        }
+    }
+
+    /// Fingerprinted local FITS source.
+    #[must_use]
+    pub const fn source(&self) -> &PipelineSource {
+        &self.source
+    }
+
+    /// Reviewed source-to-reference projective transform.
+    #[must_use]
+    pub const fn transform(&self) -> ProjectiveTransform {
+        self.transform
+    }
+
+    /// Physical detector mosaic pattern.
+    #[must_use]
+    pub const fn pattern(&self) -> &BayerPattern {
+        &self.pattern
+    }
+
+    /// Positive integration weight.
+    #[must_use]
+    pub const fn frame_weight(&self) -> f64 {
+        self.frame_weight
+    }
+}
+
 /// Failure while executing and publishing a complete banded Drizzle output.
 #[derive(Debug)]
 pub enum DrizzleOutputExecutionError {
@@ -826,6 +882,15 @@ pub enum DrizzleOutputExecutionError {
     OutputDimensions,
     /// Provenance source count does not match the ordered source set.
     InvalidProvenance,
+    /// One source has an unsupported CFA pattern or invalid frame weight.
+    InvalidSourceConfiguration {
+        /// Zero-based stable source-order index.
+        index: usize,
+    },
+    /// Fingerprint, open, header, or final source revalidation failed.
+    Input(StrictPipelineError),
+    /// Opened-source bookkeeping could not be allocated.
+    SourceAllocation,
     /// Tile evidence aggregation overflowed.
     Evidence(aether_drizzle::DrizzleAccumulationError),
     /// FITS staging, verification, or atomic publication failed.
@@ -847,6 +912,13 @@ impl Display for DrizzleOutputExecutionError {
             Self::InvalidProvenance => {
                 formatter.write_str("Drizzle provenance does not match the ordered source set")
             }
+            Self::InvalidSourceConfiguration { index } => {
+                write!(formatter, "Drizzle source {index} has invalid CFA controls")
+            }
+            Self::Input(error) => Display::fmt(error, formatter),
+            Self::SourceAllocation => {
+                formatter.write_str("cannot allocate opened Drizzle source bookkeeping")
+            }
             Self::Evidence(error) => Display::fmt(error, formatter),
             Self::Publication(error) => Display::fmt(error, formatter),
         }
@@ -862,7 +934,11 @@ impl Error for DrizzleOutputExecutionError {
             Self::Spool(error) => Some(error),
             Self::Evidence(error) => Some(error),
             Self::Publication(error) => Some(error),
-            Self::OutputDimensions | Self::InvalidProvenance => None,
+            Self::Input(error) => Some(error),
+            Self::OutputDimensions
+            | Self::InvalidProvenance
+            | Self::InvalidSourceConfiguration { .. }
+            | Self::SourceAllocation => None,
         }
     }
 }
@@ -885,6 +961,34 @@ pub fn run_drizzle_fits_output<R: Read + Seek>(
     cancellation: &CancellationToken,
     memory: &MemoryBudget,
 ) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError> {
+    run_drizzle_fits_output_inner(
+        frames,
+        parameters,
+        output,
+        maximum_band_height,
+        destinations,
+        provenance,
+        cancellation,
+        memory,
+        || Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_drizzle_fits_output_inner<R: Read + Seek, F>(
+    frames: &mut [DrizzleFitsFrame<R>],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    maximum_band_height: u32,
+    destinations: DrizzleProductDestinations,
+    provenance: &DrizzleProductProvenance,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+    before_publish: F,
+) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError>
+where
+    F: FnOnce() -> Result<(), DrizzleOutputExecutionError>,
+{
     cancellation
         .checkpoint()
         .map_err(DrizzleOutputExecutionError::Cancelled)?;
@@ -1005,6 +1109,10 @@ pub fn run_drizzle_fits_output<R: Read + Seek>(
     cancellation
         .checkpoint()
         .map_err(DrizzleOutputExecutionError::Cancelled)?;
+    before_publish()?;
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleOutputExecutionError::Cancelled)?;
     let mut staged = Vec::new();
     staged.try_reserve_exact(3).map_err(|_| {
         DrizzleOutputExecutionError::Publication(DrizzlePublicationError::AllocationFailed)
@@ -1030,6 +1138,72 @@ pub fn run_drizzle_fits_output<R: Read + Seek>(
         },
         plan,
     })
+}
+
+/// Opens, executes, revalidates, and publishes fingerprint-bound CFA sources.
+///
+/// Every file is hashed before its FITS header is accepted in strict mode. The
+/// exact sources are hashed again after all private products pass readback and
+/// immediately before publication, closing the mutation window across a long
+/// Drizzle run.
+#[allow(clippy::too_many_arguments)]
+pub fn run_strict_drizzle_output(
+    sources: &[StrictDrizzleSource],
+    parameters: DrizzleParameters,
+    output: DrizzleOutputBounds,
+    maximum_band_height: u32,
+    destinations: DrizzleProductDestinations,
+    provenance: &DrizzleProductProvenance,
+    cancellation: &CancellationToken,
+    memory: &MemoryBudget,
+) -> Result<DrizzleOutputExecutionResult, DrizzleOutputExecutionError> {
+    cancellation
+        .checkpoint()
+        .map_err(DrizzleOutputExecutionError::Cancelled)?;
+    let mut frames: Vec<DrizzleFitsFrame<File>> = Vec::new();
+    frames
+        .try_reserve_exact(sources.len())
+        .map_err(|_| DrizzleOutputExecutionError::SourceAllocation)?;
+    for (index, source) in sources.iter().enumerate() {
+        if !source.frame_weight.is_finite()
+            || source.frame_weight <= 0.0
+            || aether_drizzle::cfa_channel(&source.pattern, 0, 0).is_err()
+        {
+            return Err(DrizzleOutputExecutionError::InvalidSourceConfiguration { index });
+        }
+        let input = PipelineInput::Signal { index };
+        verify_source(&source.source, input).map_err(DrizzleOutputExecutionError::Input)?;
+        let reader = open_reader(
+            source.source.path(),
+            input,
+            HeaderReadOptions::default(),
+            ValidationMode::Strict,
+        )
+        .map_err(DrizzleOutputExecutionError::Input)?;
+        frames.push(DrizzleFitsFrame::new(
+            reader,
+            source.transform,
+            source.pattern.clone(),
+            source.frame_weight,
+        ));
+    }
+    run_drizzle_fits_output_inner(
+        &mut frames,
+        parameters,
+        output,
+        maximum_band_height,
+        destinations,
+        provenance,
+        cancellation,
+        memory,
+        || {
+            for (index, source) in sources.iter().enumerate() {
+                verify_source(&source.source, PipelineInput::Signal { index })
+                    .map_err(DrizzleOutputExecutionError::Input)?;
+            }
+            Ok(())
+        },
+    )
 }
 
 fn publication_stage_error(
@@ -1495,6 +1669,7 @@ mod tests {
     use aether_fits::{PrimaryImageReader, SampleStatus, write_f64_primary};
     use aether_metadata::BayerPattern;
     use aether_registration::ProjectiveTransform;
+    use aether_session::{SourceFingerprint, fingerprint_reader};
 
     use super::*;
 
@@ -2115,6 +2290,121 @@ mod tests {
         assert!(!mismatch_destinations.science().exists());
         assert!(!mismatch_destinations.weight().exists());
         assert!(!mismatch_destinations.support().exists());
+        Ok(())
+    }
+
+    #[test]
+    fn strict_output_requires_and_revalidates_the_bound_source() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let source_path = directory.0.join("source.fits");
+        let output_root = directory.0.join("strict-output");
+        let rejected_root = directory.0.join("rejected-output");
+        fs::create_dir(&output_root)?;
+        fs::create_dir(&rejected_root)?;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(3, 2, 1)?,
+            (0..6).map(|value| f64::from(value) + 0.625).collect(),
+        )?;
+        fs::write(&source_path, fits_bytes(&image)?)?;
+        let fingerprint = fingerprint_reader(&mut File::open(&source_path)?)?;
+        let source = StrictDrizzleSource::new(
+            PipelineSource::new(source_path.clone(), fingerprint),
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        );
+        let published = run_strict_drizzle_output(
+            &[source],
+            DrizzleParameters::new(1, 1.0)?,
+            DrizzleOutputBounds::new(3, 2, 4)?,
+            1,
+            destinations(&output_root)?,
+            &single_source_provenance()?,
+            &CancellationToken::new(),
+            &crate::MemoryBudget::new(1_048_576)?,
+        )?;
+        assert!(published.publication().destinations().science().exists());
+        assert!(published.publication().destinations().weight().exists());
+        assert!(published.publication().destinations().support().exists());
+
+        let rejected_destinations = destinations(&rejected_root)?;
+        let stale = StrictDrizzleSource::new(
+            PipelineSource::new(source_path, SourceFingerprint::new(1, "f".repeat(64))?),
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        );
+        assert!(matches!(
+            run_strict_drizzle_output(
+                &[stale],
+                DrizzleParameters::new(1, 1.0)?,
+                DrizzleOutputBounds::new(3, 2, 4)?,
+                1,
+                rejected_destinations.clone(),
+                &single_source_provenance()?,
+                &CancellationToken::new(),
+                &crate::MemoryBudget::new(1_048_576)?,
+            ),
+            Err(DrizzleOutputExecutionError::Input(
+                StrictPipelineError::SourceFingerprintMismatch { .. }
+            ))
+        ));
+        assert!(!rejected_destinations.science().exists());
+        assert!(!rejected_destinations.weight().exists());
+        assert!(!rejected_destinations.support().exists());
+        Ok(())
+    }
+
+    #[test]
+    fn source_mutation_after_private_staging_blocks_every_product() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let source_path = directory.0.join("source.fits");
+        let output_root = directory.0.join("late-mutation-output");
+        fs::create_dir(&output_root)?;
+        let image = ScientificImage::from_pixels(
+            Dimensions::new(3, 2, 1)?,
+            (0..6).map(|value| f64::from(value) + 0.875).collect(),
+        )?;
+        fs::write(&source_path, fits_bytes(&image)?)?;
+        let fingerprint = fingerprint_reader(&mut File::open(&source_path)?)?;
+        let pipeline_source = PipelineSource::new(source_path.clone(), fingerprint);
+        let mut frames = [DrizzleFitsFrame::new(
+            PrimaryImageReader::open(File::open(&source_path)?, HeaderReadOptions::default())?,
+            ProjectiveTransform::IDENTITY,
+            BayerPattern::Rggb,
+            1.0,
+        )];
+        let destinations = destinations(&output_root)?;
+
+        let error = match run_drizzle_fits_output_inner(
+            &mut frames,
+            DrizzleParameters::new(1, 1.0)?,
+            DrizzleOutputBounds::new(3, 2, 4)?,
+            1,
+            destinations.clone(),
+            &single_source_provenance()?,
+            &CancellationToken::new(),
+            &crate::MemoryBudget::new(1_048_576)?,
+            || {
+                fs::write(&source_path, b"mutated after private staging")
+                    .map_err(DrizzleSpoolError::Io)
+                    .map_err(DrizzleOutputExecutionError::Spool)?;
+                verify_source(&pipeline_source, PipelineInput::Signal { index: 0 })
+                    .map_err(DrizzleOutputExecutionError::Input)
+            },
+        ) {
+            Ok(_) => return Err("late source mutation unexpectedly published products".into()),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            DrizzleOutputExecutionError::Input(
+                StrictPipelineError::SourceFingerprintMismatch { .. }
+            )
+        ));
+        assert!(!destinations.science().exists());
+        assert!(!destinations.weight().exists());
+        assert!(!destinations.support().exists());
         Ok(())
     }
 
