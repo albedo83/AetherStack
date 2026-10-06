@@ -80,9 +80,9 @@ impl ImageRegion {
 /// Seekable reader for the pixel array of a primary FITS image.
 ///
 /// The reader owns the stream and keeps the full header report available. The
-/// current vertical slice decodes signed 16-bit integers and IEEE 754 binary32
-/// and binary64 values. Other standard `BITPIX` values remain describable but
-/// return an explicit error when pixel decoding is requested.
+/// The reader decodes every standard FITS image `BITPIX` representation into
+/// physical binary64 values. Integer `BLANK` comparison happens before binary64
+/// conversion, including for signed 64-bit storage.
 pub struct PrimaryImageReader<R> {
     reader: R,
     report: HeaderReport,
@@ -184,8 +184,8 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
     /// # Errors
     ///
     /// Returns an error when output lengths differ, the requested range lies
-    /// outside the image, byte offsets overflow, the stored representation is not
-    /// implemented by this vertical slice, seeking fails, or data is truncated.
+    /// outside the image, byte offsets overflow, seeking fails, or data is
+    /// truncated.
     pub fn read_physical_samples(
         &mut self,
         start_sample: u64,
@@ -213,14 +213,6 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
         }
 
         let format = self.descriptor.sample_format();
-        if !matches!(
-            format,
-            StoredSampleFormat::Signed16
-                | StoredSampleFormat::Float32
-                | StoredSampleFormat::Float64
-        ) {
-            return Err(ImageReadError::UnsupportedSampleFormat { format });
-        }
 
         let relative_offset = start_sample
             .checked_mul(format.byte_width())
@@ -259,7 +251,7 @@ impl<R: Read + Seek> PrimaryImageReader<R> {
                 .zip(value_chunk.iter_mut())
                 .zip(status_chunk.iter_mut())
             {
-                let stored = decode_supported_sample(format, bytes)?;
+                let stored = decode_sample(format, bytes)?;
                 let (physical, sample_status) = self.to_physical(stored);
                 *value = physical;
                 *status = sample_status;
@@ -550,16 +542,25 @@ enum StoredSample {
     Float(f64),
 }
 
-fn decode_supported_sample(
-    format: StoredSampleFormat,
-    bytes: &[u8],
-) -> Result<StoredSample, ImageReadError> {
+fn decode_sample(format: StoredSampleFormat, bytes: &[u8]) -> Result<StoredSample, ImageReadError> {
     match (format, bytes) {
+        (StoredSampleFormat::Unsigned8, [value]) => Ok(StoredSample::Integer(i64::from(*value))),
         (StoredSampleFormat::Signed16, [first, second]) => {
             Ok(StoredSample::Integer(i64::from(i16::from_be_bytes([
                 *first, *second,
             ]))))
         }
+        (StoredSampleFormat::Signed32, [first, second, third, fourth]) => {
+            Ok(StoredSample::Integer(i64::from(i32::from_be_bytes([
+                *first, *second, *third, *fourth,
+            ]))))
+        }
+        (
+            StoredSampleFormat::Signed64,
+            [first, second, third, fourth, fifth, sixth, seventh, eighth],
+        ) => Ok(StoredSample::Integer(i64::from_be_bytes([
+            *first, *second, *third, *fourth, *fifth, *sixth, *seventh, *eighth,
+        ]))),
         (StoredSampleFormat::Float32, [first, second, third, fourth]) => {
             Ok(StoredSample::Float(f64::from(f32::from_be_bytes([
                 *first, *second, *third, *fourth,
@@ -571,16 +572,6 @@ fn decode_supported_sample(
         ) => Ok(StoredSample::Float(f64::from_be_bytes([
             *first, *second, *third, *fourth, *fifth, *sixth, *seventh, *eighth,
         ]))),
-        (format, _)
-            if !matches!(
-                format,
-                StoredSampleFormat::Signed16
-                    | StoredSampleFormat::Float32
-                    | StoredSampleFormat::Float64
-            ) =>
-        {
-            Err(ImageReadError::UnsupportedSampleFormat { format })
-        }
         _ => Err(ImageReadError::InvalidStoredSampleWidth),
     }
 }
@@ -650,11 +641,6 @@ pub enum ImageReadError {
     },
     /// A byte or sample offset cannot be represented safely.
     OffsetOverflow,
-    /// Pixel decoding for the stored representation is not implemented yet.
-    UnsupportedSampleFormat {
-        /// Unsupported stored representation.
-        format: StoredSampleFormat,
-    },
     /// An internal decoding chunk did not match the representation width.
     InvalidStoredSampleWidth,
 }
@@ -706,12 +692,6 @@ impl Display for ImageReadError {
                 "region requires {expected} outputs, received {values} values and {statuses} statuses"
             ),
             Self::OffsetOverflow => formatter.write_str("FITS image byte offset overflows"),
-            Self::UnsupportedSampleFormat { format } => {
-                write!(
-                    formatter,
-                    "pixel decoding is not implemented for {format:?}"
-                )
-            }
             Self::InvalidStoredSampleWidth => {
                 formatter.write_str("stored FITS sample has an invalid byte width")
             }
@@ -733,7 +713,6 @@ impl Error for ImageReadError {
             | Self::RegionOutOfBounds { .. }
             | Self::RegionOutputLengthMismatch { .. }
             | Self::OffsetOverflow
-            | Self::UnsupportedSampleFormat { .. }
             | Self::InvalidStoredSampleWidth => None,
         }
     }
@@ -1127,21 +1106,61 @@ mod tests {
     }
 
     #[test]
-    fn leaves_other_standard_formats_explicitly_unsupported() {
-        let input = fits_image(8, 2, &[1, 2], &[]);
-        let result = PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default());
-        let Some(mut reader) = result.ok() else {
-            return;
-        };
-        let mut values = [0.0; 2];
-        let mut statuses = [SampleStatus::Valid; 2];
+    fn decodes_every_standard_integer_representation_before_scaling()
+    -> Result<(), Box<dyn StdError>> {
+        let cases = [
+            (8, vec![0_u8, 17, 255], vec![0_i64, 17, 255], 17_i64),
+            (
+                32,
+                [-2_147_483_648_i32, -17, 2_147_483_647]
+                    .into_iter()
+                    .flat_map(i32::to_be_bytes)
+                    .collect(),
+                vec![-2_147_483_648_i64, -17, 2_147_483_647],
+                -17_i64,
+            ),
+            (
+                64,
+                [i64::MIN, -9_007_199_254_740_993_i64, i64::MAX]
+                    .into_iter()
+                    .flat_map(i64::to_be_bytes)
+                    .collect(),
+                vec![i64::MIN, -9_007_199_254_740_993_i64, i64::MAX],
+                -9_007_199_254_740_993_i64,
+            ),
+        ];
 
-        assert!(matches!(
-            reader.read_physical_samples(0, &mut values, &mut statuses),
-            Err(ImageReadError::UnsupportedSampleFormat {
-                format: StoredSampleFormat::Unsigned8
-            })
-        ));
+        for (bitpix, data, stored, blank) in cases {
+            let input = fits_image(
+                bitpix,
+                stored.len(),
+                &data,
+                &[
+                    fixed_card("BSCALE", "0.5"),
+                    fixed_card("BZERO", "3.0"),
+                    fixed_card("BLANK", &blank.to_string()),
+                ],
+            );
+            let mut reader =
+                PrimaryImageReader::open(Cursor::new(input), HeaderReadOptions::default())?;
+            let mut values = [0.0; 3];
+            let mut statuses = [SampleStatus::Valid; 3];
+            reader.read_physical_samples(0, &mut values, &mut statuses)?;
+
+            assert_eq!(statuses[1], SampleStatus::Undefined);
+            assert!(values[1].is_nan());
+            assert_eq!(statuses[0], SampleStatus::Valid);
+            assert_eq!(statuses[2], SampleStatus::Valid);
+            assert_eq!(
+                values[0].to_bits(),
+                (stored[0] as f64).mul_add(0.5, 3.0).to_bits()
+            );
+            assert_eq!(
+                values[2].to_bits(),
+                (stored[2] as f64).mul_add(0.5, 3.0).to_bits()
+            );
+        }
+        Ok(())
     }
 
     #[test]

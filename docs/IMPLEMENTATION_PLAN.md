@@ -2083,6 +2083,12 @@ safety reasoning. They do not narrate obvious syntax.
      detection, merge, and correction decision. Next, bind dark/flat map
      generation and per-Light correction into a fingerprinted tiled FITS
      transaction before exposing camera-specific automatic profiles.
+205. Complete standard FITS primary-image decoding. Unsigned 8-bit, signed
+     16/32/64-bit, and IEEE binary32/64 samples now share the same bounded
+     range and region reader. Integer BLANK matching occurs before conversion,
+     including outside binary64's consecutive-integer domain; physical scaling
+     then uses the documented binary64 fused multiply-add. Boundary, scaling,
+     and undefined-sample tests cover every standard integer representation.
 
 ## 11. Stable-release definition
 
