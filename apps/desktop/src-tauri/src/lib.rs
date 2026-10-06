@@ -16,7 +16,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use aether_cache::{ArtifactFileFingerprint, ArtifactRemovalState, ArtifactStore, CacheKey};
-use aether_calibration::{CalibrationParameters, FlatNormalizationParameters};
+use aether_calibration::{
+    CalibrationParameters, DefectCorrectionParameters, DefectDetectionParameters,
+    FlatNormalizationParameters,
+};
 use aether_core::Dimensions;
 use aether_drizzle::{DrizzleOutputBounds, DrizzleParameters};
 use aether_fits::{
@@ -56,23 +59,26 @@ use aether_review::{
     TransferFunction,
 };
 use aether_runtime::{
-    BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DrizzleOutputExecutionError,
-    DrizzleProductDestinations, DrizzleProductProvenance, LightPlanExecutionError,
-    LightPlanExecutionRequest, LocalNormalizationPipelineError, LocalNormalizationRequest,
-    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
-    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
+    BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DefectFitsReference, DefectReferenceKind,
+    DefectReferenceParameters, DrizzleOutputExecutionError, DrizzleProductDestinations,
+    DrizzleProductProvenance, LightPlanExecutionError, LightPlanExecutionRequest,
+    LocalNormalizationPipelineError, LocalNormalizationRequest, MasterPlanExecutionError,
+    MasterPlanExecutionRequest, MemoryBudget, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+    PercentileClipParameters, PipelineSource, ProgressState,
     ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
     REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
     REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
     RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
-    SIGMA_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDrizzleSource,
-    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_memory,
-    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
-    run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
-    run_registered_stack, run_registration_plan, run_strict_drizzle_output_with_progress,
-    strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
+    SIGMA_REJECTION_MAP_ALGORITHM_ID, STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+    STRICT_DEFECT_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDefectCorrectionRequest,
+    StrictDrizzleSource, WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID,
+    estimate_local_normalization_memory, run_calibrated_light_plan, run_demosaiced_light_plan,
+    run_light_plan, run_local_normalization_with_progress, run_master_plan,
+    run_projective_registration_plan, run_registered_stack, run_registration_plan,
+    run_strict_defect_correction, run_strict_drizzle_output_with_progress,
+    strict_defect_parameters_sha256, strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
 };
 use aether_session::{
     ClassificationPolicy, DirectoryManifestError, DirectoryManifestOptions,
@@ -1845,6 +1851,60 @@ struct LightPlanExecutionCommandRequest {
     tile_height: usize,
     memory_limit_bytes: u64,
     output_mode: LightOutputMode,
+}
+
+/// Explicit robust-detector controls for one calibration-master role.
+///
+/// The desktop never labels these settings as automatic: camera-specific
+/// defaults remain experimental until they have been validated against the
+/// reference corpus.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DefectDetectionSettings {
+    radius: usize,
+    stride: usize,
+    minimum_neighbours: usize,
+    hot_sigma: f64,
+    cold_sigma: f64,
+    minimum_absolute_deviation: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DefectCorrectionCommandRequest {
+    calibrated_light_path: PathBuf,
+    dark_master_path: PathBuf,
+    flat_master_path: PathBuf,
+    corrected_output_path: PathBuf,
+    map_output_path: PathBuf,
+    group_id: String,
+    expected_manifest_sha256: String,
+    expected_light_plan_sha256: String,
+    dark_detection: DefectDetectionSettings,
+    flat_detection: DefectDetectionSettings,
+    correction_radius: usize,
+    correction_stride: usize,
+    correction_minimum_neighbours: usize,
+    memory_limit_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefectCorrectionResponse {
+    corrected_output_path: String,
+    map_output_path: String,
+    parameters_sha256: String,
+    reserved_bytes: usize,
+    requested_samples: usize,
+    corrected_samples: usize,
+    insufficient_support_samples: usize,
+    blocked_by_source_mask_samples: usize,
+    corrected_samples_written: u64,
+    corrected_substituted_samples: u64,
+    corrected_bytes_written: u64,
+    map_samples_written: u64,
+    map_substituted_samples: u64,
+    map_bytes_written: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -5960,6 +6020,231 @@ fn cancel_light_plan(
     cancel_calibration_execution(&execution_state, "light_execution_missing")
 }
 
+#[tauri::command]
+async fn execute_defect_correction(
+    request: DefectCorrectionCommandRequest,
+    session_state: tauri::State<'_, DesktopSessionState>,
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<DefectCorrectionResponse, PreviewCommandError> {
+    validate_defect_command_paths(&request)?;
+    let session = lock_session_state(&session_state)?
+        .clone()
+        .ok_or_else(session_state_missing_error)?;
+    let cancellation = begin_calibration_execution(&execution_state)?;
+    let worker_cancellation = cancellation.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        execute_defect_correction_sync(&session, request, &worker_cancellation)
+    })
+    .await;
+    finish_calibration_execution(&execution_state)?;
+    execution.map_err(|_| {
+        PreviewCommandError::new(
+            "defect_correction_interrupted",
+            "The detector-defect worker stopped before producing a result.",
+        )
+    })?
+}
+
+#[tauri::command]
+fn cancel_defect_correction(
+    execution_state: tauri::State<'_, DesktopCalibrationExecutionState>,
+) -> Result<bool, PreviewCommandError> {
+    cancel_calibration_execution(&execution_state, "defect_correction_missing")
+}
+
+fn validate_defect_command_paths(
+    request: &DefectCorrectionCommandRequest,
+) -> Result<(), PreviewCommandError> {
+    let inputs = [
+        &request.calibrated_light_path,
+        &request.dark_master_path,
+        &request.flat_master_path,
+    ];
+    let outputs = [&request.corrected_output_path, &request.map_output_path];
+    if inputs
+        .iter()
+        .chain(outputs.iter())
+        .any(|path| !path.is_absolute())
+        || request.corrected_output_path == request.map_output_path
+        || inputs.iter().any(|input| outputs.contains(input))
+    {
+        return Err(defect_correction_configuration_error());
+    }
+    Ok(())
+}
+
+fn defect_detection_parameters(
+    settings: DefectDetectionSettings,
+) -> Result<DefectDetectionParameters, PreviewCommandError> {
+    DefectDetectionParameters::new(
+        settings.radius,
+        settings.stride,
+        settings.minimum_neighbours,
+        settings.hot_sigma,
+        settings.cold_sigma,
+        settings.minimum_absolute_deviation,
+    )
+    .map_err(|_| defect_correction_configuration_error())
+}
+
+fn fingerprint_pipeline_source(path: PathBuf) -> Result<PipelineSource, PreviewCommandError> {
+    let mut source = File::open(&path).map_err(|_| defect_correction_input_error())?;
+    let fingerprint =
+        fingerprint_reader(&mut source).map_err(|_| defect_correction_input_error())?;
+    Ok(PipelineSource::new(path, fingerprint))
+}
+
+fn execute_defect_correction_sync(
+    session: &ImportedNativeSession,
+    request: DefectCorrectionCommandRequest,
+    cancellation: &CancellationToken,
+) -> Result<DefectCorrectionResponse, PreviewCommandError> {
+    validate_defect_command_paths(&request)?;
+    let manifest_sha256 = session
+        .manifest
+        .canonical_sha256()
+        .map_err(|_| defect_correction_input_error())?;
+    if manifest_sha256 != request.expected_manifest_sha256 {
+        return Err(PreviewCommandError::new(
+            "defect_correction_stale",
+            "The imported session changed after detector correction was reviewed.",
+        ));
+    }
+    let memory_limit = usize::try_from(request.memory_limit_bytes)
+        .map_err(|_| defect_correction_configuration_error())?;
+    let memory =
+        MemoryBudget::new(memory_limit).map_err(|_| defect_correction_configuration_error())?;
+    let correction = DefectCorrectionParameters::new(
+        request.correction_radius,
+        request.correction_stride,
+        request.correction_minimum_neighbours,
+    )
+    .map_err(|_| defect_correction_configuration_error())?;
+    let dark_parameters = DefectReferenceParameters::new(
+        DefectReferenceKind::Dark,
+        defect_detection_parameters(request.dark_detection)?,
+    );
+    let flat_parameters = DefectReferenceParameters::new(
+        DefectReferenceKind::Flat,
+        defect_detection_parameters(request.flat_detection)?,
+    );
+    let parameters_sha256 =
+        strict_defect_parameters_sha256(&[dark_parameters, flat_parameters], correction)
+            .map_err(|_| defect_correction_configuration_error())?;
+    let references = vec![
+        DefectFitsReference::new(
+            fingerprint_pipeline_source(request.dark_master_path)?,
+            dark_parameters,
+        ),
+        DefectFitsReference::new(
+            fingerprint_pipeline_source(request.flat_master_path)?,
+            flat_parameters,
+        ),
+    ];
+    let corrected_output_path = request
+        .corrected_output_path
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(defect_correction_configuration_error)?;
+    let map_output_path = request
+        .map_output_path
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(defect_correction_configuration_error)?;
+    let product_count = u32::try_from(references.len().saturating_add(1))
+        .map_err(|_| defect_correction_configuration_error())?;
+    let corrected_provenance = FitsOutputProvenance::new(
+        manifest_sha256.clone(),
+        request.group_id.clone(),
+        STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+        product_count,
+    )
+    .and_then(|value| value.with_plan_sha256(&request.expected_light_plan_sha256))
+    .and_then(|value| value.with_parameters_sha256(&parameters_sha256))
+    .map_err(|_| defect_correction_configuration_error())?;
+    let map_provenance = FitsOutputProvenance::new(
+        manifest_sha256,
+        request.group_id,
+        STRICT_DEFECT_MAP_ALGORITHM_ID,
+        product_count,
+    )
+    .and_then(|value| value.with_plan_sha256(&request.expected_light_plan_sha256))
+    .and_then(|value| value.with_parameters_sha256(&parameters_sha256))
+    .map_err(|_| defect_correction_configuration_error())?;
+    let execution = StrictDefectCorrectionRequest::new(
+        fingerprint_pipeline_source(request.calibrated_light_path)?,
+        references,
+        request.corrected_output_path,
+        request.map_output_path,
+        corrected_provenance,
+        map_provenance,
+        correction,
+    )
+    .map_err(|_| defect_correction_configuration_error())?;
+    let result = run_strict_defect_correction(&execution, cancellation, &memory)
+        .map_err(defect_correction_execution_error)?;
+    let evidence = result.correction();
+    let corrected = result.corrected();
+    let map = result.map();
+    Ok(DefectCorrectionResponse {
+        corrected_output_path,
+        map_output_path,
+        parameters_sha256: result.parameters_sha256().to_owned(),
+        reserved_bytes: result.reserved_bytes(),
+        requested_samples: evidence.requested(),
+        corrected_samples: evidence.corrected(),
+        insufficient_support_samples: evidence.insufficient_support(),
+        blocked_by_source_mask_samples: evidence.blocked_by_source_mask(),
+        corrected_samples_written: corrected.samples_written(),
+        corrected_substituted_samples: corrected.substituted_samples(),
+        corrected_bytes_written: corrected.bytes_written(),
+        map_samples_written: map.samples_written(),
+        map_substituted_samples: map.substituted_samples(),
+        map_bytes_written: map.bytes_written(),
+    })
+}
+
+const fn defect_correction_configuration_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_correction_configuration_invalid",
+        "The detector-defect correction settings or product paths are invalid.",
+    )
+}
+
+const fn defect_correction_input_error() -> PreviewCommandError {
+    PreviewCommandError::new(
+        "defect_correction_input_invalid",
+        "A detector-defect input could not be opened or fingerprinted.",
+    )
+}
+
+fn defect_correction_execution_error(
+    error: aether_runtime::DefectCorrectionPipelineError,
+) -> PreviewCommandError {
+    let code = match error {
+        aether_runtime::DefectCorrectionPipelineError::Cancelled(_) => {
+            "defect_correction_cancelled"
+        }
+        aether_runtime::DefectCorrectionPipelineError::Memory(_) => {
+            "defect_correction_memory_exhausted"
+        }
+        aether_runtime::DefectCorrectionPipelineError::ChecksumNotVerified => {
+            "defect_correction_checksum_unverified"
+        }
+        aether_runtime::DefectCorrectionPipelineError::DimensionMismatch { .. } => {
+            "defect_correction_dimension_mismatch"
+        }
+        aether_runtime::DefectCorrectionPipelineError::Publish(_) => {
+            "defect_correction_publish_failed"
+        }
+        _ => "defect_correction_failed",
+    };
+    PreviewCommandError::new(
+        code,
+        "Detector-defect correction failed without publishing a partial product set.",
+    )
+}
+
 fn cancel_calibration_execution(
     execution_state: &DesktopCalibrationExecutionState,
     missing_code: &'static str,
@@ -8324,6 +8609,7 @@ pub fn run() -> Result<(), tauri::Error> {
             apply_quality_cache_maintenance,
             apply_frame_selection,
             apply_review_decision,
+            cancel_defect_correction,
             cancel_drizzle,
             cancel_light_plan,
             cancel_local_normalization,
@@ -8334,6 +8620,7 @@ pub fn run() -> Result<(), tauri::Error> {
             cancel_session_import,
             diagnose_fits_registration,
             estimate_fits_preview_transform,
+            execute_defect_correction,
             execute_drizzle,
             execute_light_plan,
             execute_local_normalization,
@@ -8383,6 +8670,81 @@ mod tests {
     use aether_session::{ManifestGroup, StrictGroupingKey, classify_frame, fingerprint_reader};
 
     use super::*;
+
+    fn defect_command_request() -> DefectCorrectionCommandRequest {
+        let detection = DefectDetectionSettings {
+            radius: 2,
+            stride: 2,
+            minimum_neighbours: 8,
+            hot_sigma: 6.0,
+            cold_sigma: 6.0,
+            minimum_absolute_deviation: 1.0,
+        };
+        DefectCorrectionCommandRequest {
+            calibrated_light_path: PathBuf::from("/session/lights/light.fits"),
+            dark_master_path: PathBuf::from("/session/masters/dark.fits"),
+            flat_master_path: PathBuf::from("/session/masters/flat.fits"),
+            corrected_output_path: PathBuf::from("/session/corrected/light.fits"),
+            map_output_path: PathBuf::from("/session/corrected/light-map.fits"),
+            group_id: "light-uvir".to_owned(),
+            expected_manifest_sha256: "a".repeat(64),
+            expected_light_plan_sha256: "b".repeat(64),
+            dark_detection: detection,
+            flat_detection: detection,
+            correction_radius: 2,
+            correction_stride: 2,
+            correction_minimum_neighbours: 8,
+            memory_limit_bytes: 512 * 1_024 * 1_024,
+        }
+    }
+
+    #[test]
+    fn defect_command_rejects_relative_and_aliasing_paths() {
+        let mut relative = defect_command_request();
+        relative.map_output_path = PathBuf::from("map.fits");
+        assert!(matches!(
+            validate_defect_command_paths(&relative),
+            Err(PreviewCommandError {
+                code: "defect_correction_configuration_invalid",
+                ..
+            })
+        ));
+
+        let mut aliases_input = defect_command_request();
+        aliases_input.corrected_output_path = aliases_input.calibrated_light_path.clone();
+        assert!(matches!(
+            validate_defect_command_paths(&aliases_input),
+            Err(PreviewCommandError {
+                code: "defect_correction_configuration_invalid",
+                ..
+            })
+        ));
+
+        let mut duplicate_outputs = defect_command_request();
+        duplicate_outputs.map_output_path = duplicate_outputs.corrected_output_path.clone();
+        assert!(matches!(
+            validate_defect_command_paths(&duplicate_outputs),
+            Err(PreviewCommandError {
+                code: "defect_correction_configuration_invalid",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn desktop_defect_detection_preserves_explicit_bayer_controls() -> Result<(), Box<dyn Error>> {
+        let parameters = defect_detection_parameters(defect_command_request().dark_detection)?;
+        assert_eq!(parameters.radius(), 2);
+        assert_eq!(parameters.stride(), 2);
+        assert_eq!(parameters.minimum_neighbours(), 8);
+        assert_eq!(parameters.hot_sigma().to_bits(), 6.0_f64.to_bits());
+        assert_eq!(parameters.cold_sigma().to_bits(), 6.0_f64.to_bits());
+        assert_eq!(
+            parameters.minimum_absolute_deviation().to_bits(),
+            1.0_f64.to_bits()
+        );
+        Ok(())
+    }
 
     type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 

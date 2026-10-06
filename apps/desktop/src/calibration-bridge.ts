@@ -237,6 +237,41 @@ export interface ExecutedCalibratedLightFrame {
   readonly tilesReused: number;
 }
 
+export interface DefectDetectionSettings {
+  readonly radius: number;
+  readonly stride: 1 | 2;
+  readonly minimumNeighbours: number;
+  readonly hotSigma: number;
+  readonly coldSigma: number;
+  readonly minimumAbsoluteDeviation: number;
+}
+
+export interface DefectCorrectionSettings {
+  readonly darkDetection: DefectDetectionSettings;
+  readonly flatDetection: DefectDetectionSettings;
+  readonly correctionRadius: number;
+  readonly correctionStride: 1 | 2;
+  readonly correctionMinimumNeighbours: number;
+  readonly memoryLimitBytes: number;
+}
+
+export interface DefectCorrectionResult {
+  readonly correctedOutputPath: string;
+  readonly mapOutputPath: string;
+  readonly parametersSha256: string;
+  readonly reservedBytes: number;
+  readonly requestedSamples: number;
+  readonly correctedSamples: number;
+  readonly insufficientSupportSamples: number;
+  readonly blockedBySourceMaskSamples: number;
+  readonly correctedSamplesWritten: number;
+  readonly correctedSubstitutedSamples: number;
+  readonly correctedBytesWritten: number;
+  readonly mapSamplesWritten: number;
+  readonly mapSubstitutedSamples: number;
+  readonly mapBytesWritten: number;
+}
+
 /**
  * Asks the native planner to derive calibration products from the immutable
  * imported manifest. No source paths or browser-reconstructed groups cross the
@@ -326,4 +361,41 @@ export function executeLightPlan(
 /** Requests cooperative cancellation of the active native Light transaction. */
 export function cancelLightPlan(): Promise<boolean> {
   return invoke<boolean>("cancel_light_plan");
+}
+
+/** Opens a destination directory for one atomic corrected-Light product set. */
+export async function selectDefectOutputDirectory(): Promise<string | null> {
+  const path = await open({
+    directory: true,
+    multiple: false,
+    title: "Select a directory for corrected Light products",
+  });
+  return typeof path === "string" ? path : null;
+}
+
+/**
+ * Runs strict native defect analysis and publishes the corrected Light and its
+ * exact HOT/COLD map together. Paths identify already-published native
+ * artifacts; the backend fingerprints and revalidates every byte.
+ */
+export function executeDefectCorrection(
+  request: {
+    readonly calibratedLightPath: string;
+    readonly darkMasterPath: string;
+    readonly flatMasterPath: string;
+    readonly correctedOutputPath: string;
+    readonly mapOutputPath: string;
+    readonly groupId: string;
+    readonly expectedManifestSha256: string;
+    readonly expectedLightPlanSha256: string;
+  } & DefectCorrectionSettings,
+): Promise<DefectCorrectionResult> {
+  return invoke<DefectCorrectionResult>("execute_defect_correction", {
+    request,
+  });
+}
+
+/** Requests cooperative cancellation before the atomic publication boundary. */
+export function cancelDefectCorrection(): Promise<boolean> {
+  return invoke<boolean>("cancel_defect_correction");
 }

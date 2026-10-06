@@ -3,11 +3,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelDefectCorrection,
   cancelLightPlan,
   cancelMasterPlan,
+  executeDefectCorrection,
   executeLightPlan,
   executeMasterPlan,
   previewMasterPlan,
+  selectDefectOutputDirectory,
   selectLightOutputDirectory,
   selectMasterOutputDirectory,
   type LightExecutionProgress,
@@ -193,5 +196,76 @@ describe("native calibration bridge", () => {
     });
     await expect(cancelLightPlan()).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith("cancel_light_plan");
+  });
+
+  it("seals explicit dark, flat, and replacement controls for defect correction", async () => {
+    const expected = {
+      correctedOutputPath: "/session/corrected/light-0001.fits",
+      mapOutputPath: "/session/corrected/light-0001-map.fits",
+      parametersSha256: "d".repeat(64),
+      reservedBytes: 234_020_736,
+      requestedSamples: 31,
+      correctedSamples: 30,
+      insufficientSupportSamples: 1,
+      blockedBySourceMaskSamples: 0,
+      correctedSamplesWritten: 11_693_168,
+      correctedSubstitutedSamples: 0,
+      correctedBytesWritten: 93_548_224,
+      mapSamplesWritten: 11_693_168,
+      mapSubstitutedSamples: 0,
+      mapBytesWritten: 93_548_224,
+    };
+    vi.mocked(invoke).mockResolvedValue(expected);
+    const request = {
+      calibratedLightPath: "/session/lights/light-0001.fits",
+      darkMasterPath: "/session/masters/dark.fits",
+      flatMasterPath: "/session/masters/flat.fits",
+      correctedOutputPath: expected.correctedOutputPath,
+      mapOutputPath: expected.mapOutputPath,
+      groupId: "light-uvir",
+      expectedManifestSha256: "a".repeat(64),
+      expectedLightPlanSha256: "c".repeat(64),
+      darkDetection: {
+        radius: 2,
+        stride: 2 as const,
+        minimumNeighbours: 8,
+        hotSigma: 6,
+        coldSigma: 8,
+        minimumAbsoluteDeviation: 1,
+      },
+      flatDetection: {
+        radius: 2,
+        stride: 2 as const,
+        minimumNeighbours: 8,
+        hotSigma: 8,
+        coldSigma: 6,
+        minimumAbsoluteDeviation: 0.000_001,
+      },
+      correctionRadius: 2,
+      correctionStride: 2 as const,
+      correctionMinimumNeighbours: 8,
+      memoryLimitBytes: 1_073_741_824,
+    };
+
+    await expect(executeDefectCorrection(request)).resolves.toBe(expected);
+    expect(invoke).toHaveBeenCalledWith("execute_defect_correction", {
+      request,
+    });
+  });
+
+  it("selects a defect destination and exposes cooperative cancellation", async () => {
+    vi.mocked(open).mockResolvedValue("/session/corrected");
+    vi.mocked(invoke).mockResolvedValue(true);
+
+    await expect(selectDefectOutputDirectory()).resolves.toBe(
+      "/session/corrected",
+    );
+    expect(open).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Select a directory for corrected Light products",
+    });
+    await expect(cancelDefectCorrection()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith("cancel_defect_correction");
   });
 });
