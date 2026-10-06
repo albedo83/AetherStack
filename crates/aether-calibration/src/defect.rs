@@ -207,6 +207,68 @@ impl DefectMap {
             .insert(x, y, plane, flags)
             .map_err(DefectMapError::Core)
     }
+
+    /// Encodes the stable HOT/COLD bits as exact binary64 integer samples.
+    ///
+    /// Values are limited to `0`, `4`, `8`, and `12`, all exactly representable
+    /// in FITS binary64. The transport image itself is unmasked because its
+    /// samples describe mask evidence rather than science validity.
+    pub fn to_transport_image(&self) -> Result<ScientificImage, DefectMapError> {
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(self.mask.as_slice().len())
+            .map_err(|_| {
+                DefectMapError::Core(CoreError::AllocationFailed {
+                    elements: self.mask.as_slice().len(),
+                })
+            })?;
+        pixels.extend(
+            self.mask
+                .as_slice()
+                .iter()
+                .map(|flags| f64::from(flags.bits())),
+        );
+        ScientificImage::from_pixels(self.dimensions(), pixels).map_err(DefectMapError::Core)
+    }
+
+    /// Decodes an exact binary64 defect-map transport image.
+    ///
+    /// Any masked, non-finite, fractional, negative, out-of-range, or
+    /// non-HOT/COLD value rejects the complete map.
+    pub fn from_transport_image(image: &ScientificImage) -> Result<Self, DefectMapError> {
+        let mut map = Self::clear(image.dimensions())?;
+        for (index, ((value, source_flags), destination)) in image
+            .pixels()
+            .iter()
+            .zip(image.mask().as_slice())
+            .zip(map.mask.as_mut_slice())
+            .enumerate()
+        {
+            if !source_flags.is_clear() {
+                return Err(DefectMapError::MaskedTransportSample {
+                    index,
+                    bits: source_flags.bits(),
+                });
+            }
+            if !value.is_finite()
+                || *value < 0.0
+                || *value > f64::from(u8::MAX)
+                || value.to_bits() != value.trunc().to_bits()
+            {
+                return Err(DefectMapError::InvalidTransportSample {
+                    index,
+                    value_bits: value.to_bits(),
+                });
+            }
+            let bits = *value as u8;
+            let flags = PixelFlags::from_bits_retain(bits);
+            if bits != 0 {
+                validate_defect_flags(flags)?;
+            }
+            *destination = flags;
+        }
+        Ok(map)
+    }
 }
 
 /// Complete accounting for combining independent master-derived maps.
@@ -394,6 +456,20 @@ pub enum DefectMapError {
     },
     /// A merge requires at least one map.
     NoDefectMaps,
+    /// A transport image hid a sample behind a quality-mask reason.
+    MaskedTransportSample {
+        /// Zero-based planar sample index.
+        index: usize,
+        /// Rejected source-mask bits.
+        bits: u8,
+    },
+    /// A transport value was not an exact supported defect bit pattern.
+    InvalidTransportSample {
+        /// Zero-based planar sample index.
+        index: usize,
+        /// Exact rejected binary64 payload.
+        value_bits: u64,
+    },
     /// Allocation or coordinate failure from the shared image core.
     Core(CoreError),
 }
@@ -435,6 +511,14 @@ impl Display for DefectMapError {
                 "defect map accepts only non-empty HOT/COLD bits, received {bits:#010b}"
             ),
             Self::NoDefectMaps => formatter.write_str("at least one defect map is required"),
+            Self::MaskedTransportSample { index, bits } => write!(
+                formatter,
+                "defect transport sample {index} carries source-mask bits {bits:#010b}"
+            ),
+            Self::InvalidTransportSample { index, value_bits } => write!(
+                formatter,
+                "defect transport sample {index} has unsupported binary64 bits {value_bits:#018x}"
+            ),
             Self::Core(error) => Display::fmt(error, formatter),
         }
     }
@@ -1017,6 +1101,53 @@ mod tests {
             merge_defect_maps(&[&first, &second]),
             Err(DefectMapError::DimensionMismatch { .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn transport_round_trip_is_exact_for_every_defect_pattern() -> TestResult {
+        let dimensions = Dimensions::new(4, 1, 1)?;
+        let mut map = DefectMap::clear(dimensions)?;
+        map.insert(1, 0, 0, PixelFlags::HOT)?;
+        map.insert(2, 0, 0, PixelFlags::COLD)?;
+        map.insert(3, 0, 0, PixelFlags::HOT | PixelFlags::COLD)?;
+        let transport = map.to_transport_image()?;
+        assert_eq!(
+            transport
+                .pixels()
+                .iter()
+                .map(|value| *value as u8)
+                .collect::<Vec<_>>(),
+            vec![0, PixelFlags::HOT.bits(), PixelFlags::COLD.bits(), 12]
+        );
+        assert_eq!(DefectMap::from_transport_image(&transport)?, map);
+        Ok(())
+    }
+
+    #[test]
+    fn transport_decoder_rejects_masked_fractional_and_foreign_bits() -> TestResult {
+        let dimensions = Dimensions::new(1, 1, 1)?;
+        let mut masked = ScientificImage::filled(dimensions, 0.0)?;
+        masked.mark(0, 0, 0, PixelFlags::MISSING)?;
+        assert!(matches!(
+            DefectMap::from_transport_image(&masked),
+            Err(DefectMapError::MaskedTransportSample { .. })
+        ));
+
+        for value in [
+            f64::NAN,
+            -1.0,
+            4.5,
+            256.0,
+            f64::from(PixelFlags::MISSING.bits()),
+        ] {
+            let transport = ScientificImage::filled(dimensions, value)?;
+            assert!(matches!(
+                DefectMap::from_transport_image(&transport),
+                Err(DefectMapError::InvalidTransportSample { .. })
+                    | Err(DefectMapError::InvalidDefectFlags { .. })
+            ));
+        }
         Ok(())
     }
 }
