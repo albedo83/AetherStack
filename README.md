@@ -181,7 +181,11 @@ optimized CPU and GPU paths must match.
   estimator with Student-t critical values and a conservative 15-sample gate,
   all with exact low/high rejection evidence, parameter-bound provenance, and
   compact three-bit per-source ESD attribution reduced into inspectable source
-  totals without making band height a scientific parameter, plus
+  totals without making band height a scientific parameter, plus a strict
+  source-owned large-scale oracle with summed-area structure classification,
+  independent tail growth, conservative conflict/support safeguards, exact
+  source-value reintegration, bounded memory planning, and sealed parameters
+  awaiting halo-aware registered-runtime publication, plus
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
   expert UI while strict mean remains the default, with linked native previews

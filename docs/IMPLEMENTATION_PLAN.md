@@ -2338,6 +2338,27 @@ safety reasoning. They do not narrate obvious syntax.
 272. Publish the attribution prerequisite only after full validation. Document
      that source ownership is implemented while large-scale morphology,
      reintegration, and immutable report persistence remain separate work.
+273. Define versioned large-scale controls. Low and high tails, dyadic layers,
+     Chebyshev growth, and retained support must be bounded before pixel access.
+274. Classify source-owned spatial seeds in linear time. Summed-area tables must
+     preserve source and plane isolation while rejecting isolated evidence.
+275. Grow seeds exactly within image boundaries. Square Chebyshev dilation must
+     never wrap, cross planes, or transfer evidence between source identities.
+276. Resolve low/high coverage simultaneously. Single-tail coverage may promote
+     an accepted sample; dual-tail coverage must remain accepted and counted.
+277. Preserve estimator support floors. All proposed promotions at one output
+     position apply together or are discarded together before support is lost.
+278. Rebuild science from immutable sources. Expanded attribution must drive a
+     fresh compensated mean of original accepted values and complete support.
+279. Plan the complete spatial working set. Retained tail masks, temporary mask,
+     growth output, and summed-area storage require checked exact accounting.
+280. Seal the spatial policy canonically. Tail role and enablement, layers,
+     growth, and minimum support must alter a domain-separated SHA-256.
+281. Lock adversarial rebuild invariants. Repeated execution must be identical,
+     while foreign counts, dimensions, mask classes, and finiteness must fail.
+282. Publish the strict core only after repository-wide validation. State
+     explicitly that halo-aware registered execution, transactional FITS/report
+     evidence, desktop controls, and representative camera validation remain.
 
 ## 11. Stable-release definition
 

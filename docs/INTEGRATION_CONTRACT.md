@@ -213,12 +213,35 @@ desktop response carries these totals through a typed browser contract. The
 active result view ranks at most 50 sources by rejected samples and reports
 low, high, masked, and non-finite evidence separately.
 
-This attribution is the prerequisite for source-specific spatial morphology;
-it is not itself large-scale rejection. A later versioned algorithm must define
-scale decomposition, connected-structure eligibility, growth, gradient
-protection, and source-pixel reintegration before AetherStack can claim that
-capability. The compact per-pixel cube is currently execution-local; immutable
-report persistence also remains a separate schema change.
+`source-large-scale-rejection-v1` is the first source-specific spatial oracle
+built on this attribution. Low and high tails are configured independently.
+For `L` detection layers, a rejected source sample is a structure seed when its
+square neighbourhood of radius `2^(L-1)` contains at least one full diameter of
+same-tail rejects. This summed-area classifier is linear in image samples and
+does not merge planes or sources. Seeds are grown by an exact square Chebyshev
+radius.
+
+Low and high growth is calculated before attribution changes. A previously
+accepted sample reached by one tail is promoted to that tail; a sample reached
+by both remains accepted, so processing order cannot choose its sign. Masked,
+non-finite, and already rejected evidence is immutable. Promotions at one
+output position are applied as a complete set only when the configured
+retained-sample floor survives.
+
+After expansion, science and clipped support are rebuilt from the original
+source values. No interpolated, fitted, normalized, or synthetic value enters
+the mean. Every recorded disposition is revalidated against the supplied image
+mask and finiteness class; foreign source counts, dimensions, or samples fail
+closed. A domain-separated SHA-256 binds tail enablement, layers, growth, and
+support. The memory plan accounts for all retained tail masks, temporary seed
+and growth storage, and one reusable summed-area table.
+
+The strict full-image oracle is implemented and tested, but it is not yet
+enabled in the registered band runtime or desktop. Exact bounded execution will
+require halo-aware bands or equivalent transactional staging, then native FITS
+provenance, report persistence, maps, and UI controls. The compact per-pixel
+cube is still execution-local, and gradient-aware alternatives remain future
+versioned algorithms rather than undocumented changes to this contract.
 
 ## Frame-weighted mean
 
