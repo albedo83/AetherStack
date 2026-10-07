@@ -10,6 +10,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use aether_core::{CompensatedSum, CoreError, Dimensions, PixelFlags, ScientificImage};
+use statrs::distribution::{ContinuousCDF, StudentsT};
 
 /// Plane-major low/high count map emitted from percentile support evidence.
 pub const PERCENTILE_REJECTION_MAP_ALGORITHM_ID: &str = "percentile-rejection-map-v1";
@@ -577,6 +578,33 @@ pub struct SigmaClippedIntegration {
 pub struct LinearFitClippedIntegration {
     image: ScientificImage,
     support: Vec<ClippedPixelSupport>,
+}
+
+/// Generalized-ESD-clipped image and exact per-pixel rejection accounting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneralizedEsdIntegration {
+    image: ScientificImage,
+    support: Vec<ClippedPixelSupport>,
+}
+
+impl GeneralizedEsdIntegration {
+    /// Integrated image after two-sided generalized ESD rejection.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Exact accepted and rejected counts in planar sample order.
+    #[must_use]
+    pub fn support(&self) -> &[ClippedPixelSupport] {
+        &self.support
+    }
+
+    /// Consumes the result into its scientific image and evidence map.
+    #[must_use]
+    pub fn into_parts(self) -> (ScientificImage, Vec<ClippedPixelSupport>) {
+        (self.image, self.support)
+    }
 }
 
 impl LinearFitClippedIntegration {
@@ -1567,6 +1595,251 @@ pub fn integrate_linear_fit_clipped_mean(
         image: output,
         support,
     })
+}
+
+/// Integrates equal-sized images after a two-sided generalized ESD test.
+///
+/// The Rosner procedure removes the largest studentized deviation for each
+/// candidate count up to the configured fractional bound, calculates the
+/// matching Student-t critical value, then rejects through the last significant
+/// candidate. Populations below 15 usable samples are retained unchanged
+/// because the published critical-value approximation is not admitted there.
+/// Original samples, never fitted or normalized substitutes, form the final
+/// compensated mean.
+pub fn integrate_generalized_esd_mean(
+    inputs: &[&ScientificImage],
+    parameters: GeneralizedEsdParameters,
+) -> Result<GeneralizedEsdIntegration, IntegrationError> {
+    let Some(first) = inputs.first().copied() else {
+        return Err(IntegrationError::NoInputImages);
+    };
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let dimensions = first.dimensions();
+    for (input_index, input) in inputs.iter().enumerate().skip(1) {
+        let actual = input.dimensions();
+        if actual != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual,
+            });
+        }
+    }
+
+    let mut output =
+        ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: dimensions.pixel_count(),
+        })?;
+    support.resize(dimensions.pixel_count(), ClippedPixelSupport::default());
+    let mut finite = Vec::new();
+    finite.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+
+    let (output_pixels, output_mask) = output.pixels_and_mask_mut();
+    for (pixel_index, ((output, output_flags), output_support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut support)
+        .enumerate()
+    {
+        finite.clear();
+        let mut combined_rejected_flags = PixelFlags::CLEAR;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, pixel_index)?;
+            if !flags.is_clear() {
+                output_support.masked += 1;
+                combined_rejected_flags |= flags;
+            } else if !value.is_finite() {
+                output_support.non_finite += 1;
+            } else {
+                finite.push(value);
+            }
+        }
+
+        if finite.is_empty() {
+            *output = f64::NAN;
+            let mut flags = combined_rejected_flags | PixelFlags::MISSING;
+            if output_support.non_finite > 0 {
+                flags |= PixelFlags::INVALID;
+            }
+            *output_flags = flags;
+        } else {
+            finite.sort_by(f64::total_cmp);
+            let decisions = generalized_esd_decisions(&finite, parameters);
+            let mut rank = 0_usize;
+            finite.retain(|_| {
+                let decision = decisions.get(rank).copied().unwrap_or(EsdDecision::Retain);
+                rank += 1;
+                match decision {
+                    EsdDecision::Retain => true,
+                    EsdDecision::RejectLow => {
+                        output_support.low_rejected += 1;
+                        false
+                    }
+                    EsdDecision::RejectHigh => {
+                        output_support.high_rejected += 1;
+                        false
+                    }
+                }
+            });
+            output_support.accepted =
+                u32::try_from(finite.len()).map_err(|_| IntegrationError::TooManyInputImages {
+                    count: inputs.len(),
+                    maximum: u32::MAX,
+                })?;
+            *output = stable_mean(&finite);
+            *output_flags = PixelFlags::CLEAR;
+        }
+
+        if output_support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: output_support.total(),
+            });
+        }
+    }
+
+    Ok(GeneralizedEsdIntegration {
+        image: output,
+        support,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EsdDecision {
+    Retain,
+    RejectLow,
+    RejectHigh,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EsdCandidate {
+    original_rank: usize,
+    decision: EsdDecision,
+    statistic: f64,
+    critical_value: f64,
+}
+
+fn generalized_esd_decisions(
+    sorted_values: &[f64],
+    parameters: GeneralizedEsdParameters,
+) -> Vec<EsdDecision> {
+    let mut decisions = vec![EsdDecision::Retain; sorted_values.len()];
+    if sorted_values.len() < GENERALIZED_ESD_MINIMUM_SAMPLE_COUNT as usize {
+        return decisions;
+    }
+    let fraction_bound =
+        (sorted_values.len() as f64 * parameters.maximum_outlier_fraction).floor() as usize;
+    let support_bound = sorted_values
+        .len()
+        .saturating_sub(parameters.minimum_retained as usize);
+    let maximum_outliers = fraction_bound.min(support_bound);
+    if maximum_outliers == 0 {
+        return decisions;
+    }
+
+    let mut working = sorted_values
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(original_rank, value)| (original_rank, value))
+        .collect::<Vec<_>>();
+    let mut candidates = Vec::with_capacity(maximum_outliers);
+    for _ in 0..maximum_outliers {
+        let Some((candidate_index, statistic, decision)) = esd_candidate(&working) else {
+            break;
+        };
+        let sample_count = working.len();
+        let degrees_of_freedom = (sample_count - 2) as f64;
+        let probability = 1.0 - parameters.significance / (2.0 * sample_count as f64);
+        let Ok(distribution) = StudentsT::new(0.0, 1.0, degrees_of_freedom) else {
+            break;
+        };
+        let Ok(student_quantile) = distribution.try_inverse_cdf(probability) else {
+            break;
+        };
+        let numerator = (sample_count - 1) as f64 * student_quantile;
+        let denominator = ((degrees_of_freedom + student_quantile * student_quantile)
+            * sample_count as f64)
+            .sqrt();
+        let critical_value = numerator / denominator;
+        if !critical_value.is_finite() {
+            break;
+        }
+        let (original_rank, _) = working.remove(candidate_index);
+        candidates.push(EsdCandidate {
+            original_rank,
+            decision,
+            statistic,
+            critical_value,
+        });
+    }
+
+    let rejected_count = candidates
+        .iter()
+        .rposition(|candidate| candidate.statistic > candidate.critical_value)
+        .map_or(0, |index| index + 1);
+    for candidate in candidates.into_iter().take(rejected_count) {
+        decisions[candidate.original_rank] = candidate.decision;
+    }
+    decisions
+}
+
+fn esd_candidate(samples: &[(usize, f64)]) -> Option<(usize, f64, EsdDecision)> {
+    if samples.len() < 3 {
+        return None;
+    }
+    let scale = samples
+        .iter()
+        .fold(0.0_f64, |maximum, (_, value)| maximum.max(value.abs()));
+    if scale == 0.0 {
+        return None;
+    }
+    let divisor = samples.len() as f64;
+    let mut mean = CompensatedSum::new();
+    for (_, value) in samples {
+        mean.add((*value / scale) / divisor);
+    }
+    let mean = mean.total();
+    let mut squared_residuals = CompensatedSum::new();
+    for (_, value) in samples {
+        let residual = *value / scale - mean;
+        squared_residuals.add(residual * residual);
+    }
+    let sample_deviation = (squared_residuals.total().max(0.0) / (samples.len() - 1) as f64).sqrt();
+    if !sample_deviation.is_finite() || sample_deviation <= 32.0 * f64::EPSILON {
+        return None;
+    }
+    let mut candidate_index = 0_usize;
+    let mut signed_residual = samples[0].1 / scale - mean;
+    for (index, (_, value)) in samples.iter().enumerate().skip(1) {
+        let residual = *value / scale - mean;
+        if residual.abs() > signed_residual.abs() {
+            candidate_index = index;
+            signed_residual = residual;
+        }
+    }
+    let decision = if signed_residual.is_sign_negative() {
+        EsdDecision::RejectLow
+    } else {
+        EsdDecision::RejectHigh
+    };
+    Some((
+        candidate_index,
+        signed_residual.abs() / sample_deviation,
+        decision,
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2680,6 +2953,33 @@ mod tests {
         assert_eq!(parameters.significance().to_bits(), 0.05_f64.to_bits());
         assert_eq!(parameters.minimum_retained(), 3);
         assert_eq!(GENERALIZED_ESD_MINIMUM_SAMPLE_COUNT, 15);
+        Ok(())
+    }
+
+    #[test]
+    fn generalized_esd_matches_the_published_nist_example() -> TestResult {
+        let values = [
+            -0.25, 0.68, 0.94, 1.15, 1.20, 1.26, 1.26, 1.34, 1.38, 1.43, 1.49, 1.49, 1.55, 1.56,
+            1.58, 1.65, 1.69, 1.70, 1.76, 1.77, 1.81, 1.91, 1.94, 1.96, 1.99, 2.06, 2.09, 2.10,
+            2.14, 2.15, 2.23, 2.24, 2.26, 2.35, 2.37, 2.40, 2.47, 2.54, 2.62, 2.64, 2.90, 2.92,
+            2.92, 2.93, 3.21, 3.26, 3.30, 3.59, 3.68, 4.30, 4.64, 5.34, 5.42, 6.01,
+        ];
+        let inputs = values
+            .into_iter()
+            .map(|value| image(vec![value]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+
+        let result = integrate_generalized_esd_mean(
+            &references,
+            GeneralizedEsdParameters::new(0.20, 0.05, 3)?,
+        )?;
+
+        assert_eq!(result.support()[0].accepted(), 51);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].high_rejected(), 3);
+        assert_eq!(result.support()[0].total(), 54);
+        assert!(result.image().pixels()[0].is_finite());
         Ok(())
     }
 
