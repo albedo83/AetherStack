@@ -629,6 +629,43 @@ impl GeneralizedEsdIntegration {
         self.large_scale_summary
     }
 
+    /// Keeps complete rows from every plane and discards evaluated halo rows.
+    ///
+    /// The spatial summary is deliberately cleared because its counters cover
+    /// the pre-crop evaluation window. Final image, support, and attribution
+    /// evidence remain exact for the returned core.
+    pub fn crop_rows(self, start: usize, height: usize) -> Result<Self, IntegrationError> {
+        let source_dimensions = self.image.dimensions();
+        let image = self
+            .image
+            .crop_rows(start, height)
+            .map_err(IntegrationError::Core)?;
+        let dimensions = image.dimensions();
+        let row_width = dimensions.width();
+        let source_plane_area = row_width * source_dimensions.height();
+        let output_plane_area = row_width * height;
+        let mut support = Vec::new();
+        support
+            .try_reserve_exact(dimensions.pixel_count())
+            .map_err(|_| IntegrationError::SupportAllocationFailed {
+                elements: dimensions.pixel_count(),
+            })?;
+        for plane in 0..dimensions.planes() {
+            let begin = plane * source_plane_area + start * row_width;
+            support.extend_from_slice(&self.support[begin..begin + output_plane_area]);
+        }
+        let attribution = self
+            .attribution
+            .crop_rows(start, height)
+            .map_err(IntegrationError::Attribution)?;
+        Ok(Self {
+            image,
+            support,
+            attribution,
+            large_scale_summary: None,
+        })
+    }
+
     /// Applies source-owned spatial expansion and rebuilds science from the
     /// original accepted samples.
     pub fn apply_large_scale_rejection(
@@ -3414,6 +3451,47 @@ mod tests {
                 disposition: SampleDisposition::Accepted
             })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn generalized_esd_row_crop_preserves_planar_evidence() -> TestResult {
+        let dimensions = Dimensions::new(2, 4, 2)?;
+        let inputs = (0..15)
+            .map(|source| {
+                ScientificImage::from_pixels(
+                    dimensions,
+                    (0..dimensions.pixel_count())
+                        .map(|sample| source as f64 + sample as f64 / 100.0)
+                        .collect(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+        let result = integrate_generalized_esd_mean(
+            &references,
+            GeneralizedEsdParameters::new(0.30, 0.05, 3)?,
+        )?;
+
+        let expected = [2, 3, 4, 5, 10, 11, 12, 13].map(|sample| result.image().pixels()[sample]);
+        let cropped = result.crop_rows(1, 2)?;
+        assert_eq!(cropped.image().dimensions(), Dimensions::new(2, 2, 2)?);
+        assert_eq!(cropped.image().pixels(), expected.as_slice());
+        assert!(
+            cropped
+                .support()
+                .iter()
+                .all(|support| support.accepted() == 15)
+        );
+        assert!(cropped.large_scale_summary().is_none());
+        for sample in 0..cropped.image().dimensions().pixel_count() {
+            for source in 0..15 {
+                assert_eq!(
+                    cropped.attribution().disposition(sample, source)?,
+                    SampleDisposition::Accepted
+                );
+            }
+        }
         Ok(())
     }
 
