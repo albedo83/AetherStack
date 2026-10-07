@@ -12,16 +12,18 @@ use aether_fits::{
     ValidationMode,
 };
 pub use aether_integration::{
-    BALANCED_PSF_WEIGHT_ALGORITHM_ID, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID,
-    LinearFitClipParameters, PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters,
-    QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters,
+    BALANCED_PSF_WEIGHT_ALGORITHM_ID, GENERALIZED_ESD_CLIPPED_MEAN_ALGORITHM_ID,
+    GeneralizedEsdParameters, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, LinearFitClipParameters,
+    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, QualityWeightMetrics,
+    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters,
     WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
-    integrate_linear_fit_clipped_mean, integrate_mean, integrate_median,
-    integrate_percentile_clipped_mean, integrate_sigma_clipped_mean, integrate_weighted_mean,
-    integrate_winsorized_sigma_clipped_mean, materialize_percentile_rejection_map,
+    integrate_generalized_esd_mean, integrate_linear_fit_clipped_mean, integrate_mean,
+    integrate_median, integrate_percentile_clipped_mean, integrate_sigma_clipped_mean,
+    integrate_weighted_mean, integrate_winsorized_sigma_clipped_mean,
+    materialize_percentile_rejection_map,
 };
 use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
 use aether_review::FrameId;
@@ -49,12 +51,16 @@ pub const REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str =
     "registered-win-sigma-mean-f64-v1";
 /// Versioned ordered-sample linear-fit-clipped registered stack identity.
 pub const REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-lin-fit-mean-f64-v1";
+/// Versioned two-sided generalized ESD registered stack identity.
+pub const REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID: &str = "registered-esd-mean-f64-v1";
 /// Plane-major low/high count map emitted by iterative sigma rejection.
 pub const SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "sigma-rejection-map-v1";
 /// Plane-major low/high count map emitted by Winsorized sigma rejection.
 pub const WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "win-sigma-rejection-map-v1";
 /// Plane-major low/high count map emitted by linear-fit rejection.
 pub const LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID: &str = "linear-fit-rejection-map-v1";
+/// Plane-major low/high count map emitted by generalized ESD rejection.
+pub const GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID: &str = "esd-rejection-map-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -76,6 +82,8 @@ pub enum RegisteredStackEstimator {
     WinsorizedSigmaClipped(SigmaClipParameters),
     /// Ordered-sample linear-fit residual rejection.
     LinearFitClipped(LinearFitClipParameters),
+    /// Two-sided generalized extreme Studentized deviate rejection.
+    GeneralizedEsd(GeneralizedEsdParameters),
 }
 
 impl RegisteredStackEstimator {
@@ -92,6 +100,7 @@ impl RegisteredStackEstimator {
                 REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID
             }
             Self::LinearFitClipped(_) => REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID,
+            Self::GeneralizedEsd(_) => REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID,
         }
     }
 
@@ -127,6 +136,17 @@ impl RegisteredStackEstimator {
                 hasher.update(parameters.high_sigma().to_bits().to_be_bytes());
                 hasher.update(parameters.minimum_retained().to_be_bytes());
             }
+            Self::GeneralizedEsd(parameters) => {
+                hasher.update(b"generalized-esd\0");
+                hasher.update(
+                    parameters
+                        .maximum_outlier_fraction()
+                        .to_bits()
+                        .to_be_bytes(),
+                );
+                hasher.update(parameters.significance().to_bits().to_be_bytes());
+                hasher.update(parameters.minimum_retained().to_be_bytes());
+            }
             Self::StrictMean | Self::Median | Self::WeightedMean => return None,
         }
         Some(encode_lower_hex(hasher.finalize().as_slice()))
@@ -138,6 +158,7 @@ impl RegisteredStackEstimator {
             Self::SigmaClipped(_) => Some(SIGMA_REJECTION_MAP_ALGORITHM_ID),
             Self::WinsorizedSigmaClipped(_) => Some(WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID),
             Self::LinearFitClipped(_) => Some(LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID),
+            Self::GeneralizedEsd(_) => Some(GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID),
             Self::StrictMean | Self::Median | Self::WeightedMean => None,
         }
     }
@@ -1317,6 +1338,27 @@ where
                             .map_err(RegisteredStackError::Publish)?;
                     }
                 }
+                RegisteredStackEstimator::GeneralizedEsd(parameters) => {
+                    let references = images.iter().collect::<Vec<_>>();
+                    let integrated = integrate_generalized_esd_mean(&references, parameters)
+                        .map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                    if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
+                        let maps = materialize_percentile_rejection_map(
+                            integrated.image().dimensions(),
+                            integrated.support(),
+                        )
+                        .map_err(RegisteredStackError::Integration)?;
+                        low_writer
+                            .write_image_chunk(maps.low())
+                            .map_err(RegisteredStackError::Publish)?;
+                        high_writer
+                            .write_image_chunk(maps.high())
+                            .map_err(RegisteredStackError::Publish)?;
+                    }
+                }
             }
             *completed = completed
                 .checked_add(1)
@@ -1520,7 +1562,8 @@ fn planned_band_bytes(
         RegisteredStackEstimator::PercentileClipped(_)
         | RegisteredStackEstimator::SigmaClipped(_)
         | RegisteredStackEstimator::WinsorizedSigmaClipped(_)
-        | RegisteredStackEstimator::LinearFitClipped(_) => size_of::<ClippedPixelSupport>(),
+        | RegisteredStackEstimator::LinearFitClipped(_)
+        | RegisteredStackEstimator::GeneralizedEsd(_) => size_of::<ClippedPixelSupport>(),
     };
     let output = image
         .checked_add(
@@ -1541,9 +1584,8 @@ fn planned_band_bytes(
         | RegisteredStackEstimator::PercentileClipped(_)
         | RegisteredStackEstimator::SigmaClipped(_)
         | RegisteredStackEstimator::WinsorizedSigmaClipped(_)
-        | RegisteredStackEstimator::LinearFitClipped(_) => {
-            size_of::<&aether_core::ScientificImage>()
-        }
+        | RegisteredStackEstimator::LinearFitClipped(_)
+        | RegisteredStackEstimator::GeneralizedEsd(_) => size_of::<&aether_core::ScientificImage>(),
     };
     let vector_storage = source_count
         .checked_mul(size_of::<aether_core::ScientificImage>() + integration_input_size)
@@ -1556,6 +1598,9 @@ fn planned_band_bytes(
         | RegisteredStackEstimator::WinsorizedSigmaClipped(_)
         | RegisteredStackEstimator::LinearFitClipped(_) => source_count
             .checked_mul(size_of::<f64>())
+            .ok_or(RegisteredStackError::WorkSizeOverflow)?,
+        RegisteredStackEstimator::GeneralizedEsd(_) => source_count
+            .checked_mul(size_of::<f64>() + 64)
             .ok_or(RegisteredStackError::WorkSizeOverflow)?,
     };
     let rejection_map_images = if rejection_maps {
