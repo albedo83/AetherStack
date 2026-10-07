@@ -29,6 +29,12 @@ pub const WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str = "winsorized-sigma-c
 /// Stable identifier for ordered-sample linear-fit rejection.
 pub const LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID: &str = "linear-fit-clipped-mean-f64-v1";
 
+/// Stable identifier for two-sided generalized ESD rejection.
+pub const GENERALIZED_ESD_CLIPPED_MEAN_ALGORITHM_ID: &str = "generalized-esd-mean-f64-v1";
+
+/// Smallest usable population admitted by the generalized ESD approximation.
+pub const GENERALIZED_ESD_MINIMUM_SAMPLE_COUNT: u32 = 15;
+
 /// Stable identifier for the first transparent PSF quality-weight expression.
 pub const BALANCED_PSF_WEIGHT_ALGORITHM_ID: &str = "balanced-psf-weight-v1";
 
@@ -414,6 +420,57 @@ impl LinearFitClipParameters {
     }
 }
 
+/// Validated controls for deterministic two-sided generalized ESD rejection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeneralizedEsdParameters {
+    maximum_outlier_fraction: f64,
+    significance: f64,
+    minimum_retained: u32,
+}
+
+impl GeneralizedEsdParameters {
+    /// Validates the suspected-outlier bound, significance, and support floor.
+    pub fn new(
+        maximum_outlier_fraction: f64,
+        significance: f64,
+        minimum_retained: u32,
+    ) -> Result<Self, IntegrationError> {
+        if !maximum_outlier_fraction.is_finite()
+            || maximum_outlier_fraction <= 0.0
+            || maximum_outlier_fraction > 0.5
+            || !significance.is_finite()
+            || significance <= 0.0
+            || significance >= 1.0
+            || minimum_retained < 3
+        {
+            return Err(IntegrationError::InvalidGeneralizedEsdParameters);
+        }
+        Ok(Self {
+            maximum_outlier_fraction,
+            significance,
+            minimum_retained,
+        })
+    }
+
+    /// Upper bound on suspected outliers as a fraction of usable samples.
+    #[must_use]
+    pub const fn maximum_outlier_fraction(self) -> f64 {
+        self.maximum_outlier_fraction
+    }
+
+    /// Family-wise two-sided significance level.
+    #[must_use]
+    pub const fn significance(self) -> f64 {
+        self.significance
+    }
+
+    /// Minimum finite support retained after rejection.
+    #[must_use]
+    pub const fn minimum_retained(self) -> u32 {
+        self.minimum_retained
+    }
+}
+
 impl PixelSupport {
     /// Finite, clear samples included in the mean.
     #[must_use]
@@ -747,6 +804,8 @@ pub enum IntegrationError {
     InvalidSigmaParameters,
     /// Linear-fit residual limits or retained-sample floor are invalid.
     InvalidLinearFitParameters,
+    /// Generalized ESD fraction, significance, or support floor is invalid.
+    InvalidGeneralizedEsdParameters,
     /// An input does not match the first image's dimensions.
     DimensionMismatch {
         /// Zero-based input position.
@@ -824,6 +883,9 @@ impl Display for IntegrationError {
             Self::InvalidLinearFitParameters => formatter.write_str(
                 "linear-fit limits must be finite and positive, with at least three retained samples",
             ),
+            Self::InvalidGeneralizedEsdParameters => formatter.write_str(
+                "generalized ESD requires a finite outlier fraction in (0, 0.5], significance in (0, 1), and at least three retained samples",
+            ),
             Self::DimensionMismatch {
                 input_index,
                 expected,
@@ -891,6 +953,7 @@ impl Error for IntegrationError {
             | Self::InvalidPercentileParameters
             | Self::InvalidSigmaParameters
             | Self::InvalidLinearFitParameters
+            | Self::InvalidGeneralizedEsdParameters
             | Self::DimensionMismatch { .. }
             | Self::InvalidRegion { .. }
             | Self::RegionOutsideInput { .. }
@@ -2590,6 +2653,33 @@ mod tests {
         assert_eq!(parameters.low_sigma().to_bits(), 5.0_f64.to_bits());
         assert_eq!(parameters.high_sigma().to_bits(), 3.5_f64.to_bits());
         assert_eq!(parameters.minimum_retained(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn generalized_esd_parameters_are_explicit_and_bounded() -> TestResult {
+        for (fraction, significance, retained) in [
+            (0.0, 0.05, 3),
+            (0.51, 0.05, 3),
+            (f64::NAN, 0.05, 3),
+            (0.30, 0.0, 3),
+            (0.30, 1.0, 3),
+            (0.30, f64::INFINITY, 3),
+            (0.30, 0.05, 2),
+        ] {
+            assert_eq!(
+                GeneralizedEsdParameters::new(fraction, significance, retained),
+                Err(IntegrationError::InvalidGeneralizedEsdParameters)
+            );
+        }
+        let parameters = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        assert_eq!(
+            parameters.maximum_outlier_fraction().to_bits(),
+            0.30_f64.to_bits()
+        );
+        assert_eq!(parameters.significance().to_bits(), 0.05_f64.to_bits());
+        assert_eq!(parameters.minimum_retained(), 3);
+        assert_eq!(GENERALIZED_ESD_MINIMUM_SAMPLE_COUNT, 15);
         Ok(())
     }
 
