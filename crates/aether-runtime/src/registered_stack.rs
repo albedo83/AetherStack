@@ -1890,9 +1890,14 @@ fn planned_band_bytes(
                 .and_then(|bits| bits.checked_add(7))
                 .map(|bits| bits / 8)
                 .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+            // The final cropped cube and its pre-expansion baseline coexist while
+            // exact core-only promotion evidence is calculated.
+            let core_attribution_evidence = core_attribution
+                .checked_mul(2)
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?;
             plan.peak_working_bytes()
                 .checked_add(core_image_and_support)
-                .and_then(|value| value.checked_add(core_attribution))
+                .and_then(|value| value.checked_add(core_attribution_evidence))
                 .ok_or(RegisteredStackError::WorkSizeOverflow)?
         } else {
             0
