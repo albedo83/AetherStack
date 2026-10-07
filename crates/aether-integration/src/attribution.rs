@@ -21,6 +21,19 @@ pub enum SampleDisposition {
     RejectedHigh = 4,
 }
 
+impl SampleDisposition {
+    const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Accepted),
+            1 => Some(Self::Masked),
+            2 => Some(Self::NonFinite),
+            3 => Some(Self::RejectedLow),
+            4 => Some(Self::RejectedHigh),
+            _ => None,
+        }
+    }
+}
+
 /// Invalid dimensions or coordinates for rejection attribution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RejectionAttributionError {
@@ -133,5 +146,60 @@ impl RejectionAttribution {
     #[must_use]
     pub fn packed_len(&self) -> usize {
         self.packed.len()
+    }
+
+    /// Returns one exact disposition.
+    pub fn disposition(
+        &self,
+        sample_index: usize,
+        source_index: usize,
+    ) -> Result<SampleDisposition, RejectionAttributionError> {
+        let (byte_index, shift) = self.packed_position(sample_index, source_index)?;
+        let mut window = u16::from(self.packed[byte_index]);
+        if let Some(next) = self.packed.get(byte_index + 1) {
+            window |= u16::from(*next) << 8;
+        }
+        let code = ((window >> shift) & 0b111) as u8;
+        SampleDisposition::from_code(code)
+            .ok_or(RejectionAttributionError::InvalidPackedCode { code })
+    }
+
+    /// Replaces one exact disposition without modifying adjacent evidence.
+    pub fn set_disposition(
+        &mut self,
+        sample_index: usize,
+        source_index: usize,
+        disposition: SampleDisposition,
+    ) -> Result<(), RejectionAttributionError> {
+        let (byte_index, shift) = self.packed_position(sample_index, source_index)?;
+        let mut window = u16::from(self.packed[byte_index]);
+        if let Some(next) = self.packed.get(byte_index + 1) {
+            window |= u16::from(*next) << 8;
+        }
+        let mask = 0b111_u16 << shift;
+        window = (window & !mask) | (u16::from(disposition as u8) << shift);
+        self.packed[byte_index] = window as u8;
+        if shift > 5
+            && let Some(next) = self.packed.get_mut(byte_index + 1)
+        {
+            *next = (window >> 8) as u8;
+        }
+        Ok(())
+    }
+
+    fn packed_position(
+        &self,
+        sample_index: usize,
+        source_index: usize,
+    ) -> Result<(usize, u32), RejectionAttributionError> {
+        if sample_index >= self.dimensions.pixel_count() || source_index >= self.source_count {
+            return Err(RejectionAttributionError::IndexOutsideCube {
+                sample_index,
+                source_index,
+            });
+        }
+        let disposition_index = sample_index * self.source_count + source_index;
+        let bit_index = disposition_index * 3;
+        Ok((bit_index / 8, (bit_index % 8) as u32))
     }
 }
