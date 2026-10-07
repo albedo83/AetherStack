@@ -23,7 +23,7 @@ use aether_integration::{
     integrate_generalized_esd_mean, integrate_linear_fit_clipped_mean, integrate_mean,
     integrate_median, integrate_percentile_clipped_mean, integrate_sigma_clipped_mean,
     integrate_weighted_mean, integrate_winsorized_sigma_clipped_mean,
-    materialize_percentile_rejection_map,
+    materialize_percentile_rejection_map, plan_large_scale_rejection_memory,
 };
 use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
 use aether_review::FrameId;
@@ -53,6 +53,8 @@ pub const REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID: &str =
 pub const REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-lin-fit-mean-f64-v1";
 /// Versioned two-sided generalized ESD registered stack identity.
 pub const REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID: &str = "registered-esd-mean-f64-v1";
+/// Generalized ESD followed by exact source-owned large-scale expansion.
+pub const REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID: &str = "registered-spatial-esd-mean-f64-v1";
 /// Plane-major low/high count map emitted by iterative sigma rejection.
 pub const SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "sigma-rejection-map-v1";
 /// Plane-major low/high count map emitted by Winsorized sigma rejection.
@@ -61,6 +63,8 @@ pub const WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "win-sigma-rejecti
 pub const LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID: &str = "linear-fit-rejection-map-v1";
 /// Plane-major low/high count map emitted by generalized ESD rejection.
 pub const GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID: &str = "esd-rejection-map-v1";
+/// Low/high count map emitted after source-owned spatial ESD expansion.
+pub const SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID: &str = "spatial-esd-rejection-map-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -197,6 +201,8 @@ pub enum RegisteredStackEstimator {
     LinearFitClipped(LinearFitClipParameters),
     /// Two-sided generalized extreme Studentized deviate rejection.
     GeneralizedEsd(GeneralizedEsdParameters),
+    /// Generalized ESD with source-owned large-scale rejection expansion.
+    GeneralizedEsdLargeScale(RegisteredSpatialEsdParameters),
 }
 
 impl RegisteredStackEstimator {
@@ -214,6 +220,7 @@ impl RegisteredStackEstimator {
             }
             Self::LinearFitClipped(_) => REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID,
             Self::GeneralizedEsd(_) => REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID,
+            Self::GeneralizedEsdLargeScale(_) => REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID,
         }
     }
 
@@ -260,6 +267,9 @@ impl RegisteredStackEstimator {
                 hasher.update(parameters.significance().to_bits().to_be_bytes());
                 hasher.update(parameters.minimum_retained().to_be_bytes());
             }
+            Self::GeneralizedEsdLargeScale(parameters) => {
+                return Some(parameters.parameters_sha256());
+            }
             Self::StrictMean | Self::Median | Self::WeightedMean => return None,
         }
         Some(encode_lower_hex(hasher.finalize().as_slice()))
@@ -272,6 +282,7 @@ impl RegisteredStackEstimator {
             Self::WinsorizedSigmaClipped(_) => Some(WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID),
             Self::LinearFitClipped(_) => Some(LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID),
             Self::GeneralizedEsd(_) => Some(GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID),
+            Self::GeneralizedEsdLargeScale(_) => Some(SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID),
             Self::StrictMean | Self::Median | Self::WeightedMean => None,
         }
     }
@@ -1296,6 +1307,7 @@ where
     let source_summary_bytes = if matches!(
         request.estimator,
         RegisteredStackEstimator::GeneralizedEsd(_)
+            | RegisteredStackEstimator::GeneralizedEsdLargeScale(_)
     ) {
         request
             .sources
@@ -1358,9 +1370,17 @@ where
                 .checkpoint()
                 .map_err(RegisteredStackError::Cancelled)?;
             let height = (crop.height() - offset_y).min(request.band_height);
+            let halo = match request.estimator {
+                RegisteredStackEstimator::GeneralizedEsdLargeScale(parameters) => {
+                    parameters.vertical_halo()
+                }
+                _ => 0,
+            };
+            let band_window = registered_band_window(crop.height(), offset_y, height, halo)?;
             let reserved = planned_band_bytes(
                 crop.width(),
-                height,
+                band_window.read_height,
+                band_window.core_height,
                 request.sources.len(),
                 request.estimator,
                 request.rejection_map.is_some(),
@@ -1383,11 +1403,12 @@ where
                 let region = ImageRegion::new(
                     u64::try_from(plane).map_err(|_| RegisteredStackError::WorkSizeOverflow)?,
                     u64::try_from(crop.x()).map_err(|_| RegisteredStackError::WorkSizeOverflow)?,
-                    u64::try_from(crop.y() + offset_y)
+                    u64::try_from(crop.y() + band_window.read_start)
                         .map_err(|_| RegisteredStackError::WorkSizeOverflow)?,
                     u64::try_from(crop.width())
                         .map_err(|_| RegisteredStackError::WorkSizeOverflow)?,
-                    u64::try_from(height).map_err(|_| RegisteredStackError::WorkSizeOverflow)?,
+                    u64::try_from(band_window.read_height)
+                        .map_err(|_| RegisteredStackError::WorkSizeOverflow)?,
                 );
                 images.push(
                     reader
@@ -1515,6 +1536,42 @@ where
                 RegisteredStackEstimator::GeneralizedEsd(parameters) => {
                     let references = images.iter().collect::<Vec<_>>();
                     let integrated = integrate_generalized_esd_mean(&references, parameters)
+                        .map_err(RegisteredStackError::Integration)?;
+                    writer
+                        .write_image_chunk(integrated.image())
+                        .map_err(RegisteredStackError::Publish)?;
+                    let band_counts = integrated
+                        .attribution()
+                        .source_counts()
+                        .map_err(IntegrationError::Attribution)
+                        .map_err(RegisteredStackError::Integration)?;
+                    for (summary, counts) in source_dispositions.iter_mut().zip(band_counts) {
+                        summary.counts = summary
+                            .counts
+                            .checked_add(counts)
+                            .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+                    }
+                    if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
+                        let maps = materialize_percentile_rejection_map(
+                            integrated.image().dimensions(),
+                            integrated.support(),
+                        )
+                        .map_err(RegisteredStackError::Integration)?;
+                        low_writer
+                            .write_image_chunk(maps.low())
+                            .map_err(RegisteredStackError::Publish)?;
+                        high_writer
+                            .write_image_chunk(maps.high())
+                            .map_err(RegisteredStackError::Publish)?;
+                    }
+                }
+                RegisteredStackEstimator::GeneralizedEsdLargeScale(parameters) => {
+                    let references = images.iter().collect::<Vec<_>>();
+                    let integrated = integrate_generalized_esd_mean(&references, parameters.esd())
+                        .map_err(RegisteredStackError::Integration)?
+                        .apply_large_scale_rejection(&references, parameters.spatial())
+                        .map_err(RegisteredStackError::Integration)?
+                        .crop_rows(band_window.core_start, band_window.core_height)
                         .map_err(RegisteredStackError::Integration)?;
                     writer
                         .write_image_chunk(integrated.image())
@@ -1728,6 +1785,7 @@ fn revalidate_sources(
 fn planned_band_bytes(
     width: usize,
     height: usize,
+    core_height: usize,
     source_count: usize,
     estimator: RegisteredStackEstimator,
     rejection_maps: bool,
@@ -1749,7 +1807,8 @@ fn planned_band_bytes(
         | RegisteredStackEstimator::SigmaClipped(_)
         | RegisteredStackEstimator::WinsorizedSigmaClipped(_)
         | RegisteredStackEstimator::LinearFitClipped(_)
-        | RegisteredStackEstimator::GeneralizedEsd(_) => size_of::<ClippedPixelSupport>(),
+        | RegisteredStackEstimator::GeneralizedEsd(_)
+        | RegisteredStackEstimator::GeneralizedEsdLargeScale(_) => size_of::<ClippedPixelSupport>(),
     };
     let output = image
         .checked_add(
@@ -1771,7 +1830,10 @@ fn planned_band_bytes(
         | RegisteredStackEstimator::SigmaClipped(_)
         | RegisteredStackEstimator::WinsorizedSigmaClipped(_)
         | RegisteredStackEstimator::LinearFitClipped(_)
-        | RegisteredStackEstimator::GeneralizedEsd(_) => size_of::<&aether_core::ScientificImage>(),
+        | RegisteredStackEstimator::GeneralizedEsd(_)
+        | RegisteredStackEstimator::GeneralizedEsdLargeScale(_) => {
+            size_of::<&aether_core::ScientificImage>()
+        }
     };
     let vector_storage = source_count
         .checked_mul(size_of::<aether_core::ScientificImage>() + integration_input_size)
@@ -1785,11 +1847,16 @@ fn planned_band_bytes(
         | RegisteredStackEstimator::LinearFitClipped(_) => source_count
             .checked_mul(size_of::<f64>())
             .ok_or(RegisteredStackError::WorkSizeOverflow)?,
-        RegisteredStackEstimator::GeneralizedEsd(_) => source_count
+        RegisteredStackEstimator::GeneralizedEsd(_)
+        | RegisteredStackEstimator::GeneralizedEsdLargeScale(_) => source_count
             .checked_mul(size_of::<f64>() + 64)
             .ok_or(RegisteredStackError::WorkSizeOverflow)?,
     };
-    let attribution = if matches!(estimator, RegisteredStackEstimator::GeneralizedEsd(_)) {
+    let attribution = if matches!(
+        estimator,
+        RegisteredStackEstimator::GeneralizedEsd(_)
+            | RegisteredStackEstimator::GeneralizedEsdLargeScale(_)
+    ) {
         samples
             .checked_mul(source_count)
             .and_then(|value| value.checked_mul(3))
@@ -1799,6 +1866,35 @@ fn planned_band_bytes(
     } else {
         0
     };
+    let spatial_working =
+        if let RegisteredStackEstimator::GeneralizedEsdLargeScale(parameters) = estimator {
+            let dimensions = Dimensions::new(width, height, 1)
+                .map_err(|_| RegisteredStackError::WorkSizeOverflow)?;
+            let plan =
+                plan_large_scale_rejection_memory(dimensions, source_count, parameters.spatial())
+                    .map_err(IntegrationError::LargeScale)
+                    .map_err(RegisteredStackError::Integration)?;
+            let core_samples = width
+                .checked_mul(core_height)
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+            let core_image_and_support = core_samples
+                .checked_mul(
+                    size_of::<f64>() + size_of::<PixelFlags>() + size_of::<ClippedPixelSupport>(),
+                )
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+            let core_attribution = core_samples
+                .checked_mul(source_count)
+                .and_then(|value| value.checked_mul(3))
+                .and_then(|bits| bits.checked_add(7))
+                .map(|bits| bits / 8)
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+            plan.peak_working_bytes()
+                .checked_add(core_image_and_support)
+                .and_then(|value| value.checked_add(core_attribution))
+                .ok_or(RegisteredStackError::WorkSizeOverflow)?
+        } else {
+            0
+        };
     let rejection_map_images = if rejection_maps {
         image
             .checked_mul(2)
@@ -1812,6 +1908,7 @@ fn planned_band_bytes(
         .and_then(|value| value.checked_add(vector_storage))
         .and_then(|value| value.checked_add(estimator_scratch))
         .and_then(|value| value.checked_add(attribution))
+        .and_then(|value| value.checked_add(spatial_working))
         .and_then(|value| value.checked_add(rejection_map_images))
         .ok_or(RegisteredStackError::WorkSizeOverflow)
 }
