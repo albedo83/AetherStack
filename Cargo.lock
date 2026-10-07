@@ -71,6 +71,7 @@ name = "aether-integration"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "sha2 0.11.0",
  "statrs",
 ]
 

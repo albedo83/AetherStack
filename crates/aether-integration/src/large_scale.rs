@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use aether_core::Dimensions;
+use sha2::{Digest, Sha256};
 
 use crate::{RejectionAttribution, RejectionAttributionError, SampleDisposition};
 
@@ -215,6 +216,27 @@ impl LargeScaleRejectionParameters {
     #[must_use]
     pub const fn minimum_retained(self) -> u32 {
         self.minimum_retained
+    }
+
+    /// Domain-separated canonical SHA-256 of every spatial control.
+    #[must_use]
+    pub fn parameters_sha256(self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"aetherstack/source-large-scale-rejection-v1\0");
+        update_tail_digest(&mut hasher, self.low);
+        update_tail_digest(&mut hasher, self.high);
+        hasher.update(self.minimum_retained.to_be_bytes());
+        hasher.finalize().into()
+    }
+}
+
+fn update_tail_digest(hasher: &mut Sha256, tail: Option<LargeScaleTailParameters>) {
+    match tail {
+        Some(parameters) => {
+            hasher.update([1, parameters.layers()]);
+            hasher.update(parameters.growth().to_be_bytes());
+        }
+        None => hasher.update([0, 0, 0, 0]),
     }
 }
 
@@ -768,6 +790,33 @@ mod tests {
         assert_eq!(
             one_plan.peak_working_bytes(),
             2 * 300_000 + 5_151 * std::mem::size_of::<usize>()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parameter_seal_binds_tail_role_scale_growth_and_support() -> TestResult {
+        let first = LargeScaleTailParameters::new(2, 2)?;
+        let changed_layers = LargeScaleTailParameters::new(3, 2)?;
+        let changed_growth = LargeScaleTailParameters::new(2, 3)?;
+        let baseline = LargeScaleRejectionParameters::new(None, Some(first), 3)?;
+
+        assert_eq!(baseline.parameters_sha256(), baseline.parameters_sha256());
+        assert_ne!(
+            baseline.parameters_sha256(),
+            LargeScaleRejectionParameters::new(Some(first), None, 3)?.parameters_sha256()
+        );
+        assert_ne!(
+            baseline.parameters_sha256(),
+            LargeScaleRejectionParameters::new(None, Some(changed_layers), 3)?.parameters_sha256()
+        );
+        assert_ne!(
+            baseline.parameters_sha256(),
+            LargeScaleRejectionParameters::new(None, Some(changed_growth), 3)?.parameters_sha256()
+        );
+        assert_ne!(
+            baseline.parameters_sha256(),
+            LargeScaleRejectionParameters::new(None, Some(first), 4)?.parameters_sha256()
         );
         Ok(())
     }
