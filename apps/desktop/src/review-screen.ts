@@ -1582,6 +1582,14 @@ export function mountReviewScreen(
       target === elements.registeredStackRejectionMaps ||
       target === elements.registeredStackWeightReference
     ) {
+      if (
+        target === elements.registeredStackEstimator &&
+        elements.registeredStackEstimator.value === "linear_fit_clipped"
+      ) {
+        elements.registeredStackLowSigma.value = "5";
+        elements.registeredStackHighSigma.value = "3.5";
+        elements.registeredStackMinimumRetained.value = "3";
+      }
       const settings = registeredStackSettings(elements);
       if (settings) actions.onUpdateRegisteredStackSettings(settings);
       return;
@@ -3534,6 +3542,8 @@ function renderRegistration(
   const sigmaEstimator =
     stackSettings.estimator === "sigma_clipped" ||
     stackSettings.estimator === "winsorized_sigma_clipped";
+  const linearFitEstimator = stackSettings.estimator === "linear_fit_clipped";
+  const residualEstimator = sigmaEstimator || linearFitEstimator;
   const winsorizedSigmaEstimator =
     stackSettings.estimator === "winsorized_sigma_clipped";
   const medianEstimator = stackSettings.estimator === "median";
@@ -3557,14 +3567,14 @@ function renderRegistration(
     stackBusy || !rejectionEstimator;
   elements.registeredStackHighFraction.disabled =
     stackBusy || !rejectionEstimator;
-  elements.registeredStackLowSigma.disabled = stackBusy || !sigmaEstimator;
-  elements.registeredStackHighSigma.disabled = stackBusy || !sigmaEstimator;
+  elements.registeredStackLowSigma.disabled = stackBusy || !residualEstimator;
+  elements.registeredStackHighSigma.disabled = stackBusy || !residualEstimator;
   elements.registeredStackMaximumIterations.disabled =
     stackBusy || !sigmaEstimator;
   elements.registeredStackMinimumRetained.disabled =
-    stackBusy || (!rejectionEstimator && !sigmaEstimator);
+    stackBusy || (!rejectionEstimator && !residualEstimator);
   elements.registeredStackRejectionMaps.disabled =
-    stackBusy || (!rejectionEstimator && !sigmaEstimator);
+    stackBusy || (!rejectionEstimator && !residualEstimator);
   setControlFieldVisibility(
     elements.registeredStackLowFraction,
     rejectionEstimator,
@@ -3573,31 +3583,39 @@ function renderRegistration(
     elements.registeredStackHighFraction,
     rejectionEstimator,
   );
-  setControlFieldVisibility(elements.registeredStackLowSigma, sigmaEstimator);
-  setControlFieldVisibility(elements.registeredStackHighSigma, sigmaEstimator);
+  setControlFieldVisibility(
+    elements.registeredStackLowSigma,
+    residualEstimator,
+  );
+  setControlFieldVisibility(
+    elements.registeredStackHighSigma,
+    residualEstimator,
+  );
   setControlFieldVisibility(
     elements.registeredStackMaximumIterations,
     sigmaEstimator,
   );
   setControlFieldVisibility(
     elements.registeredStackMinimumRetained,
-    rejectionEstimator || sigmaEstimator,
+    rejectionEstimator || residualEstimator,
   );
   const mapToggle = elements.registeredStackRejectionMaps.closest<HTMLElement>(
     ".registered-stack__map-toggle",
   );
-  if (mapToggle) mapToggle.hidden = !rejectionEstimator && !sigmaEstimator;
+  if (mapToggle) mapToggle.hidden = !rejectionEstimator && !residualEstimator;
   elements.registeredStackEstimatorLabel.textContent = weightedEstimator
     ? "BALANCED PSF WEIGHT"
     : rejectionEstimator
       ? "PERCENTILE F64"
       : winsorizedSigmaEstimator
         ? "WINSORIZED SIGMA F64"
-        : sigmaEstimator
-          ? "ITERATIVE SIGMA F64"
-          : medianEstimator
-            ? "EXACT F64 MEDIAN"
-            : "STRICT F64 MEAN";
+        : linearFitEstimator
+          ? "LINEAR FIT F64"
+          : sigmaEstimator
+            ? "ITERATIVE SIGMA F64"
+            : medianEstimator
+              ? "EXACT F64 MEDIAN"
+              : "STRICT F64 MEAN";
   elements.registeredStackWeightPreflight.hidden = !weightedEstimator;
   elements.registeredStackWeightPreflight.dataset.ready = String(
     weightPreflight.ready,
@@ -4142,7 +4160,8 @@ function registeredStackSettings(
     estimator !== "weighted_mean" &&
     estimator !== "percentile_clipped" &&
     estimator !== "sigma_clipped" &&
-    estimator !== "winsorized_sigma_clipped"
+    estimator !== "winsorized_sigma_clipped" &&
+    estimator !== "linear_fit_clipped"
   ) {
     return null;
   }
@@ -4170,7 +4189,7 @@ function registeredStackSettings(
     maximumIterations < 1 ||
     maximumIterations > 4_294_967_295 ||
     !Number.isSafeInteger(minimumRetainedSamples) ||
-    minimumRetainedSamples < 1 ||
+    minimumRetainedSamples < (estimator === "linear_fit_clipped" ? 3 : 1) ||
     minimumRetainedSamples > 4_294_967_295
   ) {
     return null;
@@ -4188,7 +4207,8 @@ function registeredStackSettings(
     generateRejectionMaps:
       (estimator === "percentile_clipped" ||
         estimator === "sigma_clipped" ||
-        estimator === "winsorized_sigma_clipped") &&
+        estimator === "winsorized_sigma_clipped" ||
+        estimator === "linear_fit_clipped") &&
       elements.registeredStackRejectionMaps.checked,
   };
 }
@@ -5740,6 +5760,7 @@ function shellMarkup(): string {
                           <option value="percentile_clipped">Percentile-clipped mean</option>
                           <option value="sigma_clipped">Iterative sigma clipping</option>
                           <option value="winsorized_sigma_clipped">Winsorized sigma</option>
+                          <option value="linear_fit_clipped">Linear fit clipping</option>
                         </select>
                       </label>
                       <label class="control-field">
@@ -5819,7 +5840,7 @@ function shellMarkup(): string {
                         </table>
                       </div>
                     </section>
-                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile, sigma, and Winsorized sigma estimators publish exact low/high rejection evidence.</p>
+                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile, sigma, Winsorized sigma, and one-pass ordered Linear Fit estimators publish exact low/high rejection evidence.</p>
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
