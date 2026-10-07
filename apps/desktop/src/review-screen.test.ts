@@ -1764,11 +1764,30 @@ describe("frame review workspace", () => {
             bytesWritten: 278_400_000,
             memoryLimitBytes: 1_073_741_824,
             peakReservedBytes: 18_000_000,
-            estimator: "registered-crop-mean-v1",
+            estimator: "generalized-esd-clipped-mean-v1",
             lowRejectionMapPath: "/results/integrated-rejection-low.fits",
             highRejectionMapPath: "/results/integrated-rejection-high.fits",
             rejectionMapSamplesWritten: 34_798_080,
-            sourceDispositions: [],
+            sourceDispositions: [
+              {
+                frameId: frameA.id,
+                accepted: 98,
+                masked: 1,
+                nonFinite: 0,
+                rejectedLow: 1,
+                rejectedHigh: 0,
+                total: 100,
+              },
+              {
+                frameId: frameB.id,
+                accepted: 83,
+                masked: 1,
+                nonFinite: 1,
+                rejectedLow: 3,
+                rejectedHigh: 12,
+                total: 100,
+              },
+            ],
             reportPath: "/results/integrated-integration-report.json",
             reportSha256: "d".repeat(64),
           },
@@ -1823,6 +1842,20 @@ describe("frame review workspace", () => {
       }).src,
     ).toContain("blob:registered-stack");
     expect(root.textContent).toContain("Integration report");
+    expect(
+      getByRole(root, "heading", { name: "Source rejection evidence" }),
+    ).not.toBeNull();
+    expect(root.textContent).toContain(
+      "2 sources · 16 rejected samples · 8.0000%",
+    );
+    const rejectionRows = within(
+      getByRole(root, "list", { name: "Per-source rejection totals" }),
+    ).getAllByRole("listitem");
+    expect(rejectionRows).toHaveLength(2);
+    expect(rejectionRows[0]?.textContent).toContain(frameB.label);
+    expect(rejectionRows[0]?.textContent).toContain(
+      "15 rejected (15.0000%) · 3 low · 12 high · 1 masked · 1 non-finite",
+    );
     expect(root.textContent).toContain("d".repeat(64));
     fireEvent.click(getByRole(root, "button", { name: "Open prior report" }));
     expect(actions.onOpenRegisteredStackReport).toHaveBeenCalledOnce();

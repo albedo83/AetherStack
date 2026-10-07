@@ -371,6 +371,18 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-output]",
     ),
+    registeredStackSourceRejections: required<HTMLElement>(
+      root,
+      "[data-registered-stack-source-rejections]",
+    ),
+    registeredStackSourceRejectionSummary: required<HTMLElement>(
+      root,
+      "[data-registered-stack-source-rejection-summary]",
+    ),
+    registeredStackSourceRejectionRows: required<HTMLElement>(
+      root,
+      "[data-registered-stack-source-rejection-rows]",
+    ),
     registeredStackReport: required<HTMLElement>(
       root,
       "[data-registered-stack-report]",
@@ -3038,6 +3050,9 @@ interface RegistrationElements {
   readonly registeredStackMessage: HTMLElement;
   readonly registeredStackProgress: HTMLProgressElement;
   readonly registeredStackOutput: HTMLElement;
+  readonly registeredStackSourceRejections: HTMLElement;
+  readonly registeredStackSourceRejectionSummary: HTMLElement;
+  readonly registeredStackSourceRejectionRows: HTMLElement;
   readonly registeredStackReport: HTMLElement;
   readonly registeredStackReportPath: HTMLElement;
   readonly registeredStackReportDigest: HTMLElement;
@@ -3403,6 +3418,50 @@ function renderRegistration(
       : "Published registered artifacts required");
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
   const integrationReport = registration.stack.result;
+  const sourceDispositions = integrationReport?.sourceDispositions ?? [];
+  const sourceLabels = new Map(
+    registration.frames.map((frame) => [frame.id, frame.label]),
+  );
+  const totalAttributedSamples = sourceDispositions.reduce(
+    (total, source) => total + source.total,
+    0,
+  );
+  const totalRejectedSamples = sourceDispositions.reduce(
+    (total, source) => total + source.rejectedLow + source.rejectedHigh,
+    0,
+  );
+  const rejectedFraction =
+    totalAttributedSamples === 0
+      ? 0
+      : (totalRejectedSamples / totalAttributedSamples) * 100;
+  elements.registeredStackSourceRejections.hidden =
+    sourceDispositions.length === 0;
+  elements.registeredStackSourceRejectionSummary.textContent =
+    sourceDispositions.length === 0
+      ? "No per-source attribution for this estimator"
+      : `${formatCountedNoun(sourceDispositions.length, "source")} · ${totalRejectedSamples.toLocaleString("en-US")} rejected samples · ${rejectedFraction.toFixed(4)}%`;
+  const rankedSourceDispositions = [...sourceDispositions]
+    .sort(
+      (left, right) =>
+        right.rejectedLow +
+        right.rejectedHigh -
+        (left.rejectedLow + left.rejectedHigh),
+    )
+    .slice(0, 50);
+  elements.registeredStackSourceRejectionRows.replaceChildren(
+    ...rankedSourceDispositions.map((source) => {
+      const row = document.createElement("li");
+      const identity = document.createElement("span");
+      identity.textContent = sourceLabels.get(source.frameId) ?? source.frameId;
+      identity.title = source.frameId;
+      const rejected = source.rejectedLow + source.rejectedHigh;
+      const fraction = source.total === 0 ? 0 : (rejected / source.total) * 100;
+      const evidence = document.createElement("span");
+      evidence.textContent = `${rejected.toLocaleString("en-US")} rejected (${fraction.toFixed(4)}%) · ${source.rejectedLow.toLocaleString("en-US")} low · ${source.rejectedHigh.toLocaleString("en-US")} high · ${source.masked.toLocaleString("en-US")} masked · ${source.nonFinite.toLocaleString("en-US")} non-finite`;
+      row.append(identity, evidence);
+      return row;
+    }),
+  );
   const reportInspection = registration.stack.reportInspection;
   const reportPath =
     registration.stack.reportInspectionPath ?? integrationReport?.reportPath;
@@ -5929,6 +5988,13 @@ function shellMarkup(): string {
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
+                  <section class="source-rejection-evidence" data-registered-stack-source-rejections aria-labelledby="source-rejection-evidence-title" hidden>
+                    <div class="source-rejection-evidence__heading">
+                      <h6 id="source-rejection-evidence-title">Source rejection evidence</h6>
+                      <output data-registered-stack-source-rejection-summary aria-live="polite"></output>
+                    </div>
+                    <ol data-registered-stack-source-rejection-rows aria-label="Per-source rejection totals"></ol>
+                  </section>
                   <div class="integration-report" data-registered-stack-report hidden>
                     <div class="integration-report__heading">
                       <span>Integration report</span>
