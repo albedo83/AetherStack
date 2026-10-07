@@ -2734,9 +2734,11 @@ async function executeStack(): Promise<void> {
                   : "Integrating with deterministic iterative sigma rejection…"
                 : settings.estimator === "linear_fit_clipped"
                   ? "Integrating with deterministic ordered Linear Fit rejection…"
-                  : settings.estimator === "weighted_mean"
-                    ? "Integrating with identity-bound balanced PSF weights…"
-                    : "Integrating with deterministic percentile rejection…",
+                  : settings.estimator === "generalized_esd"
+                    ? "Integrating with deterministic generalized ESD rejection…"
+                    : settings.estimator === "weighted_mean"
+                      ? "Integrating with identity-bound balanced PSF weights…"
+                      : "Integrating with deterministic percentile rejection…",
       },
     },
   });

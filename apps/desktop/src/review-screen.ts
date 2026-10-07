@@ -463,6 +463,14 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-high-sigma]",
     ),
+    registeredStackEsdOutlierFraction: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-esd-outlier-fraction]",
+    ),
+    registeredStackEsdSignificance: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-esd-significance]",
+    ),
     registeredStackMaximumIterations: required<HTMLInputElement>(
       root,
       "[data-registered-stack-maximum-iterations]",
@@ -1577,6 +1585,8 @@ export function mountReviewScreen(
       target === elements.registeredStackHighFraction ||
       target === elements.registeredStackLowSigma ||
       target === elements.registeredStackHighSigma ||
+      target === elements.registeredStackEsdOutlierFraction ||
+      target === elements.registeredStackEsdSignificance ||
       target === elements.registeredStackMaximumIterations ||
       target === elements.registeredStackMinimumRetained ||
       target === elements.registeredStackRejectionMaps ||
@@ -1588,6 +1598,14 @@ export function mountReviewScreen(
       ) {
         elements.registeredStackLowSigma.value = "5";
         elements.registeredStackHighSigma.value = "3.5";
+        elements.registeredStackMinimumRetained.value = "3";
+      }
+      if (
+        target === elements.registeredStackEstimator &&
+        elements.registeredStackEstimator.value === "generalized_esd"
+      ) {
+        elements.registeredStackEsdOutlierFraction.value = "0.3";
+        elements.registeredStackEsdSignificance.value = "0.05";
         elements.registeredStackMinimumRetained.value = "3";
       }
       const settings = registeredStackSettings(elements);
@@ -3043,6 +3061,8 @@ interface RegistrationElements {
   readonly registeredStackHighFraction: HTMLInputElement;
   readonly registeredStackLowSigma: HTMLInputElement;
   readonly registeredStackHighSigma: HTMLInputElement;
+  readonly registeredStackEsdOutlierFraction: HTMLInputElement;
+  readonly registeredStackEsdSignificance: HTMLInputElement;
   readonly registeredStackMaximumIterations: HTMLInputElement;
   readonly registeredStackMinimumRetained: HTMLInputElement;
   readonly registeredStackRejectionMaps: HTMLInputElement;
@@ -3543,6 +3563,7 @@ function renderRegistration(
     stackSettings.estimator === "sigma_clipped" ||
     stackSettings.estimator === "winsorized_sigma_clipped";
   const linearFitEstimator = stackSettings.estimator === "linear_fit_clipped";
+  const generalizedEsdEstimator = stackSettings.estimator === "generalized_esd";
   const residualEstimator = sigmaEstimator || linearFitEstimator;
   const winsorizedSigmaEstimator =
     stackSettings.estimator === "winsorized_sigma_clipped";
@@ -3554,13 +3575,20 @@ function renderRegistration(
   );
   elements.registeredStackLowSigma.value = String(stackSettings.lowSigma);
   elements.registeredStackHighSigma.value = String(stackSettings.highSigma);
+  elements.registeredStackEsdOutlierFraction.value = String(
+    stackSettings.esdOutlierFraction,
+  );
+  elements.registeredStackEsdSignificance.value = String(
+    stackSettings.esdSignificance,
+  );
   elements.registeredStackMaximumIterations.value = String(
     stackSettings.maximumIterations,
   );
   elements.registeredStackMinimumRetained.value = String(
     stackSettings.minimumRetainedSamples,
   );
-  elements.registeredStackMinimumRetained.min = linearFitEstimator ? "3" : "1";
+  elements.registeredStackMinimumRetained.min =
+    linearFitEstimator || generalizedEsdEstimator ? "3" : "1";
   elements.registeredStackRejectionMaps.checked =
     stackSettings.generateRejectionMaps;
   elements.registeredStackEstimator.disabled = stackBusy;
@@ -3570,12 +3598,18 @@ function renderRegistration(
     stackBusy || !rejectionEstimator;
   elements.registeredStackLowSigma.disabled = stackBusy || !residualEstimator;
   elements.registeredStackHighSigma.disabled = stackBusy || !residualEstimator;
+  elements.registeredStackEsdOutlierFraction.disabled =
+    stackBusy || !generalizedEsdEstimator;
+  elements.registeredStackEsdSignificance.disabled =
+    stackBusy || !generalizedEsdEstimator;
   elements.registeredStackMaximumIterations.disabled =
     stackBusy || !sigmaEstimator;
   elements.registeredStackMinimumRetained.disabled =
-    stackBusy || (!rejectionEstimator && !residualEstimator);
+    stackBusy ||
+    (!rejectionEstimator && !residualEstimator && !generalizedEsdEstimator);
   elements.registeredStackRejectionMaps.disabled =
-    stackBusy || (!rejectionEstimator && !residualEstimator);
+    stackBusy ||
+    (!rejectionEstimator && !residualEstimator && !generalizedEsdEstimator);
   setControlFieldVisibility(
     elements.registeredStackLowFraction,
     rejectionEstimator,
@@ -3593,17 +3627,27 @@ function renderRegistration(
     residualEstimator,
   );
   setControlFieldVisibility(
+    elements.registeredStackEsdOutlierFraction,
+    generalizedEsdEstimator,
+  );
+  setControlFieldVisibility(
+    elements.registeredStackEsdSignificance,
+    generalizedEsdEstimator,
+  );
+  setControlFieldVisibility(
     elements.registeredStackMaximumIterations,
     sigmaEstimator,
   );
   setControlFieldVisibility(
     elements.registeredStackMinimumRetained,
-    rejectionEstimator || residualEstimator,
+    rejectionEstimator || residualEstimator || generalizedEsdEstimator,
   );
   const mapToggle = elements.registeredStackRejectionMaps.closest<HTMLElement>(
     ".registered-stack__map-toggle",
   );
-  if (mapToggle) mapToggle.hidden = !rejectionEstimator && !residualEstimator;
+  if (mapToggle)
+    mapToggle.hidden =
+      !rejectionEstimator && !residualEstimator && !generalizedEsdEstimator;
   elements.registeredStackEstimatorLabel.textContent = weightedEstimator
     ? "BALANCED PSF WEIGHT"
     : rejectionEstimator
@@ -3612,11 +3656,13 @@ function renderRegistration(
         ? "WINSORIZED SIGMA F64"
         : linearFitEstimator
           ? "LINEAR FIT F64"
-          : sigmaEstimator
-            ? "ITERATIVE SIGMA F64"
-            : medianEstimator
-              ? "EXACT F64 MEDIAN"
-              : "STRICT F64 MEAN";
+          : generalizedEsdEstimator
+            ? "GENERALIZED ESD F64"
+            : sigmaEstimator
+              ? "ITERATIVE SIGMA F64"
+              : medianEstimator
+                ? "EXACT F64 MEDIAN"
+                : "STRICT F64 MEAN";
   elements.registeredStackWeightPreflight.hidden = !weightedEstimator;
   elements.registeredStackWeightPreflight.dataset.ready = String(
     weightPreflight.ready,
@@ -4148,6 +4194,8 @@ function registeredStackSettings(
     | "registeredStackHighFraction"
     | "registeredStackLowSigma"
     | "registeredStackHighSigma"
+    | "registeredStackEsdOutlierFraction"
+    | "registeredStackEsdSignificance"
     | "registeredStackMaximumIterations"
     | "registeredStackMinimumRetained"
     | "registeredStackRejectionMaps"
@@ -4171,6 +4219,9 @@ function registeredStackSettings(
   const highFraction = elements.registeredStackHighFraction.valueAsNumber;
   const lowSigma = elements.registeredStackLowSigma.valueAsNumber;
   const highSigma = elements.registeredStackHighSigma.valueAsNumber;
+  const esdOutlierFraction =
+    elements.registeredStackEsdOutlierFraction.valueAsNumber;
+  const esdSignificance = elements.registeredStackEsdSignificance.valueAsNumber;
   const maximumIterations =
     elements.registeredStackMaximumIterations.valueAsNumber;
   const minimumRetainedSamples =
@@ -4187,6 +4238,12 @@ function registeredStackSettings(
     lowSigma <= 0 ||
     !Number.isFinite(highSigma) ||
     highSigma <= 0 ||
+    !Number.isFinite(esdOutlierFraction) ||
+    esdOutlierFraction <= 0 ||
+    esdOutlierFraction > 0.5 ||
+    !Number.isFinite(esdSignificance) ||
+    esdSignificance <= 0 ||
+    esdSignificance >= 1 ||
     !Number.isSafeInteger(maximumIterations) ||
     maximumIterations < 1 ||
     maximumIterations > 4_294_967_295 ||
@@ -4207,8 +4264,8 @@ function registeredStackSettings(
     highFraction,
     lowSigma,
     highSigma,
-    esdOutlierFraction: 0.3,
-    esdSignificance: 0.05,
+    esdOutlierFraction,
+    esdSignificance,
     maximumIterations,
     minimumRetainedSamples,
     generateRejectionMaps:
@@ -5772,6 +5829,7 @@ function shellMarkup(): string {
                           <option value="sigma_clipped">Iterative sigma clipping</option>
                           <option value="winsorized_sigma_clipped">Winsorized sigma</option>
                           <option value="linear_fit_clipped">Linear fit clipping</option>
+                          <option value="generalized_esd">Generalized ESD</option>
                         </select>
                       </label>
                       <label class="control-field">
@@ -5804,6 +5862,22 @@ function shellMarkup(): string {
                           <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease high sigma">−</button>
                           <input data-registered-stack-high-sigma aria-label="High sigma" type="number" min="0.1" step="0.1" inputmode="decimal" />
                           <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase high sigma">+</button>
+                        </span>
+                      </label>
+                      <label class="control-field">
+                        <span>Maximum outlier fraction</span>
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease maximum ESD outlier fraction">−</button>
+                          <input data-registered-stack-esd-outlier-fraction aria-label="Maximum ESD outlier fraction" type="number" min="0.01" max="0.5" step="0.01" inputmode="decimal" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase maximum ESD outlier fraction">+</button>
+                        </span>
+                      </label>
+                      <label class="control-field">
+                        <span>ESD significance</span>
+                        <span class="instrument-stepper" data-stepper>
+                          <button type="button" data-action="step-number" data-step-direction="down" aria-label="Decrease ESD significance">−</button>
+                          <input data-registered-stack-esd-significance aria-label="ESD significance" type="number" min="0.001" max="0.999" step="0.001" inputmode="decimal" />
+                          <button type="button" data-action="step-number" data-step-direction="up" aria-label="Increase ESD significance">+</button>
                         </span>
                       </label>
                       <label class="control-field">
@@ -5851,7 +5925,7 @@ function shellMarkup(): string {
                         </table>
                       </div>
                     </section>
-                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile, sigma, Winsorized sigma, and one-pass ordered Linear Fit estimators publish exact low/high rejection evidence.</p>
+                    <p class="registered-stack__advanced-note">Strict mean is the reproducibility reference. Balanced PSF weighting requires measured calibrated Lights. Percentile, sigma, Winsorized sigma, one-pass ordered Linear Fit, and two-sided generalized ESD estimators publish exact low/high rejection evidence. ESD remains inactive below 15 usable samples.</p>
                   </details>
                   <progress data-registered-stack-progress aria-label="Registered stack progress" hidden></progress>
                   <code data-registered-stack-output>Published registered artifacts required</code>
