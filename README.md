@@ -180,6 +180,8 @@ optimized CPU and GPU paths must match.
   ordered-sample linear-fit-clipped means, plus a two-sided generalized ESD
   estimator with Student-t critical values and a conservative 15-sample gate,
   all with exact low/high rejection evidence, parameter-bound provenance, and
+  compact three-bit per-source ESD attribution reduced into inspectable source
+  totals without making band height a scientific parameter, plus
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
   expert UI while strict mean remains the default, with linked native previews

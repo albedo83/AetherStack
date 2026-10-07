@@ -2312,6 +2312,32 @@ safety reasoning. They do not narrate obvious syntax.
 262. Publish the generalized ESD contract only after complete validation. Rust
      tests, format, lint, and rustdoc plus frontend tests, format, type checking,
      accessibility, and production build must all pass before direct `main`.
+263. Define a source-owned rejection cube. Every output sample and source must
+     have one explicit accepted, masked, non-finite, rejected-low, or
+     rejected-high disposition with checked dimensions and allocation.
+264. Pack attribution without losing random access. Three-bit codes may cross
+     byte boundaries, but source and planar offsets must round-trip exactly.
+265. Prove packed-storage integrity. Boundary positions, invalid codes, empty
+     sources, and out-of-range coordinates must fail or decode deterministically.
+266. Bind generalized ESD decisions back to original sources. Sorting for the
+     statistical oracle must retain source indices through every candidate and
+     final rejection decision.
+267. Aggregate complete per-source partitions. Accepted, excluded, and both
+     rejected tails must sum to the exact output sample count for every source.
+268. Accumulate attribution across bounded registered bands. The memory planner
+     must reserve packed storage and checked source totals must be independent
+     of the selected valid band height.
+269. Expose exact totals at the native boundary. Stable camel-case fields must
+     carry frame identity and every disposition; estimators without attribution
+     must return an explicit empty collection.
+270. Preserve attribution through the typed browser bridge. The frontend model
+     must represent every native counter without inferred or merged states.
+271. Present source evidence accessibly. A bounded dark-theme diagnostic ranks
+     the most rejected sources and discloses low, high, masked, and non-finite
+     totals with responsive layout and semantic list structure.
+272. Publish the attribution prerequisite only after full validation. Document
+     that source ownership is implemented while large-scale morphology,
+     reintegration, and immutable report persistence remain separate work.
 
 ## 11. Stable-release definition
 

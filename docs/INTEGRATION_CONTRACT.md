@@ -195,6 +195,31 @@ The desktop exposes `generalized_esd` with explicit 0.30 maximum-outlier and
 0.05 significance defaults. Only ESD, support, and map controls remain visible,
 and the 15-sample applicability gate is stated beside the controls.
 
+### Per-source rejection attribution
+
+Generalized ESD additionally retains the disposition of every source sample at
+every output position. `RejectionAttribution` stores one of five states:
+accepted, masked, non-finite, rejected low, or rejected high. The storage is a
+checked three-bit cube indexed by source identity and planar output offset; it
+therefore preserves the source ownership that aggregate low/high count maps
+necessarily discard. Invalid packed codes, dimensions, indices, and allocation
+sizes fail explicitly.
+
+The registered runtime accounts for the packed cube in its band memory plan and
+reduces each completed band into exact per-source totals. Source order is the
+sealed execution order, counters use checked `u64` accumulation, and tests
+require identical totals across different valid band heights. The native
+desktop response carries these totals through a typed browser contract. The
+active result view ranks at most 50 sources by rejected samples and reports
+low, high, masked, and non-finite evidence separately.
+
+This attribution is the prerequisite for source-specific spatial morphology;
+it is not itself large-scale rejection. A later versioned algorithm must define
+scale decomposition, connected-structure eligibility, growth, gradient
+protection, and source-pixel reintegration before AetherStack can claim that
+capability. The compact per-pixel cube is currently execution-local; immutable
+report persistence also remains a separate schema change.
+
 ## Frame-weighted mean
 
 `integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`
