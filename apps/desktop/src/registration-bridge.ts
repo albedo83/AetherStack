@@ -254,6 +254,17 @@ export interface RegisteredStackProgress {
   readonly code: string | null;
 }
 
+/** Exact sample dispositions retained for one registered source frame. */
+export interface RegisteredSourceDisposition {
+  readonly frameId: string;
+  readonly accepted: number;
+  readonly masked: number;
+  readonly nonFinite: number;
+  readonly rejectedLow: number;
+  readonly rejectedHigh: number;
+  readonly total: number;
+}
+
 export interface RegisteredStackResult {
   readonly planSha256: string;
   readonly outputPath: string;
@@ -269,6 +280,7 @@ export interface RegisteredStackResult {
   readonly lowRejectionMapPath: string | null;
   readonly highRejectionMapPath: string | null;
   readonly rejectionMapSamplesWritten: number | null;
+  readonly sourceDispositions: readonly RegisteredSourceDisposition[];
   readonly reportPath: string;
   readonly reportSha256: string;
 }

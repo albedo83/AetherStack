@@ -1768,6 +1768,7 @@ describe("frame review workspace", () => {
             lowRejectionMapPath: "/results/integrated-rejection-low.fits",
             highRejectionMapPath: "/results/integrated-rejection-high.fits",
             rejectionMapSamplesWritten: 34_798_080,
+            sourceDispositions: [],
             reportPath: "/results/integrated-integration-report.json",
             reportSha256: "d".repeat(64),
           },
