@@ -21,6 +21,54 @@ pub enum SampleDisposition {
     RejectedHigh = 4,
 }
 
+/// Exact disposition totals for one source across a planar region.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SourceDispositionCounts {
+    accepted: u64,
+    masked: u64,
+    non_finite: u64,
+    rejected_low: u64,
+    rejected_high: u64,
+}
+
+impl SourceDispositionCounts {
+    /// Clear finite samples retained by the estimator.
+    #[must_use]
+    pub const fn accepted(self) -> u64 {
+        self.accepted
+    }
+
+    /// Samples excluded by source quality masks.
+    #[must_use]
+    pub const fn masked(self) -> u64 {
+        self.masked
+    }
+
+    /// Clear non-finite samples excluded before statistics.
+    #[must_use]
+    pub const fn non_finite(self) -> u64 {
+        self.non_finite
+    }
+
+    /// Samples rejected from the low tail.
+    #[must_use]
+    pub const fn rejected_low(self) -> u64 {
+        self.rejected_low
+    }
+
+    /// Samples rejected from the high tail.
+    #[must_use]
+    pub const fn rejected_high(self) -> u64 {
+        self.rejected_high
+    }
+
+    /// Total planar samples represented for this source.
+    #[must_use]
+    pub const fn total(self) -> u64 {
+        self.accepted + self.masked + self.non_finite + self.rejected_low + self.rejected_high
+    }
+}
+
 impl SampleDisposition {
     const fn from_code(code: u8) -> Option<Self> {
         match code {
@@ -187,6 +235,31 @@ impl RejectionAttribution {
         Ok(())
     }
 
+    /// Aggregates exact disposition totals independently for every source.
+    pub fn source_counts(&self) -> Result<Vec<SourceDispositionCounts>, RejectionAttributionError> {
+        let bytes = self
+            .source_count
+            .checked_mul(std::mem::size_of::<SourceDispositionCounts>())
+            .ok_or(RejectionAttributionError::SizeOverflow)?;
+        let mut counts = Vec::new();
+        counts
+            .try_reserve_exact(self.source_count)
+            .map_err(|_| RejectionAttributionError::AllocationFailed { bytes })?;
+        counts.resize(self.source_count, SourceDispositionCounts::default());
+        for sample_index in 0..self.dimensions.pixel_count() {
+            for (source_index, source_counts) in counts.iter_mut().enumerate() {
+                match self.disposition(sample_index, source_index)? {
+                    SampleDisposition::Accepted => source_counts.accepted += 1,
+                    SampleDisposition::Masked => source_counts.masked += 1,
+                    SampleDisposition::NonFinite => source_counts.non_finite += 1,
+                    SampleDisposition::RejectedLow => source_counts.rejected_low += 1,
+                    SampleDisposition::RejectedHigh => source_counts.rejected_high += 1,
+                }
+            }
+        }
+        Ok(counts)
+    }
+
     fn packed_position(
         &self,
         sample_index: usize,
@@ -274,6 +347,27 @@ mod tests {
             attribution.disposition(0, 0),
             Err(RejectionAttributionError::InvalidPackedCode { code: 7 })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn source_totals_partition_every_planar_sample() -> TestResult {
+        let dimensions = Dimensions::new(2, 2, 1)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 2)?;
+        attribution.set_disposition(0, 0, SampleDisposition::RejectedLow)?;
+        attribution.set_disposition(1, 0, SampleDisposition::Masked)?;
+        attribution.set_disposition(2, 1, SampleDisposition::RejectedHigh)?;
+        attribution.set_disposition(3, 1, SampleDisposition::NonFinite)?;
+
+        let counts = attribution.source_counts()?;
+        assert_eq!(counts[0].accepted(), 2);
+        assert_eq!(counts[0].masked(), 1);
+        assert_eq!(counts[0].rejected_low(), 1);
+        assert_eq!(counts[0].total(), 4);
+        assert_eq!(counts[1].accepted(), 2);
+        assert_eq!(counts[1].non_finite(), 1);
+        assert_eq!(counts[1].rejected_high(), 1);
+        assert_eq!(counts[1].total(), 4);
         Ok(())
     }
 }
