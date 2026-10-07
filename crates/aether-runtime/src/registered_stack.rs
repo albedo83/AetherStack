@@ -14,9 +14,9 @@ use aether_fits::{
 pub use aether_integration::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, GENERALIZED_ESD_CLIPPED_MEAN_ALGORITHM_ID,
     GeneralizedEsdParameters, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, LargeScaleRejectionParameters,
-    LinearFitClipParameters, PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters,
-    QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters,
-    SourceDispositionCounts, WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    LargeScaleTailParameters, LinearFitClipParameters, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+    PercentileClipParameters, QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    SigmaClipParameters, SourceDispositionCounts, WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
@@ -275,7 +275,9 @@ impl RegisteredStackEstimator {
         Some(encode_lower_hex(hasher.finalize().as_slice()))
     }
 
-    const fn rejection_map_algorithm_id(self) -> Option<&'static str> {
+    /// Companion low/high rejection-map identity for rejecting estimators.
+    #[must_use]
+    pub const fn rejection_map_algorithm_id(self) -> Option<&'static str> {
         match self {
             Self::PercentileClipped(_) => Some(PERCENTILE_REJECTION_MAP_ALGORITHM_ID),
             Self::SigmaClipped(_) => Some(SIGMA_REJECTION_MAP_ALGORITHM_ID),

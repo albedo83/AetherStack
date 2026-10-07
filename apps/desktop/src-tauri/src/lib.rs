@@ -64,27 +64,29 @@ use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DefectFitsReference, DefectReferenceKind,
     DefectReferenceParameters, DrizzleOutputExecutionError, DrizzleProductDestinations,
     DrizzleProductProvenance, GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID, GeneralizedEsdParameters,
-    LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID, LightPlanExecutionError, LightPlanExecutionRequest,
-    LinearFitClipParameters, LocalNormalizationPipelineError, LocalNormalizationRequest,
-    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
-    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
+    LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID, LargeScaleRejectionParameters, LargeScaleTailParameters,
+    LightPlanExecutionError, LightPlanExecutionRequest, LinearFitClipParameters,
+    LocalNormalizationPipelineError, LocalNormalizationRequest, MasterPlanExecutionError,
+    MasterPlanExecutionRequest, MemoryBudget, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+    PercentileClipParameters, PipelineSource, ProgressState,
     ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
     REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID, REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID,
-    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID,
     REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
-    RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
-    RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
+    RegisteredRejectionMapOutput, RegisteredSpatialEsdParameters, RegisteredStackError,
+    RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
     RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
-    SIGMA_REJECTION_MAP_ALGORITHM_ID, STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
-    STRICT_DEFECT_MAP_ALGORITHM_ID, STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID,
-    STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDefectCorrectionRequest,
-    StrictDrizzleSource, StrictLinearDefectCorrectionRequest,
-    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_memory,
-    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
-    run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
-    run_registered_stack, run_registration_plan, run_strict_defect_correction_with_progress,
-    run_strict_drizzle_output_with_progress, run_strict_linear_defect_correction_with_progress,
-    strict_defect_parameters_sha256, strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
+    SIGMA_REJECTION_MAP_ALGORITHM_ID, SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID,
+    STRICT_DEFECT_CORRECTED_ALGORITHM_ID, STRICT_DEFECT_MAP_ALGORITHM_ID,
+    STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID, STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID,
+    SigmaClipParameters, StrictDefectCorrectionRequest, StrictDrizzleSource,
+    StrictLinearDefectCorrectionRequest, WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID,
+    estimate_local_normalization_memory, run_calibrated_light_plan, run_demosaiced_light_plan,
+    run_light_plan, run_local_normalization_with_progress, run_master_plan,
+    run_projective_registration_plan, run_registered_stack, run_registration_plan,
+    run_strict_defect_correction_with_progress, run_strict_drizzle_output_with_progress,
+    run_strict_linear_defect_correction_with_progress, strict_defect_parameters_sha256,
+    strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
     strict_linear_defect_parameters_sha256,
 };
 use aether_session::{
@@ -4080,14 +4082,48 @@ where
                 .map_err(|_| registered_stack_configuration_error())?,
             )
         }
-        RegisteredStackEstimatorInput::GeneralizedEsd => RegisteredStackEstimator::GeneralizedEsd(
-            GeneralizedEsdParameters::new(
+        RegisteredStackEstimatorInput::GeneralizedEsd => {
+            let esd = GeneralizedEsdParameters::new(
                 integration.esd_outlier_fraction,
                 integration.esd_significance,
                 integration.minimum_retained_samples,
             )
-            .map_err(|_| registered_stack_configuration_error())?,
-        ),
+            .map_err(|_| registered_stack_configuration_error())?;
+            if integration.large_scale_low_enabled || integration.large_scale_high_enabled {
+                let low = integration
+                    .large_scale_low_enabled
+                    .then(|| {
+                        LargeScaleTailParameters::new(
+                            integration.large_scale_low_layers,
+                            integration.large_scale_low_growth,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|_| registered_stack_configuration_error())?;
+                let high = integration
+                    .large_scale_high_enabled
+                    .then(|| {
+                        LargeScaleTailParameters::new(
+                            integration.large_scale_high_layers,
+                            integration.large_scale_high_growth,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|_| registered_stack_configuration_error())?;
+                let spatial = LargeScaleRejectionParameters::new(
+                    low,
+                    high,
+                    integration.minimum_retained_samples,
+                )
+                .map_err(|_| registered_stack_configuration_error())?;
+                RegisteredStackEstimator::GeneralizedEsdLargeScale(
+                    RegisteredSpatialEsdParameters::new(esd, spatial)
+                        .map_err(|_| registered_stack_configuration_error())?,
+                )
+            } else {
+                RegisteredStackEstimator::GeneralizedEsd(esd)
+            }
+        }
     };
     let plan = match request.planning.geometry_model {
         RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
@@ -4271,26 +4307,9 @@ where
         .and_then(|value| value.with_band_height(request.band_height))
         .map_err(registered_stack_error)?;
     if let Some((low_path, high_path)) = rejection_paths.as_ref() {
-        let rejection_map_algorithm_id = match integration.estimator {
-            RegisteredStackEstimatorInput::PercentileClipped => {
-                PERCENTILE_REJECTION_MAP_ALGORITHM_ID
-            }
-            RegisteredStackEstimatorInput::SigmaClipped => SIGMA_REJECTION_MAP_ALGORITHM_ID,
-            RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
-                WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID
-            }
-            RegisteredStackEstimatorInput::LinearFitClipped => {
-                LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID
-            }
-            RegisteredStackEstimatorInput::GeneralizedEsd => {
-                GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID
-            }
-            RegisteredStackEstimatorInput::StrictMean
-            | RegisteredStackEstimatorInput::Median
-            | RegisteredStackEstimatorInput::WeightedMean => {
-                return Err(registered_stack_configuration_error());
-            }
-        };
+        let rejection_map_algorithm_id = estimator
+            .rejection_map_algorithm_id()
+            .ok_or_else(registered_stack_configuration_error)?;
         let low_provenance = FitsOutputProvenance::new(
             manifest_sha256.clone(),
             "registered-rejection-low",
@@ -5098,8 +5117,14 @@ fn inspect_registered_stack_product_fits(
         return RegisteredStackReportProductStatus::MetadataMismatch;
     };
     let expected_algorithm = match product.role.as_str() {
-        "science" => registered_stack_estimator_algorithm_id(report.integration.estimator),
-        "rejection_low" | "rejection_high" => PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+        "science" => registered_stack_integration_algorithm_id(report.integration),
+        "rejection_low" | "rejection_high" => {
+            let Some(algorithm) = registered_stack_rejection_map_algorithm_id(report.integration)
+            else {
+                return RegisteredStackReportProductStatus::MetadataMismatch;
+            };
+            algorithm
+        }
         _ => return RegisteredStackReportProductStatus::MetadataMismatch,
     };
     let header = reader.report().header();
@@ -5123,6 +5148,47 @@ fn inspect_registered_stack_product_fits(
             Some(expected),
         ) if checksum == expected => RegisteredStackReportProductStatus::Verified,
         _ => RegisteredStackReportProductStatus::ChecksumMismatch,
+    }
+}
+
+const fn registered_stack_integration_algorithm_id(
+    integration: RegisteredStackIntegrationSettings,
+) -> &'static str {
+    if matches!(
+        integration.estimator,
+        RegisteredStackEstimatorInput::GeneralizedEsd
+    ) && (integration.large_scale_low_enabled || integration.large_scale_high_enabled)
+    {
+        REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID
+    } else {
+        registered_stack_estimator_algorithm_id(integration.estimator)
+    }
+}
+
+const fn registered_stack_rejection_map_algorithm_id(
+    integration: RegisteredStackIntegrationSettings,
+) -> Option<&'static str> {
+    match integration.estimator {
+        RegisteredStackEstimatorInput::PercentileClipped => {
+            Some(PERCENTILE_REJECTION_MAP_ALGORITHM_ID)
+        }
+        RegisteredStackEstimatorInput::SigmaClipped => Some(SIGMA_REJECTION_MAP_ALGORITHM_ID),
+        RegisteredStackEstimatorInput::WinsorizedSigmaClipped => {
+            Some(WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID)
+        }
+        RegisteredStackEstimatorInput::LinearFitClipped => {
+            Some(LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID)
+        }
+        RegisteredStackEstimatorInput::GeneralizedEsd => {
+            if integration.large_scale_low_enabled || integration.large_scale_high_enabled {
+                Some(SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID)
+            } else {
+                Some(GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID)
+            }
+        }
+        RegisteredStackEstimatorInput::StrictMean
+        | RegisteredStackEstimatorInput::Median
+        | RegisteredStackEstimatorInput::WeightedMean => None,
     }
 }
 
