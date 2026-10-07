@@ -197,6 +197,104 @@ impl LargeScaleRejectionParameters {
     }
 }
 
+/// Exact changes made by one simultaneous low/high spatial expansion.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LargeScaleExpansionSummary {
+    promoted_low: u64,
+    promoted_high: u64,
+    conflicts_retained: u64,
+}
+
+impl LargeScaleExpansionSummary {
+    /// Previously accepted samples promoted to low-tail rejection.
+    #[must_use]
+    pub const fn promoted_low(self) -> u64 {
+        self.promoted_low
+    }
+
+    /// Previously accepted samples promoted to high-tail rejection.
+    #[must_use]
+    pub const fn promoted_high(self) -> u64 {
+        self.promoted_high
+    }
+
+    /// Accepted samples covered by both tails and conservatively retained.
+    #[must_use]
+    pub const fn conflicts_retained(self) -> u64 {
+        self.conflicts_retained
+    }
+}
+
+/// Expands configured rejection tails simultaneously on one attribution cube.
+///
+/// Existing masked, non-finite, and statistical rejection evidence is never
+/// rewritten. An accepted sample reached by exactly one grown tail is promoted
+/// to that tail. If both tails reach it, the sample remains accepted and the
+/// conflict is counted; iteration order therefore cannot bias the result.
+pub fn expand_large_scale_rejections(
+    attribution: &mut RejectionAttribution,
+    parameters: LargeScaleRejectionParameters,
+) -> Result<LargeScaleExpansionSummary, LargeScaleRejectionError> {
+    let low = parameters
+        .low()
+        .map(|tail| {
+            classify_large_scale_seeds(attribution, LargeScaleRejectionTail::Low, tail)
+                .and_then(|seeds| grow_large_scale_seeds(&seeds, attribution, tail.growth()))
+        })
+        .transpose()?;
+    let high = parameters
+        .high()
+        .map(|tail| {
+            classify_large_scale_seeds(attribution, LargeScaleRejectionTail::High, tail)
+                .and_then(|seeds| grow_large_scale_seeds(&seeds, attribution, tail.growth()))
+        })
+        .transpose()?;
+    let source_count = attribution.source_count();
+    let mut summary = LargeScaleExpansionSummary::default();
+    for sample_index in 0..attribution.dimensions().pixel_count() {
+        for source_index in 0..source_count {
+            if attribution.disposition(sample_index, source_index)? != SampleDisposition::Accepted {
+                continue;
+            }
+            let offset = sample_index * source_count + source_index;
+            let low_reached = low.as_ref().is_some_and(|mask| mask[offset] != 0);
+            let high_reached = high.as_ref().is_some_and(|mask| mask[offset] != 0);
+            match (low_reached, high_reached) {
+                (true, false) => {
+                    attribution.set_disposition(
+                        sample_index,
+                        source_index,
+                        SampleDisposition::RejectedLow,
+                    )?;
+                    summary.promoted_low = summary
+                        .promoted_low
+                        .checked_add(1)
+                        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+                }
+                (false, true) => {
+                    attribution.set_disposition(
+                        sample_index,
+                        source_index,
+                        SampleDisposition::RejectedHigh,
+                    )?;
+                    summary.promoted_high = summary
+                        .promoted_high
+                        .checked_add(1)
+                        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+                }
+                (true, true) => {
+                    summary.conflicts_retained = summary
+                        .conflicts_retained
+                        .checked_add(1)
+                        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+                }
+                (false, false) => {}
+            }
+        }
+    }
+    Ok(summary)
+}
+
 /// Classifies source-owned large-scale seeds in sample-major, source-minor order.
 ///
 /// Each returned byte is zero or one. A rejected sample becomes a seed only
@@ -462,6 +560,42 @@ mod tests {
             grow_large_scale_seeds(&seeds[..seeds.len() - 1], &attribution, 1),
             Err(LargeScaleRejectionError::MaskLengthMismatch { .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn simultaneous_tail_expansion_retains_conflicts_and_exclusions() -> TestResult {
+        let dimensions = Dimensions::new(9, 7, 1)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 1)?;
+        for x in 1..=7 {
+            attribution.set_disposition(2 * 9 + x, 0, SampleDisposition::RejectedLow)?;
+            attribution.set_disposition(4 * 9 + x, 0, SampleDisposition::RejectedHigh)?;
+        }
+        attribution.set_disposition(3 * 9, 0, SampleDisposition::Masked)?;
+        let tail = LargeScaleTailParameters::new(1, 1)?;
+        let parameters = LargeScaleRejectionParameters::new(Some(tail), Some(tail))?;
+
+        let summary = expand_large_scale_rejections(&mut attribution, parameters)?;
+
+        assert!(summary.promoted_low() > 0);
+        assert!(summary.promoted_high() > 0);
+        assert!(summary.conflicts_retained() > 0);
+        assert_eq!(
+            attribution.disposition(3 * 9 + 4, 0)?,
+            SampleDisposition::Accepted
+        );
+        assert_eq!(
+            attribution.disposition(9 + 4, 0)?,
+            SampleDisposition::RejectedLow
+        );
+        assert_eq!(
+            attribution.disposition(5 * 9 + 4, 0)?,
+            SampleDisposition::RejectedHigh
+        );
+        assert_eq!(
+            attribution.disposition(3 * 9, 0)?,
+            SampleDisposition::Masked
+        );
         Ok(())
     }
 }
