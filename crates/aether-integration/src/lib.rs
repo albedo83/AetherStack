@@ -601,6 +601,7 @@ pub struct GeneralizedEsdIntegration {
     image: ScientificImage,
     support: Vec<ClippedPixelSupport>,
     attribution: RejectionAttribution,
+    large_scale_summary: Option<LargeScaleExpansionSummary>,
 }
 
 impl GeneralizedEsdIntegration {
@@ -620,6 +621,26 @@ impl GeneralizedEsdIntegration {
     #[must_use]
     pub const fn attribution(&self) -> &RejectionAttribution {
         &self.attribution
+    }
+
+    /// Spatial expansion accounting when large-scale rejection was applied.
+    #[must_use]
+    pub const fn large_scale_summary(&self) -> Option<LargeScaleExpansionSummary> {
+        self.large_scale_summary
+    }
+
+    /// Applies source-owned spatial expansion and rebuilds science from the
+    /// original accepted samples.
+    pub fn apply_large_scale_rejection(
+        mut self,
+        inputs: &[&ScientificImage],
+        parameters: LargeScaleRejectionParameters,
+    ) -> Result<Self, IntegrationError> {
+        let summary = expand_large_scale_rejections(&mut self.attribution, parameters)
+            .map_err(IntegrationError::LargeScale)?;
+        rebuild_generalized_esd_output(&mut self, inputs)?;
+        self.large_scale_summary = Some(summary);
+        Ok(self)
     }
 
     /// Consumes the result into its scientific image and evidence map.
@@ -864,6 +885,24 @@ pub enum IntegrationError {
     InvalidGeneralizedEsdParameters,
     /// Per-source rejection evidence could not be represented.
     Attribution(RejectionAttributionError),
+    /// Source-owned spatial rejection could not be represented or expanded.
+    LargeScale(LargeScaleRejectionError),
+    /// Rebuild inputs did not match the attribution source count.
+    AttributionSourceCountMismatch {
+        /// Source identities represented by the attribution cube.
+        expected: usize,
+        /// Input images supplied for the rebuild.
+        actual: usize,
+    },
+    /// A rebuild input no longer matched its recorded sample disposition.
+    AttributionInputMismatch {
+        /// Zero-based input image index.
+        input_index: usize,
+        /// Zero-based planar sample index.
+        sample_index: usize,
+        /// Recorded sample disposition.
+        disposition: SampleDisposition,
+    },
     /// An input does not match the first image's dimensions.
     DimensionMismatch {
         /// Zero-based input position.
@@ -945,6 +984,19 @@ impl Display for IntegrationError {
                 "generalized ESD requires a finite outlier fraction in (0, 0.5], significance in (0, 1), and at least three retained samples",
             ),
             Self::Attribution(error) => Display::fmt(error, formatter),
+            Self::LargeScale(error) => Display::fmt(error, formatter),
+            Self::AttributionSourceCountMismatch { expected, actual } => write!(
+                formatter,
+                "rejection attribution represents {expected} sources; received {actual} rebuild inputs"
+            ),
+            Self::AttributionInputMismatch {
+                input_index,
+                sample_index,
+                disposition,
+            } => write!(
+                formatter,
+                "rebuild input {input_index} sample {sample_index} does not match recorded {disposition:?} disposition"
+            ),
             Self::DimensionMismatch {
                 input_index,
                 expected,
@@ -1008,12 +1060,15 @@ impl Error for IntegrationError {
         match self {
             Self::Core(error) => Some(error),
             Self::Attribution(error) => Some(error),
+            Self::LargeScale(error) => Some(error),
             Self::NoInputImages
             | Self::TooManyInputImages { .. }
             | Self::InvalidPercentileParameters
             | Self::InvalidSigmaParameters
             | Self::InvalidLinearFitParameters
             | Self::InvalidGeneralizedEsdParameters
+            | Self::AttributionSourceCountMismatch { .. }
+            | Self::AttributionInputMismatch { .. }
             | Self::DimensionMismatch { .. }
             | Self::InvalidRegion { .. }
             | Self::RegionOutsideInput { .. }
@@ -1791,7 +1846,106 @@ pub fn integrate_generalized_esd_mean(
         image: output,
         support,
         attribution,
+        large_scale_summary: None,
     })
+}
+
+fn rebuild_generalized_esd_output(
+    integration: &mut GeneralizedEsdIntegration,
+    inputs: &[&ScientificImage],
+) -> Result<(), IntegrationError> {
+    let dimensions = integration.attribution.dimensions();
+    if inputs.len() != integration.attribution.source_count() {
+        return Err(IntegrationError::AttributionSourceCountMismatch {
+            expected: integration.attribution.source_count(),
+            actual: inputs.len(),
+        });
+    }
+    for (input_index, input) in inputs.iter().enumerate() {
+        if input.dimensions() != dimensions {
+            return Err(IntegrationError::DimensionMismatch {
+                input_index,
+                expected: dimensions,
+                actual: input.dimensions(),
+            });
+        }
+    }
+    let input_count =
+        u32::try_from(inputs.len()).map_err(|_| IntegrationError::TooManyInputImages {
+            count: inputs.len(),
+            maximum: u32::MAX,
+        })?;
+    let mut retained = Vec::new();
+    retained.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+    let (output_pixels, output_mask) = integration.image.pixels_and_mask_mut();
+    for (sample_index, ((output, output_flags), support)) in output_pixels
+        .iter_mut()
+        .zip(output_mask.as_mut_slice())
+        .zip(&mut integration.support)
+        .enumerate()
+    {
+        *support = ClippedPixelSupport::default();
+        retained.clear();
+        let mut combined_masked_flags = PixelFlags::CLEAR;
+        for (input_index, input) in inputs.iter().enumerate() {
+            let (value, flags) = sample_at(input, input_index, sample_index)?;
+            let disposition = integration
+                .attribution
+                .disposition(sample_index, input_index)
+                .map_err(IntegrationError::Attribution)?;
+            let matches = match disposition {
+                SampleDisposition::Accepted
+                | SampleDisposition::RejectedLow
+                | SampleDisposition::RejectedHigh => flags.is_clear() && value.is_finite(),
+                SampleDisposition::Masked => !flags.is_clear(),
+                SampleDisposition::NonFinite => flags.is_clear() && !value.is_finite(),
+            };
+            if !matches {
+                return Err(IntegrationError::AttributionInputMismatch {
+                    input_index,
+                    sample_index,
+                    disposition,
+                });
+            }
+            match disposition {
+                SampleDisposition::Accepted => retained.push(value),
+                SampleDisposition::Masked => {
+                    support.masked += 1;
+                    combined_masked_flags |= flags;
+                }
+                SampleDisposition::NonFinite => support.non_finite += 1,
+                SampleDisposition::RejectedLow => support.low_rejected += 1,
+                SampleDisposition::RejectedHigh => support.high_rejected += 1,
+            }
+        }
+        support.accepted =
+            u32::try_from(retained.len()).map_err(|_| IntegrationError::TooManyInputImages {
+                count: inputs.len(),
+                maximum: u32::MAX,
+            })?;
+        if retained.is_empty() {
+            *output = f64::NAN;
+            *output_flags = combined_masked_flags | PixelFlags::MISSING;
+            if support.non_finite > 0 {
+                *output_flags |= PixelFlags::INVALID;
+            }
+        } else {
+            retained.sort_by(f64::total_cmp);
+            *output = stable_mean(&retained);
+            *output_flags = PixelFlags::CLEAR;
+        }
+        if support.total() != input_count {
+            return Err(IntegrationError::InternalAccountingInvariant {
+                expected: input_count,
+                actual: support.total(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3160,6 +3314,50 @@ mod tests {
             result.attribution().disposition(0, 17)?,
             SampleDisposition::NonFinite
         );
+        Ok(())
+    }
+
+    #[test]
+    fn large_scale_rejection_rebuilds_science_from_original_sources() -> TestResult {
+        let dimensions = Dimensions::new(7, 5, 1)?;
+        let mut inputs = Vec::new();
+        for source_index in 0..15 {
+            let mut pixels = vec![source_index as f64; dimensions.pixel_count()];
+            if source_index == 14 {
+                for x in 1..=5 {
+                    pixels[2 * 7 + x] = 100.0;
+                }
+            }
+            inputs.push(ScientificImage::from_pixels(dimensions, pixels)?);
+        }
+        let references = inputs.iter().collect::<Vec<_>>();
+        let esd = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        let initial = integrate_generalized_esd_mean(&references, esd)?;
+        assert_eq!(initial.image().pixels()[7 + 3].to_bits(), 7.0_f64.to_bits());
+        assert_eq!(initial.support()[2 * 7 + 3].high_rejected(), 1);
+        let high = LargeScaleTailParameters::new(1, 1)?;
+        let spatial = LargeScaleRejectionParameters::new(None, Some(high), 3)?;
+
+        let expanded = initial.apply_large_scale_rejection(&references, spatial)?;
+
+        assert_eq!(
+            expanded.image().pixels()[7 + 3].to_bits(),
+            6.5_f64.to_bits()
+        );
+        assert_eq!(expanded.image().pixels()[3].to_bits(), 7.0_f64.to_bits());
+        assert_eq!(expanded.support()[7 + 3].accepted(), 14);
+        assert_eq!(expanded.support()[7 + 3].high_rejected(), 1);
+        assert_eq!(
+            expanded.attribution().disposition(7 + 3, 14)?,
+            SampleDisposition::RejectedHigh
+        );
+        let summary = expanded
+            .large_scale_summary()
+            .ok_or("missing large-scale summary")?;
+        assert_eq!(summary.promoted_high(), 10);
+        assert_eq!(summary.promoted_low(), 0);
+        assert_eq!(summary.conflicts_retained(), 0);
+        assert_eq!(summary.support_floor_retained(), 0);
         Ok(())
     }
 
