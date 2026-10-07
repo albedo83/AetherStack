@@ -1098,7 +1098,6 @@ pub fn integrate_median(
             elements: inputs.len(),
         }
     })?;
-
     let (output_pixels, output_mask) = output.pixels_and_mask_mut();
     for (pixel_index, ((output, output_flags), output_support)) in output_pixels
         .iter_mut()
@@ -1645,6 +1644,24 @@ pub fn integrate_generalized_esd_mean(
             elements: inputs.len(),
         }
     })?;
+    let mut decisions = Vec::new();
+    decisions.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+    let mut esd_working = Vec::new();
+    esd_working.try_reserve_exact(inputs.len()).map_err(|_| {
+        IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        }
+    })?;
+    let mut esd_candidates = Vec::new();
+    esd_candidates
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| IntegrationError::SampleAllocationFailed {
+            elements: inputs.len(),
+        })?;
 
     let (output_pixels, output_mask) = output.pixels_and_mask_mut();
     for (pixel_index, ((output, output_flags), output_support)) in output_pixels
@@ -1676,7 +1693,13 @@ pub fn integrate_generalized_esd_mean(
             *output_flags = flags;
         } else {
             finite.sort_by(f64::total_cmp);
-            let decisions = generalized_esd_decisions(&finite, parameters);
+            generalized_esd_decisions(
+                &finite,
+                parameters,
+                &mut decisions,
+                &mut esd_working,
+                &mut esd_candidates,
+            );
             let mut rank = 0_usize;
             finite.retain(|_| {
                 let decision = decisions.get(rank).copied().unwrap_or(EsdDecision::Retain);
@@ -1734,10 +1757,14 @@ struct EsdCandidate {
 fn generalized_esd_decisions(
     sorted_values: &[f64],
     parameters: GeneralizedEsdParameters,
-) -> Vec<EsdDecision> {
-    let mut decisions = vec![EsdDecision::Retain; sorted_values.len()];
+    decisions: &mut Vec<EsdDecision>,
+    working: &mut Vec<(usize, f64)>,
+    candidates: &mut Vec<EsdCandidate>,
+) {
+    decisions.clear();
+    decisions.resize(sorted_values.len(), EsdDecision::Retain);
     if sorted_values.len() < GENERALIZED_ESD_MINIMUM_SAMPLE_COUNT as usize {
-        return decisions;
+        return;
     }
     let fraction_bound =
         (sorted_values.len() as f64 * parameters.maximum_outlier_fraction).floor() as usize;
@@ -1746,18 +1773,14 @@ fn generalized_esd_decisions(
         .saturating_sub(parameters.minimum_retained as usize);
     let maximum_outliers = fraction_bound.min(support_bound);
     if maximum_outliers == 0 {
-        return decisions;
+        return;
     }
 
-    let mut working = sorted_values
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(original_rank, value)| (original_rank, value))
-        .collect::<Vec<_>>();
-    let mut candidates = Vec::with_capacity(maximum_outliers);
+    working.clear();
+    working.extend(sorted_values.iter().copied().enumerate());
+    candidates.clear();
     for _ in 0..maximum_outliers {
-        let Some((candidate_index, statistic, decision)) = esd_candidate(&working) else {
+        let Some((candidate_index, statistic, decision)) = esd_candidate(working) else {
             break;
         };
         let sample_count = working.len();
@@ -1790,10 +1813,9 @@ fn generalized_esd_decisions(
         .iter()
         .rposition(|candidate| candidate.statistic > candidate.critical_value)
         .map_or(0, |index| index + 1);
-    for candidate in candidates.into_iter().take(rejected_count) {
+    for candidate in candidates.iter().take(rejected_count) {
         decisions[candidate.original_rank] = candidate.decision;
     }
-    decisions
 }
 
 fn esd_candidate(samples: &[(usize, f64)]) -> Option<(usize, f64, EsdDecision)> {
@@ -2980,6 +3002,69 @@ mod tests {
         assert_eq!(result.support()[0].high_rejected(), 3);
         assert_eq!(result.support()[0].total(), 54);
         assert!(result.image().pixels()[0].is_finite());
+        Ok(())
+    }
+
+    #[test]
+    fn generalized_esd_is_permutation_invariant_and_fails_closed() -> TestResult {
+        let mut ordered = (0_u32..15).map(f64::from).collect::<Vec<_>>();
+        ordered.push(1_000.0);
+        let mut permuted = ordered.clone();
+        permuted.reverse();
+        let integrate = |values: &[f64], retained| -> TestResult<GeneralizedEsdIntegration> {
+            let inputs = values
+                .iter()
+                .copied()
+                .map(|value| image(vec![value]))
+                .collect::<Result<Vec<_>, _>>()?;
+            let references = inputs.iter().collect::<Vec<_>>();
+            Ok(integrate_generalized_esd_mean(
+                &references,
+                GeneralizedEsdParameters::new(0.30, 0.05, retained)?,
+            )?)
+        };
+
+        let first = integrate(&ordered, 3)?;
+        let second = integrate(&permuted, 3)?;
+        assert_eq!(first.image().pixels(), second.image().pixels());
+        assert_eq!(first.support(), second.support());
+        assert_eq!(first.image().pixels()[0].to_bits(), 7.0_f64.to_bits());
+        assert_eq!(first.support()[0].accepted(), 15);
+        assert_eq!(first.support()[0].high_rejected(), 1);
+
+        let below_admitted_population = integrate(&ordered[..14], 3)?;
+        assert_eq!(below_admitted_population.support()[0].accepted(), 14);
+        assert_eq!(below_admitted_population.support()[0].high_rejected(), 0);
+
+        let support_limited = integrate(&ordered, 16)?;
+        assert_eq!(support_limited.support()[0].accepted(), 16);
+        assert_eq!(support_limited.support()[0].high_rejected(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn generalized_esd_keeps_mask_and_nonfinite_evidence_separate() -> TestResult {
+        let mut inputs = (0_u32..15)
+            .map(|value| image(vec![f64::from(value)]))
+            .collect::<Result<Vec<_>, _>>()?;
+        inputs.push(image(vec![1_000.0])?);
+        let mut masked = image(vec![-1_000.0])?;
+        masked.mask_mut().as_mut_slice()[0] = PixelFlags::HOT;
+        inputs.push(masked);
+        inputs.push(image(vec![f64::NAN])?);
+        let references = inputs.iter().collect::<Vec<_>>();
+
+        let result = integrate_generalized_esd_mean(
+            &references,
+            GeneralizedEsdParameters::new(0.30, 0.05, 3)?,
+        )?;
+
+        assert_eq!(result.support()[0].accepted(), 15);
+        assert_eq!(result.support()[0].high_rejected(), 1);
+        assert_eq!(result.support()[0].low_rejected(), 0);
+        assert_eq!(result.support()[0].masked(), 1);
+        assert_eq!(result.support()[0].non_finite(), 1);
+        assert_eq!(result.support()[0].total(), 18);
         Ok(())
     }
 
