@@ -2237,6 +2237,75 @@ mod tests {
         Ok((request, low_path, high_path, parameters_sha256))
     }
 
+    fn generalized_esd_stack_request(
+        directory: &TestDirectory,
+        band_height: usize,
+    ) -> Result<(RegisteredStackRequest, PathBuf, PathBuf, String), Box<dyn Error>> {
+        let identities = (1_u32..=16)
+            .map(|index| FrameId::new(format!("{index:064x}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let plan = RegistrationPlan::new(
+            identities[0].clone(),
+            12,
+            10,
+            identities
+                .iter()
+                .cloned()
+                .map(|frame_id| {
+                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
+                })
+                .collect(),
+        )?;
+        let values = (0_u32..15).map(f64::from).chain(std::iter::once(1_000.0));
+        let sources = identities
+            .into_iter()
+            .zip(values)
+            .map(|(frame_id, value)| registered_source(directory, &plan, frame_id, value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let estimator =
+            RegisteredStackEstimator::GeneralizedEsd(GeneralizedEsdParameters::new(0.30, 0.05, 3)?);
+        let parameters_sha256 = estimator
+            .parameters_sha256()
+            .ok_or("missing generalized ESD parameter digest")?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            estimator.algorithm_id(),
+            16,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
+        let low_path = directory.0.join("esd-low-rejection.fits");
+        let high_path = directory.0.join("esd-high-rejection.fits");
+        let map_provenance = |group: &str| -> Result<FitsOutputProvenance, Box<dyn Error>> {
+            Ok(FitsOutputProvenance::new(
+                "a".repeat(64),
+                group,
+                GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID,
+                16,
+            )?
+            .with_plan_sha256(plan.plan_sha256())?
+            .with_parameters_sha256(&parameters_sha256)?)
+        };
+        let low_provenance = map_provenance("registered-rejection-low")?;
+        let high_provenance = map_provenance("registered-rejection-high")?;
+        let request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            directory.0.join("esd-stack.fits"),
+            provenance,
+            estimator,
+        )?
+        .with_band_height(band_height)?
+        .with_rejection_map(RegisteredRejectionMapOutput::new(
+            low_path.clone(),
+            low_provenance,
+            high_path.clone(),
+            high_provenance,
+        ))?;
+        Ok((request, low_path, high_path, parameters_sha256))
+    }
+
     fn weighted_stack_request(
         directory: &TestDirectory,
     ) -> Result<(RegisteredStackRequest, String), Box<dyn Error>> {
@@ -2597,6 +2666,63 @@ mod tests {
             let mut reader =
                 PrimaryImageReader::open(File::open(path)?, HeaderReadOptions::default())?;
             assert!(reader.verify_checksums()?.is_fully_verified());
+            let map = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+            assert!(
+                map.pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == expected.to_bits())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generalized_esd_stack_is_sealed_bounded_and_band_height_independent() -> TestResult {
+        let first_directory = TestDirectory::new()?;
+        let second_directory = TestDirectory::new()?;
+        let (first, first_low, first_high, parameters_sha256) =
+            generalized_esd_stack_request(&first_directory, 1)?;
+        let (second, second_low, second_high, second_parameters_sha256) =
+            generalized_esd_stack_request(&second_directory, 7)?;
+        assert_eq!(parameters_sha256, second_parameters_sha256);
+        assert_ne!(
+            first.estimator().parameters_sha256(),
+            RegisteredStackEstimator::GeneralizedEsd(
+                GeneralizedEsdParameters::new(0.30, 0.04, 3,)?
+            )
+            .parameters_sha256()
+        );
+        let memory = MemoryBudget::new(32 * 1_024 * 1_024)?;
+
+        let result = run_registered_stack(&first, &CancellationToken::new(), &memory, |_| {})?;
+        run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(result.dimensions(), Dimensions::new(12, 10, 3)?);
+        assert_eq!(fs::read(first.output())?, fs::read(second.output())?);
+        assert_eq!(fs::read(&first_low)?, fs::read(&second_low)?);
+        assert_eq!(fs::read(&first_high)?, fs::read(&second_high)?);
+        let mut science =
+            PrimaryImageReader::open(File::open(first.output())?, HeaderReadOptions::default())?;
+        assert!(science.verify_checksums()?.is_fully_verified());
+        assert_eq!(
+            science.report().header().string("AETHPAR"),
+            Some(parameters_sha256.as_str())
+        );
+        let image = science.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+        assert!(
+            image
+                .pixels()
+                .iter()
+                .all(|value| value.to_bits() == 7.0_f64.to_bits())
+        );
+        for (path, expected) in [(first_low, 0.0_f64), (first_high, 1.0_f64)] {
+            let mut reader =
+                PrimaryImageReader::open(File::open(path)?, HeaderReadOptions::default())?;
+            assert!(reader.verify_checksums()?.is_fully_verified());
+            assert_eq!(
+                reader.report().header().string("AETHPAR"),
+                Some(parameters_sha256.as_str())
+            );
             let map = reader.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
             assert!(
                 map.pixels()
