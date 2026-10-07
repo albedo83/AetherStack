@@ -203,3 +203,77 @@ impl RejectionAttribution {
         Ok((bit_index / 8, (bit_index % 8) as u32))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    #[test]
+    fn round_trips_every_disposition_across_byte_boundaries() -> TestResult {
+        let dimensions = Dimensions::new(3, 2, 2)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 5)?;
+        let dispositions = [
+            SampleDisposition::Accepted,
+            SampleDisposition::Masked,
+            SampleDisposition::NonFinite,
+            SampleDisposition::RejectedLow,
+            SampleDisposition::RejectedHigh,
+        ];
+        for sample_index in 0..dimensions.pixel_count() {
+            for source_index in 0..5 {
+                attribution.set_disposition(
+                    sample_index,
+                    source_index,
+                    dispositions[(sample_index + source_index) % dispositions.len()],
+                )?;
+            }
+        }
+        for sample_index in 0..dimensions.pixel_count() {
+            for source_index in 0..5 {
+                assert_eq!(
+                    attribution.disposition(sample_index, source_index)?,
+                    dispositions[(sample_index + source_index) % dispositions.len()]
+                );
+            }
+        }
+        assert_eq!(attribution.dimensions(), dimensions);
+        assert_eq!(attribution.source_count(), 5);
+        assert_eq!(attribution.packed_len(), 23);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_empty_and_out_of_bounds_access_without_mutation() -> TestResult {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        assert_eq!(
+            RejectionAttribution::new(dimensions, 0),
+            Err(RejectionAttributionError::EmptySourceSet)
+        );
+        let mut attribution = RejectionAttribution::new(dimensions, 2)?;
+        let original = attribution.clone();
+        assert!(matches!(
+            attribution.set_disposition(2, 0, SampleDisposition::RejectedHigh),
+            Err(RejectionAttributionError::IndexOutsideCube { .. })
+        ));
+        assert!(matches!(
+            attribution.disposition(0, 2),
+            Err(RejectionAttributionError::IndexOutsideCube { .. })
+        ));
+        assert_eq!(attribution, original);
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_packed_codes_fail_closed() -> TestResult {
+        let dimensions = Dimensions::new(1, 1, 1)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 1)?;
+        attribution.packed[0] = 0b111;
+        assert_eq!(
+            attribution.disposition(0, 0),
+            Err(RejectionAttributionError::InvalidPackedCode { code: 7 })
+        );
+        Ok(())
+    }
+}
