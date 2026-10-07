@@ -15,7 +15,7 @@ pub use aether_integration::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, GENERALIZED_ESD_CLIPPED_MEAN_ALGORITHM_ID,
     GeneralizedEsdParameters, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, LinearFitClipParameters,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, QualityWeightMetrics,
-    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters,
+    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters, SourceDispositionCounts,
     WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
 };
 use aether_integration::{
@@ -753,12 +753,34 @@ impl RegisteredStackRequest {
 }
 
 /// Completed common-crop registered stack.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegisteredStackResult {
     dimensions: Dimensions,
     summary: FitsWriteSummary,
     peak_reserved_bytes: usize,
     rejection_map_summary: Option<RegisteredRejectionMapSummary>,
+    source_dispositions: Vec<RegisteredSourceDispositionSummary>,
+}
+
+/// Exact spatial disposition totals bound to one registered source identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredSourceDispositionSummary {
+    frame_id: FrameId,
+    counts: SourceDispositionCounts,
+}
+
+impl RegisteredSourceDispositionSummary {
+    /// Reviewed source identity in canonical execution order.
+    #[must_use]
+    pub const fn frame_id(&self) -> &FrameId {
+        &self.frame_id
+    }
+
+    /// Exact accepted, excluded, and rejected sample totals.
+    #[must_use]
+    pub const fn counts(&self) -> SourceDispositionCounts {
+        self.counts
+    }
 }
 
 /// Write accounting for a published pair of low/high rejection maps.
@@ -785,26 +807,32 @@ impl RegisteredRejectionMapSummary {
 impl RegisteredStackResult {
     /// Published cropped output dimensions.
     #[must_use]
-    pub const fn dimensions(self) -> Dimensions {
+    pub const fn dimensions(&self) -> Dimensions {
         self.dimensions
     }
 
     /// Exact sample, substitution, byte, and checksum accounting.
     #[must_use]
-    pub const fn summary(self) -> FitsWriteSummary {
+    pub const fn summary(&self) -> FitsWriteSummary {
         self.summary
     }
 
     /// Peak logical working set observed by the shared budget.
     #[must_use]
-    pub const fn peak_reserved_bytes(self) -> usize {
+    pub const fn peak_reserved_bytes(&self) -> usize {
         self.peak_reserved_bytes
     }
 
     /// Published rejection-map accounting when requested.
     #[must_use]
-    pub const fn rejection_map_summary(self) -> Option<RegisteredRejectionMapSummary> {
+    pub const fn rejection_map_summary(&self) -> Option<RegisteredRejectionMapSummary> {
         self.rejection_map_summary
+    }
+
+    /// Per-source spatial evidence, available for attributed estimators.
+    #[must_use]
+    pub fn source_dispositions(&self) -> &[RegisteredSourceDispositionSummary] {
+        &self.source_dispositions
     }
 }
 
@@ -1152,6 +1180,39 @@ where
     let _writer = memory
         .try_reserve(writer_bytes)
         .map_err(RegisteredStackError::Memory)?;
+    let source_summary_bytes = if matches!(
+        request.estimator,
+        RegisteredStackEstimator::GeneralizedEsd(_)
+    ) {
+        request
+            .sources
+            .len()
+            .checked_mul(size_of::<RegisteredSourceDispositionSummary>())
+            .ok_or(RegisteredStackError::WorkSizeOverflow)?
+    } else {
+        0
+    };
+    let _source_summary_memory = if source_summary_bytes == 0 {
+        None
+    } else {
+        Some(
+            memory
+                .try_reserve(source_summary_bytes)
+                .map_err(RegisteredStackError::Memory)?,
+        )
+    };
+    let mut source_dispositions = Vec::new();
+    if source_summary_bytes > 0 {
+        source_dispositions
+            .try_reserve_exact(request.sources.len())
+            .map_err(|_| RegisteredStackError::AllocationFailed)?;
+        source_dispositions.extend(request.sources.iter().map(|source| {
+            RegisteredSourceDispositionSummary {
+                frame_id: source.frame_id().clone(),
+                counts: SourceDispositionCounts::default(),
+            }
+        }));
+    }
     let mut writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
         &request.output,
         output_dimensions,
@@ -1345,6 +1406,17 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    let band_counts = integrated
+                        .attribution()
+                        .source_counts()
+                        .map_err(IntegrationError::Attribution)
+                        .map_err(RegisteredStackError::Integration)?;
+                    for (summary, counts) in source_dispositions.iter_mut().zip(band_counts) {
+                        summary.counts = summary
+                            .counts
+                            .checked_add(counts)
+                            .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+                    }
                     if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
                         let maps = materialize_percentile_rejection_map(
                             integrated.image().dimensions(),
@@ -1456,6 +1528,7 @@ where
         summary,
         peak_reserved_bytes: memory.peak(),
         rejection_map_summary,
+        source_dispositions,
     })
 }
 
@@ -1603,6 +1676,16 @@ fn planned_band_bytes(
             .checked_mul(size_of::<f64>() + 64)
             .ok_or(RegisteredStackError::WorkSizeOverflow)?,
     };
+    let attribution = if matches!(estimator, RegisteredStackEstimator::GeneralizedEsd(_)) {
+        samples
+            .checked_mul(source_count)
+            .and_then(|value| value.checked_mul(3))
+            .and_then(|bits| bits.checked_add(7))
+            .map(|bits| bits / 8)
+            .ok_or(RegisteredStackError::WorkSizeOverflow)?
+    } else {
+        0
+    };
     let rejection_map_images = if rejection_maps {
         image
             .checked_mul(2)
@@ -1615,6 +1698,7 @@ fn planned_band_bytes(
         .and_then(|value| value.checked_add(decode))
         .and_then(|value| value.checked_add(vector_storage))
         .and_then(|value| value.checked_add(estimator_scratch))
+        .and_then(|value| value.checked_add(attribution))
         .and_then(|value| value.checked_add(rejection_map_images))
         .ok_or(RegisteredStackError::WorkSizeOverflow)
 }
@@ -2695,9 +2779,22 @@ mod tests {
         let memory = MemoryBudget::new(32 * 1_024 * 1_024)?;
 
         let result = run_registered_stack(&first, &CancellationToken::new(), &memory, |_| {})?;
-        run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
+        let second_result =
+            run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
 
         assert_eq!(result.dimensions(), Dimensions::new(12, 10, 3)?);
+        assert_eq!(
+            result.source_dispositions(),
+            second_result.source_dispositions()
+        );
+        assert_eq!(result.source_dispositions().len(), 16);
+        for summary in &result.source_dispositions()[..15] {
+            assert_eq!(summary.counts().accepted(), 360);
+            assert_eq!(summary.counts().total(), 360);
+        }
+        let outlier = &result.source_dispositions()[15];
+        assert_eq!(outlier.counts().rejected_high(), 360);
+        assert_eq!(outlier.counts().total(), 360);
         assert_eq!(fs::read(first.output())?, fs::read(second.output())?);
         assert_eq!(fs::read(&first_low)?, fs::read(&second_low)?);
         assert_eq!(fs::read(&first_high)?, fs::read(&second_high)?);

@@ -67,6 +67,18 @@ impl SourceDispositionCounts {
     pub const fn total(self) -> u64 {
         self.accepted + self.masked + self.non_finite + self.rejected_low + self.rejected_high
     }
+
+    /// Adds independent spatial regions while rejecting counter overflow.
+    #[must_use]
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        Some(Self {
+            accepted: self.accepted.checked_add(other.accepted)?,
+            masked: self.masked.checked_add(other.masked)?,
+            non_finite: self.non_finite.checked_add(other.non_finite)?,
+            rejected_low: self.rejected_low.checked_add(other.rejected_low)?,
+            rejected_high: self.rejected_high.checked_add(other.rejected_high)?,
+        })
+    }
 }
 
 impl SampleDisposition {
