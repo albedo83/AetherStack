@@ -2433,6 +2433,43 @@ describe("frame review workspace", () => {
       largeScaleLowGrowth: 2,
       largeScaleHighGrowth: 2,
     });
+
+    const highTail = getByRole<HTMLInputElement>(root, "checkbox", {
+      name: /High tail/,
+    });
+    const highLayers = getByRole<HTMLInputElement>(root, "spinbutton", {
+      name: "High-tail large-scale detection layers",
+    });
+    expect(highTail.checked).toBe(false);
+    expect(highTail.disabled).toBe(false);
+    expect(highLayers.disabled).toBe(true);
+    fireEvent.click(highTail);
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "generalized_esd",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 4,
+      highSigma: 3,
+      esdOutlierFraction: 0.25,
+      esdSignificance: 0.011,
+      maximumIterations: 8,
+      minimumRetainedSamples: 3,
+      generateRejectionMaps: true,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: true,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
+    });
+    fireEvent.change(highLayers, { target: { value: "4" } });
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        largeScaleHighEnabled: true,
+        largeScaleHighLayers: 4,
+      }),
+    );
   });
 
   it("presents a natively verified report without claiming an active stack", () => {
