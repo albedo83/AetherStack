@@ -54,7 +54,7 @@ pub const REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID: &str = "registered-li
 /// Versioned two-sided generalized ESD registered stack identity.
 pub const REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID: &str = "registered-esd-mean-f64-v1";
 /// Generalized ESD followed by exact source-owned large-scale expansion.
-pub const REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID: &str = "registered-spatial-esd-mean-f64-v1";
+pub const REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID: &str = "registered-spatial-esd-f64-v1";
 /// Plane-major low/high count map emitted by iterative sigma rejection.
 pub const SIGMA_REJECTION_MAP_ALGORITHM_ID: &str = "sigma-rejection-map-v1";
 /// Plane-major low/high count map emitted by Winsorized sigma rejection.
@@ -2130,6 +2130,15 @@ mod tests {
         value: f64,
     ) -> Result<RegisteredStackSource, Box<dyn Error>> {
         let image = ScientificImage::filled(Dimensions::new(12, 10, 3)?, value)?;
+        registered_image_source(directory, plan, frame_id, image)
+    }
+
+    fn registered_image_source(
+        directory: &TestDirectory,
+        plan: &RegistrationPlan,
+        frame_id: FrameId,
+        image: ScientificImage,
+    ) -> Result<RegisteredStackSource, Box<dyn Error>> {
         let path = directory
             .0
             .join(format!("registered-{}.fits", frame_id.as_str()));
@@ -2673,6 +2682,86 @@ mod tests {
         Ok((request, low_path, high_path, parameters_sha256))
     }
 
+    fn spatial_esd_stack_request(
+        directory: &TestDirectory,
+        band_height: usize,
+    ) -> Result<(RegisteredStackRequest, PathBuf, PathBuf, String), Box<dyn Error>> {
+        let identities = (1_u32..=16)
+            .map(|index| FrameId::new(format!("{index:064x}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let plan = RegistrationPlan::new(
+            identities[0].clone(),
+            12,
+            10,
+            identities
+                .iter()
+                .cloned()
+                .map(|frame_id| {
+                    PlannedRegistrationFrame::new(frame_id, 12, 10, AffineTransform::IDENTITY)
+                })
+                .collect(),
+        )?;
+        let dimensions = Dimensions::new(12, 10, 3)?;
+        let mut sources = Vec::new();
+        for (source_index, frame_id) in identities.into_iter().enumerate() {
+            let mut image = ScientificImage::filled(dimensions, source_index as f64)?;
+            if source_index == 15 {
+                for plane in 0..3 {
+                    for x in 2..10 {
+                        *image.get_mut(x, 4, plane)? = 1_000.0;
+                    }
+                }
+            }
+            sources.push(registered_image_source(directory, &plan, frame_id, image)?);
+        }
+        let esd = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        let high = aether_integration::LargeScaleTailParameters::new(1, 2)?;
+        let spatial = LargeScaleRejectionParameters::new(None, Some(high), 3)?;
+        let estimator = RegisteredStackEstimator::GeneralizedEsdLargeScale(
+            RegisteredSpatialEsdParameters::new(esd, spatial)?,
+        );
+        let parameters_sha256 = estimator
+            .parameters_sha256()
+            .ok_or("missing spatial digest")?;
+        let provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            estimator.algorithm_id(),
+            16,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?
+        .with_parameters_sha256(&parameters_sha256)?;
+        let low_path = directory.0.join("spatial-esd-low-rejection.fits");
+        let high_path = directory.0.join("spatial-esd-high-rejection.fits");
+        let map_provenance = |group: &str| -> Result<FitsOutputProvenance, Box<dyn Error>> {
+            Ok(FitsOutputProvenance::new(
+                "a".repeat(64),
+                group,
+                SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID,
+                16,
+            )?
+            .with_plan_sha256(plan.plan_sha256())?
+            .with_parameters_sha256(&parameters_sha256)?)
+        };
+        let low_provenance = map_provenance("registered-rejection-low")?;
+        let high_provenance = map_provenance("registered-rejection-high")?;
+        let request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            directory.0.join("spatial-esd-stack.fits"),
+            provenance,
+            estimator,
+        )?
+        .with_band_height(band_height)?
+        .with_rejection_map(RegisteredRejectionMapOutput::new(
+            low_path.clone(),
+            low_provenance,
+            high_path.clone(),
+            high_provenance,
+        ))?;
+        Ok((request, low_path, high_path, parameters_sha256))
+    }
+
     fn weighted_stack_request(
         directory: &TestDirectory,
     ) -> Result<(RegisteredStackRequest, String), Box<dyn Error>> {
@@ -3110,6 +3199,56 @@ mod tests {
                     .all(|value| value.to_bits() == expected.to_bits())
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn spatial_esd_is_byte_exact_across_band_boundaries() -> TestResult {
+        let first_directory = TestDirectory::new()?;
+        let second_directory = TestDirectory::new()?;
+        let (first, first_low, first_high, parameters_sha256) =
+            spatial_esd_stack_request(&first_directory, 1)?;
+        let (second, second_low, second_high, second_parameters_sha256) =
+            spatial_esd_stack_request(&second_directory, 7)?;
+        assert_eq!(parameters_sha256, second_parameters_sha256);
+        assert_eq!(
+            first.estimator().algorithm_id(),
+            REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID
+        );
+        let memory = MemoryBudget::new(64 * 1_024 * 1_024)?;
+
+        let first_result =
+            run_registered_stack(&first, &CancellationToken::new(), &memory, |_| {})?;
+        let second_result =
+            run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
+
+        assert_eq!(fs::read(first.output())?, fs::read(second.output())?);
+        assert_eq!(fs::read(&first_low)?, fs::read(&second_low)?);
+        assert_eq!(fs::read(&first_high)?, fs::read(&second_high)?);
+        assert_eq!(
+            first_result.source_dispositions(),
+            second_result.source_dispositions()
+        );
+        let outlier = &first_result.source_dispositions()[15];
+        assert_eq!(outlier.counts().rejected_high(), 150);
+        assert_eq!(outlier.counts().accepted(), 210);
+
+        let mut science =
+            PrimaryImageReader::open(File::open(first.output())?, HeaderReadOptions::default())?;
+        assert!(science.verify_checksums()?.is_fully_verified());
+        assert_eq!(
+            science.report().header().string("AETHPAR"),
+            Some(parameters_sha256.as_str())
+        );
+        let image = science.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+        assert_eq!(image.get(5, 0, 0)?.to_bits(), 7.5_f64.to_bits());
+        assert_eq!(image.get(5, 3, 0)?.to_bits(), 7.0_f64.to_bits());
+
+        let mut high =
+            PrimaryImageReader::open(File::open(first_high)?, HeaderReadOptions::default())?;
+        let high_map = high.read_region_image(ImageRegion::new(0, 0, 0, 12, 10))?;
+        assert_eq!(high_map.get(5, 0, 0)?.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(high_map.get(5, 3, 0)?.to_bits(), 1.0_f64.to_bits());
         Ok(())
     }
 
