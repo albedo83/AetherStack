@@ -15,8 +15,9 @@ pub use aether_integration::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, GENERALIZED_ESD_CLIPPED_MEAN_ALGORITHM_ID,
     GeneralizedEsdParameters, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, LargeScaleRejectionParameters,
     LargeScaleTailParameters, LinearFitClipParameters, PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
-    PercentileClipParameters, QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
-    SigmaClipParameters, SourceDispositionCounts, WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    PercentileClipParameters, QualityWeightMetrics, RejectionPromotionCounts,
+    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters, SourceDispositionCounts,
+    WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
@@ -886,6 +887,7 @@ pub struct RegisteredStackResult {
     peak_reserved_bytes: usize,
     rejection_map_summary: Option<RegisteredRejectionMapSummary>,
     source_dispositions: Vec<RegisteredSourceDispositionSummary>,
+    spatial_promotions: Option<RejectionPromotionCounts>,
 }
 
 /// Exact spatial disposition totals bound to one registered source identity.
@@ -959,6 +961,12 @@ impl RegisteredStackResult {
     #[must_use]
     pub fn source_dispositions(&self) -> &[RegisteredSourceDispositionSummary] {
         &self.source_dispositions
+    }
+
+    /// Exact samples promoted from accepted to rejected by spatial processing.
+    #[must_use]
+    pub const fn spatial_promotions(&self) -> Option<RejectionPromotionCounts> {
+        self.spatial_promotions
     }
 }
 
@@ -1340,6 +1348,11 @@ where
             }
         }));
     }
+    let mut spatial_promotions = matches!(
+        request.estimator,
+        RegisteredStackEstimator::GeneralizedEsdLargeScale(_)
+    )
+    .then(RejectionPromotionCounts::default);
     let mut writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
         &request.output,
         output_dimensions,
@@ -1570,11 +1583,28 @@ where
                 RegisteredStackEstimator::GeneralizedEsdLargeScale(parameters) => {
                     let references = images.iter().collect::<Vec<_>>();
                     let integrated = integrate_generalized_esd_mean(&references, parameters.esd())
-                        .map_err(RegisteredStackError::Integration)?
+                        .map_err(RegisteredStackError::Integration)?;
+                    let baseline = integrated
+                        .attribution()
+                        .crop_rows(band_window.core_start, band_window.core_height)
+                        .map_err(IntegrationError::Attribution)
+                        .map_err(RegisteredStackError::Integration)?;
+                    let integrated = integrated
                         .apply_large_scale_rejection(&references, parameters.spatial())
                         .map_err(RegisteredStackError::Integration)?
                         .crop_rows(band_window.core_start, band_window.core_height)
                         .map_err(RegisteredStackError::Integration)?;
+                    let band_promotions = integrated
+                        .attribution()
+                        .promotions_from(&baseline)
+                        .map_err(IntegrationError::Attribution)
+                        .map_err(RegisteredStackError::Integration)?;
+                    let total = spatial_promotions
+                        .as_mut()
+                        .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+                    *total = total
+                        .checked_add(band_promotions)
+                        .ok_or(RegisteredStackError::WorkSizeOverflow)?;
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
@@ -1701,6 +1731,7 @@ where
         peak_reserved_bytes: memory.peak(),
         rejection_map_summary,
         source_dispositions,
+        spatial_promotions,
     })
 }
 

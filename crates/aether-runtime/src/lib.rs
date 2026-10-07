@@ -101,7 +101,7 @@ pub use registered_stack::{
     RegisteredSourceDispositionSummary, RegisteredSpatialEsdParameterError,
     RegisteredSpatialEsdParameters, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackResult, RegisteredStackSource, RegisteredWeightSet,
-    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SIGMA_REJECTION_MAP_ALGORITHM_ID,
+    RejectionPromotionCounts, SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SIGMA_REJECTION_MAP_ALGORITHM_ID,
     SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID, SigmaClipParameters, SourceDispositionCounts,
     WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID,
     run_registered_stack,
