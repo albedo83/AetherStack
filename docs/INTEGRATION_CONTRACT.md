@@ -236,12 +236,22 @@ closed. A domain-separated SHA-256 binds tail enablement, layers, growth, and
 support. The memory plan accounts for all retained tail masks, temporary seed
 and growth storage, and one reusable summed-area table.
 
-The strict full-image oracle is implemented and tested, but it is not yet
-enabled in the registered band runtime or desktop. Exact bounded execution will
-require halo-aware bands or equivalent transactional staging, then native FITS
-provenance, report persistence, maps, and UI controls. The compact per-pixel
-cube is still execution-local, and gradient-aware alternatives remain future
-versioned algorithms rather than undocumented changes to this contract.
+The registered runtime evaluates an expanded row window and publishes only its
+non-overlapping core. The halo is the maximum enabled detection radius plus
+growth radius, clipped only at global image boundaries. Science, support,
+source totals, and low/high FITS maps are cropped together, so changing band
+height cannot change bytes or attribution. The memory reservation includes the
+expanded source images, attribution, spatial masks, summed-area table, rebuilt
+science, and the simultaneous cropped core.
+
+`registered-spatial-esd-f64-v1` and `spatial-esd-rejection-map-v1` distinguish
+spatial output from pixel-local ESD. Their shared parameter digest covers both
+the generalized-ESD controls and the spatial policy. Native report schema 3
+persists all six low/high controls, while schemas 1 and 2 remain readable only
+with spatial expansion disabled. The desktop exposes the feature solely under
+Generalized ESD in an advanced panel with bounded inputs. The compact
+per-pixel cube remains execution-local, and gradient-aware alternatives remain
+future versioned algorithms rather than undocumented changes to this contract.
 
 ## Frame-weighted mean
 

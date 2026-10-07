@@ -185,7 +185,8 @@ optimized CPU and GPU paths must match.
   source-owned large-scale oracle with summed-area structure classification,
   independent tail growth, conservative conflict/support safeguards, exact
   source-value reintegration, bounded memory planning, and sealed parameters
-  awaiting halo-aware registered-runtime publication, plus
+  executed through exact halo-aware registered bands with distinct FITS/report
+  provenance and advanced low/high desktop controls, plus
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
   expert UI while strict mean remains the default, with linked native previews

@@ -2359,6 +2359,22 @@ safety reasoning. They do not narrate obvious syntax.
 282. Publish the strict core only after repository-wide validation. State
      explicitly that halo-aware registered execution, transactional FITS/report
      evidence, desktop controls, and representative camera validation remain.
+283. Define exact band windows. Detection radius plus growth is the minimum
+     vertical halo, clipped only at the global common-crop boundary.
+284. Crop planar science and masks without reordering planes. Core extraction
+     must preserve bit-exact values and quality evidence.
+285. Crop packed source attribution independently. Every source disposition
+     must remain attached to the same planar sample after halo removal.
+286. Execute spatial ESD in the registered runtime. Expanded bands are rebuilt
+     from original values before science, maps, and totals publish core rows.
+287. Account for expanded execution memory. Spatial masks, integral storage,
+     halo images, rebuilt output, and cropped core require one checked plan.
+288. Prove band-height independence end to end. Science FITS, both rejection
+     maps, and per-source counters must be identical for one-row and wide bands.
+289. Carry controls through the native and typed bridges. Older requests default
+     to disabled expansion; enabled output receives distinct algorithm seals.
+290. Expose an accessible expert panel. Independent low/high enablement, layers,
+     and growth stay hidden outside generalized ESD and bounded at input.
 
 ## 11. Stable-release definition
 
