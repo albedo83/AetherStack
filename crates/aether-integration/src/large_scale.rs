@@ -66,6 +66,13 @@ pub enum LargeScaleRejectionError {
         /// Number of requested elements.
         elements: usize,
     },
+    /// A caller-supplied sample-major mask had the wrong length.
+    MaskLengthMismatch {
+        /// Exact required number of bytes.
+        expected: usize,
+        /// Supplied number of bytes.
+        actual: usize,
+    },
 }
 
 impl Display for LargeScaleRejectionError {
@@ -77,6 +84,10 @@ impl Display for LargeScaleRejectionError {
                 formatter,
                 "cannot reserve {elements} large-scale rejection elements"
             ),
+            Self::MaskLengthMismatch { expected, actual } => write!(
+                formatter,
+                "large-scale rejection mask has {actual} elements; expected {expected}"
+            ),
         }
     }
 }
@@ -85,7 +96,9 @@ impl Error for LargeScaleRejectionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Attribution(error) => Some(error),
-            Self::SizeOverflow | Self::AllocationFailed { .. } => None,
+            Self::SizeOverflow
+            | Self::AllocationFailed { .. }
+            | Self::MaskLengthMismatch { .. } => None,
         }
     }
 }
@@ -262,6 +275,77 @@ pub fn classify_large_scale_seeds(
     Ok(seeds)
 }
 
+/// Grows source-owned seeds by an exact square Chebyshev radius.
+///
+/// Planes and sources are independent. Image boundaries clip the neighbourhood
+/// instead of wrapping it, and every output byte remains zero or one.
+pub fn grow_large_scale_seeds(
+    seeds: &[u8],
+    attribution: &RejectionAttribution,
+    growth: u16,
+) -> Result<Vec<u8>, LargeScaleRejectionError> {
+    let dimensions = attribution.dimensions();
+    let width = dimensions.width();
+    let height = dimensions.height();
+    let source_count = attribution.source_count();
+    let expected = dimensions
+        .pixel_count()
+        .checked_mul(source_count)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    if seeds.len() != expected {
+        return Err(LargeScaleRejectionError::MaskLengthMismatch {
+            expected,
+            actual: seeds.len(),
+        });
+    }
+    let mut grown = zeroed_u8(expected)?;
+    let integral_width = width
+        .checked_add(1)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let integral_height = height
+        .checked_add(1)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let integral_elements = integral_width
+        .checked_mul(integral_height)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let mut integral = zeroed_usize(integral_elements)?;
+    let plane_pixels = width
+        .checked_mul(height)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let radius = usize::from(growth);
+
+    for plane in 0..dimensions.planes() {
+        let plane_offset = plane
+            .checked_mul(plane_pixels)
+            .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+        for source_index in 0..source_count {
+            integral.fill(0);
+            for y in 0..height {
+                let mut row_sum = 0_usize;
+                for x in 0..width {
+                    let sample_index = plane_offset + y * width + x;
+                    row_sum += usize::from(seeds[sample_index * source_count + source_index] != 0);
+                    let integral_index = (y + 1) * integral_width + x + 1;
+                    integral[integral_index] = integral[y * integral_width + x + 1] + row_sum;
+                }
+            }
+            for y in 0..height {
+                let top = y.saturating_sub(radius);
+                let bottom = y.saturating_add(radius).saturating_add(1).min(height);
+                for x in 0..width {
+                    let left = x.saturating_sub(radius);
+                    let right = x.saturating_add(radius).saturating_add(1).min(width);
+                    if rectangle_sum(&integral, integral_width, left, top, right, bottom) > 0 {
+                        let sample_index = plane_offset + y * width + x;
+                        grown[sample_index * source_count + source_index] = 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(grown)
+}
+
 fn rectangle_sum(
     integral: &[usize],
     stride: usize,
@@ -352,6 +436,32 @@ mod tests {
         assert_eq!(seeds[9 + 1], 0);
         assert_eq!(seeds.iter().filter(|value| **value != 0).count(), 4);
         assert!(low_seeds.iter().all(|value| *value == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn growth_is_exact_and_does_not_cross_planes_or_sources() -> TestResult {
+        let dimensions = Dimensions::new(5, 4, 2)?;
+        let attribution = RejectionAttribution::new(dimensions, 2)?;
+        let mut seeds = vec![0_u8; dimensions.pixel_count() * 2];
+        let seed_sample = 7;
+        seeds[seed_sample * 2 + 1] = 1;
+
+        let grown = grow_large_scale_seeds(&seeds, &attribution, 1)?;
+
+        for y in 0..4 {
+            for x in 0..5 {
+                let sample = y * 5 + x;
+                let expected = (1..=3).contains(&x) && (0..=2).contains(&y);
+                assert_eq!(grown[sample * 2 + 1] != 0, expected);
+                assert_eq!(grown[sample * 2], 0);
+                assert_eq!(grown[(20 + sample) * 2 + 1], 0);
+            }
+        }
+        assert!(matches!(
+            grow_large_scale_seeds(&seeds[..seeds.len() - 1], &attribution, 1),
+            Err(LargeScaleRejectionError::MaskLengthMismatch { .. })
+        ));
         Ok(())
     }
 }
