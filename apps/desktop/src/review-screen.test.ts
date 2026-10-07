@@ -2175,6 +2175,70 @@ describe("frame review workspace", () => {
       minimumRetainedSamples: 5,
       generateRejectionMaps: false,
     });
+
+    fireEvent.change(estimator, {
+      target: { value: "linear_fit_clipped" },
+    });
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "linear_fit_clipped",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 5,
+      highSigma: 3.5,
+      maximumIterations: 8,
+      minimumRetainedSamples: 3,
+      generateRejectionMaps: false,
+    });
+
+    controller.update({
+      ...advanced,
+      registration: {
+        ...advanced.registration,
+        stack: {
+          ...advanced.registration.stack,
+          settings: {
+            ...advanced.registration.stack.settings,
+            estimator: "linear_fit_clipped",
+            lowSigma: 5,
+            highSigma: 3.5,
+            minimumRetainedSamples: 3,
+            generateRejectionMaps: true,
+          },
+        },
+      },
+    });
+    expect(root.textContent).toContain("LINEAR FIT F64");
+    expect(
+      getByRole<HTMLInputElement>(root, "spinbutton", { name: "Low sigma" })
+        .disabled,
+    ).toBe(false);
+    expect(
+      getByRole<HTMLInputElement>(root, "spinbutton", {
+        name: "Minimum retained samples",
+      }).min,
+    ).toBe("3");
+    const hiddenIterations = getByRole<HTMLInputElement>(root, "spinbutton", {
+      name: "Maximum clipping passes",
+      hidden: true,
+    });
+    expect(hiddenIterations.disabled).toBe(true);
+    expect(
+      hiddenIterations.closest<HTMLElement>(".control-field")?.hidden,
+    ).toBe(true);
+    expect(maps.checked).toBe(true);
+    fireEvent.click(getByRole(root, "button", { name: "Increase high sigma" }));
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "linear_fit_clipped",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 5,
+      highSigma: 3.6,
+      maximumIterations: 8,
+      minimumRetainedSamples: 3,
+      generateRejectionMaps: true,
+    });
   });
 
   it("presents a natively verified report without claiming an active stack", () => {

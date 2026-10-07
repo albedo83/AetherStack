@@ -3560,6 +3560,7 @@ function renderRegistration(
   elements.registeredStackMinimumRetained.value = String(
     stackSettings.minimumRetainedSamples,
   );
+  elements.registeredStackMinimumRetained.min = linearFitEstimator ? "3" : "1";
   elements.registeredStackRejectionMaps.checked =
     stackSettings.generateRejectionMaps;
   elements.registeredStackEstimator.disabled = stackBusy;
