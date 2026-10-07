@@ -3,6 +3,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use aether_core::Dimensions;
+
 use crate::{RejectionAttribution, RejectionAttributionError, SampleDisposition};
 
 /// Stable identity for the first source-owned large-scale rejection contract.
@@ -249,6 +251,76 @@ impl LargeScaleExpansionSummary {
     pub const fn support_floor_retained(self) -> u64 {
         self.support_floor_retained
     }
+}
+
+/// Exact bounded working-set plan for one spatial rejection pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LargeScaleMemoryPlan {
+    mask_elements: usize,
+    integral_elements: usize,
+    peak_working_bytes: usize,
+}
+
+impl LargeScaleMemoryPlan {
+    /// Sample-major elements in one source-owned byte mask.
+    #[must_use]
+    pub const fn mask_elements(self) -> usize {
+        self.mask_elements
+    }
+
+    /// `usize` elements in one reusable summed-area table.
+    #[must_use]
+    pub const fn integral_elements(self) -> usize {
+        self.integral_elements
+    }
+
+    /// Conservative peak bytes held in addition to attribution and science.
+    #[must_use]
+    pub const fn peak_working_bytes(self) -> usize {
+        self.peak_working_bytes
+    }
+}
+
+/// Computes the exact conservative peak of masks and one summed-area table.
+pub fn plan_large_scale_rejection_memory(
+    dimensions: Dimensions,
+    source_count: usize,
+    parameters: LargeScaleRejectionParameters,
+) -> Result<LargeScaleMemoryPlan, LargeScaleRejectionError> {
+    let mask_elements = dimensions
+        .pixel_count()
+        .checked_mul(source_count)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let integral_elements = dimensions
+        .width()
+        .checked_add(1)
+        .and_then(|width| {
+            dimensions
+                .height()
+                .checked_add(1)
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let enabled_tails = usize::from(parameters.low().is_some())
+        .checked_add(usize::from(parameters.high().is_some()))
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let simultaneous_masks = enabled_tails
+        .checked_add(1)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let mask_bytes = mask_elements
+        .checked_mul(simultaneous_masks)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let integral_bytes = integral_elements
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    let peak_working_bytes = mask_bytes
+        .checked_add(integral_bytes)
+        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+    Ok(LargeScaleMemoryPlan {
+        mask_elements,
+        integral_elements,
+        peak_working_bytes,
+    })
 }
 
 /// Expands configured rejection tails simultaneously on one attribution cube.
@@ -532,7 +604,6 @@ fn zeroed_usize(elements: usize) -> Result<Vec<usize>, LargeScaleRejectionError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::Dimensions;
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -674,6 +745,29 @@ mod tests {
         assert_eq!(
             attribution.disposition(7 + 3, 0)?,
             SampleDisposition::Accepted
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn memory_plan_accounts_for_both_retained_tails_and_peak_scratch() -> TestResult {
+        let dimensions = Dimensions::new(100, 50, 3)?;
+        let tail = LargeScaleTailParameters::new(2, 2)?;
+        let both = LargeScaleRejectionParameters::new(Some(tail), Some(tail), 3)?;
+        let one = LargeScaleRejectionParameters::new(None, Some(tail), 3)?;
+
+        let both_plan = plan_large_scale_rejection_memory(dimensions, 20, both)?;
+        let one_plan = plan_large_scale_rejection_memory(dimensions, 20, one)?;
+
+        assert_eq!(both_plan.mask_elements(), 300_000);
+        assert_eq!(both_plan.integral_elements(), 5_151);
+        assert_eq!(
+            both_plan.peak_working_bytes(),
+            3 * 300_000 + 5_151 * std::mem::size_of::<usize>()
+        );
+        assert_eq!(
+            one_plan.peak_working_bytes(),
+            2 * 300_000 + 5_151 * std::mem::size_of::<usize>()
         );
         Ok(())
     }

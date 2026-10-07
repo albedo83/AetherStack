@@ -20,11 +20,11 @@ pub use attribution::{
     RejectionAttribution, RejectionAttributionError, SampleDisposition, SourceDispositionCounts,
 };
 pub use large_scale::{
-    LARGE_SCALE_REJECTION_ALGORITHM_ID, LargeScaleExpansionSummary, LargeScaleRejectionError,
-    LargeScaleRejectionParameterError, LargeScaleRejectionParameters, LargeScaleRejectionTail,
-    LargeScaleTailParameters, MAXIMUM_LARGE_SCALE_GROWTH, MAXIMUM_LARGE_SCALE_LAYERS,
-    MINIMUM_LARGE_SCALE_LAYERS, classify_large_scale_seeds, expand_large_scale_rejections,
-    grow_large_scale_seeds,
+    LARGE_SCALE_REJECTION_ALGORITHM_ID, LargeScaleExpansionSummary, LargeScaleMemoryPlan,
+    LargeScaleRejectionError, LargeScaleRejectionParameterError, LargeScaleRejectionParameters,
+    LargeScaleRejectionTail, LargeScaleTailParameters, MAXIMUM_LARGE_SCALE_GROWTH,
+    MAXIMUM_LARGE_SCALE_LAYERS, MINIMUM_LARGE_SCALE_LAYERS, classify_large_scale_seeds,
+    expand_large_scale_rejections, grow_large_scale_seeds, plan_large_scale_rejection_memory,
 };
 
 /// Plane-major low/high count map emitted from percentile support evidence.
