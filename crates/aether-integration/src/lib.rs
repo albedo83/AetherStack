@@ -3362,6 +3362,62 @@ mod tests {
     }
 
     #[test]
+    fn large_scale_rebuild_is_deterministic_and_rejects_foreign_inputs() -> TestResult {
+        let inputs = (0..15)
+            .map(|value| image(vec![f64::from(value)]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let references = inputs.iter().collect::<Vec<_>>();
+        let esd = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        let initial = integrate_generalized_esd_mean(&references, esd)?;
+        let high = LargeScaleTailParameters::new(1, 0)?;
+        let spatial = LargeScaleRejectionParameters::new(None, Some(high), 3)?;
+
+        let first = initial
+            .clone()
+            .apply_large_scale_rejection(&references, spatial)?;
+        let second = initial
+            .clone()
+            .apply_large_scale_rejection(&references, spatial)?;
+        assert_eq!(first, second);
+
+        assert!(matches!(
+            initial
+                .clone()
+                .apply_large_scale_rejection(&references[..14], spatial),
+            Err(IntegrationError::AttributionSourceCountMismatch {
+                expected: 15,
+                actual: 14
+            })
+        ));
+
+        let wrong_dimensions = image(vec![0.0, 1.0])?;
+        let mut wrong_shape = references.clone();
+        wrong_shape[14] = &wrong_dimensions;
+        assert!(matches!(
+            initial
+                .clone()
+                .apply_large_scale_rejection(&wrong_shape, spatial),
+            Err(IntegrationError::DimensionMismatch {
+                input_index: 14,
+                ..
+            })
+        ));
+
+        let non_finite = image(vec![f64::NAN])?;
+        let mut changed_sample = references.clone();
+        changed_sample[0] = &non_finite;
+        assert!(matches!(
+            initial.apply_large_scale_rejection(&changed_sample, spatial),
+            Err(IntegrationError::AttributionInputMismatch {
+                input_index: 0,
+                sample_index: 0,
+                disposition: SampleDisposition::Accepted
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn linear_fit_rejects_asymmetric_tail_outliers_with_exact_evidence() -> TestResult {
         let mut values = (0_u32..20).map(f64::from).collect::<Vec<_>>();
         values.push(1_000.0);
