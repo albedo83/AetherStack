@@ -118,6 +118,39 @@ band heights. The desktop exposes `winsorized_sigma_clipped` beside ordinary
 sigma clipping, reuses the validated asymmetric controls, and seals the
 distinct estimator identity into new and archived integration reports.
 
+## Ordered-sample linear-fit-clipped mean
+
+`linear-fit-clipped-mean-f64-v1` is a one-pass, deterministic residual
+estimator. For each pixel it sorts clear finite source samples by IEEE total
+ordering, normalizes them by the largest absolute sample, and fits a line
+against uniformly spaced symmetric rank coordinates in `(-1, 1)`. Intercept,
+slope, and population residual variance use compensated binary64 accumulation.
+An exact affine ramp is preserved: residual deviations no greater than
+`32 * f64::EPSILON` after normalization are treated as zero.
+
+Samples strictly below `-low_sigma` or above `high_sigma` times the fitted
+population residual deviation are rejected. Equality remains accepted. Both
+limits must be finite and positive, and the retained-sample floor must be at
+least three. A proposed decision that would cross that floor is discarded in
+full. Fewer than three usable samples, an all-zero population, or a degenerate
+rank fit also retains every usable sample. The oracle never substitutes fitted
+or normalized values into science output: it applies the strict compensated
+mean to the original retained samples.
+
+The registered runtime identity is `registered-lin-fit-mean-f64-v1`. It binds
+both exact binary64 sigma limits and the retained-sample floor into `AETHPAR`,
+executes the sealed affine or projective common crop in bounded bands, and can
+atomically publish `linear-fit-rejection-map-v1` low/high count maps. Tests lock
+permutation invariance, perfect-ramp preservation, asymmetric outlier evidence,
+mask and non-finite accounting, the all-or-nothing support floor, exact FITS
+checksums, and byte-identical products across band heights.
+
+The desktop exposes the stable `linear_fit_clipped` wire value with explicit
+5.0/3.5 defaults and a minimum support of three. Only its relevant sigma,
+support, and rejection-map controls remain visible. Unlike iterative sigma
+clipping, it has no pass count: iterative refitting would be a different
+scientific algorithm and requires a new identifier.
+
 ## Frame-weighted mean
 
 `integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`

@@ -2252,6 +2252,36 @@ safety reasoning. They do not narrate obvious syntax.
      Rust formatting, unit and documentation tests, warnings-as-errors linting,
      frontend formatting, type checking, production build, DOM behavior, and
      accessibility checks must all pass before direct publication to `main`.
+243. Define strict linear-fit rejection controls. Independent finite positive
+     low/high residual limits and a minimum support of three reject ambiguous
+     policies before any pixels are inspected.
+244. Implement the ordered-sample linear-fit oracle. Clear finite samples are
+     sorted, magnitude-normalized, and fitted against symmetric rank positions
+     with compensated binary64 moments before one asymmetric residual decision.
+245. Lock numerical and accounting invariants. Permutations, exact affine
+     ramps, asymmetric outliers, masks, non-finite values, and support-floor
+     rollback must preserve deterministic science and complete evidence.
+246. Execute linear-fit stacks in bounded registered bands. The runtime uses a
+     distinct algorithm identity and canonical parameter seal while retaining
+     exact affine or projective common-crop geometry.
+247. Publish science and low/high rejection evidence atomically. FITS checksums,
+     parameter provenance, exact count maps, and byte identity across band
+     heights are mandatory before any public destination appears.
+248. Keep the desktop bridge fail-closed. The stable wire value is decoded into
+     native validated controls, and only Rust may derive scientific and map
+     provenance identities.
+249. Carry the estimator through the typed browser boundary. Reports, archived
+     evidence, and execution requests retain the same explicit Linear Fit
+     identity without stringly typed fallback behavior.
+250. Expose a focused advanced Linear Fit laboratory. Relevant sigma, support,
+     and rejection-map controls remain visible; the inapplicable iterative pass
+     count stays absent; conservative defaults are applied on selection.
+251. Prove the control behavior and accessibility. DOM interaction tests cover
+     defaults, dynamic bounds, hidden controls, rejection-map state, numerical
+     stepping, and the exact settings dispatched to native code.
+252. Publish the Linear Fit contract after repository-wide validation. Rust
+     formatting, tests, linting, and documentation plus frontend formatting,
+     tests, and production build must pass before direct publication to `main`.
 
 ## 11. Stable-release definition
 
