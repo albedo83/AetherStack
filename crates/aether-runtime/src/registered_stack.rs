@@ -3432,6 +3432,23 @@ mod tests {
     }
 
     #[test]
+    fn spatial_stack_memory_failure_removes_all_transaction_outputs() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let (request, low, high, _) = spatial_esd_stack_request(&directory, 7)?;
+        let memory = MemoryBudget::new(200_000)?;
+
+        assert!(matches!(
+            run_registered_stack(&request, &CancellationToken::new(), &memory, |_| {},),
+            Err(RegisteredStackError::Memory(_))
+        ));
+        assert!(memory.peak() <= memory.limit());
+        assert!(!request.output().exists());
+        assert!(!low.exists());
+        assert!(!high.exists());
+        Ok(())
+    }
+
+    #[test]
     fn cancellation_between_bands_and_late_source_mutation_publish_nothing() -> TestResult {
         let directory = TestDirectory::new()?;
         let request = stack_request(&directory)?;
