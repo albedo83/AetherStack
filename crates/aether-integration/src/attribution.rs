@@ -225,6 +225,24 @@ impl RejectionPromotionCounts {
     pub const fn total(self) -> u64 {
         self.low + self.high
     }
+
+    /// Combines disjoint core summaries without wrapping either counter.
+    #[must_use]
+    pub const fn checked_add(self, other: Self) -> Option<Self> {
+        let Some(low) = self.low.checked_add(other.low) else {
+            return None;
+        };
+        let Some(high) = self.high.checked_add(other.high) else {
+            return None;
+        };
+        Some(Self { low, high })
+    }
+
+    /// Whether spatial expansion introduced no promotion in this region.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.low == 0 && self.high == 0
+    }
 }
 
 impl RejectionAttribution {
@@ -609,6 +627,13 @@ mod tests {
         assert_eq!(counts.low(), 1);
         assert_eq!(counts.high(), 1);
         assert_eq!(counts.total(), 2);
+        assert!(!counts.is_empty());
+        assert_eq!(
+            counts
+                .checked_add(counts)
+                .map(RejectionPromotionCounts::total),
+            Some(4)
+        );
         Ok(())
     }
 
