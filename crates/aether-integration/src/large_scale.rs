@@ -32,6 +32,8 @@ pub enum LargeScaleRejectionParameterError {
         /// Rejected growth radius.
         growth: u16,
     },
+    /// The final estimator support floor was zero.
+    InvalidMinimumRetained,
 }
 
 impl Display for LargeScaleRejectionParameterError {
@@ -48,6 +50,8 @@ impl Display for LargeScaleRejectionParameterError {
                 formatter,
                 "large-scale rejection growth {growth} exceeds {MAXIMUM_LARGE_SCALE_GROWTH} pixels"
             ),
+            Self::InvalidMinimumRetained => formatter
+                .write_str("large-scale rejection requires a positive retained-sample floor"),
         }
     }
 }
@@ -170,6 +174,7 @@ impl LargeScaleTailParameters {
 pub struct LargeScaleRejectionParameters {
     low: Option<LargeScaleTailParameters>,
     high: Option<LargeScaleTailParameters>,
+    minimum_retained: u32,
 }
 
 impl LargeScaleRejectionParameters {
@@ -177,11 +182,19 @@ impl LargeScaleRejectionParameters {
     pub fn new(
         low: Option<LargeScaleTailParameters>,
         high: Option<LargeScaleTailParameters>,
+        minimum_retained: u32,
     ) -> Result<Self, LargeScaleRejectionParameterError> {
         if low.is_none() && high.is_none() {
             return Err(LargeScaleRejectionParameterError::NoTailEnabled);
         }
-        Ok(Self { low, high })
+        if minimum_retained == 0 {
+            return Err(LargeScaleRejectionParameterError::InvalidMinimumRetained);
+        }
+        Ok(Self {
+            low,
+            high,
+            minimum_retained,
+        })
     }
 
     /// Low-tail spatial controls when enabled.
@@ -195,6 +208,12 @@ impl LargeScaleRejectionParameters {
     pub const fn high(self) -> Option<LargeScaleTailParameters> {
         self.high
     }
+
+    /// Smallest finite support allowed after spatial promotion.
+    #[must_use]
+    pub const fn minimum_retained(self) -> u32 {
+        self.minimum_retained
+    }
 }
 
 /// Exact changes made by one simultaneous low/high spatial expansion.
@@ -203,6 +222,7 @@ pub struct LargeScaleExpansionSummary {
     promoted_low: u64,
     promoted_high: u64,
     conflicts_retained: u64,
+    support_floor_retained: u64,
 }
 
 impl LargeScaleExpansionSummary {
@@ -222,6 +242,12 @@ impl LargeScaleExpansionSummary {
     #[must_use]
     pub const fn conflicts_retained(self) -> u64 {
         self.conflicts_retained
+    }
+
+    /// Proposed promotions retained to preserve the support floor.
+    #[must_use]
+    pub const fn support_floor_retained(self) -> u64 {
+        self.support_floor_retained
     }
 }
 
@@ -252,6 +278,40 @@ pub fn expand_large_scale_rejections(
     let source_count = attribution.source_count();
     let mut summary = LargeScaleExpansionSummary::default();
     for sample_index in 0..attribution.dimensions().pixel_count() {
+        let mut accepted = 0_u32;
+        let mut proposed = 0_u32;
+        for source_index in 0..source_count {
+            if attribution.disposition(sample_index, source_index)? != SampleDisposition::Accepted {
+                continue;
+            }
+            accepted = accepted
+                .checked_add(1)
+                .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+            let offset = sample_index * source_count + source_index;
+            let low_reached = low.as_ref().is_some_and(|mask| mask[offset] != 0);
+            let high_reached = high.as_ref().is_some_and(|mask| mask[offset] != 0);
+            match (low_reached, high_reached) {
+                (true, false) | (false, true) => {
+                    proposed = proposed
+                        .checked_add(1)
+                        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+                }
+                (true, true) => {
+                    summary.conflicts_retained = summary
+                        .conflicts_retained
+                        .checked_add(1)
+                        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+                }
+                (false, false) => {}
+            }
+        }
+        if accepted.saturating_sub(proposed) < parameters.minimum_retained() {
+            summary.support_floor_retained = summary
+                .support_floor_retained
+                .checked_add(u64::from(proposed))
+                .ok_or(LargeScaleRejectionError::SizeOverflow)?;
+            continue;
+        }
         for source_index in 0..source_count {
             if attribution.disposition(sample_index, source_index)? != SampleDisposition::Accepted {
                 continue;
@@ -282,13 +342,7 @@ pub fn expand_large_scale_rejections(
                         .checked_add(1)
                         .ok_or(LargeScaleRejectionError::SizeOverflow)?;
                 }
-                (true, true) => {
-                    summary.conflicts_retained = summary
-                        .conflicts_retained
-                        .checked_add(1)
-                        .ok_or(LargeScaleRejectionError::SizeOverflow)?;
-                }
-                (false, false) => {}
+                (true, true) | (false, false) => {}
             }
         }
     }
@@ -502,13 +556,17 @@ mod tests {
     #[test]
     fn requires_an_explicit_tail() -> TestResult {
         assert_eq!(
-            LargeScaleRejectionParameters::new(None, None),
+            LargeScaleRejectionParameters::new(None, None, 1),
             Err(LargeScaleRejectionParameterError::NoTailEnabled)
         );
         let high = LargeScaleTailParameters::new(2, 2)?;
         assert_eq!(
-            LargeScaleRejectionParameters::new(None, Some(high))?.high(),
+            LargeScaleRejectionParameters::new(None, Some(high), 3)?.high(),
             Some(high)
+        );
+        assert_eq!(
+            LargeScaleRejectionParameters::new(None, Some(high), 0),
+            Err(LargeScaleRejectionParameterError::InvalidMinimumRetained)
         );
         Ok(())
     }
@@ -566,14 +624,14 @@ mod tests {
     #[test]
     fn simultaneous_tail_expansion_retains_conflicts_and_exclusions() -> TestResult {
         let dimensions = Dimensions::new(9, 7, 1)?;
-        let mut attribution = RejectionAttribution::new(dimensions, 1)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 3)?;
         for x in 1..=7 {
             attribution.set_disposition(2 * 9 + x, 0, SampleDisposition::RejectedLow)?;
             attribution.set_disposition(4 * 9 + x, 0, SampleDisposition::RejectedHigh)?;
         }
         attribution.set_disposition(3 * 9, 0, SampleDisposition::Masked)?;
         let tail = LargeScaleTailParameters::new(1, 1)?;
-        let parameters = LargeScaleRejectionParameters::new(Some(tail), Some(tail))?;
+        let parameters = LargeScaleRejectionParameters::new(Some(tail), Some(tail), 1)?;
 
         let summary = expand_large_scale_rejections(&mut attribution, parameters)?;
 
@@ -595,6 +653,27 @@ mod tests {
         assert_eq!(
             attribution.disposition(3 * 9, 0)?,
             SampleDisposition::Masked
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spatial_pass_rolls_back_pixels_that_would_cross_support_floor() -> TestResult {
+        let dimensions = Dimensions::new(7, 5, 1)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 3)?;
+        for x in 1..=5 {
+            attribution.set_disposition(2 * 7 + x, 0, SampleDisposition::RejectedHigh)?;
+        }
+        let tail = LargeScaleTailParameters::new(1, 1)?;
+        let parameters = LargeScaleRejectionParameters::new(None, Some(tail), 3)?;
+
+        let summary = expand_large_scale_rejections(&mut attribution, parameters)?;
+
+        assert_eq!(summary.promoted_high(), 0);
+        assert!(summary.support_floor_retained() > 0);
+        assert_eq!(
+            attribution.disposition(7 + 3, 0)?,
+            SampleDisposition::Accepted
         );
         Ok(())
     }
