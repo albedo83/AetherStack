@@ -2065,6 +2065,12 @@ describe("frame review workspace", () => {
             maximumIterations: 8,
             minimumRetainedSamples: 5,
             generateRejectionMaps: false,
+            largeScaleLowEnabled: false,
+            largeScaleHighEnabled: false,
+            largeScaleLowLayers: 2,
+            largeScaleHighLayers: 2,
+            largeScaleLowGrowth: 2,
+            largeScaleHighGrowth: 2,
           },
         },
       },
@@ -2095,6 +2101,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: true,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     fireEvent.click(
@@ -2112,6 +2124,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: true,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     fireEvent.change(estimator, { target: { value: "median" } });
@@ -2127,6 +2145,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: false,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     controller.update({
@@ -2187,6 +2211,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: false,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     controller.update({
@@ -2220,6 +2250,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 5,
       generateRejectionMaps: false,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     fireEvent.change(estimator, {
@@ -2237,6 +2273,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 3,
       generateRejectionMaps: false,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     controller.update({
@@ -2252,6 +2294,12 @@ describe("frame review workspace", () => {
             highSigma: 3.5,
             minimumRetainedSamples: 3,
             generateRejectionMaps: true,
+            largeScaleLowEnabled: false,
+            largeScaleHighEnabled: false,
+            largeScaleLowLayers: 2,
+            largeScaleHighLayers: 2,
+            largeScaleLowGrowth: 2,
+            largeScaleHighGrowth: 2,
           },
         },
       },
@@ -2288,6 +2336,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 3,
       generateRejectionMaps: true,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     fireEvent.change(estimator, { target: { value: "generalized_esd" } });
@@ -2303,6 +2357,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 3,
       generateRejectionMaps: true,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
 
     controller.update({
@@ -2318,6 +2378,12 @@ describe("frame review workspace", () => {
             esdSignificance: 0.01,
             minimumRetainedSamples: 3,
             generateRejectionMaps: true,
+            largeScaleLowEnabled: false,
+            largeScaleHighEnabled: false,
+            largeScaleLowLayers: 2,
+            largeScaleHighLayers: 2,
+            largeScaleLowGrowth: 2,
+            largeScaleHighGrowth: 2,
           },
         },
       },
@@ -2360,6 +2426,12 @@ describe("frame review workspace", () => {
       maximumIterations: 8,
       minimumRetainedSamples: 3,
       generateRejectionMaps: true,
+      largeScaleLowEnabled: false,
+      largeScaleHighEnabled: false,
+      largeScaleLowLayers: 2,
+      largeScaleHighLayers: 2,
+      largeScaleLowGrowth: 2,
+      largeScaleHighGrowth: 2,
     });
   });
 

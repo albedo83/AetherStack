@@ -4334,6 +4334,12 @@ function registeredStackSettings(
         estimator === "linear_fit_clipped" ||
         estimator === "generalized_esd") &&
       elements.registeredStackRejectionMaps.checked,
+    largeScaleLowEnabled: false,
+    largeScaleHighEnabled: false,
+    largeScaleLowLayers: 2,
+    largeScaleHighLayers: 2,
+    largeScaleLowGrowth: 2,
+    largeScaleHighGrowth: 2,
   };
 }
 

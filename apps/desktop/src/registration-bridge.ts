@@ -197,6 +197,12 @@ export interface RegisteredStackIntegrationSettings {
   readonly maximumIterations: number;
   readonly minimumRetainedSamples: number;
   readonly generateRejectionMaps: boolean;
+  readonly largeScaleLowEnabled: boolean;
+  readonly largeScaleHighEnabled: boolean;
+  readonly largeScaleLowLayers: number;
+  readonly largeScaleHighLayers: number;
+  readonly largeScaleLowGrowth: number;
+  readonly largeScaleHighGrowth: number;
 }
 
 export interface RegisteredStackExecutionSettings extends RegistrationExecutionSettings {
@@ -521,6 +527,12 @@ export function executeRegisteredStack(
     maximumIterations: settings.integration.maximumIterations,
     minimumRetainedSamples: settings.integration.minimumRetainedSamples,
     generateRejectionMaps: settings.integration.generateRejectionMaps,
+    largeScaleLowEnabled: settings.integration.largeScaleLowEnabled,
+    largeScaleHighEnabled: settings.integration.largeScaleHighEnabled,
+    largeScaleLowLayers: settings.integration.largeScaleLowLayers,
+    largeScaleHighLayers: settings.integration.largeScaleHighLayers,
+    largeScaleLowGrowth: settings.integration.largeScaleLowGrowth,
+    largeScaleHighGrowth: settings.integration.largeScaleHighGrowth,
   };
   return invoke<RegisteredStackResult>("execute_registered_stack", {
     request: {

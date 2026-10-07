@@ -1813,6 +1813,12 @@ function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
     maximumIterations: 8,
     minimumRetainedSamples: 3,
     generateRejectionMaps: false,
+    largeScaleLowEnabled: false,
+    largeScaleHighEnabled: false,
+    largeScaleLowLayers: 2,
+    largeScaleHighLayers: 2,
+    largeScaleLowGrowth: 2,
+    largeScaleHighGrowth: 2,
   };
 }
 
