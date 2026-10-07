@@ -63,12 +63,14 @@ use aether_review::{
 use aether_runtime::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DefectFitsReference, DefectReferenceKind,
     DefectReferenceParameters, DrizzleOutputExecutionError, DrizzleProductDestinations,
-    DrizzleProductProvenance, LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID, LightPlanExecutionError,
-    LightPlanExecutionRequest, LinearFitClipParameters, LocalNormalizationPipelineError,
-    LocalNormalizationRequest, MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
+    DrizzleProductProvenance, GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID, GeneralizedEsdParameters,
+    LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID, LightPlanExecutionError, LightPlanExecutionRequest,
+    LinearFitClipParameters, LocalNormalizationPipelineError, LocalNormalizationRequest,
+    MasterPlanExecutionError, MasterPlanExecutionRequest, MemoryBudget,
     PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, PipelineSource, ProgressState,
     ProjectiveRegistrationPlanExecutionRequest, QualityWeightMetrics,
-    REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID, REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID,
+    REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
     REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
     RegisteredRejectionMapOutput, RegisteredStackError, RegisteredStackEstimator,
     RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
@@ -510,6 +512,7 @@ enum RegisteredStackEstimatorInput {
     SigmaClipped,
     WinsorizedSigmaClipped,
     LinearFitClipped,
+    GeneralizedEsd,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -558,6 +561,10 @@ struct RegisteredStackIntegrationSettings {
     low_sigma: f64,
     #[serde(default = "default_high_sigma")]
     high_sigma: f64,
+    #[serde(default = "default_esd_outlier_fraction")]
+    esd_outlier_fraction: f64,
+    #[serde(default = "default_esd_significance")]
+    esd_significance: f64,
     #[serde(default = "default_sigma_iterations")]
     maximum_iterations: u32,
     minimum_retained_samples: u32,
@@ -574,6 +581,14 @@ const fn default_high_sigma() -> f64 {
 
 const fn default_sigma_iterations() -> u32 {
     8
+}
+
+const fn default_esd_outlier_fraction() -> f64 {
+    0.30
+}
+
+const fn default_esd_significance() -> f64 {
+    0.05
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -3982,6 +3997,7 @@ where
             | RegisteredStackEstimatorInput::SigmaClipped
             | RegisteredStackEstimatorInput::WinsorizedSigmaClipped
             | RegisteredStackEstimatorInput::LinearFitClipped
+            | RegisteredStackEstimatorInput::GeneralizedEsd
     ) && integration.generate_rejection_maps
     {
         return Err(registered_stack_configuration_error());
@@ -4030,6 +4046,14 @@ where
                 .map_err(|_| registered_stack_configuration_error())?,
             )
         }
+        RegisteredStackEstimatorInput::GeneralizedEsd => RegisteredStackEstimator::GeneralizedEsd(
+            GeneralizedEsdParameters::new(
+                integration.esd_outlier_fraction,
+                integration.esd_significance,
+                integration.minimum_retained_samples,
+            )
+            .map_err(|_| registered_stack_configuration_error())?,
+        ),
     };
     let plan = match request.planning.geometry_model {
         RegistrationGeometryModel::Affine => DesktopRegistrationPlan::Affine(
@@ -4223,6 +4247,9 @@ where
             }
             RegisteredStackEstimatorInput::LinearFitClipped => {
                 LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID
+            }
+            RegisteredStackEstimatorInput::GeneralizedEsd => {
+                GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID
             }
             RegisteredStackEstimatorInput::StrictMean
             | RegisteredStackEstimatorInput::Median
@@ -5068,6 +5095,9 @@ const fn registered_stack_estimator_algorithm_id(
         }
         RegisteredStackEstimatorInput::LinearFitClipped => {
             REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID
+        }
+        RegisteredStackEstimatorInput::GeneralizedEsd => {
+            REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID
         }
     }
 }
@@ -10714,12 +10744,22 @@ mod tests {
             ),
             REGISTERED_LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID
         );
+        assert_eq!(
+            serde_json::to_string(&RegisteredStackEstimatorInput::GeneralizedEsd)?,
+            "\"generalized_esd\""
+        );
+        assert_eq!(
+            registered_stack_estimator_algorithm_id(RegisteredStackEstimatorInput::GeneralizedEsd),
+            REGISTERED_GENERALIZED_ESD_MEAN_ALGORITHM_ID
+        );
         let legacy: RegisteredStackIntegrationSettings = serde_json::from_str(
             r#"{"estimator":"strict_mean","lowFraction":0.1,"highFraction":0.1,"minimumRetainedSamples":3,"generateRejectionMaps":false}"#,
         )?;
         assert_eq!(legacy.low_sigma.to_bits(), 4.0_f64.to_bits());
         assert_eq!(legacy.high_sigma.to_bits(), 3.0_f64.to_bits());
         assert_eq!(legacy.maximum_iterations, 8);
+        assert_eq!(legacy.esd_outlier_fraction.to_bits(), 0.30_f64.to_bits());
+        assert_eq!(legacy.esd_significance.to_bits(), 0.05_f64.to_bits());
         Ok(())
     }
 
@@ -11916,6 +11956,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
@@ -12223,6 +12265,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
@@ -12497,6 +12541,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
@@ -12550,6 +12596,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
@@ -12642,6 +12690,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
@@ -12785,6 +12835,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
@@ -12847,6 +12899,8 @@ mod tests {
                     high_fraction: 0.1,
                     low_sigma: 4.0,
                     high_sigma: 3.0,
+                    esd_outlier_fraction: 0.30,
+                    esd_significance: 0.05,
                     maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
