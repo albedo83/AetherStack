@@ -120,6 +120,41 @@ impl<T> Image<T> {
 }
 
 impl<T: Clone> Image<T> {
+    /// Copies a row window from every plane while preserving sample flags.
+    pub fn crop_rows(&self, start: usize, height: usize) -> Result<Self, CoreError> {
+        let end = start
+            .checked_add(height)
+            .ok_or(CoreError::InvalidRowRange {
+                start,
+                height,
+                total_height: self.dimensions.height(),
+            })?;
+        if height == 0 || end > self.dimensions.height() {
+            return Err(CoreError::InvalidRowRange {
+                start,
+                height,
+                total_height: self.dimensions.height(),
+            });
+        }
+        let dimensions =
+            Dimensions::new(self.dimensions.width(), height, self.dimensions.planes())?;
+        let row_width = self.dimensions.width();
+        let source_plane_area = row_width * self.dimensions.height();
+        let output_plane_area = row_width * height;
+        let mut output = Self::filled(dimensions, self.pixels[0].clone())?;
+        for plane in 0..self.dimensions.planes() {
+            let source_begin = plane * source_plane_area + start * row_width;
+            let source_end = source_begin + output_plane_area;
+            let output_begin = plane * output_plane_area;
+            let output_end = output_begin + output_plane_area;
+            output.pixels[output_begin..output_end]
+                .clone_from_slice(&self.pixels[source_begin..source_end]);
+            output.mask.as_mut_slice()[output_begin..output_end]
+                .copy_from_slice(&self.mask.as_slice()[source_begin..source_end]);
+        }
+        Ok(output)
+    }
+
     /// Creates an image whose samples share the same initial value.
     ///
     /// # Errors
@@ -222,6 +257,34 @@ mod tests {
             Err(CoreError::AllocationFailed {
                 elements: usize::MAX
             })
+        ));
+    }
+
+    #[test]
+    fn crops_rows_from_all_planes_with_masks() {
+        let dimensions = Dimensions::new(2, 3, 2).expect("valid dimensions");
+        let mut image =
+            Image::from_pixels(dimensions, (0_u16..12).collect()).expect("matching pixel buffer");
+        image.mask_mut().as_mut_slice()[2] = PixelFlags::HOT;
+        image.mask_mut().as_mut_slice()[8] = PixelFlags::SATURATED;
+
+        let cropped = image.crop_rows(1, 1).expect("valid row crop");
+        assert_eq!(cropped.dimensions(), Dimensions::new(2, 1, 2).unwrap());
+        assert_eq!(cropped.pixels(), &[2, 3, 8, 9]);
+        assert_eq!(cropped.mask().as_slice()[0], PixelFlags::HOT);
+        assert_eq!(cropped.mask().as_slice()[2], PixelFlags::SATURATED);
+    }
+
+    #[test]
+    fn rejects_invalid_image_row_crops() {
+        let image = Image::filled(Dimensions::new(2, 3, 1).unwrap(), 0_u8).unwrap();
+        assert!(matches!(
+            image.crop_rows(0, 0),
+            Err(CoreError::InvalidRowRange { .. })
+        ));
+        assert!(matches!(
+            image.crop_rows(3, 1),
+            Err(CoreError::InvalidRowRange { .. })
         ));
     }
 }

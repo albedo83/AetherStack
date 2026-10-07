@@ -74,6 +74,15 @@ pub enum CoreError {
         /// Requested tile height.
         height: usize,
     },
+    /// A row window is empty or extends beyond an image.
+    InvalidRowRange {
+        /// First requested row.
+        start: usize,
+        /// Number of requested rows.
+        height: usize,
+        /// Available image height.
+        total_height: usize,
+    },
 }
 
 impl Display for CoreError {
@@ -112,6 +121,14 @@ impl Display for CoreError {
             Self::ZeroTileExtent { width, height } => write!(
                 formatter,
                 "tile dimensions must be non-zero, received {width}x{height}"
+            ),
+            Self::InvalidRowRange {
+                start,
+                height,
+                total_height,
+            } => write!(
+                formatter,
+                "row range start={start}, height={height} is outside image height {total_height}"
             ),
         }
     }
