@@ -10877,6 +10877,26 @@ mod tests {
         assert_eq!(legacy.maximum_iterations, 8);
         assert_eq!(legacy.esd_outlier_fraction.to_bits(), 0.30_f64.to_bits());
         assert_eq!(legacy.esd_significance.to_bits(), 0.05_f64.to_bits());
+        assert!(!legacy.large_scale_low_enabled);
+        assert!(!legacy.large_scale_high_enabled);
+        assert_eq!(legacy.large_scale_low_layers, 2);
+        assert_eq!(legacy.large_scale_high_layers, 2);
+        assert_eq!(legacy.large_scale_low_growth, 2);
+        assert_eq!(legacy.large_scale_high_growth, 2);
+
+        let spatial: RegisteredStackIntegrationSettings = serde_json::from_str(
+            r#"{"estimator":"generalized_esd","lowFraction":0.2,"highFraction":0.1,"esdOutlierFraction":0.3,"esdSignificance":0.05,"minimumRetainedSamples":3,"generateRejectionMaps":true,"largeScaleLowEnabled":false,"largeScaleHighEnabled":true,"largeScaleLowLayers":2,"largeScaleHighLayers":4,"largeScaleLowGrowth":2,"largeScaleHighGrowth":6}"#,
+        )?;
+        assert_eq!(
+            registered_stack_integration_algorithm_id(spatial),
+            REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID
+        );
+        assert_eq!(
+            registered_stack_rejection_map_algorithm_id(spatial),
+            Some(SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID)
+        );
+        assert_eq!(spatial.large_scale_high_layers, 4);
+        assert_eq!(spatial.large_scale_high_growth, 6);
         Ok(())
     }
 
