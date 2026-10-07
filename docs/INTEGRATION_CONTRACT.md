@@ -151,6 +151,50 @@ support, and rejection-map controls remain visible. Unlike iterative sigma
 clipping, it has no pass count: iterative refitting would be a different
 scientific algorithm and requires a new identifier.
 
+## Generalized extreme Studentized deviate mean
+
+`generalized-esd-mean-f64-v1` implements the two-sided generalized ESD
+procedure documented by the NIST/SEMATECH handbook. It assumes the usable
+per-pixel population is approximately normal. The maximum-outlier fraction is
+an upper bound on the number of suspected anomalies, not a forced rejection
+rate; its floor at the current usable sample count determines the maximum
+number of sequential tests.
+
+For candidate step `i`, the oracle calculates the largest absolute deviation
+from the sample mean in units of sample standard deviation, removes that
+candidate temporarily, and repeats up to the configured bound. Each statistic
+is compared with its matching two-sided Student-t critical value at the exact
+configured family-wise significance. The rejected count is the largest `i`
+whose statistic strictly exceeds its critical value, so all earlier candidates
+through that point are rejected even when an earlier individual comparison did
+not pass. Critical-value equality remains accepted.
+
+Every population is magnitude-normalized before compensated mean and variance
+accumulation, preventing finite extreme values from overflowing intermediate
+moments. Sorted IEEE total order and deterministic low-side tie resolution make
+the result independent of source order. The final science value is the strict
+compensated mean of original retained samples. Masks and non-finite values
+remain separate evidence and never enter the statistical population.
+
+The published approximation is admitted only for at least 15 usable samples.
+Smaller populations, zero-spread populations, distribution failures, a zero
+fractional candidate count, or a retained-support conflict reject nothing.
+Controls require a finite maximum-outlier fraction in `(0, 0.5]`, significance
+in `(0, 1)`, and at least three retained samples.
+
+The registered identity is `registered-esd-mean-f64-v1`; optional low/high maps
+use `esd-rejection-map-v1`. The exact fraction, significance, and support floor
+are bound into `AETHPAR`. The bounded runtime reserves reusable candidate,
+decision, and statistical scratch, and publishes science plus both maps as one
+checksum-verified rollback-safe set. Tests reproduce the NIST 54-value example
+with three detected outliers, then lock permutation invariance, conservative
+small-sample behavior, masks, non-finite evidence, support-floor rollback,
+parameter identity, and byte equality across band heights.
+
+The desktop exposes `generalized_esd` with explicit 0.30 maximum-outlier and
+0.05 significance defaults. Only ESD, support, and map controls remain visible,
+and the 15-sample applicability gate is stated beside the controls.
+
 ## Frame-weighted mean
 
 `integrate_weighted_mean` accepts one finite, strictly positive `FrameWeight`

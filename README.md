@@ -177,12 +177,13 @@ optimized CPU and GPU paths must match.
   versioned exact finite-sample median with overflow-safe even support, bounded
   rank scratch, atomic FITS publication, and explicit desktop/report identity,
   plus versioned percentile-, iterative sigma-, Winsorized-sigma-, and
-  ordered-sample linear-fit-clipped means with exact low/high rejection
-  evidence, parameter-bound provenance, and optional checksum-verified low/high
-  FITS maps published with the science product as one rollback-safe, create-new
-  set, exposed through a collapsed expert UI while strict mean remains the
-  default, with linked native previews for science, low-tail, and high-tail
-  products, plus fail-closed balanced-PSF
+  ordered-sample linear-fit-clipped means, plus a two-sided generalized ESD
+  estimator with Student-t critical values and a conservative 15-sample gate,
+  all with exact low/high rejection evidence, parameter-bound provenance, and
+  optional checksum-verified low/high FITS maps published with the science
+  product as one rollback-safe, create-new set, exposed through a collapsed
+  expert UI while strict mean remains the default, with linked native previews
+  for science, low-tail, and high-tail products, plus fail-closed balanced-PSF
   weighted integration whose calibrated-Light SNR, FWHM, and eccentricity
   evidence is previewed in the UI, recomputed in Rust before execution,
   identity-bound, displayed with its canonical digest, and sealed unchanged

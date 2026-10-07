@@ -2282,6 +2282,36 @@ safety reasoning. They do not narrate obvious syntax.
 252. Publish the Linear Fit contract after repository-wide validation. Rust
      formatting, tests, linting, and documentation plus frontend formatting,
      tests, and production build must pass before direct publication to `main`.
+253. Define bounded generalized ESD controls. A finite suspected-outlier
+     fraction, family-wise significance, and retained-support floor must reject
+     invalid policies before pixel access.
+254. Implement the two-sided Rosner oracle against published NIST equations.
+     Compensated normalized moments and Student-t critical values must reproduce
+     the 54-value reference example and identify its three anomalies.
+255. Lock conservative statistical invariants. Source-order permutations,
+     populations below 15, zero spread, masks, non-finite samples, and support
+     conflicts must remain deterministic and completely accounted.
+256. Execute generalized ESD over bounded registered bands. Reusable decision,
+     candidate, and working buffers avoid per-pixel allocation while the memory
+     planner reserves their conservative worst-case peak.
+257. Publish exact ESD evidence atomically. Science and low/high count maps must
+     carry checksums, a distinct algorithm identity, canonical parameter seal,
+     and byte-identical output across valid band heights.
+258. Revalidate ESD at the native desktop boundary. The stable wire identity
+     must reconstruct Rust-owned controls and provenance without trusting
+     browser-side validation.
+259. Preserve ESD through typed browser and report contracts. Exact fraction,
+     significance, support, map choice, and estimator identity must reach native
+     execution without rewriting and remain readable in archived evidence.
+260. Expose a focused generalized ESD laboratory. Dedicated instrument-style
+     fraction and significance controls, support, maps, applicability warning,
+     progress, and estimator identity must replace generic ambiguous fields.
+261. Prove ESD interaction and accessibility. DOM tests cover defaults, bounds,
+     visibility, hidden unrelated controls, numerical stepping, warnings, and
+     the exact settings dispatched to native code.
+262. Publish the generalized ESD contract only after complete validation. Rust
+     tests, format, lint, and rustdoc plus frontend tests, format, type checking,
+     accessibility, and production build must all pass before direct `main`.
 
 ## 11. Stable-release definition
 
@@ -2302,3 +2332,5 @@ repository contains no private acquisition data or machine-specific information.
   Bayer-patterned color images”:
   <https://www.microsoft.com/en-us/research/publication/high-quality-linear-interpolation-for-demosaicing-of-bayer-patterned-color-images/>
 - Apache Arrow IPC: <https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc>
+- NIST/SEMATECH generalized ESD test:
+  <https://www.itl.nist.gov/div898/handbook/eda/section3/eda35h3.htm>

@@ -4,7 +4,8 @@
 //! Separately versioned percentile, sigma, and Winsorized-sigma means add
 //! deterministic low/high rejection with exact per-pixel evidence. Linear-fit
 //! clipping models the ordered sample distribution without assuming equal
-//! exposure scale or background offset.
+//! exposure scale or background offset. Generalized ESD adds a conservative
+//! two-sided normal-population test with Student-t critical values.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
