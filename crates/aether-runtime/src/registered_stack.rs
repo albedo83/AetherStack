@@ -2051,6 +2051,43 @@ mod tests {
     }
 
     #[test]
+    fn spatial_esd_provenance_is_distinct_and_parameter_complete() -> TestResult {
+        let esd = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        let spatial = |growth| {
+            Ok::<_, Box<dyn Error>>(RegisteredSpatialEsdParameters::new(
+                esd,
+                LargeScaleRejectionParameters::new(
+                    None,
+                    Some(LargeScaleTailParameters::new(3, growth)?),
+                    3,
+                )?,
+            )?)
+        };
+        let first = RegisteredStackEstimator::GeneralizedEsdLargeScale(spatial(2)?);
+        let changed = RegisteredStackEstimator::GeneralizedEsdLargeScale(spatial(3)?);
+        let local = RegisteredStackEstimator::GeneralizedEsd(esd);
+
+        assert_eq!(
+            first.algorithm_id(),
+            REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID
+        );
+        assert!(first.algorithm_id().len() <= 32);
+        assert_eq!(
+            first.rejection_map_algorithm_id(),
+            Some(SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID)
+        );
+        assert!(SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID.len() <= 32);
+        assert_ne!(first.algorithm_id(), local.algorithm_id());
+        assert_ne!(
+            first.rejection_map_algorithm_id(),
+            local.rejection_map_algorithm_id()
+        );
+        assert_ne!(first.parameters_sha256(), local.parameters_sha256());
+        assert_ne!(first.parameters_sha256(), changed.parameters_sha256());
+        Ok(())
+    }
+
+    #[test]
     fn band_windows_clip_halos_only_at_global_boundaries() -> TestResult {
         assert_eq!(
             registered_band_window(100, 0, 20, 12)?,
