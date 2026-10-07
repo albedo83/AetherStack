@@ -590,6 +590,7 @@ pub struct LinearFitClippedIntegration {
 pub struct GeneralizedEsdIntegration {
     image: ScientificImage,
     support: Vec<ClippedPixelSupport>,
+    attribution: RejectionAttribution,
 }
 
 impl GeneralizedEsdIntegration {
@@ -605,10 +606,22 @@ impl GeneralizedEsdIntegration {
         &self.support
     }
 
+    /// Exact per-source disposition at every planar sample.
+    #[must_use]
+    pub const fn attribution(&self) -> &RejectionAttribution {
+        &self.attribution
+    }
+
     /// Consumes the result into its scientific image and evidence map.
     #[must_use]
-    pub fn into_parts(self) -> (ScientificImage, Vec<ClippedPixelSupport>) {
-        (self.image, self.support)
+    pub fn into_parts(
+        self,
+    ) -> (
+        ScientificImage,
+        Vec<ClippedPixelSupport>,
+        RejectionAttribution,
+    ) {
+        (self.image, self.support, self.attribution)
     }
 }
 
@@ -839,6 +852,8 @@ pub enum IntegrationError {
     InvalidLinearFitParameters,
     /// Generalized ESD fraction, significance, or support floor is invalid.
     InvalidGeneralizedEsdParameters,
+    /// Per-source rejection evidence could not be represented.
+    Attribution(RejectionAttributionError),
     /// An input does not match the first image's dimensions.
     DimensionMismatch {
         /// Zero-based input position.
@@ -919,6 +934,7 @@ impl Display for IntegrationError {
             Self::InvalidGeneralizedEsdParameters => formatter.write_str(
                 "generalized ESD requires a finite outlier fraction in (0, 0.5], significance in (0, 1), and at least three retained samples",
             ),
+            Self::Attribution(error) => Display::fmt(error, formatter),
             Self::DimensionMismatch {
                 input_index,
                 expected,
@@ -981,6 +997,7 @@ impl Error for IntegrationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Core(error) => Some(error),
+            Self::Attribution(error) => Some(error),
             Self::NoInputImages
             | Self::TooManyInputImages { .. }
             | Self::InvalidPercentileParameters
@@ -1636,6 +1653,8 @@ pub fn integrate_generalized_esd_mean(
 
     let mut output =
         ScientificImage::filled(dimensions, f64::NAN).map_err(IntegrationError::Core)?;
+    let mut attribution = RejectionAttribution::new(dimensions, inputs.len())
+        .map_err(IntegrationError::Attribution)?;
     let mut support = Vec::new();
     support
         .try_reserve_exact(dimensions.pixel_count())
@@ -1685,7 +1704,16 @@ pub fn integrate_generalized_esd_mean(
             } else if !value.is_finite() {
                 output_support.non_finite += 1;
             } else {
-                finite.push(value);
+                finite.push((input_index, value));
+            }
+            if !flags.is_clear() {
+                attribution
+                    .set_disposition(pixel_index, input_index, SampleDisposition::Masked)
+                    .map_err(IntegrationError::Attribution)?;
+            } else if !value.is_finite() {
+                attribution
+                    .set_disposition(pixel_index, input_index, SampleDisposition::NonFinite)
+                    .map_err(IntegrationError::Attribution)?;
             }
         }
 
@@ -1697,7 +1725,7 @@ pub fn integrate_generalized_esd_mean(
             }
             *output_flags = flags;
         } else {
-            finite.sort_by(f64::total_cmp);
+            finite.sort_by(|left, right| left.1.total_cmp(&right.1));
             generalized_esd_decisions(
                 &finite,
                 parameters,
@@ -1705,6 +1733,17 @@ pub fn integrate_generalized_esd_mean(
                 &mut esd_working,
                 &mut esd_candidates,
             );
+            for (rank, (source_index, _)) in finite.iter().copied().enumerate() {
+                let disposition = match decisions.get(rank).copied().unwrap_or(EsdDecision::Retain)
+                {
+                    EsdDecision::Retain => SampleDisposition::Accepted,
+                    EsdDecision::RejectLow => SampleDisposition::RejectedLow,
+                    EsdDecision::RejectHigh => SampleDisposition::RejectedHigh,
+                };
+                attribution
+                    .set_disposition(pixel_index, source_index, disposition)
+                    .map_err(IntegrationError::Attribution)?;
+            }
             let mut rank = 0_usize;
             finite.retain(|_| {
                 let decision = decisions.get(rank).copied().unwrap_or(EsdDecision::Retain);
@@ -1726,7 +1765,7 @@ pub fn integrate_generalized_esd_mean(
                     count: inputs.len(),
                     maximum: u32::MAX,
                 })?;
-            *output = stable_mean(&finite);
+            *output = stable_mean_indexed(&finite);
             *output_flags = PixelFlags::CLEAR;
         }
 
@@ -1741,6 +1780,7 @@ pub fn integrate_generalized_esd_mean(
     Ok(GeneralizedEsdIntegration {
         image: output,
         support,
+        attribution,
     })
 }
 
@@ -1760,7 +1800,7 @@ struct EsdCandidate {
 }
 
 fn generalized_esd_decisions(
-    sorted_values: &[f64],
+    sorted_values: &[(usize, f64)],
     parameters: GeneralizedEsdParameters,
     decisions: &mut Vec<EsdDecision>,
     working: &mut Vec<(usize, f64)>,
@@ -1782,7 +1822,12 @@ fn generalized_esd_decisions(
     }
 
     working.clear();
-    working.extend(sorted_values.iter().copied().enumerate());
+    working.extend(
+        sorted_values
+            .iter()
+            .enumerate()
+            .map(|(rank, (_, value))| (rank, *value)),
+    );
     candidates.clear();
     for _ in 0..maximum_outliers {
         let Some((candidate_index, statistic, decision)) = esd_candidate(working) else {
@@ -2113,6 +2158,23 @@ fn stable_mean(values: &[f64]) -> f64 {
     let divisor = values.len() as f64;
     let mut normalized = CompensatedSum::new();
     for value in values {
+        normalized.add((value / scale) / divisor);
+    }
+    canonical_zero(normalized.total().max(minimum / scale).min(maximum / scale) * scale)
+}
+
+fn stable_mean_indexed(values: &[(usize, f64)]) -> f64 {
+    let scale = values
+        .iter()
+        .fold(0.0_f64, |scale, (_, value)| scale.max(value.abs()));
+    if scale == 0.0 {
+        return 0.0;
+    }
+    let minimum = values[0].1;
+    let maximum = values[values.len() - 1].1;
+    let divisor = values.len() as f64;
+    let mut normalized = CompensatedSum::new();
+    for (_, value) in values {
         normalized.add((value / scale) / divisor);
     }
     canonical_zero(normalized.total().max(minimum / scale).min(maximum / scale) * scale)
@@ -3070,6 +3132,24 @@ mod tests {
         assert_eq!(result.support()[0].masked(), 1);
         assert_eq!(result.support()[0].non_finite(), 1);
         assert_eq!(result.support()[0].total(), 18);
+        for source_index in 0..15 {
+            assert_eq!(
+                result.attribution().disposition(0, source_index)?,
+                SampleDisposition::Accepted
+            );
+        }
+        assert_eq!(
+            result.attribution().disposition(0, 15)?,
+            SampleDisposition::RejectedHigh
+        );
+        assert_eq!(
+            result.attribution().disposition(0, 16)?,
+            SampleDisposition::Masked
+        );
+        assert_eq!(
+            result.attribution().disposition(0, 17)?,
+            SampleDisposition::NonFinite
+        );
         Ok(())
     }
 
