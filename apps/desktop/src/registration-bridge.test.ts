@@ -169,6 +169,8 @@ describe("native registration bridge", () => {
             highFraction: 0.1,
             lowSigma: 4,
             highSigma: 3,
+            esdOutlierFraction: 0.3,
+            esdSignificance: 0.05,
             maximumIterations: 8,
             minimumRetainedSamples: 3,
             generateRejectionMaps: true,
@@ -193,6 +195,8 @@ describe("native registration bridge", () => {
           highFraction: 0.1,
           lowSigma: 4,
           highSigma: 3,
+          esdOutlierFraction: 0.3,
+          esdSignificance: 0.05,
           maximumIterations: 8,
           minimumRetainedSamples: 3,
           generateRejectionMaps: true,
@@ -217,6 +221,8 @@ describe("native registration bridge", () => {
       highFraction: 0.1,
       lowSigma: 5,
       highSigma: 3.5,
+      esdOutlierFraction: 0.3,
+      esdSignificance: 0.05,
       maximumIterations: 8,
       minimumRetainedSamples: 3,
       generateRejectionMaps: true,
@@ -246,10 +252,63 @@ describe("native registration bridge", () => {
             highFraction: 0.1,
             lowSigma: 5,
             highSigma: 3.5,
+            esdOutlierFraction: 0.3,
+            esdSignificance: 0.05,
             maximumIterations: 8,
             minimumRetainedSamples: 3,
             generateRejectionMaps: true,
           },
+        }),
+      }),
+    );
+  });
+
+  it("forwards generalized ESD controls without rewriting them", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      outputPath: "/results/generalized-esd.fits",
+    });
+    const integration = {
+      estimator: "generalized_esd" as const,
+      weightReferenceFrameId: null,
+      lowFraction: 0.1,
+      highFraction: 0.1,
+      lowSigma: 4,
+      highSigma: 3,
+      esdOutlierFraction: 0.25,
+      esdSignificance: 0.01,
+      maximumIterations: 8,
+      minimumRetainedSamples: 15,
+      generateRejectionMaps: true,
+    };
+
+    await executeRegisteredStack(
+      "/results/generalized-esd.fits",
+      {
+        referenceFrameId: "1".repeat(64),
+        sourceFrameIds: ["2".repeat(64)],
+      },
+      "a".repeat(64),
+      [
+        { frameId: "1".repeat(64), path: "/registered/reference.fits" },
+        { frameId: "2".repeat(64), path: "/registered/source.fits" },
+      ],
+      [],
+      null,
+      { bandHeight: 128, memoryLimitBytes: 1_073_741_824, integration },
+      vi.fn(),
+    );
+
+    expect(invoke).toHaveBeenLastCalledWith(
+      "execute_registered_stack",
+      expect.objectContaining({
+        request: expect.objectContaining({
+          integration: expect.objectContaining({
+            estimator: "generalized_esd",
+            esdOutlierFraction: 0.25,
+            esdSignificance: 0.01,
+            minimumRetainedSamples: 15,
+            generateRejectionMaps: true,
+          }),
         }),
       }),
     );

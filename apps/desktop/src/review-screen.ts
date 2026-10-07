@@ -4162,7 +4162,8 @@ function registeredStackSettings(
     estimator !== "percentile_clipped" &&
     estimator !== "sigma_clipped" &&
     estimator !== "winsorized_sigma_clipped" &&
-    estimator !== "linear_fit_clipped"
+    estimator !== "linear_fit_clipped" &&
+    estimator !== "generalized_esd"
   ) {
     return null;
   }
@@ -4190,7 +4191,10 @@ function registeredStackSettings(
     maximumIterations < 1 ||
     maximumIterations > 4_294_967_295 ||
     !Number.isSafeInteger(minimumRetainedSamples) ||
-    minimumRetainedSamples < (estimator === "linear_fit_clipped" ? 3 : 1) ||
+    minimumRetainedSamples <
+      (estimator === "linear_fit_clipped" || estimator === "generalized_esd"
+        ? 3
+        : 1) ||
     minimumRetainedSamples > 4_294_967_295
   ) {
     return null;
@@ -4203,13 +4207,16 @@ function registeredStackSettings(
     highFraction,
     lowSigma,
     highSigma,
+    esdOutlierFraction: 0.3,
+    esdSignificance: 0.05,
     maximumIterations,
     minimumRetainedSamples,
     generateRejectionMaps:
       (estimator === "percentile_clipped" ||
         estimator === "sigma_clipped" ||
         estimator === "winsorized_sigma_clipped" ||
-        estimator === "linear_fit_clipped") &&
+        estimator === "linear_fit_clipped" ||
+        estimator === "generalized_esd") &&
       elements.registeredStackRejectionMaps.checked,
   };
 }
@@ -4232,7 +4239,8 @@ function formatEstimatorName(
     | "percentile_clipped"
     | "sigma_clipped"
     | "winsorized_sigma_clipped"
-    | "linear_fit_clipped",
+    | "linear_fit_clipped"
+    | "generalized_esd",
 ): string {
   switch (estimator) {
     case "strict_mean":
@@ -4249,6 +4257,8 @@ function formatEstimatorName(
       return "Winsorized sigma clipped";
     case "linear_fit_clipped":
       return "linear fit clipped";
+    case "generalized_esd":
+      return "generalized ESD";
   }
 }
 

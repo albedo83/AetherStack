@@ -185,12 +185,15 @@ export interface RegisteredStackIntegrationSettings {
     | "percentile_clipped"
     | "sigma_clipped"
     | "winsorized_sigma_clipped"
-    | "linear_fit_clipped";
+    | "linear_fit_clipped"
+    | "generalized_esd";
   readonly weightReferenceFrameId: string | null;
   readonly lowFraction: number;
   readonly highFraction: number;
   readonly lowSigma: number;
   readonly highSigma: number;
+  readonly esdOutlierFraction: number;
+  readonly esdSignificance: number;
   readonly maximumIterations: number;
   readonly minimumRetainedSamples: number;
   readonly generateRejectionMaps: boolean;
@@ -501,6 +504,8 @@ export function executeRegisteredStack(
     highFraction: settings.integration.highFraction,
     lowSigma: settings.integration.lowSigma,
     highSigma: settings.integration.highSigma,
+    esdOutlierFraction: settings.integration.esdOutlierFraction,
+    esdSignificance: settings.integration.esdSignificance,
     maximumIterations: settings.integration.maximumIterations,
     minimumRetainedSamples: settings.integration.minimumRetainedSamples,
     generateRejectionMaps: settings.integration.generateRejectionMaps,

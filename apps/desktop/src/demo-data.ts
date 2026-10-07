@@ -166,6 +166,8 @@ export const demoReviewModel: ReviewViewModel = {
         highFraction: 0.1,
         lowSigma: 4,
         highSigma: 3,
+        esdOutlierFraction: 0.3,
+        esdSignificance: 0.05,
         maximumIterations: 8,
         minimumRetainedSamples: 3,
         generateRejectionMaps: false,
