@@ -569,6 +569,18 @@ struct RegisteredStackIntegrationSettings {
     maximum_iterations: u32,
     minimum_retained_samples: u32,
     generate_rejection_maps: bool,
+    #[serde(default)]
+    large_scale_low_enabled: bool,
+    #[serde(default)]
+    large_scale_high_enabled: bool,
+    #[serde(default = "default_large_scale_layers")]
+    large_scale_low_layers: u8,
+    #[serde(default = "default_large_scale_layers")]
+    large_scale_high_layers: u8,
+    #[serde(default = "default_large_scale_growth")]
+    large_scale_low_growth: u16,
+    #[serde(default = "default_large_scale_growth")]
+    large_scale_high_growth: u16,
 }
 
 const fn default_low_sigma() -> f64 {
@@ -581,6 +593,14 @@ const fn default_high_sigma() -> f64 {
 
 const fn default_sigma_iterations() -> u32 {
     8
+}
+
+const fn default_large_scale_layers() -> u8 {
+    2
+}
+
+const fn default_large_scale_growth() -> u16 {
+    2
 }
 
 const fn default_esd_outlier_fraction() -> f64 {
@@ -11992,6 +12012,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &CancellationToken::new(),
@@ -12301,6 +12327,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &CancellationToken::new(),
@@ -12577,6 +12609,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &CancellationToken::new(),
@@ -12633,6 +12671,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &CancellationToken::new(),
@@ -12752,6 +12796,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &CancellationToken::new(),
@@ -12897,6 +12947,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &CancellationToken::new(),
@@ -12961,6 +13017,12 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
+                    large_scale_low_enabled: false,
+                    large_scale_high_enabled: false,
+                    large_scale_low_layers: 2,
+                    large_scale_high_layers: 2,
+                    large_scale_low_growth: 2,
+                    large_scale_high_growth: 2,
                 },
             },
             &cancellation,
