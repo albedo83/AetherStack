@@ -13,10 +13,10 @@ use aether_fits::{
 };
 pub use aether_integration::{
     BALANCED_PSF_WEIGHT_ALGORITHM_ID, GENERALIZED_ESD_CLIPPED_MEAN_ALGORITHM_ID,
-    GeneralizedEsdParameters, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, LinearFitClipParameters,
-    PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters, QualityWeightMetrics,
-    SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters, SourceDispositionCounts,
-    WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
+    GeneralizedEsdParameters, LINEAR_FIT_CLIPPED_MEAN_ALGORITHM_ID, LargeScaleRejectionParameters,
+    LinearFitClipParameters, PERCENTILE_REJECTION_MAP_ALGORITHM_ID, PercentileClipParameters,
+    QualityWeightMetrics, SIGMA_CLIPPED_MEAN_ALGORITHM_ID, SigmaClipParameters,
+    SourceDispositionCounts, WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID,
 };
 use aether_integration::{
     ClippedPixelSupport, FrameWeight, IntegrationError, PixelSupport, balanced_psf_weight,
@@ -64,6 +64,78 @@ pub const GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID: &str = "esd-rejection-map-
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
+
+/// Canonical generalized-ESD controls plus source-owned spatial expansion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RegisteredSpatialEsdParameters {
+    esd: GeneralizedEsdParameters,
+    spatial: LargeScaleRejectionParameters,
+}
+
+impl RegisteredSpatialEsdParameters {
+    /// Binds both rejection stages to the same retained-sample safety floor.
+    pub fn new(
+        esd: GeneralizedEsdParameters,
+        spatial: LargeScaleRejectionParameters,
+    ) -> Result<Self, RegisteredSpatialEsdParameterError> {
+        if esd.minimum_retained() != spatial.minimum_retained() {
+            return Err(RegisteredSpatialEsdParameterError::SupportFloorMismatch {
+                esd: esd.minimum_retained(),
+                spatial: spatial.minimum_retained(),
+            });
+        }
+        Ok(Self { esd, spatial })
+    }
+
+    /// Pixel-local generalized-ESD controls.
+    #[must_use]
+    pub const fn esd(self) -> GeneralizedEsdParameters {
+        self.esd
+    }
+
+    /// Source-owned large-scale expansion controls.
+    #[must_use]
+    pub const fn spatial(self) -> LargeScaleRejectionParameters {
+        self.spatial
+    }
+
+    /// Stable digest covering both output-altering parameter sets.
+    #[must_use]
+    pub fn parameters_sha256(self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"aetherstack-registered-spatial-esd-parameters-v1\0");
+        hasher.update(self.esd.maximum_outlier_fraction().to_bits().to_be_bytes());
+        hasher.update(self.esd.significance().to_bits().to_be_bytes());
+        hasher.update(self.esd.minimum_retained().to_be_bytes());
+        hasher.update(self.spatial.parameters_sha256());
+        encode_lower_hex(hasher.finalize().as_slice())
+    }
+}
+
+/// Invalid cross-stage registered spatial-ESD configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisteredSpatialEsdParameterError {
+    /// Pixel-local and spatial stages disagree on the support floor.
+    SupportFloorMismatch {
+        /// Pixel-local generalized-ESD floor.
+        esd: u32,
+        /// Spatial expansion floor.
+        spatial: u32,
+    },
+}
+
+impl Display for RegisteredSpatialEsdParameterError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SupportFloorMismatch { esd, spatial } => write!(
+                formatter,
+                "generalized ESD retains {esd} samples but spatial expansion retains {spatial}"
+            ),
+        }
+    }
+}
+
+impl Error for RegisteredSpatialEsdParameterError {}
 
 /// Scientific estimator selected for one registered common-crop stack.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1797,6 +1869,35 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn Error>>;
+
+    #[test]
+    fn spatial_esd_parameters_bind_support_floor_and_digest() -> TestResult {
+        let esd = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        let spatial = LargeScaleRejectionParameters::new(
+            None,
+            Some(aether_integration::LargeScaleTailParameters::new(3, 5)?),
+            3,
+        )?;
+        let parameters = RegisteredSpatialEsdParameters::new(esd, spatial)?;
+        assert_eq!(parameters.esd(), esd);
+        assert_eq!(parameters.spatial(), spatial);
+        assert_eq!(parameters.parameters_sha256().len(), 64);
+        assert_eq!(
+            parameters.parameters_sha256(),
+            parameters.parameters_sha256()
+        );
+
+        let mismatched = LargeScaleRejectionParameters::new(
+            None,
+            Some(aether_integration::LargeScaleTailParameters::new(3, 5)?),
+            4,
+        )?;
+        assert_eq!(
+            RegisteredSpatialEsdParameters::new(esd, mismatched),
+            Err(RegisteredSpatialEsdParameterError::SupportFloorMismatch { esd: 3, spatial: 4 })
+        );
+        Ok(())
+    }
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     struct TestDirectory(PathBuf);
