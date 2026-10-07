@@ -127,6 +127,19 @@ pub enum RejectionAttributionError {
         /// Invalid three-bit value.
         code: u8,
     },
+    /// Two attribution cubes cannot be compared sample for sample.
+    CubeMismatch,
+    /// A comparison observed a transition forbidden to spatial expansion.
+    UnexpectedDispositionTransition {
+        /// Planar sample carrying the invalid transition.
+        sample_index: usize,
+        /// Source carrying the invalid transition.
+        source_index: usize,
+        /// Baseline disposition.
+        before: SampleDisposition,
+        /// Final disposition.
+        after: SampleDisposition,
+    },
 }
 
 impl Display for RejectionAttributionError {
@@ -161,6 +174,18 @@ impl Display for RejectionAttributionError {
                     "rejection attribution contains invalid code {code}"
                 )
             }
+            Self::CubeMismatch => formatter.write_str(
+                "rejection attribution cubes have different dimensions or source counts",
+            ),
+            Self::UnexpectedDispositionTransition {
+                sample_index,
+                source_index,
+                before,
+                after,
+            } => write!(
+                formatter,
+                "rejection attribution transition sample={sample_index}, source={source_index} from {before:?} to {after:?} is not a spatial promotion"
+            ),
         }
     }
 }
@@ -173,6 +198,33 @@ pub struct RejectionAttribution {
     dimensions: Dimensions,
     source_count: usize,
     packed: Vec<u8>,
+}
+
+/// Exact accepted-to-rejected transitions introduced by spatial expansion.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RejectionPromotionCounts {
+    low: u64,
+    high: u64,
+}
+
+impl RejectionPromotionCounts {
+    /// Accepted samples promoted into the low tail.
+    #[must_use]
+    pub const fn low(self) -> u64 {
+        self.low
+    }
+
+    /// Accepted samples promoted into the high tail.
+    #[must_use]
+    pub const fn high(self) -> u64 {
+        self.high
+    }
+
+    /// All spatial promotions represented by this comparison.
+    #[must_use]
+    pub const fn total(self) -> u64 {
+        self.low + self.high
+    }
 }
 
 impl RejectionAttribution {
@@ -273,6 +325,51 @@ impl RejectionAttribution {
             }
         }
         Ok(cropped)
+    }
+
+    /// Counts only valid accepted-to-tail transitions from a baseline cube.
+    ///
+    /// Unchanged masked, non-finite, accepted, and already rejected samples
+    /// are permitted. Every other transition fails closed because spatial
+    /// rejection is not allowed to erase or change existing evidence.
+    pub fn promotions_from(
+        &self,
+        baseline: &Self,
+    ) -> Result<RejectionPromotionCounts, RejectionAttributionError> {
+        if self.dimensions != baseline.dimensions || self.source_count != baseline.source_count {
+            return Err(RejectionAttributionError::CubeMismatch);
+        }
+        let mut counts = RejectionPromotionCounts::default();
+        for sample_index in 0..self.dimensions.pixel_count() {
+            for source_index in 0..self.source_count {
+                let before = baseline.disposition(sample_index, source_index)?;
+                let after = self.disposition(sample_index, source_index)?;
+                match (before, after) {
+                    (SampleDisposition::Accepted, SampleDisposition::RejectedLow) => {
+                        counts.low = counts
+                            .low
+                            .checked_add(1)
+                            .ok_or(RejectionAttributionError::SizeOverflow)?;
+                    }
+                    (SampleDisposition::Accepted, SampleDisposition::RejectedHigh) => {
+                        counts.high = counts
+                            .high
+                            .checked_add(1)
+                            .ok_or(RejectionAttributionError::SizeOverflow)?;
+                    }
+                    _ if before == after => {}
+                    _ => {
+                        return Err(RejectionAttributionError::UnexpectedDispositionTransition {
+                            sample_index,
+                            source_index,
+                            before,
+                            after,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(counts)
     }
 
     /// Returns one exact disposition.
@@ -495,6 +592,41 @@ mod tests {
         assert!(matches!(
             attribution.crop_rows(2, 2),
             Err(RejectionAttributionError::InvalidRowRange { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn counts_only_accepted_to_tail_promotions() -> TestResult {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        let mut baseline = RejectionAttribution::new(dimensions, 3)?;
+        baseline.set_disposition(1, 2, SampleDisposition::Masked)?;
+        let mut expanded = baseline.clone();
+        expanded.set_disposition(0, 0, SampleDisposition::RejectedLow)?;
+        expanded.set_disposition(0, 1, SampleDisposition::RejectedHigh)?;
+
+        let counts = expanded.promotions_from(&baseline)?;
+        assert_eq!(counts.low(), 1);
+        assert_eq!(counts.high(), 1);
+        assert_eq!(counts.total(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn promotion_comparison_rejects_foreign_cubes_and_evidence_changes() -> TestResult {
+        let dimensions = Dimensions::new(1, 1, 1)?;
+        let baseline = RejectionAttribution::new(dimensions, 2)?;
+        let foreign = RejectionAttribution::new(dimensions, 1)?;
+        assert_eq!(
+            baseline.promotions_from(&foreign),
+            Err(RejectionAttributionError::CubeMismatch)
+        );
+
+        let mut changed = baseline.clone();
+        changed.set_disposition(0, 0, SampleDisposition::Masked)?;
+        assert!(matches!(
+            changed.promotions_from(&baseline),
+            Err(RejectionAttributionError::UnexpectedDispositionTransition { .. })
         ));
         Ok(())
     }

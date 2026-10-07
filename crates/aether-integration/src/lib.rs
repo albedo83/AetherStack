@@ -17,7 +17,8 @@ mod attribution;
 mod large_scale;
 
 pub use attribution::{
-    RejectionAttribution, RejectionAttributionError, SampleDisposition, SourceDispositionCounts,
+    RejectionAttribution, RejectionAttributionError, RejectionPromotionCounts, SampleDisposition,
+    SourceDispositionCounts,
 };
 pub use large_scale::{
     LARGE_SCALE_REJECTION_ALGORITHM_ID, LargeScaleExpansionSummary, LargeScaleMemoryPlan,
