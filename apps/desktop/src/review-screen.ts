@@ -4210,7 +4210,8 @@ function formatEstimatorName(
     | "weighted_mean"
     | "percentile_clipped"
     | "sigma_clipped"
-    | "winsorized_sigma_clipped",
+    | "winsorized_sigma_clipped"
+    | "linear_fit_clipped",
 ): string {
   switch (estimator) {
     case "strict_mean":
@@ -4225,6 +4226,8 @@ function formatEstimatorName(
       return "iterative sigma clipped";
     case "winsorized_sigma_clipped":
       return "Winsorized sigma clipped";
+    case "linear_fit_clipped":
+      return "linear fit clipped";
   }
 }
 

@@ -184,7 +184,8 @@ export interface RegisteredStackIntegrationSettings {
     | "weighted_mean"
     | "percentile_clipped"
     | "sigma_clipped"
-    | "winsorized_sigma_clipped";
+    | "winsorized_sigma_clipped"
+    | "linear_fit_clipped";
   readonly weightReferenceFrameId: string | null;
   readonly lowFraction: number;
   readonly highFraction: number;

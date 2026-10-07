@@ -202,6 +202,59 @@ describe("native registration bridge", () => {
     });
   });
 
+  it("forwards linear-fit residual controls without rewriting them", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      outputPath: "/results/linear-fit.fits",
+    });
+    const planning = {
+      referenceFrameId: "1".repeat(64),
+      sourceFrameIds: ["2".repeat(64)],
+    };
+    const integration = {
+      estimator: "linear_fit_clipped" as const,
+      weightReferenceFrameId: null,
+      lowFraction: 0.1,
+      highFraction: 0.1,
+      lowSigma: 5,
+      highSigma: 3.5,
+      maximumIterations: 8,
+      minimumRetainedSamples: 3,
+      generateRejectionMaps: true,
+    };
+
+    await executeRegisteredStack(
+      "/results/linear-fit.fits",
+      planning,
+      "a".repeat(64),
+      [
+        { frameId: "1".repeat(64), path: "/registered/reference.fits" },
+        { frameId: "2".repeat(64), path: "/registered/source.fits" },
+      ],
+      [],
+      null,
+      { bandHeight: 128, memoryLimitBytes: 1_073_741_824, integration },
+      vi.fn(),
+    );
+
+    expect(invoke).toHaveBeenLastCalledWith(
+      "execute_registered_stack",
+      expect.objectContaining({
+        request: expect.objectContaining({
+          integration: {
+            estimator: "linear_fit_clipped",
+            lowFraction: 0.1,
+            highFraction: 0.1,
+            lowSigma: 5,
+            highSigma: 3.5,
+            maximumIterations: 8,
+            minimumRetainedSamples: 3,
+            generateRejectionMaps: true,
+          },
+        }),
+      }),
+    );
+  });
+
   it("selects and cancels a registered stack natively", async () => {
     vi.mocked(save).mockResolvedValue("/results/integrated-common-crop.fits");
     vi.mocked(invoke).mockResolvedValue(true);
