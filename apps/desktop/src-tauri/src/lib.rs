@@ -619,8 +619,22 @@ struct RegisteredStackResponse {
     low_rejection_map_path: Option<String>,
     high_rejection_map_path: Option<String>,
     rejection_map_samples_written: Option<u64>,
+    source_dispositions: Vec<RegisteredSourceDispositionResponse>,
     report_path: String,
     report_sha256: String,
+}
+
+/// Exact per-source sample accounting returned by attributed estimators.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredSourceDispositionResponse {
+    frame_id: String,
+    accepted: u64,
+    masked: u64,
+    non_finite: u64,
+    rejected_low: u64,
+    rejected_high: u64,
+    total: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4316,6 +4330,22 @@ where
     let dimensions = result.dimensions();
     let summary = result.summary();
     let rejection_map_summary = result.rejection_map_summary();
+    let source_dispositions = result
+        .source_dispositions()
+        .iter()
+        .map(|source| {
+            let counts = source.counts();
+            RegisteredSourceDispositionResponse {
+                frame_id: source.frame_id().as_str().to_owned(),
+                accepted: counts.accepted(),
+                masked: counts.masked(),
+                non_finite: counts.non_finite(),
+                rejected_low: counts.rejected_low(),
+                rejected_high: counts.rejected_high(),
+                total: counts.total(),
+            }
+        })
+        .collect();
     let low_rejection_map_path = rejection_paths
         .as_ref()
         .map(|(path, _)| unicode_registered_output_path(path))
@@ -4395,6 +4425,7 @@ where
             );
             value.low().samples_written()
         }),
+        source_dispositions,
         report_path,
         report_sha256,
     })
@@ -12567,6 +12598,7 @@ mod tests {
             result.rejection_map_samples_written,
             Some(result.samples_written)
         );
+        assert!(result.source_dispositions.is_empty());
         assert!(stack_path.is_file());
         assert!(low_path.is_file());
         assert!(high_path.is_file());
@@ -12575,14 +12607,14 @@ mod tests {
         let sigma = execute_registered_stack_sync(
             &session,
             RegisteredStackCommandRequest {
-                planning,
-                expected_plan_sha256,
+                planning: planning.clone(),
+                expected_plan_sha256: expected_plan_sha256.clone(),
                 artifacts: registered
                     .frames
-                    .into_iter()
+                    .iter()
                     .map(|frame| RegistrationArtifactInput {
-                        frame_id: frame.frame_id,
-                        path: PathBuf::from(frame.output_path),
+                        frame_id: frame.frame_id.clone(),
+                        path: PathBuf::from(&frame.output_path),
                     })
                     .collect(),
                 quality_evidence: Vec::new(),
@@ -12607,6 +12639,7 @@ mod tests {
             |_| {},
         )?;
         assert_eq!(sigma.estimator, REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID);
+        assert!(sigma.source_dispositions.is_empty());
         assert!(sigma_path.is_file());
         assert!(
             directory
@@ -12620,6 +12653,30 @@ mod tests {
                 .join("sigma-stack-rejection-high.fits")
                 .is_file()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_exact_source_disposition_contract() -> TestResult {
+        let response = RegisteredSourceDispositionResponse {
+            frame_id: "a".repeat(64),
+            accepted: 10,
+            masked: 2,
+            non_finite: 1,
+            rejected_low: 3,
+            rejected_high: 4,
+            total: 20,
+        };
+
+        let value = serde_json::to_value(response)?;
+        assert_eq!(value["frameId"], "a".repeat(64));
+        assert_eq!(value["accepted"], 10);
+        assert_eq!(value["masked"], 2);
+        assert_eq!(value["nonFinite"], 1);
+        assert_eq!(value["rejectedLow"], 3);
+        assert_eq!(value["rejectedHigh"], 4);
+        assert_eq!(value["total"], 20);
         Ok(())
     }
 
