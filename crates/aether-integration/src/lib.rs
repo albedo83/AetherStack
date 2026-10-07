@@ -13,6 +13,10 @@ use std::fmt::{Display, Formatter};
 use aether_core::{CompensatedSum, CoreError, Dimensions, PixelFlags, ScientificImage};
 use statrs::distribution::{ContinuousCDF, StudentsT};
 
+mod attribution;
+
+pub use attribution::{RejectionAttribution, RejectionAttributionError, SampleDisposition};
+
 /// Plane-major low/high count map emitted from percentile support evidence.
 pub const PERCENTILE_REJECTION_MAP_ALGORITHM_ID: &str = "percentile-rejection-map-v1";
 
