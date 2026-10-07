@@ -487,6 +487,34 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-maximum-iterations]",
     ),
+    registeredStackLargeScale: required<HTMLElement>(
+      root,
+      "[data-registered-stack-large-scale]",
+    ),
+    registeredStackLargeScaleLowEnabled: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-large-scale-low-enabled]",
+    ),
+    registeredStackLargeScaleHighEnabled: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-large-scale-high-enabled]",
+    ),
+    registeredStackLargeScaleLowLayers: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-large-scale-low-layers]",
+    ),
+    registeredStackLargeScaleHighLayers: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-large-scale-high-layers]",
+    ),
+    registeredStackLargeScaleLowGrowth: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-large-scale-low-growth]",
+    ),
+    registeredStackLargeScaleHighGrowth: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-large-scale-high-growth]",
+    ),
     registeredStackMinimumRetained: required<HTMLInputElement>(
       root,
       "[data-registered-stack-minimum-retained]",
@@ -3079,6 +3107,13 @@ interface RegistrationElements {
   readonly registeredStackEsdOutlierFraction: HTMLInputElement;
   readonly registeredStackEsdSignificance: HTMLInputElement;
   readonly registeredStackMaximumIterations: HTMLInputElement;
+  readonly registeredStackLargeScale: HTMLElement;
+  readonly registeredStackLargeScaleLowEnabled: HTMLInputElement;
+  readonly registeredStackLargeScaleHighEnabled: HTMLInputElement;
+  readonly registeredStackLargeScaleLowLayers: HTMLInputElement;
+  readonly registeredStackLargeScaleHighLayers: HTMLInputElement;
+  readonly registeredStackLargeScaleLowGrowth: HTMLInputElement;
+  readonly registeredStackLargeScaleHighGrowth: HTMLInputElement;
   readonly registeredStackMinimumRetained: HTMLInputElement;
   readonly registeredStackRejectionMaps: HTMLInputElement;
   readonly registeredStackEstimatorLabel: HTMLElement;
@@ -5962,6 +5997,40 @@ function shellMarkup(): string {
                         </span>
                       </label>
                     </div>
+                    <fieldset class="large-scale-rejection" data-registered-stack-large-scale hidden>
+                      <legend>Large-scale pixel rejection</legend>
+                      <p>Expand source-owned ESD evidence across coherent structures. Exact halos keep results independent of processing band size.</p>
+                      <div class="large-scale-rejection__tails">
+                        <section class="large-scale-tail" aria-labelledby="large-scale-low-title">
+                          <label class="large-scale-tail__switch">
+                            <input data-registered-stack-large-scale-low-enabled type="checkbox" />
+                            <span><strong id="large-scale-low-title">Low tail</strong><small>Cold trails and broad negative defects</small></span>
+                          </label>
+                          <label class="control-field">
+                            <span>Detection layers</span>
+                            <input data-registered-stack-large-scale-low-layers aria-label="Low-tail large-scale detection layers" type="number" min="1" max="12" step="1" inputmode="numeric" />
+                          </label>
+                          <label class="control-field">
+                            <span>Growth radius</span>
+                            <input data-registered-stack-large-scale-low-growth aria-label="Low-tail large-scale growth radius" type="number" min="0" max="256" step="1" inputmode="numeric" />
+                          </label>
+                        </section>
+                        <section class="large-scale-tail" aria-labelledby="large-scale-high-title">
+                          <label class="large-scale-tail__switch">
+                            <input data-registered-stack-large-scale-high-enabled type="checkbox" />
+                            <span><strong id="large-scale-high-title">High tail</strong><small>Satellite trails and broad positive defects</small></span>
+                          </label>
+                          <label class="control-field">
+                            <span>Detection layers</span>
+                            <input data-registered-stack-large-scale-high-layers aria-label="High-tail large-scale detection layers" type="number" min="1" max="12" step="1" inputmode="numeric" />
+                          </label>
+                          <label class="control-field">
+                            <span>Growth radius</span>
+                            <input data-registered-stack-large-scale-high-growth aria-label="High-tail large-scale growth radius" type="number" min="0" max="256" step="1" inputmode="numeric" />
+                          </label>
+                        </section>
+                      </div>
+                    </fieldset>
                     <label class="registered-stack__map-toggle">
                       <input data-registered-stack-rejection-maps type="checkbox" />
                       <span><strong>Publish rejection evidence</strong><small>Create separate low-tail and high-tail FITS maps beside the science product.</small></span>
