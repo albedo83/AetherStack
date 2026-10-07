@@ -3534,6 +3534,17 @@ describe("frame review workspace", () => {
     const registration = fixture({
       ...demoReviewModel,
       activeWorkspace: "registration",
+      registration: {
+        ...demoReviewModel.registration,
+        stack: {
+          ...demoReviewModel.registration.stack,
+          settings: {
+            ...demoReviewModel.registration.stack.settings,
+            estimator: "generalized_esd",
+            largeScaleHighEnabled: true,
+          },
+        },
+      },
     });
     const registrationReport = await axe.run(registration.root, {
       rules: {
