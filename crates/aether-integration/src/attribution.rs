@@ -99,6 +99,15 @@ impl SampleDisposition {
 pub enum RejectionAttributionError {
     /// At least one source is required.
     EmptySourceSet,
+    /// A requested row window was empty or extended beyond the image.
+    InvalidRowRange {
+        /// First requested row.
+        start: usize,
+        /// Number of requested rows.
+        height: usize,
+        /// Available image height.
+        total_height: usize,
+    },
     /// The sample count or compact storage length overflowed `usize`.
     SizeOverflow,
     /// Compact evidence storage could not be reserved.
@@ -124,6 +133,14 @@ impl Display for RejectionAttributionError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptySourceSet => formatter.write_str("rejection attribution requires a source"),
+            Self::InvalidRowRange {
+                start,
+                height,
+                total_height,
+            } => write!(
+                formatter,
+                "rejection attribution row range start={start}, height={height} is outside height {total_height}"
+            ),
             Self::SizeOverflow => formatter.write_str("rejection attribution size overflowed"),
             Self::AllocationFailed { bytes } => {
                 write!(
@@ -206,6 +223,56 @@ impl RejectionAttribution {
     #[must_use]
     pub fn packed_len(&self) -> usize {
         self.packed.len()
+    }
+
+    /// Copies a complete row window from every plane into a compact cube.
+    ///
+    /// This operation preserves planar order and source ownership exactly. It
+    /// is intended for banded processors that evaluate a halo but publish only
+    /// the non-overlapping core rows.
+    pub fn crop_rows(
+        &self,
+        start: usize,
+        height: usize,
+    ) -> Result<Self, RejectionAttributionError> {
+        let end = start
+            .checked_add(height)
+            .ok_or(RejectionAttributionError::InvalidRowRange {
+                start,
+                height,
+                total_height: self.dimensions.height(),
+            })?;
+        if height == 0 || end > self.dimensions.height() {
+            return Err(RejectionAttributionError::InvalidRowRange {
+                start,
+                height,
+                total_height: self.dimensions.height(),
+            });
+        }
+        let dimensions = Dimensions::new(self.dimensions.width(), height, self.dimensions.planes())
+            .map_err(|_| RejectionAttributionError::SizeOverflow)?;
+        let mut cropped = Self::new(dimensions, self.source_count)?;
+        let source_plane_area = self.dimensions.width() * self.dimensions.height();
+        let cropped_plane_area = dimensions.width() * dimensions.height();
+        for plane in 0..dimensions.planes() {
+            for row in 0..height {
+                for column in 0..dimensions.width() {
+                    let source_sample = plane * source_plane_area
+                        + (start + row) * self.dimensions.width()
+                        + column;
+                    let cropped_sample =
+                        plane * cropped_plane_area + row * dimensions.width() + column;
+                    for source_index in 0..self.source_count {
+                        cropped.set_disposition(
+                            cropped_sample,
+                            source_index,
+                            self.disposition(source_sample, source_index)?,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(cropped)
     }
 
     /// Returns one exact disposition.
@@ -380,6 +447,55 @@ mod tests {
         assert_eq!(counts[1].non_finite(), 1);
         assert_eq!(counts[1].rejected_high(), 1);
         assert_eq!(counts[1].total(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn crops_rows_from_every_plane_without_losing_source_ownership() -> TestResult {
+        let dimensions = Dimensions::new(2, 4, 2)?;
+        let mut attribution = RejectionAttribution::new(dimensions, 3)?;
+        for sample in 0..dimensions.pixel_count() {
+            attribution.set_disposition(
+                sample,
+                sample % 3,
+                if sample % 2 == 0 {
+                    SampleDisposition::RejectedLow
+                } else {
+                    SampleDisposition::RejectedHigh
+                },
+            )?;
+        }
+
+        let cropped = attribution.crop_rows(1, 2)?;
+        assert_eq!(cropped.dimensions(), Dimensions::new(2, 2, 2)?);
+        for plane in 0..2 {
+            for row in 0..2 {
+                for column in 0..2 {
+                    let source_sample = plane * 8 + (row + 1) * 2 + column;
+                    let cropped_sample = plane * 4 + row * 2 + column;
+                    for source in 0..3 {
+                        assert_eq!(
+                            cropped.disposition(cropped_sample, source)?,
+                            attribution.disposition(source_sample, source)?
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_empty_and_out_of_bounds_row_crops() -> TestResult {
+        let attribution = RejectionAttribution::new(Dimensions::new(2, 3, 1)?, 1)?;
+        assert!(matches!(
+            attribution.crop_rows(0, 0),
+            Err(RejectionAttributionError::InvalidRowRange { .. })
+        ));
+        assert!(matches!(
+            attribution.crop_rows(2, 2),
+            Err(RejectionAttributionError::InvalidRowRange { .. })
+        ));
         Ok(())
     }
 }
