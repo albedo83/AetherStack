@@ -2255,6 +2255,78 @@ describe("frame review workspace", () => {
       minimumRetainedSamples: 3,
       generateRejectionMaps: true,
     });
+
+    fireEvent.change(estimator, { target: { value: "generalized_esd" } });
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "generalized_esd",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 5,
+      highSigma: 3.6,
+      esdOutlierFraction: 0.3,
+      esdSignificance: 0.05,
+      maximumIterations: 8,
+      minimumRetainedSamples: 3,
+      generateRejectionMaps: true,
+    });
+
+    controller.update({
+      ...advanced,
+      registration: {
+        ...advanced.registration,
+        stack: {
+          ...advanced.registration.stack,
+          settings: {
+            ...advanced.registration.stack.settings,
+            estimator: "generalized_esd",
+            esdOutlierFraction: 0.25,
+            esdSignificance: 0.01,
+            minimumRetainedSamples: 3,
+            generateRejectionMaps: true,
+          },
+        },
+      },
+    });
+    expect(root.textContent).toContain("GENERALIZED ESD F64");
+    expect(root.textContent).toContain("inactive below 15 usable samples");
+    const esdFraction = getByRole<HTMLInputElement>(root, "spinbutton", {
+      name: "Maximum ESD outlier fraction",
+    });
+    const esdSignificance = getByRole<HTMLInputElement>(root, "spinbutton", {
+      name: "ESD significance",
+    });
+    expect(esdFraction.disabled).toBe(false);
+    expect(esdFraction.value).toBe("0.25");
+    expect(esdSignificance.disabled).toBe(false);
+    expect(esdSignificance.value).toBe("0.01");
+    expect(
+      getByRole<HTMLInputElement>(root, "spinbutton", {
+        name: "Low sigma",
+        hidden: true,
+      }).disabled,
+    ).toBe(true);
+    expect(
+      getByRole<HTMLInputElement>(root, "spinbutton", {
+        name: "Minimum retained samples",
+      }).min,
+    ).toBe("3");
+    fireEvent.click(
+      getByRole(root, "button", { name: "Increase ESD significance" }),
+    );
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith({
+      estimator: "generalized_esd",
+      weightReferenceFrameId: null,
+      lowFraction: 0.12,
+      highFraction: 0.08,
+      lowSigma: 4,
+      highSigma: 3,
+      esdOutlierFraction: 0.25,
+      esdSignificance: 0.011,
+      maximumIterations: 8,
+      minimumRetainedSamples: 3,
+      generateRejectionMaps: true,
+    });
   });
 
   it("presents a natively verified report without claiming an active stack", () => {
