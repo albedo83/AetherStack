@@ -1628,6 +1628,12 @@ export function mountReviewScreen(
       target === elements.registeredStackEsdOutlierFraction ||
       target === elements.registeredStackEsdSignificance ||
       target === elements.registeredStackMaximumIterations ||
+      target === elements.registeredStackLargeScaleLowEnabled ||
+      target === elements.registeredStackLargeScaleHighEnabled ||
+      target === elements.registeredStackLargeScaleLowLayers ||
+      target === elements.registeredStackLargeScaleHighLayers ||
+      target === elements.registeredStackLargeScaleLowGrowth ||
+      target === elements.registeredStackLargeScaleHighGrowth ||
       target === elements.registeredStackMinimumRetained ||
       target === elements.registeredStackRejectionMaps ||
       target === elements.registeredStackWeightReference
@@ -3678,6 +3684,22 @@ function renderRegistration(
   elements.registeredStackMaximumIterations.value = String(
     stackSettings.maximumIterations,
   );
+  elements.registeredStackLargeScaleLowEnabled.checked =
+    stackSettings.largeScaleLowEnabled;
+  elements.registeredStackLargeScaleHighEnabled.checked =
+    stackSettings.largeScaleHighEnabled;
+  elements.registeredStackLargeScaleLowLayers.value = String(
+    stackSettings.largeScaleLowLayers,
+  );
+  elements.registeredStackLargeScaleHighLayers.value = String(
+    stackSettings.largeScaleHighLayers,
+  );
+  elements.registeredStackLargeScaleLowGrowth.value = String(
+    stackSettings.largeScaleLowGrowth,
+  );
+  elements.registeredStackLargeScaleHighGrowth.value = String(
+    stackSettings.largeScaleHighGrowth,
+  );
   elements.registeredStackMinimumRetained.value = String(
     stackSettings.minimumRetainedSamples,
   );
@@ -3698,6 +3720,19 @@ function renderRegistration(
     stackBusy || !generalizedEsdEstimator;
   elements.registeredStackMaximumIterations.disabled =
     stackBusy || !sigmaEstimator;
+  elements.registeredStackLargeScale.hidden = !generalizedEsdEstimator;
+  elements.registeredStackLargeScaleLowEnabled.disabled =
+    stackBusy || !generalizedEsdEstimator;
+  elements.registeredStackLargeScaleHighEnabled.disabled =
+    stackBusy || !generalizedEsdEstimator;
+  elements.registeredStackLargeScaleLowLayers.disabled =
+    stackBusy || !stackSettings.largeScaleLowEnabled;
+  elements.registeredStackLargeScaleLowGrowth.disabled =
+    stackBusy || !stackSettings.largeScaleLowEnabled;
+  elements.registeredStackLargeScaleHighLayers.disabled =
+    stackBusy || !stackSettings.largeScaleHighEnabled;
+  elements.registeredStackLargeScaleHighGrowth.disabled =
+    stackBusy || !stackSettings.largeScaleHighEnabled;
   elements.registeredStackMinimumRetained.disabled =
     stackBusy ||
     (!rejectionEstimator && !residualEstimator && !generalizedEsdEstimator);
@@ -4291,6 +4326,12 @@ function registeredStackSettings(
     | "registeredStackEsdOutlierFraction"
     | "registeredStackEsdSignificance"
     | "registeredStackMaximumIterations"
+    | "registeredStackLargeScaleLowEnabled"
+    | "registeredStackLargeScaleHighEnabled"
+    | "registeredStackLargeScaleLowLayers"
+    | "registeredStackLargeScaleHighLayers"
+    | "registeredStackLargeScaleLowGrowth"
+    | "registeredStackLargeScaleHighGrowth"
     | "registeredStackMinimumRetained"
     | "registeredStackRejectionMaps"
     | "registeredStackWeightReference"
@@ -4320,6 +4361,14 @@ function registeredStackSettings(
     elements.registeredStackMaximumIterations.valueAsNumber;
   const minimumRetainedSamples =
     elements.registeredStackMinimumRetained.valueAsNumber;
+  const largeScaleLowLayers =
+    elements.registeredStackLargeScaleLowLayers.valueAsNumber;
+  const largeScaleHighLayers =
+    elements.registeredStackLargeScaleHighLayers.valueAsNumber;
+  const largeScaleLowGrowth =
+    elements.registeredStackLargeScaleLowGrowth.valueAsNumber;
+  const largeScaleHighGrowth =
+    elements.registeredStackLargeScaleHighGrowth.valueAsNumber;
   if (
     !Number.isFinite(lowFraction) ||
     lowFraction < 0 ||
@@ -4346,7 +4395,19 @@ function registeredStackSettings(
       (estimator === "linear_fit_clipped" || estimator === "generalized_esd"
         ? 3
         : 1) ||
-    minimumRetainedSamples > 4_294_967_295
+    minimumRetainedSamples > 4_294_967_295 ||
+    !Number.isSafeInteger(largeScaleLowLayers) ||
+    largeScaleLowLayers < 1 ||
+    largeScaleLowLayers > 12 ||
+    !Number.isSafeInteger(largeScaleHighLayers) ||
+    largeScaleHighLayers < 1 ||
+    largeScaleHighLayers > 12 ||
+    !Number.isSafeInteger(largeScaleLowGrowth) ||
+    largeScaleLowGrowth < 0 ||
+    largeScaleLowGrowth > 256 ||
+    !Number.isSafeInteger(largeScaleHighGrowth) ||
+    largeScaleHighGrowth < 0 ||
+    largeScaleHighGrowth > 256
   ) {
     return null;
   }
@@ -4369,12 +4430,16 @@ function registeredStackSettings(
         estimator === "linear_fit_clipped" ||
         estimator === "generalized_esd") &&
       elements.registeredStackRejectionMaps.checked,
-    largeScaleLowEnabled: false,
-    largeScaleHighEnabled: false,
-    largeScaleLowLayers: 2,
-    largeScaleHighLayers: 2,
-    largeScaleLowGrowth: 2,
-    largeScaleHighGrowth: 2,
+    largeScaleLowEnabled:
+      estimator === "generalized_esd" &&
+      elements.registeredStackLargeScaleLowEnabled.checked,
+    largeScaleHighEnabled:
+      estimator === "generalized_esd" &&
+      elements.registeredStackLargeScaleHighEnabled.checked,
+    largeScaleLowLayers,
+    largeScaleHighLayers,
+    largeScaleLowGrowth,
+    largeScaleHighGrowth,
   };
 }
 
