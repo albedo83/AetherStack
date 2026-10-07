@@ -261,23 +261,23 @@ mod tests {
     }
 
     #[test]
-    fn crops_rows_from_all_planes_with_masks() {
-        let dimensions = Dimensions::new(2, 3, 2).expect("valid dimensions");
-        let mut image =
-            Image::from_pixels(dimensions, (0_u16..12).collect()).expect("matching pixel buffer");
+    fn crops_rows_from_all_planes_with_masks() -> Result<(), CoreError> {
+        let dimensions = Dimensions::new(2, 3, 2)?;
+        let mut image = Image::from_pixels(dimensions, (0_u16..12).collect())?;
         image.mask_mut().as_mut_slice()[2] = PixelFlags::HOT;
         image.mask_mut().as_mut_slice()[8] = PixelFlags::SATURATED;
 
-        let cropped = image.crop_rows(1, 1).expect("valid row crop");
-        assert_eq!(cropped.dimensions(), Dimensions::new(2, 1, 2).unwrap());
+        let cropped = image.crop_rows(1, 1)?;
+        assert_eq!(cropped.dimensions(), Dimensions::new(2, 1, 2)?);
         assert_eq!(cropped.pixels(), &[2, 3, 8, 9]);
         assert_eq!(cropped.mask().as_slice()[0], PixelFlags::HOT);
         assert_eq!(cropped.mask().as_slice()[2], PixelFlags::SATURATED);
+        Ok(())
     }
 
     #[test]
-    fn rejects_invalid_image_row_crops() {
-        let image = Image::filled(Dimensions::new(2, 3, 1).unwrap(), 0_u8).unwrap();
+    fn rejects_invalid_image_row_crops() -> Result<(), CoreError> {
+        let image = Image::filled(Dimensions::new(2, 3, 1)?, 0_u8)?;
         assert!(matches!(
             image.crop_rows(0, 0),
             Err(CoreError::InvalidRowRange { .. })
@@ -286,5 +286,6 @@ mod tests {
             image.crop_rows(3, 1),
             Err(CoreError::InvalidRowRange { .. })
         ));
+        Ok(())
     }
 }
