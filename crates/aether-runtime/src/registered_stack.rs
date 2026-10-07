@@ -110,6 +110,17 @@ impl RegisteredSpatialEsdParameters {
         hasher.update(self.spatial.parameters_sha256());
         encode_lower_hex(hasher.finalize().as_slice())
     }
+
+    /// Rows required on either side of a core band for exact spatial output.
+    #[must_use]
+    pub fn vertical_halo(self) -> usize {
+        [self.spatial.low(), self.spatial.high()]
+            .into_iter()
+            .flatten()
+            .map(|tail| tail.detection_radius() + usize::from(tail.growth()))
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 /// Invalid cross-stage registered spatial-ESD configuration.
@@ -136,6 +147,36 @@ impl Display for RegisteredSpatialEsdParameterError {
 }
 
 impl Error for RegisteredSpatialEsdParameterError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RegisteredBandWindow {
+    read_start: usize,
+    read_height: usize,
+    core_start: usize,
+    core_height: usize,
+}
+
+fn registered_band_window(
+    image_height: usize,
+    core_start: usize,
+    core_height: usize,
+    halo: usize,
+) -> Result<RegisteredBandWindow, RegisteredStackError> {
+    let core_end = core_start
+        .checked_add(core_height)
+        .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+    if core_height == 0 || core_end > image_height {
+        return Err(RegisteredStackError::WorkSizeOverflow);
+    }
+    let read_start = core_start.saturating_sub(halo);
+    let read_end = core_end.saturating_add(halo).min(image_height);
+    Ok(RegisteredBandWindow {
+        read_start,
+        read_height: read_end - read_start,
+        core_start: core_start - read_start,
+        core_height,
+    })
+}
 
 /// Scientific estimator selected for one registered common-crop stack.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1896,6 +1937,50 @@ mod tests {
             RegisteredSpatialEsdParameters::new(esd, mismatched),
             Err(RegisteredSpatialEsdParameterError::SupportFloorMismatch { esd: 3, spatial: 4 })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn spatial_esd_halo_covers_detection_and_growth() -> TestResult {
+        let esd = GeneralizedEsdParameters::new(0.30, 0.05, 3)?;
+        let low = aether_integration::LargeScaleTailParameters::new(3, 5)?;
+        let high = aether_integration::LargeScaleTailParameters::new(5, 2)?;
+        let spatial = LargeScaleRejectionParameters::new(Some(low), Some(high), 3)?;
+        let parameters = RegisteredSpatialEsdParameters::new(esd, spatial)?;
+        assert_eq!(parameters.vertical_halo(), 18);
+        Ok(())
+    }
+
+    #[test]
+    fn band_windows_clip_halos_only_at_global_boundaries() -> TestResult {
+        assert_eq!(
+            registered_band_window(100, 0, 20, 12)?,
+            RegisteredBandWindow {
+                read_start: 0,
+                read_height: 32,
+                core_start: 0,
+                core_height: 20,
+            }
+        );
+        assert_eq!(
+            registered_band_window(100, 40, 20, 12)?,
+            RegisteredBandWindow {
+                read_start: 28,
+                read_height: 44,
+                core_start: 12,
+                core_height: 20,
+            }
+        );
+        assert_eq!(
+            registered_band_window(100, 80, 20, 12)?,
+            RegisteredBandWindow {
+                read_start: 68,
+                read_height: 32,
+                core_start: 12,
+                core_height: 20,
+            }
+        );
+        assert!(registered_band_window(100, 100, 1, 12).is_err());
         Ok(())
     }
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
