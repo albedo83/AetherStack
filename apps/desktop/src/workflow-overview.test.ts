@@ -26,6 +26,8 @@ describe("workflow overview", () => {
     expect(run.querySelectorAll('[data-state="complete"]')).toHaveLength(0);
     expect(run.querySelectorAll('[data-state="ready"]')).toHaveLength(2);
     expect(getByRole(run, "progressbar").getAttribute("value")).toBe("0");
+    expect(run.textContent).toContain("0 of 5 required stages published");
+    expect(run.textContent).toContain("Optional");
   });
 
   it("lists only completed native artifacts and escapes runtime paths", () => {
@@ -69,7 +71,7 @@ describe("workflow overview", () => {
     });
 
     expect(run.querySelectorAll('[data-state="complete"]')).toHaveLength(1);
-    expect(getByRole(run, "progressbar").getAttribute("value")).toBe("17");
+    expect(getByRole(run, "progressbar").getAttribute("value")).toBe("20");
     expect(results.querySelectorAll(".result-card")).toHaveLength(1);
     expect(results.textContent).toContain('/products/<master>&"dark.fits');
     expect(results.querySelector("master")).toBeNull();
@@ -81,5 +83,39 @@ describe("workflow overview", () => {
         name: "Reveal Master dark in the file manager",
       }),
     ).toBeTruthy();
+  });
+
+  it("does not make optional local normalization block a complete run", () => {
+    const { run, results } = overviewFixture();
+    renderWorkflowOverview(run, results, {
+      ...demoReviewModel,
+      reviewSessionReady: true,
+      calibration: {
+        ...demoReviewModel.calibration,
+        execution: {
+          ...demoReviewModel.calibration.execution,
+          state: "completed",
+        },
+        lightExecution: {
+          ...demoReviewModel.calibration.lightExecution,
+          state: "completed",
+        },
+      },
+      registration: {
+        ...demoReviewModel.registration,
+        execution: {
+          ...demoReviewModel.registration.execution,
+          state: "completed",
+        },
+        stack: {
+          ...demoReviewModel.registration.stack,
+          state: "completed",
+        },
+      },
+    });
+
+    expect(getByRole(run, "progressbar").getAttribute("value")).toBe("100");
+    expect(run.textContent).toContain("5 of 5 required stages published");
+    expect(run.textContent).not.toContain("optional stage published");
   });
 });

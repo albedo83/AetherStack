@@ -6,6 +6,8 @@ interface WorkflowStage {
   readonly label: string;
   readonly description: string;
   readonly workspace: WorkspaceView;
+  /** Optional stages remain visible but never block a complete science run. */
+  readonly required: boolean;
   readonly state: StageState;
   readonly evidence: string;
 }
@@ -55,12 +57,18 @@ export function renderWorkflowOverview(
   model: ReviewViewModel,
 ): void {
   const stages = deriveStages(model);
-  const complete = stages.filter((stage) => stage.state === "complete").length;
-  const percent = Math.round((complete / stages.length) * 100);
+  const requiredStages = stages.filter((stage) => stage.required);
+  const complete = requiredStages.filter(
+    (stage) => stage.state === "complete",
+  ).length;
+  const optionalComplete = stages.filter(
+    (stage) => !stage.required && stage.state === "complete",
+  ).length;
+  const percent = Math.round((complete / requiredStages.length) * 100);
   text(
     runWorkspace,
     "[data-workflow-summary]",
-    `${complete} of ${stages.length} native stages published`,
+    `${complete} of ${requiredStages.length} required stages published${optionalComplete > 0 ? ` · ${optionalComplete} optional stage published` : ""}`,
   );
   text(runWorkspace, "[data-workflow-percent]", `${percent}%`);
   const progress = required<HTMLProgressElement>(
@@ -105,6 +113,7 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
       description:
         "Classify FITS sources, inspect quality, and record explicit decisions.",
       workspace: "frames",
+      required: true,
       state: model.reviewSessionReady
         ? "complete"
         : model.frames.length > 0
@@ -119,6 +128,7 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
       description:
         "Publish immutable master Dark, Flat, and optional Bias products.",
       workspace: "calibration",
+      required: true,
       state: executionState(
         model.calibration.execution.state,
         masters > 0,
@@ -134,6 +144,7 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
       description:
         "Apply exact master associations and preserve per-frame provenance.",
       workspace: "calibration",
+      required: true,
       state: executionState(
         model.calibration.lightExecution.state,
         calibrated > 0,
@@ -149,6 +160,7 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
       description:
         "Solve reviewed geometry and publish aligned FITS frames atomically.",
       workspace: "registration",
+      required: true,
       state: executionState(
         model.registration.execution.state,
         registered > 0,
@@ -164,6 +176,7 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
       description:
         "Optionally match large-scale background while preserving source signal.",
       workspace: "normalization",
+      required: false,
       state: executionState(
         model.localNormalization.state,
         normalization !== null,
@@ -178,6 +191,7 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
       description:
         "Resolve a sealed estimator policy and publish science and evidence maps.",
       workspace: "registration",
+      required: true,
       state: executionState(
         model.registration.stack.state,
         integrated !== null,
@@ -306,9 +320,16 @@ function deriveArtifacts(model: ReviewViewModel): readonly PublishedArtifact[] {
 function stageMarkup(stage: WorkflowStage): string {
   return `<li class="workflow-stage" data-state="${stage.state}">
     <span class="workflow-stage__lamp" aria-hidden="true"></span>
-    <div><div class="workflow-stage__title"><h3>${escapeHtml(stage.label)}</h3><span>${stateLabel(stage.state)}</span></div><p>${escapeHtml(stage.description)}</p><output>${escapeHtml(stage.evidence)}</output></div>
+    <div><div class="workflow-stage__title"><h3>${escapeHtml(stage.label)}</h3><span>${stage.required ? stateLabel(stage.state) : optionalStateLabel(stage.state)}</span></div><p>${escapeHtml(stage.description)}</p><output>${escapeHtml(stage.evidence)}</output></div>
     <button class="button button--quiet" type="button" data-action="select-workspace" data-workspace="${stage.workspace}" aria-label="Open ${escapeHtml(stage.label)}">Open</button>
   </li>`;
+}
+
+function optionalStateLabel(state: StageState): string {
+  if (state === "complete") return "Optional · complete";
+  if (state === "running") return "Optional · running";
+  if (state === "attention") return "Optional · attention";
+  return "Optional";
 }
 
 function artifactMarkup(artifact: PublishedArtifact): string {
