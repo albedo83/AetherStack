@@ -1233,6 +1233,29 @@ export function mountReviewScreen(
       }
       return;
     }
+    if (action === "reveal-artifact") {
+      const path = actionElement.dataset.artifactPath;
+      if (!path) return;
+      const kind = actionElement.dataset.artifactKind ?? "artifact";
+      const status = required<HTMLElement>(
+        root,
+        "[data-results-reveal-status]",
+      );
+      actionElement.setAttribute("aria-busy", "true");
+      status.textContent = `Locating ${kind}…`;
+      void actions
+        .onRevealArtifact(path)
+        .then(() => {
+          status.textContent = `${kind} revealed in the system file manager.`;
+        })
+        .catch(() => {
+          status.textContent = `Could not reveal ${kind}. The published path remains available above.`;
+        })
+        .finally(() => {
+          actionElement.removeAttribute("aria-busy");
+        });
+      return;
+    }
     if (action === "clear-frame-filter") {
       frameQuery = "";
       elements.frameFilter.value = "";

@@ -43,6 +43,7 @@ export function workflowOverviewMarkup(): string {
         <strong data-results-count>0 artifacts</strong>
         <span data-results-summary>No native product has been published yet.</span>
       </div>
+      <p class="results-reveal-status" data-results-reveal-status role="status" aria-live="polite"></p>
       <div class="results-ledger" data-results-ledger></div>
     </section>`;
 }
@@ -314,7 +315,10 @@ function artifactMarkup(artifact: PublishedArtifact): string {
   return `<article class="result-card">
     <div class="result-card__icon" aria-hidden="true">FITS</div>
     <div><p>${escapeHtml(artifact.kind)}</p><code title="${escapeHtml(artifact.path)}">${escapeHtml(artifact.path)}</code><small>${escapeHtml(artifact.evidence)}</small></div>
-    <button class="button button--quiet" type="button" data-action="select-workspace" data-workspace="${artifact.workspace}" aria-label="Inspect ${escapeHtml(artifact.kind)}">Inspect</button>
+    <div class="result-card__actions">
+      <button class="button button--quiet" type="button" data-action="select-workspace" data-workspace="${artifact.workspace}" aria-label="Open ${escapeHtml(artifact.kind)} workspace">Workspace</button>
+      <button class="button button--primary" type="button" data-action="reveal-artifact" data-artifact-path="${escapeHtml(artifact.path)}" data-artifact-kind="${escapeHtml(artifact.kind)}" aria-label="Reveal ${escapeHtml(artifact.kind)} in the file manager">Show file</button>
+    </div>
   </article>`;
 }
 

@@ -466,6 +466,8 @@ export type SortDirection = "ascending" | "descending";
 
 export interface ReviewActions {
   readonly onSelectWorkspace: (workspace: WorkspaceView) => void;
+  /** Reveals one native-published artifact in the platform file manager. */
+  readonly onRevealArtifact: (path: string) => Promise<void>;
   readonly onSelectLocalNormalizationSource: () => void;
   readonly onSelectLocalNormalizationReference: () => void;
   readonly onSelectLocalNormalizationOutput: () => void;

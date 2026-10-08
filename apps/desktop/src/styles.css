@@ -7063,6 +7063,20 @@ tr[data-state="blocked"] .association-state {
   color: var(--text-dim);
 }
 
+.result-card__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.results-reveal-status {
+  min-height: 16px;
+  margin: -8px 0 0;
+  color: #8fa7bd;
+  font-size: 11px;
+}
+
 .results-empty {
   display: grid;
   justify-items: center;
@@ -7245,9 +7259,14 @@ html[data-ui-motion="reduced"] *::after {
   }
 
   .workflow-stage > .button,
-  .result-card > .button {
+  .result-card__actions {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .result-card__actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .results-summary {

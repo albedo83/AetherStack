@@ -74,7 +74,12 @@ describe("workflow overview", () => {
     expect(results.textContent).toContain('/products/<master>&"dark.fits');
     expect(results.querySelector("master")).toBeNull();
     expect(
-      getByRole(results, "button", { name: "Inspect Master dark" }),
+      getByRole(results, "button", { name: "Open Master dark workspace" }),
+    ).toBeTruthy();
+    expect(
+      getByRole(results, "button", {
+        name: "Reveal Master dark in the file manager",
+      }),
     ).toBeTruthy();
   });
 });

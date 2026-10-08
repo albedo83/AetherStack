@@ -18,7 +18,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.5",
+    "@tauri-apps/cli": "2.12.1",
     "@testing-library/dom": "10.4.2",
     "@types/node": "22.20.4",
     "axe-core": "4.13.0",
@@ -29,7 +29,8 @@
     "vitest": "5.0.1"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1",
-    "@tauri-apps/plugin-dialog": "2.7.3"
+    "@tauri-apps/api": "2.12.1",
+    "@tauri-apps/plugin-dialog": "2.7.3",
+    "@tauri-apps/plugin-opener": "2.7.0"
   }
 }

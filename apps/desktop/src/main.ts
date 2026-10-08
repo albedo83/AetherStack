@@ -1,5 +1,7 @@
 import "./styles.css";
 
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
 import {
   cancelDefectCorrection,
   cancelLinearDefectCorrection,
@@ -232,6 +234,9 @@ let defectPreviewTicket = 0;
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
     selectWorkspace(workspace);
+  },
+  async onRevealArtifact(path) {
+    await revealItemInDir(path);
   },
   onSelectLocalNormalizationSource() {
     void chooseLocalNormalizationPath("source");

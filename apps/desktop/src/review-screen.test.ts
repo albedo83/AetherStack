@@ -3,6 +3,7 @@ import {
   getByRole,
   getByText,
   queryByText,
+  waitFor,
   within,
 } from "@testing-library/dom";
 import axe from "axe-core";
@@ -18,6 +19,7 @@ function fixture(model: ReviewViewModel = demoReviewModel) {
   document.body.append(root);
   const actions: ReviewActions = {
     onSelectWorkspace: vi.fn(),
+    onRevealArtifact: vi.fn().mockResolvedValue(undefined),
     onSelectLocalNormalizationSource: vi.fn(),
     onSelectLocalNormalizationReference: vi.fn(),
     onSelectLocalNormalizationOutput: vi.fn(),
@@ -263,6 +265,58 @@ describe("frame review workspace", () => {
         name: "A focused interface for long sessions",
       }),
     ).toBeTruthy();
+  });
+
+  it("reveals only a path returned by a completed native transaction", async () => {
+    const outputPath = "/products/master-dark.fits";
+    const { root, actions } = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "results",
+      calibration: {
+        ...demoReviewModel.calibration,
+        execution: {
+          ...demoReviewModel.calibration.execution,
+          state: "completed",
+          result: {
+            manifestSha256: "a".repeat(64),
+            planSha256: "b".repeat(64),
+            memoryLimitBytes: 1_073_741_824,
+            peakReservedBytes: 128,
+            products: [
+              {
+                groupId: "dark-60s",
+                kind: "dark",
+                outputPath,
+                totalSamples: 4,
+                usableSamples: 4,
+                maskedSamples: 0,
+                nonFiniteSamples: 0,
+                minimum: 1,
+                maximum: 4,
+                mean: 2.5,
+                populationStandardDeviation: 1.25,
+                samplesWritten: 4,
+                substitutedSamples: 0,
+                bytesWritten: 32,
+                normalization: null,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    fireEvent.click(
+      getByRole(root, "button", {
+        name: "Reveal Master dark in the file manager",
+      }),
+    );
+    expect(actions.onRevealArtifact).toHaveBeenCalledWith(outputPath);
+    await waitFor(() => {
+      expect(root.textContent).toContain(
+        "Master dark revealed in the system file manager.",
+      );
+    });
   });
 
   it("exposes all plan-bound controls and renders scientific evidence", () => {

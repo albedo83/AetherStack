@@ -10660,6 +10660,7 @@ const fn preview_worker_error() -> PreviewCommandError {
 pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(DesktopCalibrationArtifactState::default())
         .manage(DesktopCalibrationExecutionState::default())
         .manage(DesktopSessionImportState::default())
