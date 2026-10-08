@@ -10760,6 +10760,10 @@ mod tests {
     #[test]
     fn native_artifact_registry_resolves_defect_inputs_by_identity() -> Result<(), Box<dyn Error>> {
         let state = DesktopCalibrationArtifactState::default();
+        let product_root = std::env::temp_dir().join("aether-desktop-artifact-registry");
+        let dark_path = product_root.join("dark.fits");
+        let flat_path = product_root.join("flat.fits");
+        let light_path = product_root.join("light.fits");
         let master = MasterPlanExecutionResponse {
             manifest_sha256: "a".repeat(64),
             plan_sha256: "b".repeat(64),
@@ -10769,7 +10773,7 @@ mod tests {
                 ExecutedMasterProduct {
                     group_id: "dark-group".to_owned(),
                     kind: "dark",
-                    output_path: "/products/dark.fits".to_owned(),
+                    output_path: dark_path.to_string_lossy().into_owned(),
                     total_samples: 1,
                     usable_samples: 1,
                     masked_samples: 0,
@@ -10786,7 +10790,7 @@ mod tests {
                 ExecutedMasterProduct {
                     group_id: "flat-group".to_owned(),
                     kind: "flat",
-                    output_path: "/products/flat.fits".to_owned(),
+                    output_path: flat_path.to_string_lossy().into_owned(),
                     total_samples: 1,
                     usable_samples: 1,
                     masked_samples: 0,
@@ -10819,7 +10823,7 @@ mod tests {
                 source_frame_id: "f".repeat(64),
                 source_label: "light.fits".to_owned(),
                 source_sha256: "d".repeat(64),
-                output_path: "/products/light.fits".to_owned(),
+                output_path: light_path.to_string_lossy().into_owned(),
                 rgb_output_path: None,
                 total_samples: 1,
                 usable_samples: 1,
@@ -10844,20 +10848,20 @@ mod tests {
             .calibrated_frames
             .get(&("light-group".to_owned(), "f".repeat(64)))
             .ok_or("calibrated frame identity is missing")?;
-        assert_eq!(frame.path, PathBuf::from("/products/light.fits"));
+        assert_eq!(frame.path, light_path);
         assert_eq!(frame.dark_group_id, "dark-group");
         assert_eq!(frame.flat_group_id, "flat-group");
         assert_eq!(
             artifacts
                 .masters
                 .get(&("dark".to_owned(), frame.dark_group_id.clone())),
-            Some(&PathBuf::from("/products/dark.fits"))
+            Some(&dark_path)
         );
         assert_eq!(
             artifacts
                 .masters
                 .get(&("flat".to_owned(), frame.flat_group_id.clone())),
-            Some(&PathBuf::from("/products/flat.fits"))
+            Some(&flat_path)
         );
         Ok(())
     }
