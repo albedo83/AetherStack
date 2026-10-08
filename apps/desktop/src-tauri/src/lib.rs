@@ -841,6 +841,7 @@ struct RegisteredStackReportSourceInspection {
     file_name: String,
     byte_length: u64,
     sha256: String,
+    spatial_promotions: Option<RegisteredSpatialPromotionResponse>,
 }
 
 /// On-disk verification result for one product named by an integration report.
@@ -4924,6 +4925,7 @@ fn inspect_registered_stack_report_sync_with_products(
             file_name: source.file_name.clone(),
             byte_length: source.byte_length,
             sha256: source.sha256.clone(),
+            spatial_promotions: source.spatial_promotions,
         })
         .collect();
     Ok(RegisteredStackReportInspectionResponse {
