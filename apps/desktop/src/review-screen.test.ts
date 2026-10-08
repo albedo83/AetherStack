@@ -221,6 +221,41 @@ describe("frame review workspace", () => {
     expect(actions.onSelectWorkspace).toHaveBeenCalledWith("normalization");
   });
 
+  it("routes the Run and Results workspaces without placeholder controls", () => {
+    const { root, actions, controller } = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "run",
+    });
+    const run = root.querySelector<HTMLElement>("[data-run-workspace]")!;
+    const results = root.querySelector<HTMLElement>(
+      "[data-results-workspace]",
+    )!;
+    expect(run.hidden).toBe(false);
+    expect(results.hidden).toBe(true);
+    expect(
+      getByRole(run, "heading", {
+        name: "Prepare a defensible processing run",
+      }),
+    ).toBeTruthy();
+    expect(run.querySelectorAll(".workflow-stage")).toHaveLength(6);
+    expect(run.textContent).toContain("native stages published");
+
+    fireEvent.click(getByRole(root, "button", { name: "Results" }));
+    expect(actions.onSelectWorkspace).toHaveBeenCalledWith("results");
+    controller.update({ ...demoReviewModel, activeWorkspace: "results" });
+    expect(run.hidden).toBe(true);
+    expect(results.hidden).toBe(false);
+    expect(
+      getByRole(results, "heading", {
+        name: "Products and reproducibility ledger",
+      }),
+    ).toBeTruthy();
+    expect(results.textContent).toContain("No published products");
+
+    fireEvent.click(getByRole(root, "button", { name: "Run" }));
+    expect(actions.onSelectWorkspace).toHaveBeenCalledWith("run");
+  });
+
   it("exposes all plan-bound controls and renders scientific evidence", () => {
     const { root, actions, controller } = fixture({
       ...demoReviewModel,
@@ -3736,5 +3771,24 @@ describe("frame review workspace", () => {
       },
     });
     expect(normalizationReport.violations).toEqual([]);
+    normalization.controller.destroy();
+    normalization.root.remove();
+
+    const run = fixture({ ...demoReviewModel, activeWorkspace: "run" });
+    const runReport = await axe.run(run.root, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(runReport.violations).toEqual([]);
+    run.controller.destroy();
+    run.root.remove();
+
+    const results = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "results",
+    });
+    const resultsReport = await axe.run(results.root, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(resultsReport.violations).toEqual([]);
   });
 });

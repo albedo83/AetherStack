@@ -45,7 +45,12 @@ export type FrameRole = "bias" | "dark" | "flat" | "light";
 export type DrizzleProductView = "science" | "weight" | "support";
 
 export type WorkspaceView =
-  "frames" | "calibration" | "registration" | "normalization";
+  | "frames"
+  | "calibration"
+  | "registration"
+  | "normalization"
+  | "run"
+  | "results";
 
 export type LightFrameView = "raw" | "calibrated";
 

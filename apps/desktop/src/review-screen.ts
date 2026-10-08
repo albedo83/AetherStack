@@ -33,6 +33,10 @@ import type {
   SortField,
 } from "./model.ts";
 import { defectReportVerdict } from "./defect-batch.ts";
+import {
+  renderWorkflowOverview,
+  workflowOverviewMarkup,
+} from "./workflow-overview.ts";
 
 export interface ReviewScreen {
   readonly update: (model: ReviewViewModel) => void;
@@ -182,6 +186,8 @@ export function mountReviewScreen(
       root,
       "[data-normalization-workspace]",
     ),
+    runWorkspace: required<HTMLElement>(root, "[data-run-workspace]"),
+    resultsWorkspace: required<HTMLElement>(root, "[data-results-workspace]"),
     registrationReference: required<HTMLSelectElement>(
       root,
       "[data-registration-reference]",
@@ -1210,7 +1216,9 @@ export function mountReviewScreen(
         workspace === "frames" ||
         workspace === "calibration" ||
         workspace === "registration" ||
-        workspace === "normalization"
+        workspace === "normalization" ||
+        workspace === "run" ||
+        workspace === "results"
       ) {
         actions.onSelectWorkspace(workspace);
       }
@@ -1973,6 +1981,8 @@ export function mountReviewScreen(
       model.activeWorkspace !== "registration";
     elements.normalizationWorkspace.hidden =
       model.activeWorkspace !== "normalization";
+    elements.runWorkspace.hidden = model.activeWorkspace !== "run";
+    elements.resultsWorkspace.hidden = model.activeWorkspace !== "results";
     for (const item of elements.workspaceNavigation) {
       const selected = item.dataset.workspace === model.activeWorkspace;
       item.toggleAttribute("aria-current", selected);
@@ -1995,6 +2005,11 @@ export function mountReviewScreen(
       sourceEvidenceLimit,
     );
     localNormalizationPanel.update(model.localNormalization);
+    renderWorkflowOverview(
+      elements.runWorkspace,
+      elements.resultsWorkspace,
+      model,
+    );
     syncStepperStates(root);
     elements.importSession.disabled = cancellingImport || masterBusy;
     elements.importSession.classList.toggle("button--danger", importing);
@@ -5764,8 +5779,8 @@ function shellMarkup(): string {
           ${navigationItem("calibration", "Calibration", "◫", true)}
           ${navigationItem("registration", "Registration", "⌖", true)}
           ${navigationItem("normalization", "Normalize", "≋", true)}
-          ${navigationItem("run", "Run", "▷", false)}
-          ${navigationItem("results", "Results", "◉", false)}
+          ${navigationItem("run", "Run", "▷", true)}
+          ${navigationItem("results", "Results", "◉", true)}
         </nav>
         <button class="nav-item sidebar__settings" type="button" aria-label="Settings, not available in this build" title="Settings workspace is not connected yet" disabled>
           <span class="nav-item__icon" aria-hidden="true">⚙</span>
@@ -6606,6 +6621,7 @@ function shellMarkup(): string {
             </section>
           </div>
         </section>
+        ${workflowOverviewMarkup()}
       </main>
     </div>
 
