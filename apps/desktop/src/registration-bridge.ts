@@ -223,6 +223,21 @@ export interface RegisteredWeightPreflight {
   }[];
 }
 
+/** A native, versioned recommendation resolved before pixel integration. */
+export interface AutomaticIntegrationPreview {
+  readonly schemaVersion: number;
+  readonly registrationPlanSha256: string;
+  readonly automaticPlanSha256: string;
+  readonly algorithmId: string;
+  readonly sourceCount: number;
+  readonly populationTier: "minimal" | "small" | "medium" | "large";
+  readonly rationale: string;
+  readonly settings: Omit<
+    RegisteredStackIntegrationSettings,
+    "weightReferenceFrameId"
+  >;
+}
+
 export interface RegistrationExecutionProgress {
   readonly frameIndex: number;
   readonly frameCount: number;
@@ -578,6 +593,19 @@ export function previewRegisteredWeights(
       frameIds,
       referenceFrameId,
       qualityEvidence,
+    },
+  });
+}
+
+/** Resolves and seals an explicit estimator recommendation for one stack. */
+export function previewAutomaticIntegration(
+  expectedPlanSha256: string,
+  sourceCount: number,
+): Promise<AutomaticIntegrationPreview> {
+  return invoke<AutomaticIntegrationPreview>("preview_automatic_integration", {
+    request: {
+      expectedPlanSha256,
+      sourceCount,
     },
   });
 }
