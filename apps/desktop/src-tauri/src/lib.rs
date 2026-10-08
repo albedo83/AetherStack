@@ -13836,7 +13836,7 @@ mod tests {
     fn applies_idempotent_review_decisions_and_undoes_native_transactions() -> TestResult {
         let imported = ImportedSession {
             name: "transaction test".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![
                 imported_review_test_frame('a', "first.fits"),
                 imported_review_test_frame('b', "second.fits"),
@@ -13916,7 +13916,7 @@ mod tests {
     fn previews_selection_in_native_order_without_mutating_manual_state() -> TestResult {
         let imported = ImportedSession {
             name: "selection test".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![
                 imported_review_test_frame('a', "first.fits"),
                 imported_review_test_frame('b', "second.fits"),
@@ -13988,7 +13988,7 @@ mod tests {
     fn selection_preview_rejects_foreign_identity_and_wrong_threshold_kind() -> TestResult {
         let imported = ImportedSession {
             name: "selection validation".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![imported_review_test_frame('a', "first.fits")],
             files_considered: 1,
             fingerprinted_source_bytes: 0,
@@ -14050,7 +14050,7 @@ mod tests {
     -> TestResult {
         let imported = ImportedSession {
             name: "selection apply".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![
                 imported_review_test_frame('a', "first.fits"),
                 imported_review_test_frame('b', "second.fits"),
@@ -14151,7 +14151,7 @@ mod tests {
     fn confirmed_selection_rejects_a_stale_digest_without_mutation() -> TestResult {
         let imported = ImportedSession {
             name: "stale selection".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![imported_review_test_frame('a', "first.fits")],
             files_considered: 1,
             fingerprinted_source_bytes: 0,
@@ -14194,7 +14194,7 @@ mod tests {
     fn selection_test_frame(digit: char) -> FrameSelectionFrameWire {
         FrameSelectionFrameWire {
             frame_id: digit.to_string().repeat(64),
-            source_path: PathBuf::from(format!("/runtime-only/LIGHTS/{digit}.fits")),
+            source_path: runtime_test_source_path(&format!("{digit}.fits")),
         }
     }
 
@@ -14208,7 +14208,7 @@ mod tests {
         record_frame_quality(
             state,
             FrameId::new(digit.to_string().repeat(64))?,
-            PathBuf::from(format!("/runtime-only/LIGHTS/{digit}.fits")),
+            runtime_test_source_path(&format!("{digit}.fits")),
             &response,
         )?;
         Ok(())
@@ -14255,12 +14255,13 @@ mod tests {
     }
 
     fn imported_review_test_frame(digit: char, label: &str) -> ImportedFrame {
+        let path = runtime_test_source_path(label);
         ImportedFrame {
             id: digit.to_string().repeat(64),
             role: "light",
             label: label.to_owned(),
             relative_path: format!("LIGHTS/{label}"),
-            path: format!("/runtime-only/LIGHTS/{label}"),
+            path: path.to_string_lossy().into_owned(),
             exposure_seconds: Some(60.0),
             temperature_celsius: Some(-5.0),
             camera: Some("Synthetic camera".to_owned()),
@@ -14273,6 +14274,18 @@ mod tests {
             source_sha256: digit.to_string().repeat(64),
             quality: None,
         }
+    }
+
+    fn runtime_test_root() -> PathBuf {
+        std::env::temp_dir().join("aether-desktop-runtime-only")
+    }
+
+    fn runtime_test_root_path() -> String {
+        runtime_test_root().to_string_lossy().into_owned()
+    }
+
+    fn runtime_test_source_path(label: &str) -> PathBuf {
+        runtime_test_root().join("LIGHTS").join(label)
     }
 
     fn cached_quality_test_frame(digit: char, label: &str) -> TestResult<ImportedFrame> {
@@ -14399,7 +14412,7 @@ mod tests {
         ineligible.bayer_pattern = None;
         let mut session = ImportedSession {
             name: "cache diagnostics".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![restored, missing, rejected, ineligible],
             files_considered: 4,
             fingerprinted_source_bytes: 0,
@@ -14633,7 +14646,7 @@ mod tests {
         let expected_id = FrameId::new(frame.id.clone())?;
         let session = ImportedSession {
             name: "restored quality".to_owned(),
-            root_path: "/runtime-only".to_owned(),
+            root_path: runtime_test_root_path(),
             frames: vec![frame],
             files_considered: 1,
             fingerprinted_source_bytes: 0,
