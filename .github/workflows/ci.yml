@@ -11,6 +11,7 @@ jobs:
   frontend:
     name: Desktop frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/desktop
@@ -41,6 +42,7 @@ jobs:
   quality:
     name: Rust ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -60,9 +62,12 @@ jobs:
 
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 12
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install --no-install-recommends -y \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
             libssl-dev \
