@@ -1,0 +1,73 @@
+name: Release build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    name: Bundle ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            artifact: aetherstack-macos
+          - os: ubuntu-latest
+            label: Linux
+            artifact: aetherstack-linux
+          - os: windows-latest
+            label: Windows
+            artifact: aetherstack-windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install locked frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build native bundles
+        working-directory: apps/desktop
+        run: npm run tauri:build
+
+      - name: Upload unsigned bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}-${{ github.ref_name }}
+          path: target/release/bundle
+          if-no-files-found: error
+          retention-days: 14
