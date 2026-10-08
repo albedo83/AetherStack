@@ -1777,6 +1777,7 @@ describe("frame review workspace", () => {
                 rejectedLow: 1,
                 rejectedHigh: 0,
                 total: 100,
+                spatialPromotions: { low: 0, high: 0, total: 0 },
               },
               {
                 frameId: frameB.id,
@@ -1786,6 +1787,7 @@ describe("frame review workspace", () => {
                 rejectedLow: 3,
                 rejectedHigh: 12,
                 total: 100,
+                spatialPromotions: { low: 2, high: 10, total: 12 },
               },
             ],
             spatialPromotions: { low: 2, high: 10, total: 12 },

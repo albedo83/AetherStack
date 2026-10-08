@@ -269,6 +269,7 @@ export interface RegisteredSourceDisposition {
   readonly rejectedLow: number;
   readonly rejectedHigh: number;
   readonly total: number;
+  readonly spatialPromotions: RegisteredSpatialPromotionCounts | null;
 }
 
 /** Exact samples newly rejected by the large-scale spatial stage. */
