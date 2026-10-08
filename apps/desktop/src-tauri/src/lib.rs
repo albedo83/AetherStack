@@ -5304,6 +5304,9 @@ fn publish_immutable_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let staged = (|| {
             temporary.write_all(bytes)?;
             temporary.sync_all()?;
+            // Windows denies removal of an open file handle. Close the fully
+            // synchronized staging file before linking and unlinking it.
+            drop(temporary);
             fs::hard_link(&temporary_path, path)?;
             published = true;
             fs::remove_file(&temporary_path)?;
