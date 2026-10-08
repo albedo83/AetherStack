@@ -5382,7 +5382,7 @@ fn publish_immutable_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             fs::hard_link(&temporary_path, path)?;
             published = true;
             fs::remove_file(&temporary_path)?;
-            File::open(parent)?.sync_all()
+            sync_report_parent(parent)
         })();
         if staged.is_err() {
             let _ignored = fs::remove_file(&temporary_path);
@@ -5393,6 +5393,21 @@ fn publish_immutable_report(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return staged;
     }
     Err(last_error.unwrap_or_else(|| std::io::Error::other("report staging namespace exhausted")))
+}
+
+fn sync_report_parent(parent: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(parent)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows does not support opening an ordinary directory with
+        // `File::open`, so the synchronized file and completed hard link are
+        // the strongest portable publication boundary available here.
+        let _ = parent;
+        Ok(())
+    }
 }
 
 fn unicode_registered_output_path(path: &Path) -> Result<String, PreviewCommandError> {
