@@ -1702,7 +1702,7 @@ describe("frame review workspace", () => {
     );
   });
 
-  it("presents published registered pixels as an accessible Blink sequence", () => {
+  it("presents published registered pixels as an accessible Blink sequence", async () => {
     const frameA = demoReviewModel.registration.frames[0]!;
     const frameB = demoReviewModel.registration.frames[1]!;
     const planSha256 = "9".repeat(64);
@@ -1852,8 +1852,14 @@ describe("frame review workspace", () => {
     const spatialEvidence = getByRole(root, "status", {
       name: "Large-scale spatial pass",
     });
-    expect(spatialEvidence.textContent).toContain("12 additional spatial rejections");
+    expect(spatialEvidence.textContent).toContain(
+      "12 additional spatial rejections",
+    );
     expect(spatialEvidence.textContent).toContain("2 low tail · 10 high tail");
+    const evidenceAccessibility = await axe.run(spatialEvidence, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(evidenceAccessibility.violations).toEqual([]);
     const rejectionRows = within(
       getByRole(root, "list", { name: "Per-source rejection totals" }),
     ).getAllByRole("listitem");
