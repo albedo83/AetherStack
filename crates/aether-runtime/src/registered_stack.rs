@@ -895,6 +895,7 @@ pub struct RegisteredStackResult {
 pub struct RegisteredSourceDispositionSummary {
     frame_id: FrameId,
     counts: SourceDispositionCounts,
+    spatial_promotions: Option<RejectionPromotionCounts>,
 }
 
 impl RegisteredSourceDispositionSummary {
@@ -908,6 +909,12 @@ impl RegisteredSourceDispositionSummary {
     #[must_use]
     pub const fn counts(&self) -> SourceDispositionCounts {
         self.counts
+    }
+
+    /// Exact spatial promotions owned by this source when spatial ESD ran.
+    #[must_use]
+    pub const fn spatial_promotions(&self) -> Option<RejectionPromotionCounts> {
+        self.spatial_promotions
     }
 }
 
@@ -1314,11 +1321,16 @@ where
     let _writer = memory
         .try_reserve(writer_bytes)
         .map_err(RegisteredStackError::Memory)?;
-    let source_summary_bytes = if matches!(
+    let attributed_estimator = matches!(
         request.estimator,
         RegisteredStackEstimator::GeneralizedEsd(_)
             | RegisteredStackEstimator::GeneralizedEsdLargeScale(_)
-    ) {
+    );
+    let spatial_estimator = matches!(
+        request.estimator,
+        RegisteredStackEstimator::GeneralizedEsdLargeScale(_)
+    );
+    let source_summary_bytes = if attributed_estimator {
         request
             .sources
             .len()
@@ -1345,14 +1357,11 @@ where
             RegisteredSourceDispositionSummary {
                 frame_id: source.frame_id().clone(),
                 counts: SourceDispositionCounts::default(),
+                spatial_promotions: spatial_estimator.then(RejectionPromotionCounts::default),
             }
         }));
     }
-    let mut spatial_promotions = matches!(
-        request.estimator,
-        RegisteredStackEstimator::GeneralizedEsdLargeScale(_)
-    )
-    .then(RejectionPromotionCounts::default);
+    let mut spatial_promotions = spatial_estimator.then(RejectionPromotionCounts::default);
     let mut writer = AtomicF64PrimaryStreamWriter::create_with_provenance(
         &request.output,
         output_dimensions,
@@ -1594,11 +1603,26 @@ where
                         .map_err(RegisteredStackError::Integration)?
                         .crop_rows(band_window.core_start, band_window.core_height)
                         .map_err(RegisteredStackError::Integration)?;
-                    let band_promotions = integrated
+                    let band_source_promotions = integrated
                         .attribution()
-                        .promotions_from(&baseline)
+                        .source_promotions_from(&baseline)
                         .map_err(IntegrationError::Attribution)
                         .map_err(RegisteredStackError::Integration)?;
+                    let mut band_promotions = RejectionPromotionCounts::default();
+                    for (summary, promotions) in
+                        source_dispositions.iter_mut().zip(band_source_promotions)
+                    {
+                        let source_total = summary
+                            .spatial_promotions
+                            .as_mut()
+                            .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+                        *source_total = source_total
+                            .checked_add(promotions)
+                            .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+                        band_promotions = band_promotions
+                            .checked_add(promotions)
+                            .ok_or(RegisteredStackError::WorkSizeOverflow)?;
+                    }
                     let total = spatial_promotions
                         .as_mut()
                         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
