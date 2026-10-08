@@ -271,6 +271,13 @@ export interface RegisteredSourceDisposition {
   readonly total: number;
 }
 
+/** Exact samples newly rejected by the large-scale spatial stage. */
+export interface RegisteredSpatialPromotionCounts {
+  readonly low: number;
+  readonly high: number;
+  readonly total: number;
+}
+
 export interface RegisteredStackResult {
   readonly planSha256: string;
   readonly outputPath: string;
@@ -287,6 +294,7 @@ export interface RegisteredStackResult {
   readonly highRejectionMapPath: string | null;
   readonly rejectionMapSamplesWritten: number | null;
   readonly sourceDispositions: readonly RegisteredSourceDisposition[];
+  readonly spatialPromotions: RegisteredSpatialPromotionCounts | null;
   readonly reportPath: string;
   readonly reportSha256: string;
 }

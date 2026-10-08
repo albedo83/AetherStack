@@ -1788,6 +1788,7 @@ describe("frame review workspace", () => {
                 total: 100,
               },
             ],
+            spatialPromotions: null,
             reportPath: "/results/integrated-integration-report.json",
             reportSha256: "d".repeat(64),
           },
