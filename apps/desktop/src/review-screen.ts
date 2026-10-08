@@ -383,6 +383,18 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-source-rejection-rows]",
     ),
+    registeredStackSpatialPromotions: required<HTMLElement>(
+      root,
+      "[data-registered-stack-spatial-promotions]",
+    ),
+    registeredStackSpatialPromotionTotal: required<HTMLElement>(
+      root,
+      "[data-registered-stack-spatial-promotion-total]",
+    ),
+    registeredStackSpatialPromotionBreakdown: required<HTMLElement>(
+      root,
+      "[data-registered-stack-spatial-promotion-breakdown]",
+    ),
     registeredStackReport: required<HTMLElement>(
       root,
       "[data-registered-stack-report]",
@@ -3087,6 +3099,9 @@ interface RegistrationElements {
   readonly registeredStackSourceRejections: HTMLElement;
   readonly registeredStackSourceRejectionSummary: HTMLElement;
   readonly registeredStackSourceRejectionRows: HTMLElement;
+  readonly registeredStackSpatialPromotions: HTMLElement;
+  readonly registeredStackSpatialPromotionTotal: HTMLElement;
+  readonly registeredStackSpatialPromotionBreakdown: HTMLElement;
   readonly registeredStackReport: HTMLElement;
   readonly registeredStackReportPath: HTMLElement;
   readonly registeredStackReportDigest: HTMLElement;
@@ -3460,6 +3475,7 @@ function renderRegistration(
   elements.registeredStackOutput.title = registration.stack.outputPath ?? "";
   const integrationReport = registration.stack.result;
   const sourceDispositions = integrationReport?.sourceDispositions ?? [];
+  const spatialPromotions = integrationReport?.spatialPromotions ?? null;
   const sourceLabels = new Map(
     registration.frames.map((frame) => [frame.id, frame.label]),
   );
@@ -3481,6 +3497,15 @@ function renderRegistration(
     sourceDispositions.length === 0
       ? "No per-source attribution for this estimator"
       : `${formatCountedNoun(sourceDispositions.length, "source")} · ${totalRejectedSamples.toLocaleString("en-US")} rejected samples · ${rejectedFraction.toFixed(4)}%`;
+  elements.registeredStackSpatialPromotions.hidden = spatialPromotions === null;
+  elements.registeredStackSpatialPromotionTotal.textContent =
+    spatialPromotions === null
+      ? ""
+      : `${spatialPromotions.total.toLocaleString("en-US")} additional spatial ${spatialPromotions.total === 1 ? "rejection" : "rejections"}`;
+  elements.registeredStackSpatialPromotionBreakdown.textContent =
+    spatialPromotions === null
+      ? ""
+      : `${spatialPromotions.low.toLocaleString("en-US")} low tail · ${spatialPromotions.high.toLocaleString("en-US")} high tail`;
   const rankedSourceDispositions = [...sourceDispositions]
     .sort(
       (left, right) =>
@@ -6132,6 +6157,14 @@ function shellMarkup(): string {
                     <div class="source-rejection-evidence__heading">
                       <h6 id="source-rejection-evidence-title">Source rejection evidence</h6>
                       <output data-registered-stack-source-rejection-summary aria-live="polite"></output>
+                    </div>
+                    <div class="spatial-promotion-evidence" data-registered-stack-spatial-promotions role="status" aria-labelledby="spatial-promotion-evidence-title" hidden>
+                      <span class="spatial-promotion-evidence__icon" aria-hidden="true">◎</span>
+                      <span>
+                        <small id="spatial-promotion-evidence-title">Large-scale spatial pass</small>
+                        <strong data-registered-stack-spatial-promotion-total></strong>
+                        <span data-registered-stack-spatial-promotion-breakdown></span>
+                      </span>
                     </div>
                     <ol data-registered-stack-source-rejection-rows aria-label="Per-source rejection totals"></ol>
                   </section>
