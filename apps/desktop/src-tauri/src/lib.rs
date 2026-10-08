@@ -658,6 +658,7 @@ struct RegisteredSourceDispositionResponse {
     rejected_low: u64,
     rejected_high: u64,
     total: u64,
+    spatial_promotions: Option<RegisteredSpatialPromotionResponse>,
 }
 
 /// Exact low/high rejection counts added by large-scale spatial processing.
@@ -4394,6 +4395,13 @@ where
                 rejected_low: counts.rejected_low(),
                 rejected_high: counts.rejected_high(),
                 total: counts.total(),
+                spatial_promotions: source.spatial_promotions().map(|promotions| {
+                    RegisteredSpatialPromotionResponse {
+                        low: promotions.low(),
+                        high: promotions.high(),
+                        total: promotions.total(),
+                    }
+                }),
             }
         })
         .collect();
@@ -12886,6 +12894,7 @@ mod tests {
             rejected_low: 3,
             rejected_high: 4,
             total: 20,
+            spatial_promotions: None,
         };
 
         let value = serde_json::to_value(response)?;
