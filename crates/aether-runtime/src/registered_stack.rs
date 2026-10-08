@@ -66,6 +66,8 @@ pub const LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID: &str = "linear-fit-rejection-ma
 pub const GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID: &str = "esd-rejection-map-v1";
 /// Low/high count map emitted after source-owned spatial ESD expansion.
 pub const SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID: &str = "spatial-esd-rejection-map-v1";
+/// Plane-major accepted-sample count map for any registered estimator.
+pub const ACCEPTED_SUPPORT_MAP_ALGORITHM_ID: &str = "accepted-support-map-v1";
 const REGISTERED_STACK_STAGE_ID: &str = "registered-stack";
 const DEFAULT_BAND_HEIGHT: usize = 128;
 const STREAM_WRITER_BUFFER_BYTES: usize = 64 * 1_024;
@@ -518,6 +520,7 @@ pub struct RegisteredStackRequest {
     estimator: RegisteredStackEstimator,
     weights: Option<Vec<FrameWeight>>,
     rejection_map: Option<RegisteredRejectionMapOutput>,
+    support_map: Option<RegisteredSupportMapOutput>,
 }
 
 #[derive(Clone, Debug)]
@@ -607,6 +610,27 @@ impl RegisteredRejectionMapOutput {
     #[must_use]
     pub fn high_output(&self) -> &Path {
         &self.high_output
+    }
+}
+
+/// Optional companion FITS containing exact accepted-sample counts.
+#[derive(Clone, Debug)]
+pub struct RegisteredSupportMapOutput {
+    output: PathBuf,
+    provenance: FitsOutputProvenance,
+}
+
+impl RegisteredSupportMapOutput {
+    /// Binds one create-new support-map destination to its provenance.
+    #[must_use]
+    pub const fn new(output: PathBuf, provenance: FitsOutputProvenance) -> Self {
+        Self { output, provenance }
+    }
+
+    /// Accepted-support count FITS destination.
+    #[must_use]
+    pub fn output(&self) -> &Path {
+        &self.output
     }
 }
 
@@ -803,6 +827,7 @@ impl RegisteredStackRequest {
             estimator,
             weights,
             rejection_map: None,
+            support_map: None,
         })
     }
 
@@ -871,10 +896,36 @@ impl RegisteredStackRequest {
         if output.low_output == self.output
             || output.high_output == self.output
             || output.low_output == output.high_output
+            || self.support_map.as_ref().is_some_and(|support| {
+                support.output == output.low_output || support.output == output.high_output
+            })
         {
             return Err(RegisteredStackError::DuplicateOutputPath);
         }
         self.rejection_map = Some(output);
+        Ok(self)
+    }
+
+    /// Adds an accepted-support map to the same publication unit.
+    pub fn with_support_map(
+        mut self,
+        output: RegisteredSupportMapOutput,
+    ) -> Result<Self, RegisteredStackError> {
+        if output.provenance.algorithm_id() != ACCEPTED_SUPPORT_MAP_ALGORITHM_ID
+            || output.provenance.source_count() != self.provenance.source_count()
+            || output.provenance.plan_sha256() != Some(self.plan.plan_sha256())
+            || output.provenance.parameters_sha256() != self.provenance.parameters_sha256()
+        {
+            return Err(RegisteredStackError::SupportMapProvenanceMismatch);
+        }
+        if output.output == self.output
+            || self.rejection_map.as_ref().is_some_and(|rejection| {
+                output.output == rejection.low_output || output.output == rejection.high_output
+            })
+        {
+            return Err(RegisteredStackError::DuplicateOutputPath);
+        }
+        self.support_map = Some(output);
         Ok(self)
     }
 }
@@ -886,6 +937,7 @@ pub struct RegisteredStackResult {
     summary: FitsWriteSummary,
     peak_reserved_bytes: usize,
     rejection_map_summary: Option<RegisteredRejectionMapSummary>,
+    support_map_summary: Option<FitsWriteSummary>,
     source_dispositions: Vec<RegisteredSourceDispositionSummary>,
     spatial_promotions: Option<RejectionPromotionCounts>,
 }
@@ -964,6 +1016,12 @@ impl RegisteredStackResult {
         self.rejection_map_summary
     }
 
+    /// Published accepted-support map accounting when requested.
+    #[must_use]
+    pub const fn support_map_summary(&self) -> Option<FitsWriteSummary> {
+        self.support_map_summary
+    }
+
     /// Per-source spatial evidence, available for attributed estimators.
     #[must_use]
     pub fn source_dispositions(&self) -> &[RegisteredSourceDispositionSummary] {
@@ -1002,6 +1060,8 @@ pub enum RegisteredStackError {
     RejectionMapRequiresRejectingEstimator,
     /// Rejection-map provenance is inconsistent with the stack request.
     RejectionMapProvenanceMismatch,
+    /// Accepted-support map provenance is inconsistent with the stack request.
+    SupportMapProvenanceMismatch,
     /// Science and companion products cannot target the same path.
     DuplicateOutputPath,
     /// A band cannot contain zero rows.
@@ -1072,6 +1132,7 @@ impl RegisteredStackError {
             Self::EstimatorParameterProvenanceMismatch => "registered-stack-estimator-parameters",
             Self::RejectionMapRequiresRejectingEstimator => "registered-stack-map-estimator",
             Self::RejectionMapProvenanceMismatch => "registered-stack-map-provenance",
+            Self::SupportMapProvenanceMismatch => "registered-stack-support-provenance",
             Self::DuplicateOutputPath => "registered-stack-output-path",
             Self::ZeroBandHeight => "registered-stack-band-height",
             Self::ArtifactIdentityMismatch { .. } => "registered-stack-artifact-identity",
@@ -1127,6 +1188,9 @@ impl Display for RegisteredStackError {
             }
             Self::RejectionMapProvenanceMismatch => {
                 formatter.write_str("rejection-map provenance does not match the stack request")
+            }
+            Self::SupportMapProvenanceMismatch => {
+                formatter.write_str("support-map provenance does not match the stack request")
             }
             Self::DuplicateOutputPath => {
                 formatter.write_str("science and rejection-map outputs must use distinct paths")
@@ -1754,6 +1818,7 @@ where
         summary,
         peak_reserved_bytes: memory.peak(),
         rejection_map_summary,
+        support_map_summary: None,
         source_dispositions,
         spatial_promotions,
     })
