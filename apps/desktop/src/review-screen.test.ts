@@ -1788,7 +1788,7 @@ describe("frame review workspace", () => {
                 total: 100,
               },
             ],
-            spatialPromotions: null,
+            spatialPromotions: { low: 2, high: 10, total: 12 },
             reportPath: "/results/integrated-integration-report.json",
             reportSha256: "d".repeat(64),
           },
@@ -1849,6 +1849,11 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain(
       "2 sources · 16 rejected samples · 8.0000%",
     );
+    const spatialEvidence = getByRole(root, "status", {
+      name: "Large-scale spatial pass",
+    });
+    expect(spatialEvidence.textContent).toContain("12 additional spatial rejections");
+    expect(spatialEvidence.textContent).toContain("2 low tail · 10 high tail");
     const rejectionRows = within(
       getByRole(root, "list", { name: "Per-source rejection totals" }),
     ).getAllByRole("listitem");
