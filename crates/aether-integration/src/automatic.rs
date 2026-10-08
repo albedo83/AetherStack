@@ -230,3 +230,102 @@ impl Display for AutomaticIntegrationPlanError {
 }
 
 impl Error for AutomaticIntegrationPlanError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_an_empty_population() {
+        assert_eq!(
+            AutomaticIntegrationPlan::resolve(0),
+            Err(AutomaticIntegrationPlanError::EmptyPopulation)
+        );
+    }
+
+    #[test]
+    fn locks_every_population_boundary() {
+        let cases = [
+            (
+                1,
+                AutomaticPopulationTier::Minimal,
+                AutomaticEstimator::StrictMean,
+            ),
+            (
+                2,
+                AutomaticPopulationTier::Minimal,
+                AutomaticEstimator::StrictMean,
+            ),
+            (
+                3,
+                AutomaticPopulationTier::Small,
+                AutomaticEstimator::Median,
+            ),
+            (
+                7,
+                AutomaticPopulationTier::Small,
+                AutomaticEstimator::Median,
+            ),
+            (
+                8,
+                AutomaticPopulationTier::Medium,
+                AutomaticEstimator::WinsorizedSigmaClipped,
+            ),
+            (
+                14,
+                AutomaticPopulationTier::Medium,
+                AutomaticEstimator::WinsorizedSigmaClipped,
+            ),
+            (
+                15,
+                AutomaticPopulationTier::Large,
+                AutomaticEstimator::GeneralizedEsd,
+            ),
+            (
+                u32::MAX,
+                AutomaticPopulationTier::Large,
+                AutomaticEstimator::GeneralizedEsd,
+            ),
+        ];
+
+        for (source_count, expected_tier, expected_estimator) in cases {
+            let plan = AutomaticIntegrationPlan::resolve(source_count).expect("valid plan");
+            assert_eq!(plan.source_count(), source_count);
+            assert_eq!(plan.tier(), expected_tier);
+            assert_eq!(plan.estimator(), expected_estimator);
+            assert_eq!(plan.minimum_retained_samples(), 3.min(source_count));
+            assert!(plan.generate_support_map());
+            assert_eq!(
+                plan.generate_rejection_maps(),
+                expected_estimator != AutomaticEstimator::StrictMean
+            );
+        }
+    }
+
+    #[test]
+    fn publishes_explicit_stable_values_and_rationale() {
+        let plan = AutomaticIntegrationPlan::resolve(15).expect("valid plan");
+
+        assert_eq!(
+            AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID,
+            "automatic-integration-plan-v1"
+        );
+        assert_eq!(plan.tier().as_str(), "large");
+        assert_eq!(plan.estimator().as_str(), "generalized_esd");
+        assert_eq!(plan.low_sigma(), 4.0);
+        assert_eq!(plan.high_sigma(), 3.0);
+        assert_eq!(plan.esd_outlier_fraction(), 0.30);
+        assert_eq!(plan.esd_significance(), 0.05);
+        assert_eq!(plan.maximum_iterations(), 8);
+        assert!(plan.rationale().contains("15 or more frames"));
+    }
+
+    #[test]
+    fn repeated_resolution_is_bit_identical() {
+        for source_count in 1..=64 {
+            let first = AutomaticIntegrationPlan::resolve(source_count).expect("valid plan");
+            let second = AutomaticIntegrationPlan::resolve(source_count).expect("valid plan");
+            assert_eq!(first, second);
+        }
+    }
+}
