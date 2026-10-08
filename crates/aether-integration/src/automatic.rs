@@ -8,6 +8,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use sha2::{Digest, Sha256};
+
 /// Stable identifier for the first automatic-integration planning contract.
 pub const AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID: &str = "automatic-integration-plan-v1";
 
@@ -214,6 +216,52 @@ impl AutomaticIntegrationPlan {
             }
         }
     }
+
+    /// Returns the SHA-256 seal of every execution-relevant plan field.
+    ///
+    /// Integers use big-endian bytes, floating-point values use canonical IEEE
+    /// bit patterns, and stable textual identifiers are length-prefixed. This
+    /// avoids locale, JSON-number, and map-order dependencies at API borders.
+    #[must_use]
+    pub fn plan_sha256(self) -> String {
+        let mut hasher = Sha256::new();
+        update_length_prefixed(
+            &mut hasher,
+            AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID.as_bytes(),
+        );
+        hasher.update(self.source_count.to_be_bytes());
+        update_length_prefixed(&mut hasher, self.tier.as_str().as_bytes());
+        update_length_prefixed(&mut hasher, self.estimator.as_str().as_bytes());
+        hasher.update(self.low_sigma.to_bits().to_be_bytes());
+        hasher.update(self.high_sigma.to_bits().to_be_bytes());
+        hasher.update(self.esd_outlier_fraction.to_bits().to_be_bytes());
+        hasher.update(self.esd_significance.to_bits().to_be_bytes());
+        hasher.update(self.maximum_iterations.to_be_bytes());
+        hasher.update(self.minimum_retained_samples.to_be_bytes());
+        hasher.update([u8::from(self.generate_rejection_maps)]);
+        hasher.update([u8::from(self.generate_support_map)]);
+        hex_digest(hasher.finalize())
+    }
+}
+
+fn update_length_prefixed(hasher: &mut Sha256, value: &[u8]) {
+    // Stable identifiers are compile-time ASCII constants and never approach
+    // the u32 boundary; the fixed-width cast keeps the byte contract portable.
+    #[allow(clippy::cast_possible_truncation)]
+    let length = value.len() as u32;
+    hasher.update(length.to_be_bytes());
+    hasher.update(value);
+}
+
+fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = digest.as_ref();
+    let mut hexadecimal = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        hexadecimal.push(char::from(HEX[usize::from(byte >> 4)]));
+        hexadecimal.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    hexadecimal
 }
 
 /// Invalid input to automatic integration planning.
@@ -235,6 +283,8 @@ impl Error for AutomaticIntegrationPlanError {}
 mod tests {
     use super::*;
 
+    type TestResult = Result<(), Box<dyn Error>>;
+
     #[test]
     fn rejects_an_empty_population() {
         assert_eq!(
@@ -244,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn locks_every_population_boundary() {
+    fn locks_every_population_boundary() -> TestResult {
         let cases = [
             (
                 1,
@@ -289,7 +339,7 @@ mod tests {
         ];
 
         for (source_count, expected_tier, expected_estimator) in cases {
-            let plan = AutomaticIntegrationPlan::resolve(source_count).expect("valid plan");
+            let plan = AutomaticIntegrationPlan::resolve(source_count)?;
             assert_eq!(plan.source_count(), source_count);
             assert_eq!(plan.tier(), expected_tier);
             assert_eq!(plan.estimator(), expected_estimator);
@@ -300,11 +350,12 @@ mod tests {
                 expected_estimator != AutomaticEstimator::StrictMean
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn publishes_explicit_stable_values_and_rationale() {
-        let plan = AutomaticIntegrationPlan::resolve(15).expect("valid plan");
+    fn publishes_explicit_stable_values_and_rationale() -> TestResult {
+        let plan = AutomaticIntegrationPlan::resolve(15)?;
 
         assert_eq!(
             AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID,
@@ -312,20 +363,22 @@ mod tests {
         );
         assert_eq!(plan.tier().as_str(), "large");
         assert_eq!(plan.estimator().as_str(), "generalized_esd");
-        assert_eq!(plan.low_sigma(), 4.0);
-        assert_eq!(plan.high_sigma(), 3.0);
-        assert_eq!(plan.esd_outlier_fraction(), 0.30);
-        assert_eq!(plan.esd_significance(), 0.05);
+        assert_eq!(plan.low_sigma().to_bits(), 4.0_f64.to_bits());
+        assert_eq!(plan.high_sigma().to_bits(), 3.0_f64.to_bits());
+        assert_eq!(plan.esd_outlier_fraction().to_bits(), 0.30_f64.to_bits());
+        assert_eq!(plan.esd_significance().to_bits(), 0.05_f64.to_bits());
         assert_eq!(plan.maximum_iterations(), 8);
         assert!(plan.rationale().contains("15 or more frames"));
+        Ok(())
     }
 
     #[test]
-    fn repeated_resolution_is_bit_identical() {
+    fn repeated_resolution_is_bit_identical() -> TestResult {
         for source_count in 1..=64 {
-            let first = AutomaticIntegrationPlan::resolve(source_count).expect("valid plan");
-            let second = AutomaticIntegrationPlan::resolve(source_count).expect("valid plan");
+            let first = AutomaticIntegrationPlan::resolve(source_count)?;
+            let second = AutomaticIntegrationPlan::resolve(source_count)?;
             assert_eq!(first, second);
         }
+        Ok(())
     }
 }
