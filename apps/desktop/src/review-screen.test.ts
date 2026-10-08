@@ -9,7 +9,7 @@ import {
 import axe from "axe-core";
 import { describe, expect, it, vi } from "vitest";
 
-import { demoReviewModel } from "./demo-data.ts";
+import { createEmptyReviewModel, demoReviewModel } from "./demo-data.ts";
 import type { ReviewActions, ReviewViewModel } from "./model.ts";
 import { mountReviewScreen } from "./review-screen.ts";
 
@@ -599,7 +599,18 @@ describe("frame review workspace", () => {
     await Promise.resolve();
 
     expect(actions.onSelectWorkspace).toHaveBeenCalledWith("frames");
+    expect(actions.onSelectRole).toHaveBeenCalledWith("light");
     expect(panel?.open).toBe(true);
+  });
+
+  it("does not offer a review plan before any Light frame exists", () => {
+    const { root } = fixture(createEmptyReviewModel());
+    const review = getByRole(root, "button", {
+      name: "Review plan",
+    }) as HTMLButtonElement;
+
+    expect(review.disabled).toBe(true);
+    expect(review.title).toContain("Import Light frames");
   });
 
   it("edits typed quality gates and requests a native preview only when evidence is ready", () => {

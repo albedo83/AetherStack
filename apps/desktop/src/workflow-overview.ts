@@ -19,6 +19,52 @@ interface PublishedArtifact {
   readonly workspace: WorkspaceView;
 }
 
+interface WorkflowGuidance {
+  readonly step: string;
+  readonly title: string;
+  readonly description: string;
+  readonly actionLabel: string;
+  readonly action: "import-session" | "select-workspace";
+  readonly workspace?: WorkspaceView;
+  readonly tone: "next" | "busy" | "attention" | "complete";
+}
+
+/** Persistent, plain-language orientation for first-time and expert users. */
+export function workflowCoachMarkup(): string {
+  return `<aside class="workflow-coach" data-workflow-coach data-tone="next" aria-labelledby="workflow-coach-title">
+    <span class="workflow-coach__beacon" aria-hidden="true">?</span>
+    <div class="workflow-coach__copy">
+      <p><span data-workflow-coach-step>Getting started</span> · Recommended next action</p>
+      <h2 id="workflow-coach-title" data-workflow-coach-title>Import an imaging session</h2>
+      <span data-workflow-coach-description>Select the folder that contains your Lights and calibration frames.</span>
+    </div>
+    <button class="button button--primary" type="button" data-workflow-coach-action data-action="import-session">Import session</button>
+  </aside>`;
+}
+
+/**
+ * Explains the next useful action from native evidence. The coach never makes
+ * a scientific choice: it only routes the user to the workspace that owns it.
+ */
+export function renderWorkflowCoach(
+  coach: HTMLElement,
+  model: ReviewViewModel,
+): void {
+  const guidance = deriveGuidance(model);
+  coach.dataset.tone = guidance.tone;
+  text(coach, "[data-workflow-coach-step]", guidance.step);
+  text(coach, "[data-workflow-coach-title]", guidance.title);
+  text(coach, "[data-workflow-coach-description]", guidance.description);
+  const action = required<HTMLButtonElement>(
+    coach,
+    "[data-workflow-coach-action]",
+  );
+  action.textContent = guidance.actionLabel;
+  action.dataset.action = guidance.action;
+  if (guidance.workspace) action.dataset.workspace = guidance.workspace;
+  else delete action.dataset.workspace;
+}
+
 /** Static shell for the workflow control room and published-artifact ledger. */
 export function workflowOverviewMarkup(): string {
   return `
@@ -202,6 +248,212 @@ function deriveStages(model: ReviewViewModel): readonly WorkflowStage[] {
         : model.registration.stack.message,
     },
   ];
+}
+
+function deriveGuidance(model: ReviewViewModel): WorkflowGuidance {
+  const sessionFrameCount = model.roles.reduce(
+    (total, role) => total + role.count,
+    0,
+  );
+  if (sessionFrameCount === 0) {
+    if (model.sessionStatus.tone === "busy") {
+      return guidance(
+        "Step 1 of 5",
+        "Importing and verifying FITS files",
+        "AetherStack is reading headers, fingerprinting sources, and building a trustworthy session. You can follow progress in Frames.",
+        "View import progress",
+        "select-workspace",
+        "busy",
+        "frames",
+      );
+    }
+    return guidance(
+      "Step 1 of 5",
+      "Import your imaging session",
+      "Select one folder containing Lights, Darks, Flats, and optional Bias frames. Your source files remain read-only.",
+      "Import session",
+      "import-session",
+      "next",
+    );
+  }
+
+  if (!model.reviewSessionReady) {
+    return guidance(
+      "Review before processing",
+      "Resolve the frame review",
+      "Inspect uncertain frames and confirm which Lights should participate before creating scientific products.",
+      "Review frames",
+      "select-workspace",
+      "attention",
+      "frames",
+    );
+  }
+
+  const masters = model.calibration.execution.result?.products.length ?? 0;
+  const masterState = model.calibration.execution.state;
+  if (masterState === "running" || masterState === "cancelling") {
+    return guidance(
+      "Step 2 of 5",
+      "Calibration masters are being built",
+      "Keep this application open. Progress and any recoverable issue are shown in Calibration.",
+      "View master progress",
+      "select-workspace",
+      "busy",
+      "calibration",
+    );
+  }
+  if (masterState === "error") {
+    return guidance(
+      "Step 2 needs attention",
+      "Resolve the calibration issue",
+      "Open Calibration for the exact failure evidence. Existing source files and previously published products are unchanged.",
+      "Open Calibration",
+      "select-workspace",
+      "attention",
+      "calibration",
+    );
+  }
+  if (masters === 0) {
+    return guidance(
+      "Step 2 of 5",
+      "Build the calibration masters",
+      "Review the proposed Dark, Flat, and optional Bias associations, then choose an empty output folder.",
+      "Open Calibration",
+      "select-workspace",
+      "next",
+      "calibration",
+    );
+  }
+
+  const calibrated =
+    model.calibration.lightExecution.result?.calibratedFrames.length ?? 0;
+  const lightState = model.calibration.lightExecution.state;
+  if (lightState === "running" || lightState === "cancelling") {
+    return guidance(
+      "Step 3 of 5",
+      "Lights are being calibrated",
+      "AetherStack is applying the reviewed master associations without modifying the original exposures.",
+      "View calibration progress",
+      "select-workspace",
+      "busy",
+      "calibration",
+    );
+  }
+  if (lightState === "error") {
+    return guidance(
+      "Step 3 needs attention",
+      "Resolve the Light calibration issue",
+      "Open Calibration to inspect the failed source and exact native diagnostic before trying again.",
+      "Open Calibration",
+      "select-workspace",
+      "attention",
+      "calibration",
+    );
+  }
+  if (calibrated === 0) {
+    return guidance(
+      "Step 3 of 5",
+      "Calibrate the accepted Lights",
+      "Create calibrated linear images from the masters. Color CFA data can also produce debayered RGB previews for Blink.",
+      "Open Light calibration",
+      "select-workspace",
+      "next",
+      "calibration",
+    );
+  }
+
+  const registered = model.registration.execution.result?.frames.length ?? 0;
+  const registrationState = model.registration.execution.state;
+  if (registrationState === "running" || registrationState === "cancelling") {
+    return guidance(
+      "Step 4 of 5",
+      "Lights are being registered",
+      "The native solver is aligning the accepted frames and validating their common image area.",
+      "View registration progress",
+      "select-workspace",
+      "busy",
+      "registration",
+    );
+  }
+  if (registrationState === "error") {
+    return guidance(
+      "Step 4 needs attention",
+      "Resolve the registration issue",
+      "Open Registration to inspect star matches, residuals, overlap, and the suggested corrective action.",
+      "Open Registration",
+      "select-workspace",
+      "attention",
+      "registration",
+    );
+  }
+  if (registered === 0) {
+    return guidance(
+      "Step 4 of 5",
+      "Register the calibrated Lights",
+      "Analyze a representative pair, review the geometry evidence, then publish the complete aligned set.",
+      "Open Registration",
+      "select-workspace",
+      "next",
+      "registration",
+    );
+  }
+
+  const stackState = model.registration.stack.state;
+  if (stackState === "running" || stackState === "cancelling") {
+    return guidance(
+      "Step 5 of 5",
+      "The registered stack is being integrated",
+      "Keep the application open while AetherStack publishes the science image and requested evidence maps atomically.",
+      "View integration progress",
+      "select-workspace",
+      "busy",
+      "registration",
+    );
+  }
+  if (stackState === "error") {
+    return guidance(
+      "Step 5 needs attention",
+      "Resolve the integration issue",
+      "Open Registration to inspect the estimator, source evidence, output destination, and failure diagnostic.",
+      "Open Integration",
+      "select-workspace",
+      "attention",
+      "registration",
+    );
+  }
+  if (!model.registration.stack.result) {
+    return guidance(
+      "Step 5 of 5",
+      "Integrate the registered Lights",
+      "Choose Automatic for a documented safe policy, or open Advanced for explicit rejection controls. Local normalization remains optional.",
+      "Open Integration",
+      "select-workspace",
+      "next",
+      "registration",
+    );
+  }
+
+  return guidance(
+    "Processing complete",
+    "Your integrated science product is ready",
+    "Review every published FITS product and its reproducibility evidence, then reveal the files in the system file manager.",
+    "View Results",
+    "select-workspace",
+    "complete",
+    "results",
+  );
+}
+
+function guidance(
+  step: string,
+  title: string,
+  description: string,
+  actionLabel: string,
+  action: WorkflowGuidance["action"],
+  tone: WorkflowGuidance["tone"],
+  workspace?: WorkspaceView,
+): WorkflowGuidance {
+  return { step, title, description, actionLabel, action, tone, workspace };
 }
 
 function executionState(

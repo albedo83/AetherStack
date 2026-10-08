@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import { demoReviewModel } from "./demo-data.ts";
 import {
+  renderWorkflowCoach,
   renderWorkflowOverview,
+  workflowCoachMarkup,
   workflowOverviewMarkup,
 } from "./workflow-overview.ts";
 
@@ -18,6 +20,54 @@ function overviewFixture() {
 }
 
 describe("workflow overview", () => {
+  it("always gives an empty production session one direct next action", () => {
+    const coach = document.createElement("div");
+    coach.innerHTML = workflowCoachMarkup();
+    const element = coach.firstElementChild as HTMLElement;
+    renderWorkflowCoach(element, {
+      ...demoReviewModel,
+      roles: demoReviewModel.roles.map((role) => ({ ...role, count: 0 })),
+      frames: [],
+      reviewSessionReady: false,
+    });
+
+    expect(element.textContent).toContain("Import your imaging session");
+    expect(
+      getByRole(element, "button", { name: "Import session" }).dataset.action,
+    ).toBe("import-session");
+  });
+
+  it("does not mistake an empty role tab for an empty session", () => {
+    const coach = document.createElement("div");
+    coach.innerHTML = workflowCoachMarkup();
+    const element = coach.firstElementChild as HTMLElement;
+    renderWorkflowCoach(element, {
+      ...demoReviewModel,
+      frames: [],
+      reviewSessionReady: true,
+    });
+
+    expect(element.textContent).toContain("Build the calibration masters");
+    expect(element.textContent).not.toContain("Import your imaging session");
+  });
+
+  it("routes a loaded beginner to the exact workspace needing attention", () => {
+    const coach = document.createElement("div");
+    coach.innerHTML = workflowCoachMarkup();
+    const element = coach.firstElementChild as HTMLElement;
+    renderWorkflowCoach(element, {
+      ...demoReviewModel,
+      reviewSessionReady: true,
+    });
+
+    expect(element.textContent).toContain("Build the calibration masters");
+    const action = getByRole(element, "button", {
+      name: "Open Calibration",
+    });
+    expect(action.dataset.action).toBe("select-workspace");
+    expect(action.dataset.workspace).toBe("calibration");
+  });
+
   it("derives readiness from native model evidence", () => {
     const { run, results } = overviewFixture();
     renderWorkflowOverview(run, results, demoReviewModel);

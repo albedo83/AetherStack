@@ -310,6 +310,102 @@ button:active:not(:disabled) {
   display: none;
 }
 
+.workflow-coach {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  min-height: 76px;
+  margin: 16px 24px 0;
+  padding: 11px 12px 11px 14px;
+  background:
+    linear-gradient(135deg, #152437f2, #0b121bf2 72%), var(--surface-1);
+  border: 1px solid #3d5875;
+  border-radius: 13px;
+  box-shadow:
+    inset 0 1px #c7e2ff18,
+    0 10px 26px #0005;
+}
+
+.workflow-coach__beacon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: #d8ebff;
+  font-size: 18px;
+  font-weight: 850;
+  background: linear-gradient(145deg, #315d8e, #173250);
+  border: 1px solid #6f9bcb;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 1px #e7f4ff33,
+    0 0 16px #5ca9ff38;
+}
+
+.workflow-coach__copy {
+  min-width: 0;
+}
+
+.workflow-coach__copy p,
+.workflow-coach__copy h2,
+.workflow-coach__copy > span {
+  margin: 0;
+}
+
+.workflow-coach__copy p {
+  color: #87bdf4;
+  font-size: 9px;
+  font-weight: 820;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.workflow-coach__copy h2 {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.workflow-coach__copy > span {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-coach[data-tone="busy"] {
+  border-color: #4c78a8;
+}
+
+.workflow-coach[data-tone="attention"] {
+  background: linear-gradient(135deg, #35231cf2, #160f0df2 72%);
+  border-color: #8c5b48;
+}
+
+.workflow-coach[data-tone="attention"] .workflow-coach__beacon {
+  color: #ffe7df;
+  background: linear-gradient(145deg, #8a4c3b, #48251e);
+  border-color: #cc8169;
+  box-shadow: 0 0 16px #ff8c6638;
+}
+
+.workflow-coach[data-tone="complete"] {
+  background: linear-gradient(135deg, #163027f2, #0a1713f2 72%);
+  border-color: #3f7966;
+}
+
+.workflow-coach[data-tone="complete"] .workflow-coach__beacon {
+  color: #ddfff3;
+  background: linear-gradient(145deg, #367c66, #183d32);
+  border-color: #67b99e;
+}
+
 .health-chip,
 .state-chip,
 .viewer-chip {
@@ -7307,6 +7403,19 @@ html[data-ui-motion="reduced"] *::after {
 }
 
 @media (max-width: 680px) {
+  .workflow-coach {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .workflow-coach > .button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .workflow-coach__copy > span {
+    white-space: normal;
+  }
+
   .settings-grid {
     grid-template-columns: 1fr;
   }

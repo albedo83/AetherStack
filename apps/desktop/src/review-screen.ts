@@ -34,7 +34,9 @@ import type {
 } from "./model.ts";
 import { defectReportVerdict } from "./defect-batch.ts";
 import {
+  renderWorkflowCoach,
   renderWorkflowOverview,
+  workflowCoachMarkup,
   workflowOverviewMarkup,
 } from "./workflow-overview.ts";
 import { mountUiPreferences, uiPreferencesMarkup } from "./ui-preferences.ts";
@@ -194,6 +196,7 @@ export function mountReviewScreen(
     runWorkspace: required<HTMLElement>(root, "[data-run-workspace]"),
     resultsWorkspace: required<HTMLElement>(root, "[data-results-workspace]"),
     settingsWorkspace: required<HTMLElement>(root, "[data-settings-workspace]"),
+    workflowCoach: required<HTMLElement>(root, "[data-workflow-coach]"),
     registrationReference: required<HTMLSelectElement>(
       root,
       "[data-registration-reference]",
@@ -929,6 +932,10 @@ export function mountReviewScreen(
       "[data-session-import-progress]",
     ),
     importSession: required<HTMLButtonElement>(root, "[data-import-session]"),
+    reviewPlan: required<HTMLButtonElement>(
+      root,
+      '[data-action="open-selection-panel"]',
+    ),
     undo: required<HTMLButtonElement>(root, '[data-action="undo"]'),
     roleTabs: required<HTMLElement>(root, "[data-role-tabs]"),
     roleHeading: required<HTMLElement>(root, "[data-role-heading]"),
@@ -1270,6 +1277,7 @@ export function mountReviewScreen(
     }
     if (action === "open-selection-panel") {
       actions.onSelectWorkspace("frames");
+      actions.onSelectRole("light");
       elements.selectionPanel.open = true;
       queueMicrotask(() => {
         elements.selectionPanel.scrollIntoView?.({ block: "nearest" });
@@ -2024,6 +2032,8 @@ export function mountReviewScreen(
       model.localNormalization.state === "cancelling";
     const decisionBusy = model.decisionPending || importing || masterBusy;
     const decisionsAvailable = reviewCommandsAvailable(model);
+    const lightRoleCount =
+      model.roles.find((role) => role.role === "light")?.count ?? 0;
     elements.framesWorkspace.hidden = model.activeWorkspace !== "frames";
     elements.calibrationWorkspace.hidden =
       model.activeWorkspace !== "calibration";
@@ -2061,6 +2071,7 @@ export function mountReviewScreen(
       elements.resultsWorkspace,
       model,
     );
+    renderWorkflowCoach(elements.workflowCoach, model);
     syncStepperStates(root);
     elements.importSession.disabled = cancellingImport || masterBusy;
     elements.importSession.classList.toggle("button--danger", importing);
@@ -2069,6 +2080,13 @@ export function mountReviewScreen(
       : importing
         ? "× Cancel import"
         : "＋ Import session";
+    elements.reviewPlan.disabled = lightRoleCount === 0 || decisionBusy;
+    elements.reviewPlan.title =
+      lightRoleCount === 0
+        ? "Import Light frames to configure automatic quality review"
+        : decisionBusy
+          ? "Finish the active operation before changing the review plan"
+          : "Open the automatic Light-frame quality review";
     renderRoles(elements.roleTabs, model);
     renderRows(elements.tableBody, model, frameQuery);
     renderFrameSelection(elements, model);
@@ -5902,6 +5920,8 @@ function shellMarkup(): string {
             <button class="button button--primary" type="button" data-action="open-selection-panel">Review plan</button>
           </div>
         </header>
+
+        ${workflowCoachMarkup()}
 
         <section class="frames-workspace" aria-labelledby="frames-heading" data-frames-workspace>
           <div class="workspace-heading">
