@@ -13462,6 +13462,58 @@ mod tests {
     }
 
     #[test]
+    fn previews_explicit_automatic_integration_settings() -> TestResult {
+        let registration_plan_sha256 = "a".repeat(64);
+        let response = preview_automatic_integration_sync(AutomaticIntegrationPreviewRequest {
+            expected_plan_sha256: registration_plan_sha256.clone(),
+            source_count: 15,
+        })?;
+
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.registration_plan_sha256, registration_plan_sha256);
+        assert_eq!(
+            response.algorithm_id,
+            AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID
+        );
+        assert_eq!(response.source_count, 15);
+        assert_eq!(response.population_tier, "large");
+        assert!(response.rationale.contains("15 or more frames"));
+        assert!(is_lower_sha256(&response.automatic_plan_sha256));
+        assert!(matches!(
+            response.settings.estimator,
+            RegisteredStackEstimatorInput::GeneralizedEsd
+        ));
+        assert!(response.settings.generate_rejection_maps);
+        assert!(response.settings.generate_support_map);
+        assert!(!response.settings.large_scale_low_enabled);
+        assert!(!response.settings.large_scale_high_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn automatic_preview_fails_closed_for_invalid_identity_or_population() {
+        let invalid_identity =
+            preview_automatic_integration_sync(AutomaticIntegrationPreviewRequest {
+                expected_plan_sha256: "not-a-sha256".to_owned(),
+                source_count: 15,
+            });
+        let empty_population =
+            preview_automatic_integration_sync(AutomaticIntegrationPreviewRequest {
+                expected_plan_sha256: "a".repeat(64),
+                source_count: 0,
+            });
+
+        assert_eq!(
+            invalid_identity.err().map(|error| error.code),
+            Some("registered_stack_configuration_invalid")
+        );
+        assert_eq!(
+            empty_population.err().map(|error| error.code),
+            Some("registered_stack_configuration_invalid")
+        );
+    }
+
+    #[test]
     fn previews_canonical_registered_weights_before_execution() -> TestResult {
         let first = "1".repeat(64);
         let second = "2".repeat(64);
