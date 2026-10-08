@@ -2375,6 +2375,62 @@ safety reasoning. They do not narrate obvious syntax.
      to disabled expansion; enabled output receives distinct algorithm seals.
 290. Expose an accessible expert panel. Independent low/high enablement, layers,
      and growth stay hidden outside generalized ESD and bounded at input.
+291. Define the accepted-support image contract. Every planar output position
+     stores the exact count of retained source samples as a clear-mask binary64
+     value, including valid zero support.
+292. Materialize strict and clipped support evidence. `PixelSupport` and
+     `ClippedPixelSupport` convert without rounding, dimension ambiguity, or
+     estimator-specific reinterpretation.
+293. Lock support materialization with exact unit evidence. Multi-plane order,
+     clear masks, strict counts, clipped counts, and length disagreement remain
+     regression-tested.
+294. Define a stable runtime identity. `accepted-support-map-v1` distinguishes
+     the diagnostic product from science and low/high rejection evidence.
+295. Publish support in bounded registered bands. The memory plan covers its
+     image and writer buffer, and every supported estimator streams the same
+     exact contract.
+296. Prove band-height independence. Valid one-row and wider executions must
+     produce byte-identical support FITS with verified checksums.
+297. Reject foreign support provenance before pixel publication. Algorithm,
+     plan, manifest, source count, dimensions, and destination separation remain
+     native fail-closed checks.
+298. Prove transactional collision behavior. A late support destination
+     collision removes science and other products created by the run while
+     preserving every pre-existing byte.
+299. Carry support through native desktop execution. Rust derives the adjacent
+     destination, owns provenance, reports the exact sample count, and removes
+     the support file if later report publication fails.
+300. Verify real native support output. Advanced-stack tests require exact
+     retained counts and complete FITS checksum validation.
+301. Advance integration reports to schema 6. A sealed `support` role is valid
+     only when the execution setting requests it, while prior schemas remain
+     readable and cannot claim the newer product.
+302. Lock report integrity and compatibility. Verified, missing, mismatched,
+     legacy, and setting/product disagreement cases remain explicit tests.
+303. Type the browser contract end to end. Settings, native response fields,
+     report roles, result state, mocks, and preview sources use one closed
+     support-map vocabulary.
+304. Prove the IPC transport. The bridge forwards the opt-in unchanged and
+     preserves native path and sample-count results without browser inference.
+305. Retain support evidence in active result state. Completion summaries and
+     later preview selection keep the native product identity available.
+306. Expose an estimator-independent advanced control. The accepted-support
+     option remains accessible for strict, median, weighted, and rejecting
+     estimators and is disabled only while execution owns the settings.
+307. Preview support internally. A dedicated tab requests the scalar FITS
+     through Rust, uses revocable resources, rejects stale responses, and can
+     reopen a verified archived report product.
+308. Distinguish support evidence visually and semantically. The dark
+     instrument surface uses a dedicated treatment, explicit alternative text,
+     and accepted-source distribution language without weakening contrast or
+     keyboard behavior.
+309. Prove the complete UI workflow. DOM tests cover opt-in dispatch, product
+     availability, tab selection, preview identity, and exact count-distribution
+     presentation.
+310. Publish accepted-support parity only after full validation. Rust format,
+     tests, warnings-as-errors lint, and documentation plus frontend formatting,
+     tests, accessibility, type checking, and production build must pass before
+     direct publication to `main`.
 
 ## 11. Stable-release definition
 
