@@ -1768,8 +1768,8 @@ describe("frame review workspace", () => {
             lowRejectionMapPath: "/results/integrated-rejection-low.fits",
             highRejectionMapPath: "/results/integrated-rejection-high.fits",
             rejectionMapSamplesWritten: 34_798_080,
-            supportMapPath: null,
-            supportMapSamplesWritten: null,
+            supportMapPath: "/results/integrated-support.fits",
+            supportMapSamplesWritten: 34_798_080,
             sourceDispositions: [
               {
                 frameId: frameA.id,
@@ -2073,6 +2073,52 @@ describe("frame review workspace", () => {
     });
     expect(root.textContent).toContain("x 12 · y 34");
     expect(root.textContent).toContain("low 0 / 1 / 0");
+    const supportTab = getByRole<HTMLButtonElement>(root, "tab", {
+      name: "Support",
+    });
+    expect(supportTab.disabled).toBe(false);
+    fireEvent.click(supportTab);
+    expect(actions.onSelectRegisteredStackProduct).toHaveBeenCalledWith(
+      "support",
+    );
+    controller.update({
+      ...ready,
+      registration: {
+        ...ready.registration,
+        stack: {
+          ...ready.registration.stack,
+          selectedProduct: "support",
+          sciencePreview: {
+            frameId: `${planSha256}:registered-stack:science`,
+            url: "blob:registered-stack",
+          },
+          preview: {
+            frameId: `${planSha256}:registered-stack:support`,
+            url: "blob:registered-stack-support",
+          },
+          histogramState: "ready",
+          histogram: {
+            algorithmId: "rejection-count-histogram-v1",
+            totalSamples: 1_000,
+            zeroSamples: 0,
+            rejectedSamples: 1_000,
+            maximumRejectedCount: 18,
+            bins: [
+              { rejectedCount: 17, samples: 125 },
+              { rejectedCount: 18, samples: 875 },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      getByRole<HTMLImageElement>(root, "img", {
+        name: "Accepted source support map preview",
+      }).src,
+    ).toContain("blob:registered-stack-support");
+    expect(root.textContent).toContain(
+      "1,000 covered pixels · 100.000% · maximum 18 accepted sources",
+    );
   });
 
   it("keeps robust integration controls explicit and model-driven", () => {
@@ -2206,6 +2252,18 @@ describe("frame review workspace", () => {
         ?.closest<HTMLElement>(".control-field")?.hidden,
     ).toBe(true);
     expect(root.textContent).toContain("EXACT F64 MEDIAN");
+    const supportMap = getByRole<HTMLInputElement>(root, "checkbox", {
+      name: /Publish accepted support/,
+    });
+    expect(supportMap.disabled).toBe(false);
+    fireEvent.click(supportMap);
+    expect(actions.onUpdateRegisteredStackSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        estimator: "median",
+        generateRejectionMaps: false,
+        generateSupportMap: true,
+      }),
+    );
 
     controller.update({
       ...advanced,
