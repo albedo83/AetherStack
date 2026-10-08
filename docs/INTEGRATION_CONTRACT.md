@@ -244,12 +244,26 @@ height cannot change bytes or attribution. The memory reservation includes the
 expanded source images, attribution, spatial masks, summed-area table, rebuilt
 science, and the simultaneous cropped core.
 
+The runtime compares the cropped attribution immediately before and after
+large-scale processing. `RejectionPromotionCounts` records only transitions
+from accepted to rejected-low or rejected-high. Unchanged states are valid;
+every other transition, source-count mismatch, dimension mismatch, and checked
+counter overflow fails the run. Counts are accumulated across non-overlapping
+band cores, so halo samples are never counted twice. A spatial run returns an
+explicit zero-valued record when no promotion occurs, while non-spatial
+estimators return no record. Tests require exact low/high totals and equality
+across valid band heights.
+
 `registered-spatial-esd-f64-v1` and `spatial-esd-rejection-map-v1` distinguish
 spatial output from pixel-local ESD. Their shared parameter digest covers both
 the generalized-ESD controls and the spatial policy. Native report schema 3
-persists all six low/high controls, while schemas 1 and 2 remain readable only
-with spatial expansion disabled. The desktop exposes the feature solely under
-Generalized ESD in an advanced panel with bounded inputs. The compact
+persists all six low/high controls. Schema 4 additionally seals the exact
+low/high/total promotion counts and rejects a record whose total is not their
+checked sum or whose presence disagrees with the spatial settings. Schemas 1
+and 2 remain readable only with spatial expansion disabled; schema 3 remains
+readable without promotion evidence. The desktop exposes the feature solely
+under Generalized ESD in an advanced panel with bounded inputs and shows the
+additional spatial rejections separately from the complete per-source totals. The compact
 per-pixel cube remains execution-local, and gradient-aware alternatives remain
 future versioned algorithms rather than undocumented changes to this contract.
 
