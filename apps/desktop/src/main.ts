@@ -2822,7 +2822,7 @@ async function executeStack(): Promise<void> {
           sourceVerification: null,
           sourceVerificationProgress: null,
           settings,
-          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
+          message: `${result.width} × ${result.height} × ${result.planes} integrated atomically · ${result.estimator}${nativeWeightDigest ? ` · weights ${nativeWeightDigest.slice(0, 12)}…` : ""}${result.supportMapPath !== null && result.supportMapSamplesWritten !== null ? ` · support ${result.supportMapSamplesWritten.toLocaleString("en-US")} samples` : ""} · peak ${formatMemory(result.peakReservedBytes)}`,
         },
       },
     });
