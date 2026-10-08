@@ -24,7 +24,8 @@ use aether_integration::{
     integrate_generalized_esd_mean, integrate_linear_fit_clipped_mean, integrate_mean,
     integrate_median, integrate_percentile_clipped_mean, integrate_sigma_clipped_mean,
     integrate_weighted_mean, integrate_winsorized_sigma_clipped_mean,
-    materialize_percentile_rejection_map, plan_large_scale_rejection_memory,
+    materialize_clipped_support_map, materialize_percentile_rejection_map, materialize_support_map,
+    plan_large_scale_rejection_memory,
 };
 use aether_registration::{ProjectiveRegistrationPlan, RegistrationPlan};
 use aether_review::FrameId;
@@ -1374,11 +1375,10 @@ where
         progress,
     )?;
 
-    let writer_count = if request.rejection_map.is_some() {
-        3
-    } else {
-        1
-    };
+    let writer_count = 1_usize
+        .checked_add(usize::from(request.rejection_map.is_some()) * 2)
+        .and_then(|value| value.checked_add(usize::from(request.support_map.is_some())))
+        .ok_or(RegisteredStackError::WorkSizeOverflow)?;
     let writer_bytes = STREAM_WRITER_BUFFER_BYTES
         .checked_mul(writer_count)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
@@ -1452,6 +1452,18 @@ where
             ))
         })
         .transpose()?;
+    let mut support_writer = request
+        .support_map
+        .as_ref()
+        .map(|support| {
+            AtomicF64PrimaryStreamWriter::create_with_provenance(
+                &support.output,
+                output_dimensions,
+                &support.provenance,
+            )
+            .map_err(RegisteredStackError::Publish)
+        })
+        .transpose()?;
     for plane in 0..planes {
         for offset_y in (0..crop.height()).step_by(request.band_height) {
             cancellation
@@ -1472,6 +1484,7 @@ where
                 request.sources.len(),
                 request.estimator,
                 request.rejection_map.is_some(),
+                request.support_map.is_some(),
             )?;
             let _band = memory
                 .try_reserve(reserved)
@@ -1512,6 +1525,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                 }
                 RegisteredStackEstimator::Median => {
                     let references = images.iter().collect::<Vec<_>>();
@@ -1520,6 +1538,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                 }
                 RegisteredStackEstimator::WeightedMean => {
                     let weights = request
@@ -1535,6 +1558,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                 }
                 RegisteredStackEstimator::PercentileClipped(parameters) => {
                     let references = images.iter().collect::<Vec<_>>();
@@ -1543,6 +1571,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_clipped_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                     if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
                         let maps = materialize_percentile_rejection_map(
                             integrated.image().dimensions(),
@@ -1564,6 +1597,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_clipped_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                     if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
                         let maps = materialize_percentile_rejection_map(
                             integrated.image().dimensions(),
@@ -1586,6 +1624,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_clipped_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                     if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
                         let maps = materialize_percentile_rejection_map(
                             integrated.image().dimensions(),
@@ -1607,6 +1650,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_clipped_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                     if let Some((low_writer, high_writer)) = rejection_writers.as_mut() {
                         let maps = materialize_percentile_rejection_map(
                             integrated.image().dimensions(),
@@ -1628,6 +1676,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_clipped_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                     let band_counts = integrated
                         .attribution()
                         .source_counts()
@@ -1696,6 +1749,11 @@ where
                     writer
                         .write_image_chunk(integrated.image())
                         .map_err(RegisteredStackError::Publish)?;
+                    write_clipped_support_chunk(
+                        &mut support_writer,
+                        integrated.image().dimensions(),
+                        integrated.support(),
+                    )?;
                     let band_counts = integrated
                         .attribution()
                         .source_counts()
@@ -1745,6 +1803,13 @@ where
             let high = high.finish().map_err(RegisteredStackError::Publish)?;
             validate_staged(&high, output_dimensions)?;
             Ok::<_, RegisteredStackError>((low, high))
+        })
+        .transpose()?;
+    let staged_support_map = support_writer
+        .map(|writer| {
+            let support = writer.finish().map_err(RegisteredStackError::Publish)?;
+            validate_staged(&support, output_dimensions)?;
+            Ok::<_, RegisteredStackError>(support)
         })
         .transpose()?;
     *completed = completed
@@ -1810,6 +1875,31 @@ where
     } else {
         None
     };
+    let support_map_summary = if let Some(support) = staged_support_map {
+        let support_path = &request
+            .support_map
+            .as_ref()
+            .ok_or(RegisteredStackError::SupportMapProvenanceMismatch)?
+            .output;
+        match support.publish() {
+            Ok(summary) => Some(summary),
+            Err(error) => {
+                let mut published = Vec::with_capacity(4);
+                if error.output_is_published() {
+                    published.push(support_path.as_path());
+                }
+                if let Some(rejection) = &request.rejection_map {
+                    published.push(rejection.high_output.as_path());
+                    published.push(rejection.low_output.as_path());
+                }
+                published.push(request.output.as_path());
+                rollback_published(&published)?;
+                return Err(RegisteredStackError::Publish(error));
+            }
+        }
+    } else {
+        None
+    };
     *completed = completed
         .checked_add(1)
         .ok_or(RegisteredStackError::WorkSizeOverflow)?;
@@ -1818,7 +1908,7 @@ where
         summary,
         peak_reserved_bytes: memory.peak(),
         rejection_map_summary,
-        support_map_summary: None,
+        support_map_summary,
         source_dispositions,
         spatial_promotions,
     })
@@ -1827,6 +1917,36 @@ where
 fn rollback_published(paths: &[&Path]) -> Result<(), RegisteredStackError> {
     for path in paths {
         fs::remove_file(path).map_err(RegisteredStackError::RollbackPublishedOutput)?;
+    }
+    Ok(())
+}
+
+fn write_support_chunk(
+    writer: &mut Option<AtomicF64PrimaryStreamWriter>,
+    dimensions: Dimensions,
+    support: &[PixelSupport],
+) -> Result<(), RegisteredStackError> {
+    if let Some(writer) = writer {
+        let map = materialize_support_map(dimensions, support)
+            .map_err(RegisteredStackError::Integration)?;
+        writer
+            .write_image_chunk(map.image())
+            .map_err(RegisteredStackError::Publish)?;
+    }
+    Ok(())
+}
+
+fn write_clipped_support_chunk(
+    writer: &mut Option<AtomicF64PrimaryStreamWriter>,
+    dimensions: Dimensions,
+    support: &[ClippedPixelSupport],
+) -> Result<(), RegisteredStackError> {
+    if let Some(writer) = writer {
+        let map = materialize_clipped_support_map(dimensions, support)
+            .map_err(RegisteredStackError::Integration)?;
+        writer
+            .write_image_chunk(map.image())
+            .map_err(RegisteredStackError::Publish)?;
     }
     Ok(())
 }
@@ -1911,6 +2031,7 @@ fn planned_band_bytes(
     source_count: usize,
     estimator: RegisteredStackEstimator,
     rejection_maps: bool,
+    support_map: bool,
 ) -> Result<usize, RegisteredStackError> {
     let samples = width
         .checked_mul(height)
@@ -2029,6 +2150,7 @@ fn planned_band_bytes(
     } else {
         0
     };
+    let support_map_image = if support_map { image } else { 0 };
     sources
         .checked_add(output)
         .and_then(|value| value.checked_add(decode))
@@ -2037,6 +2159,7 @@ fn planned_band_bytes(
         .and_then(|value| value.checked_add(attribution))
         .and_then(|value| value.checked_add(spatial_working))
         .and_then(|value| value.checked_add(rejection_map_images))
+        .and_then(|value| value.checked_add(support_map_image))
         .ok_or(RegisteredStackError::WorkSizeOverflow)
 }
 
