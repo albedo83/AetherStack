@@ -3264,10 +3264,12 @@ mod tests {
         for summary in &result.source_dispositions()[..15] {
             assert_eq!(summary.counts().accepted(), 360);
             assert_eq!(summary.counts().total(), 360);
+            assert_eq!(summary.spatial_promotions(), None);
         }
         let outlier = &result.source_dispositions()[15];
         assert_eq!(outlier.counts().rejected_high(), 360);
         assert_eq!(outlier.counts().total(), 360);
+        assert_eq!(outlier.spatial_promotions(), None);
         assert_eq!(fs::read(first.output())?, fs::read(second.output())?);
         assert_eq!(fs::read(&first_low)?, fs::read(&second_low)?);
         assert_eq!(fs::read(&first_high)?, fs::read(&second_high)?);
@@ -3343,6 +3345,18 @@ mod tests {
         let outlier = &first_result.source_dispositions()[15];
         assert_eq!(outlier.counts().rejected_high(), 150);
         assert_eq!(outlier.counts().accepted(), 210);
+        let outlier_promotions = outlier
+            .spatial_promotions()
+            .ok_or("spatial source did not retain promotion evidence")?;
+        assert_eq!(outlier_promotions.low(), 0);
+        assert_eq!(outlier_promotions.high(), 126);
+        assert_eq!(outlier_promotions.total(), 126);
+        for summary in &first_result.source_dispositions()[..15] {
+            assert_eq!(
+                summary.spatial_promotions(),
+                Some(RejectionPromotionCounts::default())
+            );
+        }
 
         let mut science =
             PrimaryImageReader::open(File::open(first.output())?, HeaderReadOptions::default())?;
