@@ -3499,14 +3499,31 @@ describe("frame review workspace", () => {
     ).toBe("actual");
   });
 
-  it("does not expose the unfinished clipping control as a working action", () => {
+  it("does not expose an unfinished clipping control in the release surface", () => {
     const { root } = fixture();
+    expect(root.querySelector(".viewer__tools")?.textContent).not.toContain(
+      "Clipping",
+    );
+  });
 
+  it("filters frame rows by file name and clears the local query", () => {
+    const { root } = fixture();
+    const filter = getByRole(root, "searchbox", {
+      name: "Filter lights",
+    }) as HTMLInputElement;
+    fireEvent.input(filter, { target: { value: "0003" } });
+    const rows = root.querySelectorAll("[data-frame-rows] tr[data-frame-id]");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("light_0003.fits");
+    expect(root.querySelector("[data-selection-count]")?.textContent).toContain(
+      "1 shown",
+    );
+
+    fireEvent.click(getByRole(root, "button", { name: "Clear frame filter" }));
+    expect(filter.value).toBe("");
     expect(
-      getByRole(root, "button", {
-        name: "Clipping overlay is not available in this build",
-      }).hasAttribute("disabled"),
-    ).toBe(true);
+      root.querySelectorAll("[data-frame-rows] tr[data-frame-id]"),
+    ).toHaveLength(demoReviewModel.frames.length);
   });
 
   it("keeps manual decisions unavailable before native session import", () => {

@@ -938,7 +938,11 @@ export function mountReviewScreen(
       '[data-action="select-light-frame-view"][data-light-frame-view-value="calibrated"]',
     ),
     frameTable: required<HTMLTableElement>(root, "[data-frame-table]"),
-    filter: required<HTMLButtonElement>(root, "[data-filter-frames]"),
+    frameFilter: required<HTMLInputElement>(root, "[data-frame-filter]"),
+    clearFrameFilter: required<HTMLButtonElement>(
+      root,
+      '[data-action="clear-frame-filter"]',
+    ),
     tableBody: required<HTMLTableSectionElement>(root, "[data-frame-rows]"),
     selectionCount: required<HTMLElement>(root, "[data-selection-count]"),
     framePosition: required<HTMLElement>(root, "[data-frame-position]"),
@@ -1078,6 +1082,7 @@ export function mountReviewScreen(
   let sourceEvidenceReportSha256: string | null = null;
   let diagnosticsFilter: DiagnosticsEvidenceFilter = "all";
   let diagnosticsQuery = "";
+  let frameQuery = "";
 
   const onClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
@@ -1226,6 +1231,14 @@ export function mountReviewScreen(
       ) {
         actions.onSelectWorkspace(workspace);
       }
+      return;
+    }
+    if (action === "clear-frame-filter") {
+      frameQuery = "";
+      elements.frameFilter.value = "";
+      renderRows(elements.tableBody, model, frameQuery);
+      updateFrameListSummary(elements, model, frameQuery);
+      elements.frameFilter.focus();
       return;
     }
     if (action === "open-selection-panel") {
@@ -1768,6 +1781,12 @@ export function mountReviewScreen(
   };
 
   const onInput = (event: Event): void => {
+    if (event.target === elements.frameFilter) {
+      frameQuery = elements.frameFilter.value;
+      renderRows(elements.tableBody, model, frameQuery);
+      updateFrameListSummary(elements, model, frameQuery);
+      return;
+    }
     if (
       event.target === elements.drizzleDropShrink ||
       event.target === elements.drizzleMaximumContributions ||
@@ -2024,7 +2043,7 @@ export function mountReviewScreen(
         ? "× Cancel import"
         : "＋ Import session";
     renderRoles(elements.roleTabs, model);
-    renderRows(elements.tableBody, model);
+    renderRows(elements.tableBody, model, frameQuery);
     renderFrameSelection(elements, model);
     const activeRole = model.roles.find(
       (role) => role.role === model.activeRole,
@@ -2059,14 +2078,12 @@ export function mountReviewScreen(
       "aria-label",
       `${activeRoleLabel} review metrics`,
     );
-    elements.filter.setAttribute(
+    elements.frameFilter.setAttribute(
       "aria-label",
       `Filter ${activeRoleLabel.toLocaleLowerCase("en-US")}`,
     );
-    elements.filter.title = `Filter ${activeRoleLabel.toLocaleLowerCase("en-US")}`;
-    elements.selectionCount.textContent = activeRole
-      ? `${model.frames.length} shown · ${activeRole.count} total`
-      : `${model.frames.length} shown`;
+    elements.frameFilter.placeholder = `Find ${activeRoleLabel.toLocaleLowerCase("en-US")}`;
+    updateFrameListSummary(elements, model, frameQuery);
     elements.framePosition.textContent = `${position} / ${model.frames.length}`;
     elements.selectedLabel.textContent = frame?.label ?? "No frame selected";
     const resolvedPreview =
@@ -2643,17 +2660,24 @@ function automaticSelectionChangeCount(model: ReviewViewModel): number {
 function renderRows(
   container: HTMLTableSectionElement,
   model: ReviewViewModel,
+  query: string,
 ): void {
   container.replaceChildren();
-  if (model.frames.length === 0) {
+  const frames = filteredReviewFrames(model.frames, query);
+  if (frames.length === 0) {
     const emptyRow = document.createElement("tr");
-    const emptyCell = textCell("No frames loaded for this type", "empty-row");
+    const emptyCell = textCell(
+      model.frames.length === 0
+        ? "No frames loaded for this type"
+        : "No frame names match this filter",
+      "empty-row",
+    );
     emptyCell.colSpan = 7;
     emptyRow.append(emptyCell);
     container.append(emptyRow);
     return;
   }
-  for (const frame of model.frames) {
+  for (const frame of frames) {
     const row = document.createElement("tr");
     const selected = frame.id === model.selectedFrameId;
     row.role = "row";
@@ -2720,6 +2744,33 @@ function renderRows(
     );
     container.append(row);
   }
+}
+
+function filteredReviewFrames(
+  frames: readonly ReviewFrame[],
+  query: string,
+): readonly ReviewFrame[] {
+  const normalized = query.trim().toLocaleLowerCase("en-US");
+  if (!normalized) return frames;
+  return frames.filter((frame) =>
+    frame.label.toLocaleLowerCase("en-US").includes(normalized),
+  );
+}
+
+function updateFrameListSummary(
+  elements: {
+    readonly selectionCount: HTMLElement;
+    readonly clearFrameFilter: HTMLButtonElement;
+  },
+  model: ReviewViewModel,
+  query: string,
+): void {
+  const shown = filteredReviewFrames(model.frames, query).length;
+  const activeRole = model.roles.find((role) => role.role === model.activeRole);
+  elements.selectionCount.textContent = activeRole
+    ? `${shown} shown · ${activeRole.count} total`
+    : `${shown} shown`;
+  elements.clearFrameFilter.disabled = query.length === 0;
 }
 
 function selectionProposalPresentation(
@@ -5781,12 +5832,12 @@ function shellMarkup(): string {
           <span class="brand__name">AetherStack</span>
         </div>
         <nav class="primary-nav" aria-label="Workflow">
-          ${navigationItem("frames", "Frames", "▦", true)}
-          ${navigationItem("calibration", "Calibration", "◫", true)}
-          ${navigationItem("registration", "Registration", "⌖", true)}
-          ${navigationItem("normalization", "Normalize", "≋", true)}
-          ${navigationItem("run", "Run", "▷", true)}
-          ${navigationItem("results", "Results", "◉", true)}
+          ${navigationItem("frames", "Frames", "▦")}
+          ${navigationItem("calibration", "Calibration", "◫")}
+          ${navigationItem("registration", "Registration", "⌖")}
+          ${navigationItem("normalization", "Normalize", "≋")}
+          ${navigationItem("run", "Run", "▷")}
+          ${navigationItem("results", "Results", "◉")}
         </nav>
         <button class="nav-item sidebar__settings" type="button" data-action="select-workspace" data-workspace="settings">
           <span class="nav-item__icon" aria-hidden="true">⚙</span>
@@ -5837,7 +5888,7 @@ function shellMarkup(): string {
                     <button class="tool-button" type="button" data-action="select-light-frame-view" data-light-frame-view-value="calibrated" aria-pressed="false" disabled>Calibrated</button>
                   </div>
                   <button class="tool-button" type="button" data-action="measure-all-quality" aria-label="All eligible light frames have diagnostic quality measurements" aria-live="polite" aria-atomic="true" disabled>Quality complete</button>
-                  <button class="icon-button" type="button" data-filter-frames aria-label="Frame filtering is not available in this build" title="Frame filtering is not connected yet" disabled>⌕</button>
+                  <label class="frame-filter"><span class="sr-only">Filter frames by file name</span><span aria-hidden="true">⌕</span><input type="search" data-frame-filter autocomplete="off" spellcheck="false" /><button type="button" data-action="clear-frame-filter" aria-label="Clear frame filter">×</button></label>
                 </div>
               </div>
               <div class="table-scroll" tabindex="0" aria-label="Scrollable frame table">
@@ -5904,7 +5955,6 @@ function shellMarkup(): string {
                   <button class="tool-button" type="button" data-action="viewer-actual" aria-label="Show preview pixels at one hundred percent" aria-pressed="false">1:1</button>
                   <button class="tool-button" type="button" data-action="measure-quality" aria-label="Measure diagnostic frame quality">Measure quality</button>
                   <button class="tool-button" type="button" data-action="open-statistics" aria-label="Inspect exact FITS statistics">Statistics</button>
-                  <button class="tool-button" type="button" aria-label="Clipping overlay is not available in this build" title="Clipping requires rejection maps" disabled>Clipping</button>
                 </div>
               </div>
 
@@ -6774,18 +6824,8 @@ function shellMarkup(): string {
   `;
 }
 
-function navigationItem(
-  id: string,
-  label: string,
-  icon: string,
-  enabled: boolean,
-): string {
-  if (enabled) {
-    return `<button class="nav-item" type="button" data-action="select-workspace" data-workspace="${id}">
-      <span class="nav-item__icon" aria-hidden="true">${icon}</span><span>${label}</span>
-    </button>`;
-  }
-  return `<button class="nav-item" type="button" data-workspace="${id}" aria-label="${label}, not available in this build" title="${label} workspace is not connected yet" disabled>
+function navigationItem(id: string, label: string, icon: string): string {
+  return `<button class="nav-item" type="button" data-action="select-workspace" data-workspace="${id}">
     <span class="nav-item__icon" aria-hidden="true">${icon}</span><span>${label}</span>
   </button>`;
 }
