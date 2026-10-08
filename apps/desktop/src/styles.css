@@ -2279,13 +2279,25 @@ button:active:not(:disabled) {
 
 .integration-report__source-browser li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
   padding: 6px 9px;
   color: #9db3c1;
   font-size: 10px;
   background: #08131b;
   border-left: 2px solid #315b70;
+}
+
+.integration-report__source-promotions {
+  padding: 2px 6px;
+  color: #bceefa;
+  font-size: 8px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, #1d4656, #102d38);
+  border: 1px solid #41798d;
+  border-radius: 999px;
+  box-shadow: inset 0 1px #e0faff1f;
 }
 
 .integration-report__source-browser li[data-empty="true"] {
@@ -2330,6 +2342,18 @@ button:active:not(:disabled) {
 }
 
 @media (max-width: 760px) {
+  .integration-report__source-browser li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .integration-report__source-promotions {
+    justify-self: start;
+  }
+
+  .integration-report__source-browser code {
+    grid-column: 1 / -1;
+  }
+
   .integration-report__source-toolbar {
     align-items: stretch;
     flex-direction: column;

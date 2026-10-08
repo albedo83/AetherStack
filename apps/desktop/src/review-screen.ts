@@ -3677,7 +3677,18 @@ function renderRegistration(
       ? formatRegisteredSourceStatus(verification.status)
       : `frame ${source.frameId.slice(0, 12)}… · sha256 ${source.sha256.slice(0, 12)}…`;
     seals.title = `Frame identity: ${source.frameId}\nSource SHA-256: ${source.sha256}`;
-    row.append(identity, seals);
+    row.append(identity);
+    if (
+      source.spatialPromotions !== null &&
+      source.spatialPromotions.total > 0
+    ) {
+      const promotions = document.createElement("span");
+      promotions.className = "integration-report__source-promotions";
+      promotions.textContent = `Spatial +${source.spatialPromotions.total.toLocaleString("en-US")}`;
+      promotions.title = `${source.spatialPromotions.low.toLocaleString("en-US")} low-tail and ${source.spatialPromotions.high.toLocaleString("en-US")} high-tail promotions`;
+      row.append(promotions);
+    }
+    row.append(seals);
     return row;
   });
   if (sourceEvidence.length > 0 && sourceRows.length === 0) {
