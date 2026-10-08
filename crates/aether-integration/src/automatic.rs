@@ -127,7 +127,10 @@ impl AutomaticIntegrationPlan {
             esd_significance: 0.05,
             maximum_iterations: 8,
             minimum_retained_samples: 3.min(source_count),
-            generate_rejection_maps: !matches!(estimator, AutomaticEstimator::StrictMean),
+            generate_rejection_maps: matches!(
+                estimator,
+                AutomaticEstimator::WinsorizedSigmaClipped | AutomaticEstimator::GeneralizedEsd
+            ),
             generate_support_map: true,
         })
     }
@@ -347,7 +350,10 @@ mod tests {
             assert!(plan.generate_support_map());
             assert_eq!(
                 plan.generate_rejection_maps(),
-                expected_estimator != AutomaticEstimator::StrictMean
+                matches!(
+                    expected_estimator,
+                    AutomaticEstimator::WinsorizedSigmaClipped | AutomaticEstimator::GeneralizedEsd
+                )
             );
         }
         Ok(())
