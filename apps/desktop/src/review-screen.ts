@@ -4165,11 +4165,14 @@ function renderRejectionHistogram(
 ): void {
   const visible = stack.selectedProduct !== "science";
   elements.registeredStackHistogram.hidden = !visible;
+  elements.registeredStackHistogram.dataset.product = stack.selectedProduct;
   elements.registeredStackHistogramBins.replaceChildren();
   if (!visible) return;
   if (stack.histogramState === "loading") {
     elements.registeredStackHistogramSummary.textContent =
-      "Reading exact rejection counts…";
+      stack.selectedProduct === "support"
+        ? "Reading exact accepted-source counts…"
+        : "Reading exact rejection counts…";
     return;
   }
   if (stack.histogramState === "error" || !stack.histogram) {
@@ -4183,7 +4186,10 @@ function renderRejectionHistogram(
     histogram.totalSamples === 0
       ? 0
       : (100 * histogram.rejectedSamples) / histogram.totalSamples;
-  elements.registeredStackHistogramSummary.textContent = `${histogram.rejectedSamples.toLocaleString("en-US")} affected samples · ${fraction.toFixed(3)}% · maximum ${histogram.maximumRejectedCount}`;
+  elements.registeredStackHistogramSummary.textContent =
+    stack.selectedProduct === "support"
+      ? `${histogram.rejectedSamples.toLocaleString("en-US")} covered pixels · ${fraction.toFixed(3)}% · maximum ${histogram.maximumRejectedCount} accepted sources`
+      : `${histogram.rejectedSamples.toLocaleString("en-US")} affected samples · ${fraction.toFixed(3)}% · maximum ${histogram.maximumRejectedCount}`;
   const positiveBins = histogram.bins.filter((bin) => bin.rejectedCount > 0);
   const visibleBins = positiveBins.slice(0, 32);
   const maximumSamples = Math.max(1, ...visibleBins.map((bin) => bin.samples));
