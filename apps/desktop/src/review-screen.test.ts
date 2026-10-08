@@ -2574,6 +2574,68 @@ describe("frame review workspace", () => {
     );
   });
 
+  it("presents the sealed automatic recommendation and mode switch", () => {
+    const automatic: ReviewViewModel = {
+      ...demoReviewModel,
+      activeWorkspace: "registration",
+      registration: {
+        ...demoReviewModel.registration,
+        stack: {
+          ...demoReviewModel.registration.stack,
+          integrationMode: "automatic",
+          automaticPreviewState: "ready",
+          automaticPreview: {
+            schemaVersion: 1,
+            registrationPlanSha256: "a".repeat(64),
+            automaticPlanSha256: "b".repeat(64),
+            algorithmId: "automatic-integration-plan-v1",
+            sourceCount: 18,
+            populationTier: "large",
+            rationale:
+              "15 or more frames: use generalized ESD for finite-sample outlier testing.",
+            settings: {
+              estimator: "generalized_esd",
+              lowFraction: 0.2,
+              highFraction: 0.1,
+              lowSigma: 4,
+              highSigma: 3,
+              esdOutlierFraction: 0.3,
+              esdSignificance: 0.05,
+              maximumIterations: 8,
+              minimumRetainedSamples: 3,
+              generateRejectionMaps: true,
+              generateSupportMap: true,
+              largeScaleLowEnabled: false,
+              largeScaleHighEnabled: false,
+              largeScaleLowLayers: 2,
+              largeScaleHighLayers: 2,
+              largeScaleLowGrowth: 2,
+              largeScaleHighGrowth: 2,
+            },
+          },
+        },
+      },
+    };
+    const { root, actions } = fixture(automatic);
+    const automaticButton = getByRole(root, "button", {
+      name: /AutomaticQuality policy/,
+    });
+    const manualButton = getByRole(root, "button", {
+      name: /ManualExplicit controls/,
+    });
+    const advanced = getByText(root, "Advanced integration").closest("details");
+
+    expect(automaticButton.getAttribute("aria-pressed")).toBe("true");
+    expect(manualButton.getAttribute("aria-pressed")).toBe("false");
+    expect(root.textContent).toContain("large · 18 frames");
+    expect(root.textContent).toContain("generalized esd");
+    expect(root.textContent).toContain("sha256 " + "b".repeat(64));
+    expect(advanced?.hidden).toBe(true);
+
+    fireEvent.click(manualButton);
+    expect(actions.onSetRegisteredStackMode).toHaveBeenCalledWith("manual");
+  });
+
   it("presents a natively verified report without claiming an active stack", () => {
     const external: ReviewViewModel = {
       ...demoReviewModel,
