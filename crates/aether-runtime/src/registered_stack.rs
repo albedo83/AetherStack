@@ -2573,6 +2573,91 @@ mod tests {
     }
 
     #[test]
+    fn support_map_is_exact_and_band_height_independent() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let plan = plan()?;
+        let sources = vec![
+            registered_source(&directory, &plan, id('b')?, 4.0)?,
+            registered_source(&directory, &plan, id('a')?, 2.0)?,
+        ];
+        let science_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            REGISTERED_CROP_MEAN_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let support_provenance = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "accepted-support",
+            ACCEPTED_SUPPORT_MAP_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let one_row_support = directory.0.join("support-one-row.fits");
+        let wide_support = directory.0.join("support-wide.fits");
+        let one_row = RegisteredStackRequest::new_with_estimator(
+            plan.clone(),
+            sources.clone(),
+            directory.0.join("science-one-row.fits"),
+            science_provenance.clone(),
+            RegisteredStackEstimator::StrictMean,
+        )?
+        .with_support_map(RegisteredSupportMapOutput::new(
+            one_row_support.clone(),
+            support_provenance.clone(),
+        ))?
+        .with_band_height(1)?;
+        let wide = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            directory.0.join("science-wide.fits"),
+            science_provenance,
+            RegisteredStackEstimator::StrictMean,
+        )?
+        .with_support_map(RegisteredSupportMapOutput::new(
+            wide_support.clone(),
+            support_provenance,
+        ))?
+        .with_band_height(8)?;
+
+        let first = run_registered_stack(
+            &one_row,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+        run_registered_stack(
+            &wide,
+            &CancellationToken::new(),
+            &MemoryBudget::new(2_000_000)?,
+            |_| {},
+        )?;
+
+        assert!(first.support_map_summary().is_some());
+        assert_eq!(fs::read(&one_row_support)?, fs::read(&wide_support)?);
+        let mut reader =
+            PrimaryImageReader::open(File::open(&one_row_support)?, HeaderReadOptions::default())?;
+        let dimensions = first.dimensions();
+        for plane in 0..dimensions.planes() {
+            let image = reader.read_region_image(ImageRegion::new(
+                u64::try_from(plane)?,
+                0,
+                0,
+                u64::try_from(dimensions.width())?,
+                u64::try_from(dimensions.height())?,
+            ))?;
+            assert!(
+                image
+                    .pixels()
+                    .iter()
+                    .all(|value| value.to_bits() == 2.0_f64.to_bits())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn median_stack_is_exact_and_band_height_independent() -> TestResult {
         let directory = TestDirectory::new()?;
         let identities = ['a', 'b', 'c']
