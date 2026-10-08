@@ -64,6 +64,10 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      - name: Audit frontend dependencies
+        working-directory: apps/desktop
+        run: npm audit --audit-level=high
+
       - name: Build native bundles
         working-directory: apps/desktop
         run: npm run tauri:build
