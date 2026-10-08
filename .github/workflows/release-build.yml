@@ -83,3 +83,49 @@ jobs:
           path: target/release/bundle
           if-no-files-found: error
           retention-days: 14
+
+  draft-release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v7
+
+      - name: Download platform bundles
+        uses: actions/download-artifact@v7
+        with:
+          pattern: aetherstack-*-${{ github.ref_name }}
+          path: release-artifacts
+
+      - name: Collect distributable installers
+        shell: bash
+        run: |
+          mkdir release-files
+          find release-artifacts -type f \( \
+            -name '*.AppImage' -o \
+            -name '*.deb' -o \
+            -name '*.dmg' -o \
+            -name '*.exe' -o \
+            -name '*.msi' -o \
+            -name '*.rpm' -o \
+            -name '*.tar.gz' -o \
+            -name '*.zip' \
+          \) -exec cp --no-clobber {} release-files/ \;
+          node apps/desktop/scripts/write-bundle-checksums.mjs release-files
+
+      - name: Create reviewable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          release-files/*
+          --verify-tag
+          --draft
+          --generate-notes
+          --title "AetherStack ${{ github.ref_name }}"

@@ -35,8 +35,9 @@ Finder, Explorer, or the platform file manager.
 Unsigned development installers for macOS, Linux, and Windows are produced by
 the [Release build workflow](https://github.com/albedo83/AetherStack/actions/workflows/release-build.yml).
 Every workflow artifact contains a `SHA256SUMS.txt` manifest with portable
-relative paths. Code signing and notarization are intentionally not claimed by
-these development builds.
+relative paths. A version tag builds all three platforms and creates a draft
+GitHub release for maintainer review. Code signing and notarization are
+intentionally not claimed by these development builds.
 
 Build a native installer locally:
 
