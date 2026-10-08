@@ -785,7 +785,7 @@ struct RegisteredStackReportWeights {
     entries: Vec<RegisteredWeightPreflightEntry>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegisteredStackReportProduct {
     role: String,
@@ -12751,12 +12751,76 @@ mod tests {
                 total: high,
             });
         }
-        let (_, schema_five_bytes) = encode_registered_stack_report(schema_five_report)?;
+        let schema_five_digest =
+            lowercase_hex(&Sha256::digest(serde_json::to_vec(&schema_five_report)?));
+        let schema_five_envelope = RegisteredStackReportEnvelope {
+            schema_version: 5,
+            report_sha256: schema_five_digest,
+            report: schema_five_report,
+        };
         let schema_five_path = directory.path().join("schema-five-spatial-report.json");
-        fs::write(&schema_five_path, schema_five_bytes)?;
+        fs::write(
+            &schema_five_path,
+            serde_json::to_vec_pretty(&schema_five_envelope)?,
+        )?;
         let schema_five_inspection =
             inspect_registered_stack_report_sync_with_products(&schema_five_path, false)?;
         assert_eq!(schema_five_inspection.schema_version, 5);
+
+        let mut schema_five_with_support: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        schema_five_with_support.integration.generate_support_map = true;
+        let mut support_product = schema_five_with_support.products[0].clone();
+        support_product.role = "support".to_owned();
+        support_product.file_name = "legacy-support.fits".to_owned();
+        schema_five_with_support.products.push(support_product);
+        let schema_five_with_support_digest = lowercase_hex(&Sha256::digest(serde_json::to_vec(
+            &schema_five_with_support,
+        )?));
+        let schema_five_with_support_path = directory
+            .path()
+            .join("schema-five-with-support-report.json");
+        fs::write(
+            &schema_five_with_support_path,
+            serde_json::to_vec_pretty(&RegisteredStackReportEnvelope {
+                schema_version: 5,
+                report_sha256: schema_five_with_support_digest,
+                report: schema_five_with_support,
+            })?,
+        )?;
+        let schema_five_support_error = inspect_registered_stack_report_sync_with_products(
+            &schema_five_with_support_path,
+            false,
+        )
+        .err()
+        .ok_or("schema five unexpectedly accepted a support product")?;
+        assert_eq!(
+            schema_five_support_error.code,
+            "registered_stack_report_invalid"
+        );
+
+        let mut schema_six_missing_support: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        schema_six_missing_support.integration.generate_support_map = true;
+        let (_, schema_six_missing_support_bytes) =
+            encode_registered_stack_report(schema_six_missing_support)?;
+        let schema_six_missing_support_path = directory
+            .path()
+            .join("schema-six-missing-support-report.json");
+        fs::write(
+            &schema_six_missing_support_path,
+            schema_six_missing_support_bytes,
+        )?;
+        let schema_six_missing_support_error = inspect_registered_stack_report_sync_with_products(
+            &schema_six_missing_support_path,
+            false,
+        )
+        .err()
+        .ok_or("schema six unexpectedly accepted a missing support product")?;
+        assert_eq!(
+            schema_six_missing_support_error.code,
+            "registered_stack_report_invalid"
+        );
 
         let mut mismatched_source_report: RegisteredStackReport =
             serde_json::from_value(report["report"].clone())?;
@@ -13058,6 +13122,40 @@ mod tests {
                 .iter()
                 .all(|value| value.to_bits() == 2.0_f64.to_bits())
         );
+        let report_path = directory
+            .path()
+            .join("advanced-stack-integration-report.json");
+        let inspection = inspect_registered_stack_report_sync(&report_path)?;
+        assert_eq!(inspection.schema_version, 6);
+        assert!(inspection.all_products_verified);
+        assert_eq!(inspection.product_count, 4);
+        let inspected_support = inspection
+            .products
+            .iter()
+            .find(|product| product.role == "support")
+            .ok_or("support product missing from native report inspection")?;
+        assert_eq!(
+            inspected_support.status,
+            RegisteredStackReportProductStatus::Verified
+        );
+        assert_eq!(
+            inspected_support.bytes_written,
+            fs::metadata(&support_path)?.len()
+        );
+        let parked_support_path = directory.path().join("parked-support.fits");
+        fs::rename(&support_path, &parked_support_path)?;
+        let missing_support = inspect_registered_stack_report_sync(&report_path)?;
+        assert!(!missing_support.all_products_verified);
+        assert_eq!(
+            missing_support
+                .products
+                .iter()
+                .find(|product| product.role == "support")
+                .map(|product| product.status),
+            Some(RegisteredStackReportProductStatus::Missing)
+        );
+        fs::rename(&parked_support_path, &support_path)?;
+        assert!(inspect_registered_stack_report_sync(&report_path)?.all_products_verified);
 
         let sigma_path = directory.path().join("sigma-stack.fits");
         let sigma = execute_registered_stack_sync(
