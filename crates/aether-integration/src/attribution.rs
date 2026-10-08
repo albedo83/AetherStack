@@ -393,6 +393,59 @@ impl RejectionAttribution {
         Ok(counts)
     }
 
+    /// Counts valid spatial promotions independently for every source.
+    ///
+    /// The returned vector preserves the attribution cube's canonical source
+    /// order. It applies the same fail-closed transition rules as
+    /// [`Self::promotions_from`].
+    pub fn source_promotions_from(
+        &self,
+        baseline: &Self,
+    ) -> Result<Vec<RejectionPromotionCounts>, RejectionAttributionError> {
+        if self.dimensions != baseline.dimensions || self.source_count != baseline.source_count {
+            return Err(RejectionAttributionError::CubeMismatch);
+        }
+        let bytes = self
+            .source_count
+            .checked_mul(std::mem::size_of::<RejectionPromotionCounts>())
+            .ok_or(RejectionAttributionError::SizeOverflow)?;
+        let mut counts = Vec::new();
+        counts
+            .try_reserve_exact(self.source_count)
+            .map_err(|_| RejectionAttributionError::AllocationFailed { bytes })?;
+        counts.resize(self.source_count, RejectionPromotionCounts::default());
+        for sample_index in 0..self.dimensions.pixel_count() {
+            for (source_index, source_counts) in counts.iter_mut().enumerate() {
+                let before = baseline.disposition(sample_index, source_index)?;
+                let after = self.disposition(sample_index, source_index)?;
+                match (before, after) {
+                    (SampleDisposition::Accepted, SampleDisposition::RejectedLow) => {
+                        source_counts.low = source_counts
+                            .low
+                            .checked_add(1)
+                            .ok_or(RejectionAttributionError::SizeOverflow)?;
+                    }
+                    (SampleDisposition::Accepted, SampleDisposition::RejectedHigh) => {
+                        source_counts.high = source_counts
+                            .high
+                            .checked_add(1)
+                            .ok_or(RejectionAttributionError::SizeOverflow)?;
+                    }
+                    _ if before == after => {}
+                    _ => {
+                        return Err(RejectionAttributionError::UnexpectedDispositionTransition {
+                            sample_index,
+                            source_index,
+                            before,
+                            after,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(counts)
+    }
+
     /// Returns one exact disposition.
     pub fn disposition(
         &self,
