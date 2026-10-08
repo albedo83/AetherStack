@@ -1276,7 +1276,8 @@ export function mountReviewScreen(
       if (
         product === "science" ||
         product === "rejection_low" ||
-        product === "rejection_high"
+        product === "rejection_high" ||
+        product === "support"
       ) {
         actions.onSelectRegisteredStackProduct(product);
       }
@@ -3935,7 +3936,11 @@ function renderRegistration(
         ? true
         : product === "rejection_low"
           ? Boolean(previewResult.lowRejectionMapPath)
-          : Boolean(previewResult.highRejectionMapPath)
+          : product === "rejection_high"
+            ? Boolean(previewResult.highRejectionMapPath)
+            : product === "support"
+              ? Boolean(previewResult.supportMapPath)
+              : false
       : Boolean(reportProductAvailable);
     const selected = product === registration.stack.selectedProduct;
     button.disabled = !available || stackBusy;
@@ -3977,7 +3982,9 @@ function renderRegistration(
       ? "Integrated registered common-crop preview"
       : registration.stack.selectedProduct === "rejection_low"
         ? "Low-tail rejection map preview"
-        : "High-tail rejection map preview"
+        : registration.stack.selectedProduct === "rejection_high"
+          ? "High-tail rejection map preview"
+          : "Accepted source support map preview"
     : "";
   elements.registeredStackOverlayControl.hidden =
     !diagnosticProduct || !stackPreviewReady;
@@ -6250,6 +6257,7 @@ function shellMarkup(): string {
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="science" aria-selected="true">Science</button>
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_low" aria-selected="false" disabled>Low reject</button>
                     <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="rejection_high" aria-selected="false" disabled>High reject</button>
+                    <button type="button" role="tab" data-action="select-registered-stack-product" data-stack-product="support" aria-selected="false" disabled>Support</button>
                   </div>
                   <div class="registered-stack__preview" data-action="inspect-registered-stack-pixel">
                     <img class="registered-stack__science-layer" data-registered-stack-science-image alt="" hidden />
