@@ -118,7 +118,7 @@ const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
 const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
 const MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES: u64 = 128 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
-const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 5;
+const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 6;
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
 const QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID: &str = "quality-cache-maintenance-preview-v1";
@@ -4500,6 +4500,13 @@ where
             map_summary.high(),
         )?);
     }
+    if let (Some(support_path), Some(map_summary)) = (support_path.as_ref(), support_map_summary) {
+        products.push(registered_stack_report_product(
+            "support",
+            support_path,
+            map_summary,
+        )?);
+    }
     let report = RegisteredStackReport {
         algorithm_id: REGISTERED_STACK_REPORT_ALGORITHM_ID.to_owned(),
         plan_sha256: request.expected_plan_sha256.clone(),
@@ -4912,9 +4919,18 @@ fn inspect_registered_stack_report_sync_with_products(
     if product_roles.len() != envelope.report.products.len() || !product_roles.contains("science") {
         return Err(registered_stack_report_validation_error());
     }
-    if product_roles
-        .iter()
-        .any(|role| !matches!(*role, "science" | "rejection_low" | "rejection_high"))
+    if product_roles.iter().any(|role| {
+        !matches!(
+            *role,
+            "science" | "rejection_low" | "rejection_high" | "support"
+        )
+    }) {
+        return Err(registered_stack_report_validation_error());
+    }
+    let has_support_product = product_roles.contains("support");
+    if (envelope.schema_version < 6 && has_support_product)
+        || (envelope.schema_version >= 6
+            && has_support_product != envelope.report.integration.generate_support_map)
     {
         return Err(registered_stack_report_validation_error());
     }
@@ -5296,6 +5312,7 @@ fn inspect_registered_stack_product_fits(
             };
             algorithm
         }
+        "support" => ACCEPTED_SUPPORT_MAP_ALGORITHM_ID,
         _ => return RegisteredStackReportProductStatus::MetadataMismatch,
     };
     let header = reader.report().header();
