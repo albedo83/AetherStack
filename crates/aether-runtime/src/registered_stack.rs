@@ -3312,7 +3312,7 @@ mod tests {
         );
         let promotions = first_result
             .spatial_promotions()
-            .expect("spatial ESD must report promoted rejections");
+            .ok_or("spatial ESD did not report promoted rejections")?;
         assert_eq!(promotions.low(), 0);
         assert_eq!(promotions.high(), 126);
         assert_eq!(promotions.total(), 126);
