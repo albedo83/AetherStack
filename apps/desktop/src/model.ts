@@ -50,7 +50,8 @@ export type WorkspaceView =
   | "registration"
   | "normalization"
   | "run"
-  | "results";
+  | "results"
+  | "settings";
 
 export type LightFrameView = "raw" | "calibrated";
 

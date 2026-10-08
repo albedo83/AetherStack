@@ -254,6 +254,15 @@ describe("frame review workspace", () => {
 
     fireEvent.click(getByRole(root, "button", { name: "Run" }));
     expect(actions.onSelectWorkspace).toHaveBeenCalledWith("run");
+
+    fireEvent.click(getByRole(root, "button", { name: "Settings" }));
+    expect(actions.onSelectWorkspace).toHaveBeenCalledWith("settings");
+    controller.update({ ...demoReviewModel, activeWorkspace: "settings" });
+    expect(
+      getByRole(root, "heading", {
+        name: "A focused interface for long sessions",
+      }),
+    ).toBeTruthy();
   });
 
   it("exposes all plan-bound controls and renders scientific evidence", () => {
@@ -3790,5 +3799,16 @@ describe("frame review workspace", () => {
       rules: { "color-contrast": { enabled: false } },
     });
     expect(resultsReport.violations).toEqual([]);
+    results.controller.destroy();
+    results.root.remove();
+
+    const settings = fixture({
+      ...demoReviewModel,
+      activeWorkspace: "settings",
+    });
+    const settingsReport = await axe.run(settings.root, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(settingsReport.violations).toEqual([]);
   });
 });

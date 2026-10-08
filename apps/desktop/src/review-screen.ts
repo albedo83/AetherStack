@@ -37,6 +37,7 @@ import {
   renderWorkflowOverview,
   workflowOverviewMarkup,
 } from "./workflow-overview.ts";
+import { mountUiPreferences, uiPreferencesMarkup } from "./ui-preferences.ts";
 
 export interface ReviewScreen {
   readonly update: (model: ReviewViewModel) => void;
@@ -188,6 +189,7 @@ export function mountReviewScreen(
     ),
     runWorkspace: required<HTMLElement>(root, "[data-run-workspace]"),
     resultsWorkspace: required<HTMLElement>(root, "[data-results-workspace]"),
+    settingsWorkspace: required<HTMLElement>(root, "[data-settings-workspace]"),
     registrationReference: required<HTMLSelectElement>(
       root,
       "[data-registration-reference]",
@@ -1065,6 +1067,7 @@ export function mountReviewScreen(
     elements.normalizationWorkspace,
     actions,
   );
+  const uiPreferences = mountUiPreferences(elements.settingsWorkspace);
 
   let model = initialModel;
   let pendingRejectFrameId: string | null = null;
@@ -1218,7 +1221,8 @@ export function mountReviewScreen(
         workspace === "registration" ||
         workspace === "normalization" ||
         workspace === "run" ||
-        workspace === "results"
+        workspace === "results" ||
+        workspace === "settings"
       ) {
         actions.onSelectWorkspace(workspace);
       }
@@ -1983,6 +1987,7 @@ export function mountReviewScreen(
       model.activeWorkspace !== "normalization";
     elements.runWorkspace.hidden = model.activeWorkspace !== "run";
     elements.resultsWorkspace.hidden = model.activeWorkspace !== "results";
+    elements.settingsWorkspace.hidden = model.activeWorkspace !== "settings";
     for (const item of elements.workspaceNavigation) {
       const selected = item.dataset.workspace === model.activeWorkspace;
       item.toggleAttribute("aria-current", selected);
@@ -2203,6 +2208,7 @@ export function mountReviewScreen(
 
   const destroy = (): void => {
     localNormalizationPanel.destroy();
+    uiPreferences.destroy();
     root.removeEventListener("click", onClick);
     root.removeEventListener("change", onChange);
     root.removeEventListener("input", onInput);
@@ -5782,7 +5788,7 @@ function shellMarkup(): string {
           ${navigationItem("run", "Run", "▷", true)}
           ${navigationItem("results", "Results", "◉", true)}
         </nav>
-        <button class="nav-item sidebar__settings" type="button" aria-label="Settings, not available in this build" title="Settings workspace is not connected yet" disabled>
+        <button class="nav-item sidebar__settings" type="button" data-action="select-workspace" data-workspace="settings">
           <span class="nav-item__icon" aria-hidden="true">⚙</span>
           <span>Settings</span>
         </button>
@@ -6622,6 +6628,7 @@ function shellMarkup(): string {
           </div>
         </section>
         ${workflowOverviewMarkup()}
+        ${uiPreferencesMarkup()}
       </main>
     </div>
 
