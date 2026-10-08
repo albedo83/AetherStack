@@ -117,7 +117,7 @@ const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
 const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
 const MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES: u64 = 128 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
-const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 3;
+const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 4;
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
 const QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID: &str = "quality-cache-maintenance-preview-v1";
@@ -661,7 +661,7 @@ struct RegisteredSourceDispositionResponse {
 }
 
 /// Exact low/high rejection counts added by large-scale spatial processing.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RegisteredSpatialPromotionResponse {
     low: u64,
@@ -746,6 +746,8 @@ struct RegisteredStackReport {
     dimensions: RegisteredStackReportDimensions,
     sources: Vec<RegisteredStackReportSource>,
     weights: Option<RegisteredStackReportWeights>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spatial_promotions: Option<RegisteredSpatialPromotionResponse>,
     products: Vec<RegisteredStackReportProduct>,
 }
 
@@ -4446,6 +4448,7 @@ where
         },
         sources: report_sources,
         weights: weight_report,
+        spatial_promotions,
         products,
     };
     let (report_sha256, report_bytes) = encode_registered_stack_report(report)?;
@@ -4690,13 +4693,27 @@ fn inspect_registered_stack_report_sync_with_products(
         serde_json::from_slice(&bytes).map_err(|_| registered_stack_report_validation_error())?;
     let geometry_schema_valid = matches!(
         (envelope.schema_version, envelope.report.geometry_model),
-        (1, None) | (2 | REGISTERED_STACK_REPORT_SCHEMA_VERSION, Some(_))
+        (1, None) | (2..=REGISTERED_STACK_REPORT_SCHEMA_VERSION, Some(_))
     );
     let spatial_schema_valid = envelope.schema_version >= 3
         || (!envelope.report.integration.large_scale_low_enabled
             && !envelope.report.integration.large_scale_high_enabled);
+    let uses_spatial_rejection = envelope.report.integration.large_scale_low_enabled
+        || envelope.report.integration.large_scale_high_enabled;
+    let promotion_schema_valid = if envelope.schema_version < 4 {
+        envelope.report.spatial_promotions.is_none()
+    } else {
+        match envelope.report.spatial_promotions {
+            Some(counts) if uses_spatial_rejection => {
+                counts.low.checked_add(counts.high) == Some(counts.total)
+            }
+            None if !uses_spatial_rejection => true,
+            _ => false,
+        }
+    };
     if !geometry_schema_valid
         || !spatial_schema_valid
+        || !promotion_schema_valid
         || !is_lower_sha256(&envelope.report_sha256)
         || envelope.report.algorithm_id != REGISTERED_STACK_REPORT_ALGORITHM_ID
         || !is_lower_sha256(&envelope.report.plan_sha256)
