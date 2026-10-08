@@ -12639,6 +12639,60 @@ mod tests {
         let schema_three_inspection =
             inspect_registered_stack_report_sync_with_products(&schema_three_path, false)?;
         assert_eq!(schema_three_inspection.schema_version, 3);
+        let mut schema_five_report: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        schema_five_report.integration.estimator = RegisteredStackEstimatorInput::GeneralizedEsd;
+        schema_five_report.integration.large_scale_high_enabled = true;
+        schema_five_report.spatial_promotions = Some(RegisteredSpatialPromotionResponse {
+            low: 0,
+            high: 9,
+            total: 9,
+        });
+        for (source, high) in schema_five_report.sources.iter_mut().zip([4, 5]) {
+            source.spatial_promotions = Some(RegisteredSpatialPromotionResponse {
+                low: 0,
+                high,
+                total: high,
+            });
+        }
+        let (_, schema_five_bytes) = encode_registered_stack_report(schema_five_report)?;
+        let schema_five_path = directory.path().join("schema-five-spatial-report.json");
+        fs::write(&schema_five_path, schema_five_bytes)?;
+        let schema_five_inspection =
+            inspect_registered_stack_report_sync_with_products(&schema_five_path, false)?;
+        assert_eq!(schema_five_inspection.schema_version, 5);
+
+        let mut mismatched_source_report: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        mismatched_source_report.integration.estimator =
+            RegisteredStackEstimatorInput::GeneralizedEsd;
+        mismatched_source_report
+            .integration
+            .large_scale_high_enabled = true;
+        mismatched_source_report.spatial_promotions = Some(RegisteredSpatialPromotionResponse {
+            low: 0,
+            high: 9,
+            total: 9,
+        });
+        for (source, high) in mismatched_source_report.sources.iter_mut().zip([4, 6]) {
+            source.spatial_promotions = Some(RegisteredSpatialPromotionResponse {
+                low: 0,
+                high,
+                total: high,
+            });
+        }
+        let (_, mismatched_source_bytes) =
+            encode_registered_stack_report(mismatched_source_report)?;
+        let mismatched_source_path = directory.path().join("mismatched-source-report.json");
+        fs::write(&mismatched_source_path, mismatched_source_bytes)?;
+        let mismatched_source_error =
+            inspect_registered_stack_report_sync_with_products(&mismatched_source_path, false)
+                .err()
+                .ok_or("mismatched source promotions unexpectedly validated")?;
+        assert_eq!(
+            mismatched_source_error.code,
+            "registered_stack_report_invalid"
+        );
         let mut legacy_report: RegisteredStackReport =
             serde_json::from_value(report["report"].clone())?;
         legacy_report.geometry_model = None;
