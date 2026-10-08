@@ -3527,7 +3527,10 @@ function renderRegistration(
       const evidence = document.createElement("span");
       evidence.textContent = `${rejected.toLocaleString("en-US")} rejected (${fraction.toFixed(4)}%) · ${source.rejectedLow.toLocaleString("en-US")} low · ${source.rejectedHigh.toLocaleString("en-US")} high · ${source.masked.toLocaleString("en-US")} masked · ${source.nonFinite.toLocaleString("en-US")} non-finite`;
       metrics.append(evidence);
-      if (source.spatialPromotions !== null) {
+      if (
+        source.spatialPromotions !== null &&
+        source.spatialPromotions.total > 0
+      ) {
         const promoted = document.createElement("span");
         promoted.className = "source-rejection-evidence__spatial";
         promoted.textContent = `Spatial +${source.spatialPromotions.total.toLocaleString("en-US")} · ${source.spatialPromotions.low.toLocaleString("en-US")} low · ${source.spatialPromotions.high.toLocaleString("en-US")} high`;

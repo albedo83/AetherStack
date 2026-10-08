@@ -1870,6 +1870,10 @@ describe("frame review workspace", () => {
     expect(rejectionRows[0]?.textContent).toContain(
       "15 rejected (15.0000%) · 3 low · 12 high · 1 masked · 1 non-finite",
     );
+    expect(rejectionRows[0]?.textContent).toContain(
+      "Spatial +12 · 2 low · 10 high",
+    );
+    expect(rejectionRows[1]?.textContent).not.toContain("Spatial +0");
     expect(root.textContent).toContain("d".repeat(64));
     fireEvent.click(getByRole(root, "button", { name: "Open prior report" }));
     expect(actions.onOpenRegisteredStackReport).toHaveBeenCalledOnce();
