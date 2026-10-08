@@ -535,6 +535,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-rejection-maps]",
     ),
+    registeredStackSupportMap: required<HTMLInputElement>(
+      root,
+      "[data-registered-stack-support-map]",
+    ),
     registeredStackEstimatorLabel: required<HTMLElement>(
       root,
       "[data-registered-stack-estimator-label]",
@@ -1648,6 +1652,7 @@ export function mountReviewScreen(
       target === elements.registeredStackLargeScaleHighGrowth ||
       target === elements.registeredStackMinimumRetained ||
       target === elements.registeredStackRejectionMaps ||
+      target === elements.registeredStackSupportMap ||
       target === elements.registeredStackWeightReference
     ) {
       if (
@@ -3137,6 +3142,7 @@ interface RegistrationElements {
   readonly registeredStackLargeScaleHighGrowth: HTMLInputElement;
   readonly registeredStackMinimumRetained: HTMLInputElement;
   readonly registeredStackRejectionMaps: HTMLInputElement;
+  readonly registeredStackSupportMap: HTMLInputElement;
   readonly registeredStackEstimatorLabel: HTMLElement;
   readonly registeredStackWeightPreflight: HTMLElement;
   readonly registeredStackWeightStatus: HTMLElement;
@@ -3755,6 +3761,7 @@ function renderRegistration(
     linearFitEstimator || generalizedEsdEstimator ? "3" : "1";
   elements.registeredStackRejectionMaps.checked =
     stackSettings.generateRejectionMaps;
+  elements.registeredStackSupportMap.checked = stackSettings.generateSupportMap;
   elements.registeredStackEstimator.disabled = stackBusy;
   elements.registeredStackLowFraction.disabled =
     stackBusy || !rejectionEstimator;
@@ -3787,6 +3794,7 @@ function renderRegistration(
   elements.registeredStackRejectionMaps.disabled =
     stackBusy ||
     (!rejectionEstimator && !residualEstimator && !generalizedEsdEstimator);
+  elements.registeredStackSupportMap.disabled = stackBusy;
   setControlFieldVisibility(
     elements.registeredStackLowFraction,
     rejectionEstimator,
@@ -4382,6 +4390,7 @@ function registeredStackSettings(
     | "registeredStackLargeScaleHighGrowth"
     | "registeredStackMinimumRetained"
     | "registeredStackRejectionMaps"
+    | "registeredStackSupportMap"
     | "registeredStackWeightReference"
   >,
 ): RegisteredStackIntegrationSettings | null {
@@ -4478,7 +4487,7 @@ function registeredStackSettings(
         estimator === "linear_fit_clipped" ||
         estimator === "generalized_esd") &&
       elements.registeredStackRejectionMaps.checked,
-    generateSupportMap: false,
+    generateSupportMap: elements.registeredStackSupportMap.checked,
     largeScaleLowEnabled:
       estimator === "generalized_esd" &&
       elements.registeredStackLargeScaleLowEnabled.checked,
@@ -6150,6 +6159,10 @@ function shellMarkup(): string {
                     <label class="registered-stack__map-toggle">
                       <input data-registered-stack-rejection-maps type="checkbox" />
                       <span><strong>Publish rejection evidence</strong><small>Create separate low-tail and high-tail FITS maps beside the science product.</small></span>
+                    </label>
+                    <label class="registered-stack__map-toggle registered-stack__map-toggle--support">
+                      <input data-registered-stack-support-map type="checkbox" />
+                      <span><strong>Publish accepted support</strong><small>Create an exact per-pixel FITS map of source samples retained by integration.</small></span>
                     </label>
                     <section class="weight-preflight" data-registered-stack-weight-preflight hidden aria-labelledby="weight-preflight-title">
                       <div class="weight-preflight__heading">
