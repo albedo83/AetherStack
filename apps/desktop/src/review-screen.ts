@@ -2154,7 +2154,9 @@ export function mountReviewScreen(
         : "Measuring…"
       : qualityCandidateCount > 0
         ? `Measure all · ${qualityCandidateCount}`
-        : "Quality complete";
+        : model.frames.length === 0
+          ? "No Lights"
+          : "Quality complete";
     elements.qualityBatchButton.setAttribute(
       "aria-label",
       model.qualityBatchRunning
@@ -2165,7 +2167,9 @@ export function mountReviewScreen(
           ? "Wait for the active diagnostic quality measurement"
           : qualityCandidateCount > 0
             ? `Measure diagnostic quality for ${qualityCandidateCount} eligible light frames`
-            : "All eligible light frames have diagnostic quality measurements",
+            : model.frames.length === 0
+              ? "Import Light frames to measure diagnostic quality"
+              : "All eligible light frames have diagnostic quality measurements",
     );
     elements.cfaBadge.textContent =
       calibratedLightView && frame?.previewContent.kind === "rgb"

@@ -50,7 +50,7 @@ import {
   selectLocalNormalizationSource,
   type LocalNormalizationProgress,
 } from "./local-normalization-bridge.ts";
-import { demoReviewModel } from "./demo-data.ts";
+import { createEmptyReviewModel } from "./demo-data.ts";
 import type {
   DrizzleProductView,
   DefectBatchReport,
@@ -156,7 +156,7 @@ const maximumCachedPreviewBytes = 32 * 1_024 * 1_024;
 // One frame in each direction warms Blink without saturating the FITS worker pool.
 const maximumAdjacentPrefetches = 2;
 
-let model = demoReviewModel;
+let model = createEmptyReviewModel();
 let importedSession: ImportedSession | null = null;
 let sessionImportPhase: "idle" | "running" | "cancelling" = "idle";
 
@@ -5435,24 +5435,10 @@ function selectRole(role: FrameRole): void {
   sortTicket += 1;
   statisticsTicket += 1;
   if (!importedSession) {
-    if (role === "light") {
-      update({
-        ...model,
-        activeRole: role,
-        lightFrameView: "raw",
-        frames: demoReviewModel.frames,
-        selectedFrameId: demoReviewModel.selectedFrameId,
-        preview: null,
-        qualityBatchRunning: false,
-        qualityBatchProgress: null,
-        frameSelection: resetFrameSelection(model.frameSelection.rules),
-        statisticsPanel: closedStatisticsPanel(),
-      });
-      return;
-    }
     update({
       ...model,
       activeRole: role,
+      lightFrameView: "raw",
       frames: [],
       selectedFrameId: null,
       playing: false,
