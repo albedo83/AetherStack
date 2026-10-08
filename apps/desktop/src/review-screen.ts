@@ -467,6 +467,34 @@ export function mountReviewScreen(
       root,
       '[data-action="open-registered-stack-report"]',
     ),
+    registeredStackModes: requiredAll<HTMLButtonElement>(
+      root,
+      '[data-action="select-registered-stack-mode"]',
+    ),
+    registeredStackAutomaticPlan: required<HTMLElement>(
+      root,
+      "[data-registered-stack-automatic-plan]",
+    ),
+    registeredStackAutomaticState: required<HTMLElement>(
+      root,
+      "[data-registered-stack-automatic-state]",
+    ),
+    registeredStackAutomaticTier: required<HTMLElement>(
+      root,
+      "[data-registered-stack-automatic-tier]",
+    ),
+    registeredStackAutomaticEstimator: required<HTMLElement>(
+      root,
+      "[data-registered-stack-automatic-estimator]",
+    ),
+    registeredStackAutomaticRationale: required<HTMLElement>(
+      root,
+      "[data-registered-stack-automatic-rationale]",
+    ),
+    registeredStackAutomaticSeal: required<HTMLElement>(
+      root,
+      "[data-registered-stack-automatic-seal]",
+    ),
     registeredStackEstimator: required<HTMLSelectElement>(
       root,
       "[data-registered-stack-estimator]",
@@ -3126,6 +3154,13 @@ interface RegistrationElements {
   readonly registeredStackSourceVerification: HTMLElement;
   readonly returnToActiveStack: HTMLButtonElement;
   readonly openRegisteredStackReport: HTMLButtonElement;
+  readonly registeredStackModes: readonly HTMLButtonElement[];
+  readonly registeredStackAutomaticPlan: HTMLElement;
+  readonly registeredStackAutomaticState: HTMLElement;
+  readonly registeredStackAutomaticTier: HTMLElement;
+  readonly registeredStackAutomaticEstimator: HTMLElement;
+  readonly registeredStackAutomaticRationale: HTMLElement;
+  readonly registeredStackAutomaticSeal: HTMLElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
   readonly registeredStackHighFraction: HTMLInputElement;
@@ -6054,6 +6089,26 @@ function shellMarkup(): string {
                   </div>
                   <p data-registered-stack-message>Register the reviewed Lights to unlock integration</p>
                   <button class="button button--quiet registered-stack__open-report" type="button" data-action="open-registered-stack-report">Open prior report</button>
+                  <div class="integration-mode" role="group" aria-label="Integration planning mode">
+                    <button type="button" data-action="select-registered-stack-mode" data-stack-mode="automatic" aria-pressed="false">
+                      <span>Automatic</span><small>Quality policy</small>
+                    </button>
+                    <button type="button" data-action="select-registered-stack-mode" data-stack-mode="manual" aria-pressed="true">
+                      <span>Manual</span><small>Explicit controls</small>
+                    </button>
+                  </div>
+                  <section class="automatic-plan" data-registered-stack-automatic-plan hidden aria-labelledby="automatic-plan-heading">
+                    <div class="automatic-plan__heading">
+                      <div><span class="status-light" aria-hidden="true"></span><strong id="automatic-plan-heading">Native quality plan</strong></div>
+                      <span data-registered-stack-automatic-state>Not requested</span>
+                    </div>
+                    <dl>
+                      <div><dt>Population</dt><dd data-registered-stack-automatic-tier>—</dd></div>
+                      <div><dt>Estimator</dt><dd data-registered-stack-automatic-estimator>—</dd></div>
+                    </dl>
+                    <p data-registered-stack-automatic-rationale>The sealed registration population determines the recommendation.</p>
+                    <code data-registered-stack-automatic-seal>Awaiting native seal</code>
+                  </section>
                   <details class="advanced-settings registered-stack__advanced">
                     <summary>Advanced integration</summary>
                     <div class="registered-stack__control-grid">
