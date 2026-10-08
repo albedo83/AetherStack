@@ -14,11 +14,17 @@ use aether_core::{CompensatedSum, CoreError, Dimensions, PixelFlags, ScientificI
 use statrs::distribution::{ContinuousCDF, StudentsT};
 
 mod attribution;
+mod automatic;
 mod large_scale;
 
 pub use attribution::{
     RejectionAttribution, RejectionAttributionError, RejectionPromotionCounts, SampleDisposition,
     SourceDispositionCounts,
+};
+pub use automatic::{
+    AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID, AutomaticEstimator, AutomaticIntegrationPlan,
+    AutomaticIntegrationPlanError, AutomaticPopulationTier, ESD_POPULATION_THRESHOLD,
+    WINSORIZED_POPULATION_THRESHOLD,
 };
 pub use large_scale::{
     LARGE_SCALE_REJECTION_ALGORITHM_ID, LargeScaleExpansionSummary, LargeScaleMemoryPlan,
