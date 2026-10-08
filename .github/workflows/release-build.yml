@@ -68,6 +68,10 @@ jobs:
         working-directory: apps/desktop
         run: npm run tauri:build
 
+      - name: Write portable SHA-256 manifest
+        working-directory: apps/desktop
+        run: node scripts/write-bundle-checksums.mjs ../../target/release/bundle
+
       - name: Upload unsigned bundles
         uses: actions/upload-artifact@v6
         with:
