@@ -208,6 +208,8 @@ export interface RegisteredStackIntegrationSettings {
 }
 
 export interface RegisteredStackExecutionSettings extends RegistrationExecutionSettings {
+  /** Native automatic-plan seal; null keeps the fully manual contract. */
+  readonly automaticPlanSha256?: string | null;
   readonly integration: RegisteredStackIntegrationSettings;
 }
 
@@ -574,6 +576,7 @@ export function executeRegisteredStack(
       outputPath,
       bandHeight: settings.bandHeight,
       memoryLimitBytes: settings.memoryLimitBytes,
+      automaticPlanSha256: settings.automaticPlanSha256 ?? null,
       integration,
     },
     onProgress: progress,

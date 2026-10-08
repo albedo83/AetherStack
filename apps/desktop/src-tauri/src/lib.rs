@@ -505,10 +505,12 @@ struct RegisteredStackCommandRequest {
     output_path: PathBuf,
     band_height: usize,
     memory_limit_bytes: u64,
+    #[serde(default)]
+    automatic_plan_sha256: Option<String>,
     integration: RegisteredStackIntegrationSettings,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RegisteredStackEstimatorInput {
     StrictMean,
@@ -4077,6 +4079,11 @@ where
     let report_path = registered_stack_report_path(&request.output_path)?;
     require_absent_registered_report(&report_path)?;
     let integration = request.integration;
+    validate_automatic_integration_execution(
+        request.automatic_plan_sha256.as_deref(),
+        request.artifacts.len(),
+        integration,
+    )?;
     let geometry_model = request.planning.geometry_model;
     if !matches!(
         integration.estimator,
@@ -4600,6 +4607,53 @@ where
         report_path,
         report_sha256,
     })
+}
+
+fn validate_automatic_integration_execution(
+    expected_sha256: Option<&str>,
+    source_count: usize,
+    settings: RegisteredStackIntegrationSettings,
+) -> Result<(), PreviewCommandError> {
+    let Some(expected_sha256) = expected_sha256 else {
+        return Ok(());
+    };
+    if !is_lower_sha256(expected_sha256) {
+        return Err(registered_stack_configuration_error());
+    }
+    let source_count =
+        u32::try_from(source_count).map_err(|_| registered_stack_configuration_error())?;
+    let plan = AutomaticIntegrationPlan::resolve(source_count)
+        .map_err(|_| registered_stack_configuration_error())?;
+    let estimator = match plan.estimator() {
+        AutomaticEstimator::StrictMean => RegisteredStackEstimatorInput::StrictMean,
+        AutomaticEstimator::Median => RegisteredStackEstimatorInput::Median,
+        AutomaticEstimator::WinsorizedSigmaClipped => {
+            RegisteredStackEstimatorInput::WinsorizedSigmaClipped
+        }
+        AutomaticEstimator::GeneralizedEsd => RegisteredStackEstimatorInput::GeneralizedEsd,
+    };
+    let exact_match = expected_sha256 == plan.plan_sha256()
+        && settings.estimator == estimator
+        && settings.low_fraction.to_bits() == 0.20_f64.to_bits()
+        && settings.high_fraction.to_bits() == 0.10_f64.to_bits()
+        && settings.low_sigma.to_bits() == plan.low_sigma().to_bits()
+        && settings.high_sigma.to_bits() == plan.high_sigma().to_bits()
+        && settings.esd_outlier_fraction.to_bits() == plan.esd_outlier_fraction().to_bits()
+        && settings.esd_significance.to_bits() == plan.esd_significance().to_bits()
+        && settings.maximum_iterations == plan.maximum_iterations()
+        && settings.minimum_retained_samples == plan.minimum_retained_samples()
+        && settings.generate_rejection_maps == plan.generate_rejection_maps()
+        && settings.generate_support_map == plan.generate_support_map()
+        && !settings.large_scale_low_enabled
+        && !settings.large_scale_high_enabled
+        && settings.large_scale_low_layers == default_large_scale_layers()
+        && settings.large_scale_high_layers == default_large_scale_layers()
+        && settings.large_scale_low_growth == default_large_scale_growth()
+        && settings.large_scale_high_growth == default_large_scale_growth();
+    if !exact_match {
+        return Err(registered_stack_configuration_error());
+    }
+    Ok(())
 }
 
 fn preview_registered_weights_sync(
@@ -12375,6 +12429,7 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 19,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::StrictMean,
                     low_fraction: 0.1,
@@ -12691,6 +12746,7 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::StrictMean,
                     low_fraction: 0.1,
@@ -13134,6 +13190,7 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::PercentileClipped,
                     low_fraction: 0.1,
@@ -13253,6 +13310,7 @@ mod tests {
                 output_path: sigma_path.clone(),
                 band_height: 17,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::SigmaClipped,
                     low_fraction: 0.1,
@@ -13415,6 +13473,7 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::WeightedMean,
                     low_fraction: 0.1,
@@ -13619,6 +13678,7 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::WeightedMean,
                     low_fraction: 0.1,
@@ -13690,6 +13750,7 @@ mod tests {
                 output_path: stack_path.clone(),
                 band_height: 32,
                 memory_limit_bytes: 16 * 1_024 * 1_024,
+                automatic_plan_sha256: None,
                 integration: RegisteredStackIntegrationSettings {
                     estimator: RegisteredStackEstimatorInput::StrictMean,
                     low_fraction: 0.1,

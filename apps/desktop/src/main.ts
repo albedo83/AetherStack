@@ -2906,6 +2906,10 @@ async function executeStack(): Promise<void> {
       {
         bandHeight: 128,
         memoryLimitBytes: model.calibration.lightSettings.memoryLimitBytes,
+        automaticPlanSha256:
+          stack.integrationMode === "automatic"
+            ? (stack.automaticPreview?.automaticPlanSha256 ?? null)
+            : null,
         integration: settings,
       },
       onProgress,
