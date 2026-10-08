@@ -381,4 +381,74 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn plan_seal_is_stable_lowercase_sha256() -> TestResult {
+        let plan = AutomaticIntegrationPlan::resolve(15)?;
+        let first = plan.plan_sha256();
+        let second = plan.plan_sha256();
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(first, first.to_ascii_lowercase());
+        Ok(())
+    }
+
+    #[test]
+    fn plan_seal_binds_every_execution_field() -> TestResult {
+        let baseline = AutomaticIntegrationPlan::resolve(15)?;
+        let baseline_sha256 = baseline.plan_sha256();
+        let variants = [
+            AutomaticIntegrationPlan {
+                source_count: 16,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                tier: AutomaticPopulationTier::Medium,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                estimator: AutomaticEstimator::Median,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                low_sigma: 4.1,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                high_sigma: 3.1,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                esd_outlier_fraction: 0.2,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                esd_significance: 0.01,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                maximum_iterations: 9,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                minimum_retained_samples: 4,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                generate_rejection_maps: false,
+                ..baseline
+            },
+            AutomaticIntegrationPlan {
+                generate_support_map: false,
+                ..baseline
+            },
+        ];
+
+        for variant in variants {
+            assert_ne!(variant.plan_sha256(), baseline_sha256);
+        }
+        Ok(())
+    }
 }
