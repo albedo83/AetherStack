@@ -3730,6 +3730,70 @@ mod tests {
     }
 
     #[test]
+    fn support_collision_rolls_back_science_and_preserves_user_data() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let plan = plan()?;
+        let sources = vec![
+            registered_source(&directory, &plan, id('b')?, 4.0)?,
+            registered_source(&directory, &plan, id('a')?, 2.0)?,
+        ];
+        let science_path = directory.0.join("science-with-support.fits");
+        let support_path = directory.0.join("accepted-support.fits");
+        let science = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "registered-stack",
+            REGISTERED_CROP_MEAN_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let support = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "accepted-support",
+            ACCEPTED_SUPPORT_MAP_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(plan.plan_sha256())?;
+        let request = RegisteredStackRequest::new_with_estimator(
+            plan,
+            sources,
+            science_path.clone(),
+            science,
+            RegisteredStackEstimator::StrictMean,
+        )?
+        .with_support_map(RegisteredSupportMapOutput::new(
+            support_path.clone(),
+            support,
+        ))?;
+        let blocker = b"pre-existing support data";
+        let collision_error = RefCell::new(None);
+
+        let error = run_registered_stack(
+            &request,
+            &CancellationToken::new(),
+            &MemoryBudget::new(4 * 1_024 * 1_024)?,
+            |event| {
+                if event.state() == ProgressState::Running
+                    && event
+                        .total_units()
+                        .is_some_and(|total| event.completed_units().checked_add(1) == Some(total))
+                {
+                    *collision_error.borrow_mut() = fs::write(&support_path, blocker).err();
+                }
+            },
+        )
+        .err()
+        .ok_or("a colliding support destination unexpectedly succeeded")?;
+
+        if let Some(error) = collision_error.into_inner() {
+            return Err(error.into());
+        }
+        assert!(matches!(error, RegisteredStackError::Publish(_)));
+        assert!(!science_path.exists());
+        assert_eq!(fs::read(&support_path)?, blocker);
+        Ok(())
+    }
+
+    #[test]
     fn strict_mean_rejects_rejection_map_configuration() -> TestResult {
         let directory = TestDirectory::new()?;
         let request = stack_request(&directory)?;
