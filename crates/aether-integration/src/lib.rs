@@ -761,6 +761,84 @@ pub struct PercentileRejectionMaps {
     high: ScientificImage,
 }
 
+/// Exact accepted-sample counts in original planar order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcceptedSupportMap {
+    image: ScientificImage,
+}
+
+impl AcceptedSupportMap {
+    /// Number of finite, clear samples retained at every output position.
+    #[must_use]
+    pub const fn image(&self) -> &ScientificImage {
+        &self.image
+    }
+
+    /// Consumes the exact count map.
+    #[must_use]
+    pub fn into_image(self) -> ScientificImage {
+        self.image
+    }
+}
+
+/// Materializes accepted counts for a non-rejecting integration.
+///
+/// # Errors
+///
+/// Returns an error when support and image dimensions disagree or allocation
+/// fails.
+pub fn materialize_support_map(
+    source_dimensions: Dimensions,
+    support: &[PixelSupport],
+) -> Result<AcceptedSupportMap, IntegrationError> {
+    materialize_accepted_counts(
+        source_dimensions,
+        support.iter().map(|entry| entry.accepted()),
+        support.len(),
+    )
+}
+
+/// Materializes accepted counts for a rejecting integration.
+///
+/// # Errors
+///
+/// Returns an error when support and image dimensions disagree or allocation
+/// fails.
+pub fn materialize_clipped_support_map(
+    source_dimensions: Dimensions,
+    support: &[ClippedPixelSupport],
+) -> Result<AcceptedSupportMap, IntegrationError> {
+    materialize_accepted_counts(
+        source_dimensions,
+        support.iter().map(|entry| entry.accepted()),
+        support.len(),
+    )
+}
+
+fn materialize_accepted_counts(
+    source_dimensions: Dimensions,
+    accepted: impl Iterator<Item = u32>,
+    actual_len: usize,
+) -> Result<AcceptedSupportMap, IntegrationError> {
+    if actual_len != source_dimensions.pixel_count() {
+        return Err(IntegrationError::SupportLengthMismatch {
+            expected: source_dimensions.pixel_count(),
+            actual: actual_len,
+        });
+    }
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(source_dimensions.pixel_count())
+        .map_err(|_| IntegrationError::SupportAllocationFailed {
+            elements: source_dimensions.pixel_count(),
+        })?;
+    pixels.extend(accepted.map(f64::from));
+    Ok(AcceptedSupportMap {
+        image: ScientificImage::from_pixels(source_dimensions, pixels)
+            .map_err(IntegrationError::Core)?,
+    })
+}
+
 impl PercentileRejectionMaps {
     /// Counts rejected from the low sorted tail.
     #[must_use]
