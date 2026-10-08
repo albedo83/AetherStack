@@ -12,6 +12,7 @@ import {
   executeRegistrationPlan,
   executeRegisteredStack,
   inspectRegisteredStackReport,
+  previewAutomaticIntegration,
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectRegistrationOutputDirectory,
@@ -437,6 +438,30 @@ describe("native registration bridge", () => {
         frameIds: ["1".repeat(64)],
         referenceFrameId: "1".repeat(64),
         qualityEvidence: evidence,
+      },
+    });
+  });
+
+  it("requests a sealed automatic integration recommendation", async () => {
+    const result = {
+      schemaVersion: 1,
+      registrationPlanSha256: "a".repeat(64),
+      automaticPlanSha256: "b".repeat(64),
+      algorithmId: "automatic-integration-plan-v1",
+      sourceCount: 15,
+      populationTier: "large",
+      rationale: "15 or more frames",
+      settings: { estimator: "generalized_esd" },
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+
+    await expect(previewAutomaticIntegration("a".repeat(64), 15)).resolves.toBe(
+      result,
+    );
+    expect(invoke).toHaveBeenLastCalledWith("preview_automatic_integration", {
+      request: {
+        expectedPlanSha256: "a".repeat(64),
+        sourceCount: 15,
       },
     });
   });
