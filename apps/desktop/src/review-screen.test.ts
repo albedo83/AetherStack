@@ -267,6 +267,29 @@ describe("frame review workspace", () => {
     ).toBeTruthy();
   });
 
+  it("presents an accessible native session drop target", () => {
+    const { root, controller } = fixture();
+    const overlay = root.querySelector<HTMLElement>(
+      "[data-session-drop-overlay]",
+    )!;
+
+    expect(overlay.hidden).toBe(true);
+    controller.setSessionDropState("ready", "Release to import this session");
+    expect(overlay.hidden).toBe(false);
+    expect(overlay.dataset.state).toBe("ready");
+    expect(overlay.textContent).toContain("Release to import this session");
+
+    controller.setSessionDropState(
+      "blocked",
+      "Drop exactly one directory at a time",
+    );
+    expect(overlay.dataset.state).toBe("blocked");
+    expect(overlay.textContent).toContain("exactly one directory");
+
+    controller.setSessionDropState("hidden");
+    expect(overlay.hidden).toBe(true);
+  });
+
   it("reveals only a path returned by a completed native transaction", async () => {
     const outputPath = "/products/master-dark.fits";
     const { root, actions } = fixture({

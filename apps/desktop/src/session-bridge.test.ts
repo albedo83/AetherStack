@@ -7,6 +7,7 @@ import {
   cancelSessionImport,
   importedSessionDiagnostics,
   importedSessionStatus,
+  importSessionPath,
   previewQualityCacheMaintenance,
   exportSessionDiagnostics,
   selectAndInspectSessionDiagnostics,
@@ -67,6 +68,21 @@ describe("native session bridge", () => {
       onProgress?: Channel<unknown>;
     };
     expect(invocation.onProgress?.onmessage).toBe(onProgress);
+  });
+
+  it("passes one native dropped path through the same bounded scanner", async () => {
+    const imported = importedSessionFixture();
+    vi.mocked(invoke).mockResolvedValue(imported);
+    const onProgress = vi.fn();
+
+    await expect(
+      importSessionPath("/dropped/session", onProgress),
+    ).resolves.toBe(imported);
+    expect(open).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("import_session_directory", {
+      path: "/dropped/session",
+      onProgress: expect.any(Channel),
+    });
   });
 
   it("cancels only through the path-free native import slot", async () => {

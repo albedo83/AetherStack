@@ -7093,6 +7093,68 @@ tr[data-state="blocked"] .association-state {
   font-size: 32px;
 }
 
+.session-drop-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 18px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  color: #dffcf6;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 42%, #174d4b 0, #0a171de8 42%, #05090ef5 76%),
+    #080d12;
+  border: 2px solid #68d6c4;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px #d9fff34d,
+    inset 0 0 70px #41bea629,
+    0 26px 80px #000c;
+  pointer-events: none;
+}
+
+.session-drop-overlay[hidden] {
+  display: none;
+}
+
+.session-drop-overlay[data-state="blocked"] {
+  color: #ffe7df;
+  border-color: #ff8c66;
+  background: radial-gradient(
+    circle at 50% 42%,
+    #532d27 0,
+    #170e0de8 48%,
+    #05090ef5 78%
+  );
+}
+
+.session-drop-overlay__instrument {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  color: #a9fff0;
+  font-size: 34px;
+  background: linear-gradient(145deg, #1c4c4a, #0a2024);
+  border: 1px solid #68d6c4;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 2px #ddfff44d,
+    0 0 28px #44d1bb55;
+}
+
+.session-drop-overlay strong {
+  font-size: clamp(19px, 3vw, 30px);
+}
+
+.session-drop-overlay span {
+  color: #91aaa8;
+  font-size: 12px;
+}
+
 .settings-workspace {
   display: grid;
   align-content: start;

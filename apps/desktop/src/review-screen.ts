@@ -41,6 +41,10 @@ import { mountUiPreferences, uiPreferencesMarkup } from "./ui-preferences.ts";
 
 export interface ReviewScreen {
   readonly update: (model: ReviewViewModel) => void;
+  readonly setSessionDropState: (
+    state: "hidden" | "ready" | "blocked",
+    message?: string,
+  ) => void;
   readonly destroy: () => void;
 }
 
@@ -2266,7 +2270,18 @@ export function mountReviewScreen(
   root.addEventListener("keydown", onKeyDown);
   update(initialModel);
 
-  return { update, destroy };
+  const setSessionDropState: ReviewScreen["setSessionDropState"] = (
+    state,
+    message,
+  ) => {
+    const overlay = required<HTMLElement>(root, "[data-session-drop-overlay]");
+    overlay.hidden = state === "hidden";
+    overlay.dataset.state = state;
+    required<HTMLElement>(overlay, "[data-session-drop-message]").textContent =
+      message ?? "Drop one session directory";
+  };
+
+  return { update, setSessionDropState, destroy };
 }
 
 function isReviewRejectionReason(
@@ -6707,6 +6722,12 @@ function shellMarkup(): string {
         ${workflowOverviewMarkup()}
         ${uiPreferencesMarkup()}
       </main>
+    </div>
+
+    <div class="session-drop-overlay" data-session-drop-overlay data-state="ready" role="status" aria-live="polite" aria-atomic="true" hidden>
+      <div class="session-drop-overlay__instrument" aria-hidden="true">↓</div>
+      <strong data-session-drop-message>Drop one session directory</strong>
+      <span>FITS sources stay read-only · native validation starts after drop</span>
     </div>
 
     <div class="dialog-backdrop" role="presentation" data-diagnostics-dialog hidden>

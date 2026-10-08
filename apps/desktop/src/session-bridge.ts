@@ -215,6 +215,14 @@ export async function selectAndImportSession(
     title: "Import an astrophotography session",
   });
   if (typeof path !== "string") return null;
+  return importSessionPath(path, onProgress);
+}
+
+/** Imports one exact native path selected by a trusted desktop interaction. */
+export async function importSessionPath(
+  path: string,
+  onProgress: (progress: SessionImportProgress) => void = () => {},
+): Promise<ImportedSession> {
   const progress = new Channel<SessionImportProgress>();
   progress.onmessage = onProgress;
   return invoke<ImportedSession>("import_session_directory", {

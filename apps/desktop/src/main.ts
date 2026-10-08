@@ -1,5 +1,7 @@
 import "./styles.css";
 
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import {
@@ -134,11 +136,13 @@ import {
   exportSessionDiagnostics,
   importedSessionDiagnostics,
   importedSessionStatus,
+  importSessionPath,
   previewQualityCacheMaintenance,
   selectAndInspectSessionDiagnostics,
   selectAndImportSession,
   type ImportedFrame,
   type ImportedSession,
+  type SessionImportProgress,
 } from "./session-bridge.ts";
 import { inspectFitsStatistics } from "./statistics-bridge.ts";
 
@@ -230,6 +234,7 @@ let localNormalizationSharedTransform: EstimatedDisplayTransform | null = null;
 let defectPreviewResource: PreviewResource | null = null;
 let defectSharedTransform: EstimatedDisplayTransform | null = null;
 let defectPreviewTicket = 0;
+let stopSessionDropListener: (() => void) | null = null;
 
 const screen = mountReviewScreen(root, model, {
   onSelectWorkspace(workspace) {
@@ -650,6 +655,57 @@ const screen = mountReviewScreen(root, model, {
   },
 });
 
+if (isTauri()) {
+  void getCurrentWindow()
+    .onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "leave") {
+        screen.setSessionDropState("hidden");
+        return;
+      }
+      if (payload.type === "over") return;
+      const blocked =
+        sessionImportPhase !== "idle" || processingBlocksSessionImport();
+      if (payload.type === "enter") {
+        screen.setSessionDropState(
+          blocked || payload.paths.length !== 1 ? "blocked" : "ready",
+          blocked
+            ? "Finish or cancel the active native operation first"
+            : payload.paths.length === 1
+              ? "Release to import this session directory"
+              : "Drop exactly one session directory at a time",
+        );
+        return;
+      }
+      screen.setSessionDropState("hidden");
+      if (blocked) return;
+      if (payload.paths.length !== 1) {
+        update({
+          ...model,
+          sessionStatus: {
+            tone: "warning",
+            label: "Drop exactly one session directory",
+          },
+        });
+        return;
+      }
+      const [path] = payload.paths;
+      if (path) void importDroppedSession(path);
+    })
+    .then((unlisten) => {
+      stopSessionDropListener = unlisten;
+    })
+    .catch(() => {
+      update({
+        ...model,
+        sessionStatus: {
+          tone: "warning",
+          label: "Drag-and-drop unavailable · use Import session",
+        },
+      });
+    });
+}
+
 window.addEventListener("beforeunload", disposeRuntimeResources, {
   once: true,
 });
@@ -684,16 +740,35 @@ async function importSession(): Promise<void> {
     return;
   }
   if (sessionImportPhase === "cancelling") return;
-  if (
+  if (processingBlocksSessionImport()) return;
+  await runSessionImport(selectAndImportSession);
+}
+
+async function importDroppedSession(path: string): Promise<void> {
+  if (sessionImportPhase !== "idle" || processingBlocksSessionImport()) return;
+  await runSessionImport(
+    (onProgress) => importSessionPath(path, onProgress),
+    "Dropped path is not a readable session directory",
+  );
+}
+
+function processingBlocksSessionImport(): boolean {
+  return (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling" ||
     isActiveExecutionState(model.calibration.defectCorrection.state) ||
     isActiveExecutionState(model.calibration.lightExecution.state) ||
     isRegistrationWorkActive() ||
     isLocalNormalizationActive()
-  ) {
-    return;
-  }
+  );
+}
+
+async function runSessionImport(
+  loader: (
+    onProgress: (progress: SessionImportProgress) => void,
+  ) => Promise<ImportedSession | null>,
+  failureLabel = "Import failed · open Diagnostics",
+): Promise<void> {
   const previousStatus = model.sessionStatus;
   sessionImportPhase = "running";
   update({
@@ -706,7 +781,7 @@ async function importSession(): Promise<void> {
     },
   });
   try {
-    const imported = await selectAndImportSession((progress) => {
+    const imported = await loader((progress) => {
       if (sessionImportPhase !== "running") return;
       const label =
         progress.stage === "discovering"
@@ -747,7 +822,7 @@ async function importSession(): Promise<void> {
             ...model,
             sessionStatus: {
               tone: "error",
-              label: "Import failed · open Diagnostics",
+              label: failureLabel,
             },
             sessionImportProgress: null,
           },
@@ -5871,6 +5946,8 @@ function disposeRuntimeResources(): void {
   defectCorrectionTicket += 1;
   linearDefectCorrectionTicket += 1;
   defectBatchResume = null;
+  stopSessionDropListener?.();
+  stopSessionDropListener = null;
   if (
     model.calibration.execution.state === "running" ||
     model.calibration.execution.state === "cancelling"
