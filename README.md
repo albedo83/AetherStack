@@ -194,7 +194,11 @@ optimized CPU and GPU paths must match.
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
   expert UI while strict mean remains the default, with linked native previews
-  for science, low-tail, and high-tail products, plus fail-closed balanced-PSF
+  for science, low-tail, and high-tail products, plus an estimator-independent
+  `accepted-support-map-v1` FITS companion containing the exact retained-source
+  count at every planar output position; it participates in bounded memory
+  planning, atomic rollback, checksum readback, schema-6 report sealing, native
+  report verification, and the internal Support preview, plus fail-closed balanced-PSF
   weighted integration whose calibrated-Light SNR, FWHM, and eccentricity
   evidence is previewed in the UI, recomputed in Rust before execution,
   identity-bound, displayed with its canonical digest, and sealed unchanged

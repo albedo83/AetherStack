@@ -317,6 +317,24 @@ low-tail counts and the other exact high-tail counts. The source counts are
 masked and non-finite exclusions remain different support categories and are
 not statistical rejections.
 
+## Accepted support map
+
+`materialize_support_map` converts `PixelSupport.accepted` into a binary64 image
+with the integrated product's exact dimensions, plane count, and planar order.
+`materialize_clipped_support_map` performs the same conversion for every robust
+estimator backed by `ClippedPixelSupport`. Counts originate as `u32`, so every
+published binary64 value is exact. The map mask is always clear: zero is valid
+evidence that no source contributed at that position, not a missing map sample.
+
+The registered runtime exposes this optional companion for every estimator
+under the stable `accepted-support-map-v1` identity. Its band image and FITS
+writer buffer are included in the checked memory reservation. The destination
+must be distinct from science and rejection products, the plan and manifest
+digests must match, and private checksum readback completes before any public
+path is created. A late collision rolls back all products created by the run
+without modifying pre-existing bytes. Tests require exact counts and
+byte-identical FITS output across valid band heights.
+
 ## Registered stack execution
 
 `run_registered_stack` is the bounded FITS-to-FITS orchestration for a sealed
@@ -354,17 +372,18 @@ with sources and used independently in every bounded band. A caller cannot
 select this estimator through the generic constructor and accidentally omit
 its weight set.
 
-Science and both companion files are completely written and checksum-verified
+Science and every requested companion file are completely written and checksum-verified
 while private. Their destinations must be distinct, their source counts and
 plan digests must agree, and publication never overwrites an existing file.
-The executor then publishes the three files as a rollback-safe set. If a later
+The executor then publishes the complete set as one rollback-safe transaction. If a later
 destination collides or publication fails, every earlier file created by that
 run is removed; pre-existing files are never modified. A rollback failure is a
 separate typed error so an operator can identify the incomplete set.
 
 The desktop keeps strict mean as the visible default. Its collapsed advanced
-section can select the percentile estimator, configure both tail fractions and
-the retained-sample floor, and request both rejection maps. JavaScript only
+section can select an estimator, configure its relevant controls, request both
+rejection maps where supported, and independently request the accepted support
+map for any estimator. JavaScript only
 transports these values. Rust validates them again, derives adjacent create-new
 map destinations from the chosen science path, binds all provenance, and owns
 the complete transaction.
@@ -379,9 +398,16 @@ reads or integrates scientific pixels.
 After publication, the desktop may request a bounded display preview of the
 integrated product. Rust estimates the display transform and renders RGB or a
 selected scalar plane; the browser retains only a revocable PNG object URL.
-When rejection maps exist, the same viewer exposes explicit Science, Low
-reject, and High reject tabs. Each selection requests its own scalar preview
+When diagnostic maps exist, the same viewer exposes explicit Science, Low
+reject, High reject, and Support tabs. Each selection requests its own scalar preview
 from Rust, revokes the previous object URL, and rejects stale asynchronous
 responses by plan, science output, and selected product identity.
 This display path cannot mutate, replace, or validate the scientific FITS, and
 a preview failure does not invalidate a successfully published stack.
+
+Integration report schema 6 binds the optional `support` product to the
+`generateSupportMap` setting. Earlier schemas remain readable but cannot claim
+the new role. A schema-6 setting/product mismatch is rejected, and inspection
+checks dimensions, sample count, source count, plan/manifest provenance,
+algorithm identity, FITS checksums, and sealed byte length before marking the
+support product verified.
