@@ -12542,6 +12542,26 @@ mod tests {
             .err()
             .ok_or("incoherent promotion report unexpectedly validated")?;
         assert_eq!(invalid_error.code, "registered_stack_report_invalid");
+        let mut schema_three_report: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        schema_three_report.integration.estimator = RegisteredStackEstimatorInput::GeneralizedEsd;
+        schema_three_report.integration.large_scale_high_enabled = true;
+        schema_three_report.spatial_promotions = None;
+        let schema_three_digest =
+            lowercase_hex(&Sha256::digest(serde_json::to_vec(&schema_three_report)?));
+        let schema_three_envelope = RegisteredStackReportEnvelope {
+            schema_version: 3,
+            report_sha256: schema_three_digest,
+            report: schema_three_report,
+        };
+        let schema_three_path = directory.path().join("schema-three-spatial-report.json");
+        fs::write(
+            &schema_three_path,
+            serde_json::to_vec_pretty(&schema_three_envelope)?,
+        )?;
+        let schema_three_inspection =
+            inspect_registered_stack_report_sync_with_products(&schema_three_path, false)?;
+        assert_eq!(schema_three_inspection.schema_version, 3);
         let mut legacy_report: RegisteredStackReport =
             serde_json::from_value(report["report"].clone())?;
         legacy_report.geometry_model = None;
