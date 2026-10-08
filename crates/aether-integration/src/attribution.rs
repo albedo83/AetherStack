@@ -235,6 +235,9 @@ impl RejectionPromotionCounts {
         let Some(high) = self.high.checked_add(other.high) else {
             return None;
         };
+        if low.checked_add(high).is_none() {
+            return None;
+        }
         Some(Self { low, high })
     }
 
@@ -654,5 +657,21 @@ mod tests {
             Err(RejectionAttributionError::UnexpectedDispositionTransition { .. })
         ));
         Ok(())
+    }
+
+    #[test]
+    fn promotion_aggregation_rejects_counter_and_combined_total_overflow() {
+        let maximum_low = RejectionPromotionCounts {
+            low: u64::MAX,
+            high: 0,
+        };
+        let maximum_high = RejectionPromotionCounts {
+            low: 0,
+            high: u64::MAX,
+        };
+        let one_low = RejectionPromotionCounts { low: 1, high: 0 };
+
+        assert_eq!(maximum_low.checked_add(one_low), None);
+        assert_eq!(maximum_low.checked_add(maximum_high), None);
     }
 }
