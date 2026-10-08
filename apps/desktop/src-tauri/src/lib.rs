@@ -12905,6 +12905,26 @@ mod tests {
         assert_eq!(value["rejectedLow"], 3);
         assert_eq!(value["rejectedHigh"], 4);
         assert_eq!(value["total"], 20);
+        assert!(value["spatialPromotions"].is_null());
+
+        let spatial = serde_json::to_value(RegisteredSourceDispositionResponse {
+            frame_id: "b".repeat(64),
+            accepted: 80,
+            masked: 0,
+            non_finite: 0,
+            rejected_low: 5,
+            rejected_high: 15,
+            total: 100,
+            spatial_promotions: Some(RegisteredSpatialPromotionResponse {
+                low: 2,
+                high: 7,
+                total: 9,
+            }),
+        })?;
+        assert_eq!(
+            spatial["spatialPromotions"],
+            serde_json::json!({ "low": 2, "high": 7, "total": 9 })
+        );
         Ok(())
     }
 
