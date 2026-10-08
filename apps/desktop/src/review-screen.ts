@@ -495,6 +495,10 @@ export function mountReviewScreen(
       root,
       "[data-registered-stack-automatic-seal]",
     ),
+    registeredStackAdvanced: required<HTMLDetailsElement>(
+      root,
+      ".registered-stack__advanced",
+    ),
     registeredStackEstimator: required<HTMLSelectElement>(
       root,
       "[data-registered-stack-estimator]",
@@ -1293,6 +1297,13 @@ export function mountReviewScreen(
     }
     if (action === "execute-registered-stack") {
       actions.onExecuteRegisteredStack();
+      return;
+    }
+    if (action === "select-registered-stack-mode") {
+      const mode = actionElement.dataset.stackMode;
+      if (mode === "manual" || mode === "automatic") {
+        actions.onSetRegisteredStackMode(mode);
+      }
       return;
     }
     if (action === "cancel-registered-stack") {
@@ -3161,6 +3172,7 @@ interface RegistrationElements {
   readonly registeredStackAutomaticEstimator: HTMLElement;
   readonly registeredStackAutomaticRationale: HTMLElement;
   readonly registeredStackAutomaticSeal: HTMLElement;
+  readonly registeredStackAdvanced: HTMLDetailsElement;
   readonly registeredStackEstimator: HTMLSelectElement;
   readonly registeredStackLowFraction: HTMLInputElement;
   readonly registeredStackHighFraction: HTMLInputElement;
@@ -3491,6 +3503,42 @@ function renderRegistration(
     registration.execution.state === "completed" &&
     registration.execution.result?.planSha256 === registration.plan?.planSha256;
   const stackSettings = registration.stack.settings;
+  const automaticMode = registration.stack.integrationMode === "automatic";
+  const automaticPreview = registration.stack.automaticPreview;
+  const automaticReady =
+    automaticMode &&
+    registration.stack.automaticPreviewState === "ready" &&
+    automaticPreview?.registrationPlanSha256 === registration.plan?.planSha256;
+  for (const button of elements.registeredStackModes) {
+    const selected =
+      button.dataset.stackMode === registration.stack.integrationMode;
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = stackBusy;
+  }
+  elements.registeredStackAutomaticPlan.hidden = !automaticMode;
+  elements.registeredStackAutomaticPlan.dataset.state =
+    registration.stack.automaticPreviewState;
+  elements.registeredStackAutomaticState.textContent =
+    registration.stack.automaticPreviewState === "loading"
+      ? "Resolving…"
+      : automaticReady
+        ? "Sealed"
+        : registration.stack.automaticPreviewState === "error"
+          ? "Unavailable"
+          : "Not requested";
+  elements.registeredStackAutomaticTier.textContent = automaticPreview
+    ? `${humanize(automaticPreview.populationTier)} · ${automaticPreview.sourceCount.toLocaleString("en-US")} frames`
+    : "—";
+  elements.registeredStackAutomaticEstimator.textContent = automaticPreview
+    ? humanize(automaticPreview.settings.estimator)
+    : "—";
+  elements.registeredStackAutomaticRationale.textContent =
+    automaticPreview?.rationale ??
+    "The sealed registration population determines the recommendation.";
+  elements.registeredStackAutomaticSeal.textContent = automaticPreview
+    ? `sha256 ${automaticPreview.automaticPlanSha256}`
+    : "Awaiting native seal";
+  elements.registeredStackAdvanced.hidden = automaticMode;
   const weightPreflight = buildQualityWeightPreflight(
     registration.plan,
     model.activeRole === "light" && model.lightFrameView === "calibrated"
@@ -3502,6 +3550,7 @@ function renderRegistration(
   elements.executeRegisteredStack.disabled =
     !registeredSetReady ||
     stackBusy ||
+    (automaticMode && !automaticReady) ||
     (weightedEstimator && !weightPreflight.ready);
   elements.executeRegisteredStack.hidden = stackBusy;
   elements.cancelRegisteredStack.hidden = !stackBusy;
