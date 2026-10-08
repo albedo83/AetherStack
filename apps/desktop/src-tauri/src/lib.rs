@@ -12292,6 +12292,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
+                    generate_support_map: false,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
@@ -12607,6 +12608,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
+                    generate_support_map: false,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
@@ -12985,6 +12987,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
+                    generate_support_map: true,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
@@ -12999,6 +13002,7 @@ mod tests {
 
         let low_path = directory.path().join("advanced-stack-rejection-low.fits");
         let high_path = directory.path().join("advanced-stack-rejection-high.fits");
+        let support_path = directory.path().join("advanced-stack-support.fits");
         assert_eq!(
             result.estimator,
             REGISTERED_PERCENTILE_CLIPPED_MEAN_ALGORITHM_ID
@@ -13012,10 +13016,31 @@ mod tests {
             result.rejection_map_samples_written,
             Some(result.samples_written)
         );
+        assert_eq!(result.support_map_path.as_deref(), support_path.to_str());
+        assert_eq!(
+            result.support_map_samples_written,
+            Some(result.samples_written)
+        );
         assert!(result.source_dispositions.is_empty());
         assert!(stack_path.is_file());
         assert!(low_path.is_file());
         assert!(high_path.is_file());
+        let mut support_reader =
+            PrimaryImageReader::open(File::open(&support_path)?, HeaderReadOptions::default())?;
+        assert!(support_reader.verify_checksums()?.is_fully_verified());
+        let support = support_reader.read_region_image(ImageRegion::new(
+            0,
+            0,
+            0,
+            u64::try_from(result.width)?,
+            u64::try_from(result.height)?,
+        ))?;
+        assert!(
+            support
+                .pixels()
+                .iter()
+                .all(|value| value.to_bits() == 2.0_f64.to_bits())
+        );
 
         let sigma_path = directory.path().join("sigma-stack.fits");
         let sigma = execute_registered_stack_sync(
@@ -13047,6 +13072,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: true,
+                    generate_support_map: false,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
@@ -13208,6 +13234,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
+                    generate_support_map: false,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
@@ -13359,6 +13386,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 2,
                     generate_rejection_maps: false,
+                    generate_support_map: false,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
@@ -13429,6 +13457,7 @@ mod tests {
                     maximum_iterations: 8,
                     minimum_retained_samples: 3,
                     generate_rejection_maps: false,
+                    generate_support_map: false,
                     large_scale_low_enabled: false,
                     large_scale_high_enabled: false,
                     large_scale_low_layers: 2,
