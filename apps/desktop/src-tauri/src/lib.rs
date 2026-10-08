@@ -642,6 +642,7 @@ struct RegisteredStackResponse {
     high_rejection_map_path: Option<String>,
     rejection_map_samples_written: Option<u64>,
     source_dispositions: Vec<RegisteredSourceDispositionResponse>,
+    spatial_promotions: Option<RegisteredSpatialPromotionResponse>,
     report_path: String,
     report_sha256: String,
 }
@@ -656,6 +657,15 @@ struct RegisteredSourceDispositionResponse {
     non_finite: u64,
     rejected_low: u64,
     rejected_high: u64,
+    total: u64,
+}
+
+/// Exact low/high rejection counts added by large-scale spatial processing.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredSpatialPromotionResponse {
+    low: u64,
+    high: u64,
     total: u64,
 }
 
@@ -4385,6 +4395,14 @@ where
             }
         })
         .collect();
+    let spatial_promotions =
+        result
+            .spatial_promotions()
+            .map(|counts| RegisteredSpatialPromotionResponse {
+                low: counts.low(),
+                high: counts.high(),
+                total: counts.total(),
+            });
     let low_rejection_map_path = rejection_paths
         .as_ref()
         .map(|(path, _)| unicode_registered_output_path(path))
@@ -4465,6 +4483,7 @@ where
             value.low().samples_written()
         }),
         source_dispositions,
+        spatial_promotions,
         report_path,
         report_sha256,
     })
