@@ -187,9 +187,10 @@ optimized CPU and GPU paths must match.
   source-value reintegration, bounded memory planning, and sealed parameters
   executed through exact halo-aware registered bands with distinct FITS/report
   provenance and advanced low/high desktop controls; accepted-to-tail spatial
-  promotions are counted exactly over non-overlapping band cores, sealed in
-  report schema 4, and presented separately from complete per-source rejection
-  totals in an accessible instrument-style diagnostic, plus
+  promotions are counted exactly over non-overlapping band cores, sealed as
+  aggregate evidence in report schema 4 and as reconciled per-source evidence
+  in schema 5, and presented separately from complete rejection totals in
+  accessible live and archived instrument-style diagnostics, plus
   optional checksum-verified low/high FITS maps published with the science
   product as one rollback-safe, create-new set, exposed through a collapsed
   expert UI while strict mean remains the default, with linked native previews
