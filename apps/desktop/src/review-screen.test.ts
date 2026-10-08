@@ -1887,12 +1887,12 @@ describe("frame review workspace", () => {
           ...ready.registration.stack,
           reportInspectionState: "ready",
           reportInspection: {
-            schemaVersion: 2,
+            schemaVersion: 5,
             reportSha256: "d".repeat(64),
             planSha256,
             geometryModel: "affine",
             manifestSha256: "e".repeat(64),
-            estimator: "strict_mean",
+            estimator: "generalized_esd",
             width: 4_128,
             height: 2_810,
             planes: 3,
@@ -1906,7 +1906,7 @@ describe("frame review workspace", () => {
                 fileName: "registered-a.fits",
                 byteLength: 278_992_800,
                 sha256: "9".repeat(64),
-                spatialPromotions: null,
+                spatialPromotions: { low: 2, high: 10, total: 12 },
               },
             ],
             products: [
@@ -1923,13 +1923,22 @@ describe("frame review workspace", () => {
       },
     });
     expect(root.textContent).toContain(
-      "2 sources · 3 products · strict mean · affine geometry · schema 2",
+      "2 sources · 3 products · generalized ESD · affine geometry · schema 5",
     );
     expect(root.textContent).toContain("all FITS verified");
     expect(root.textContent).toContain("Science · integrated.fits");
     expect(root.textContent).toContain("266.1 MiB · FITS verified");
     expect(root.textContent).toContain("registered-a.fits · 266.1 MiB");
     expect(root.textContent).toContain("sha256 999999999999…");
+    const archivedPromotionEvidence = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        ".integration-report__source-promotions",
+      ),
+    ).find((element) => element.textContent?.includes("Spatial +12"));
+    expect(archivedPromotionEvidence).toBeDefined();
+    expect(archivedPromotionEvidence?.title).toBe(
+      "2 low-tail and 10 high-tail promotions",
+    );
     expect(getByRole(root, "button", { name: "Verify again" })).not.toBeNull();
     fireEvent.click(
       getByRole(root, "button", { name: "Next registered frame" }),
