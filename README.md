@@ -1,5 +1,9 @@
 # AetherStack
 
+[![CI](https://github.com/albedo83/AetherStack/actions/workflows/ci.yml/badge.svg)](https://github.com/albedo83/AetherStack/actions/workflows/ci.yml)
+[![Release build](https://github.com/albedo83/AetherStack/actions/workflows/release-build.yml/badge.svg)](https://github.com/albedo83/AetherStack/actions/workflows/release-build.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-6fc4b5.svg)](LICENSE)
+
 AetherStack is a Rust engine for calibrating, registering, and stacking
 astrophotography data. Its design prioritizes numerical accuracy, reproducible
 results, explainable decisions, and bounded-memory processing of large FITS and
@@ -8,6 +12,42 @@ SER sessions.
 The project is under active development. The current milestone establishes a
 strict CPU reference implementation and the scientific contracts that future
 optimized CPU and GPU paths must match.
+
+## Desktop application
+
+The `0.1` desktop scope is a native Tauri application for FITS session import,
+frame review and Blink, calibration, defect correction, registration, local
+normalization, robust integration, Drizzle, diagnostics, and published-product
+review. The application starts empty: it never substitutes demonstration data
+for acquisition evidence.
+
+Use **Import session** and select a structured session directory containing any
+combination of `lights`, `darks`, `flats`, and `bias` directories. Short darks
+remain Darks; the native calibration planner decides whether a matched short
+Dark or a true Bias calibrates each Flat and exposes that decision before
+execution. Source files are read-only throughout processing.
+
+The **Run** workspace reports readiness from native evidence and links to the
+stage that needs attention. The **Results** workspace lists only products
+returned by completed atomic transactions and can reveal each product in
+Finder, Explorer, or the platform file manager.
+
+Unsigned development installers for macOS, Linux, and Windows are produced by
+the [Release build workflow](https://github.com/albedo83/AetherStack/actions/workflows/release-build.yml).
+Every workflow artifact contains a `SHA256SUMS.txt` manifest with portable
+relative paths. Code signing and notarization are intentionally not claimed by
+these development builds.
+
+Build a native installer locally:
+
+```shell
+cd apps/desktop
+npm ci
+npm run tauri:build
+```
+
+Generated bundles are written below `target/release/bundle`. On macOS,
+`hdiutil` must be allowed to create the temporary disk image used for the DMG.
 
 ## Current capabilities
 
