@@ -12839,6 +12839,21 @@ mod tests {
     }
 
     #[test]
+    fn serializes_exact_spatial_promotion_contract() -> TestResult {
+        let value = serde_json::to_value(RegisteredSpatialPromotionResponse {
+            low: 7,
+            high: 11,
+            total: 18,
+        })?;
+
+        assert_eq!(
+            value,
+            serde_json::json!({ "low": 7, "high": 11, "total": 18 })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn integrates_with_native_identity_bound_quality_weights() -> TestResult {
         let directory = TestDirectory::new()?;
         let session_root = directory.path().join("session");
