@@ -12480,6 +12480,7 @@ mod tests {
         assert!(result.low_rejection_map_path.is_none());
         assert!(result.high_rejection_map_path.is_none());
         assert!(result.rejection_map_samples_written.is_none());
+        assert!(result.spatial_promotions.is_none());
         assert!(stack_path.is_file());
         let report_path = directory
             .path()
@@ -12504,6 +12505,7 @@ mod tests {
             false
         );
         assert_eq!(report["report"]["integration"]["largeScaleHighLayers"], 2);
+        assert!(report["report"].get("spatialPromotions").is_none());
         assert_eq!(report["report"]["products"][0]["role"], "science");
         assert_eq!(
             report["report"]["sources"].as_array().map(Vec::len),
@@ -12525,6 +12527,21 @@ mod tests {
         assert_eq!(inspection.sources[0].frame_id.len(), 64);
         assert_eq!(inspection.sources[0].sha256.len(), 64);
         assert!(inspection.sources[0].byte_length > 0);
+        let mut invalid_report: RegisteredStackReport =
+            serde_json::from_value(report["report"].clone())?;
+        invalid_report.integration.large_scale_high_enabled = true;
+        invalid_report.spatial_promotions = Some(RegisteredSpatialPromotionResponse {
+            low: 0,
+            high: 5,
+            total: 4,
+        });
+        let (_, invalid_bytes) = encode_registered_stack_report(invalid_report)?;
+        let invalid_path = directory.path().join("invalid-promotion-report.json");
+        fs::write(&invalid_path, invalid_bytes)?;
+        let invalid_error = inspect_registered_stack_report_sync(&invalid_path)
+            .err()
+            .ok_or("incoherent promotion report unexpectedly validated")?;
+        assert_eq!(invalid_error.code, "registered_stack_report_invalid");
         let mut legacy_report: RegisteredStackReport =
             serde_json::from_value(report["report"].clone())?;
         legacy_report.geometry_model = None;
