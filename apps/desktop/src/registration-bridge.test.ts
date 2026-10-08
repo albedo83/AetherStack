@@ -139,6 +139,8 @@ describe("native registration bridge", () => {
     const result = {
       planSha256: "a".repeat(64),
       outputPath: "/results/integrated.fits",
+      supportMapPath: "/results/integrated-support.fits",
+      supportMapSamplesWritten: 34_798_080,
     };
     vi.mocked(invoke).mockResolvedValue(result);
     const planning = {
@@ -174,7 +176,7 @@ describe("native registration bridge", () => {
             maximumIterations: 8,
             minimumRetainedSamples: 3,
             generateRejectionMaps: true,
-            generateSupportMap: false,
+            generateSupportMap: true,
             largeScaleLowEnabled: false,
             largeScaleHighEnabled: false,
             largeScaleLowLayers: 2,
@@ -207,7 +209,7 @@ describe("native registration bridge", () => {
           maximumIterations: 8,
           minimumRetainedSamples: 3,
           generateRejectionMaps: true,
-          generateSupportMap: false,
+          generateSupportMap: true,
           largeScaleLowEnabled: false,
           largeScaleHighEnabled: false,
           largeScaleLowLayers: 2,
