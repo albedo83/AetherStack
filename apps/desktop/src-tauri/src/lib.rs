@@ -61,9 +61,10 @@ use aether_review::{
     TransferFunction,
 };
 use aether_runtime::{
-    BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken, DefectFitsReference, DefectReferenceKind,
-    DefectReferenceParameters, DrizzleOutputExecutionError, DrizzleProductDestinations,
-    DrizzleProductProvenance, GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID, GeneralizedEsdParameters,
+    ACCEPTED_SUPPORT_MAP_ALGORITHM_ID, BALANCED_PSF_WEIGHT_ALGORITHM_ID, CancellationToken,
+    DefectFitsReference, DefectReferenceKind, DefectReferenceParameters,
+    DrizzleOutputExecutionError, DrizzleProductDestinations, DrizzleProductProvenance,
+    GENERALIZED_ESD_REJECTION_MAP_ALGORITHM_ID, GeneralizedEsdParameters,
     LINEAR_FIT_REJECTION_MAP_ALGORITHM_ID, LargeScaleRejectionParameters, LargeScaleTailParameters,
     LightPlanExecutionError, LightPlanExecutionRequest, LinearFitClipParameters,
     LocalNormalizationPipelineError, LocalNormalizationRequest, MasterPlanExecutionError,
@@ -74,19 +75,19 @@ use aether_runtime::{
     REGISTERED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, REGISTERED_SPATIAL_ESD_MEAN_ALGORITHM_ID,
     REGISTERED_WINSORIZED_SIGMA_CLIPPED_MEAN_ALGORITHM_ID, RegisteredFrameQuality,
     RegisteredRejectionMapOutput, RegisteredSpatialEsdParameters, RegisteredStackError,
-    RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackSource, RegisteredWeightSet,
-    RegistrationPlanExecutionError, RegistrationPlanExecutionRequest, RegistrationPlanSource,
-    SIGMA_REJECTION_MAP_ALGORITHM_ID, SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID,
-    STRICT_DEFECT_CORRECTED_ALGORITHM_ID, STRICT_DEFECT_MAP_ALGORITHM_ID,
-    STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID, STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID,
-    SigmaClipParameters, StrictDefectCorrectionRequest, StrictDrizzleSource,
-    StrictLinearDefectCorrectionRequest, WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID,
-    estimate_local_normalization_memory, run_calibrated_light_plan, run_demosaiced_light_plan,
-    run_light_plan, run_local_normalization_with_progress, run_master_plan,
-    run_projective_registration_plan, run_registered_stack, run_registration_plan,
-    run_strict_defect_correction_with_progress, run_strict_drizzle_output_with_progress,
-    run_strict_linear_defect_correction_with_progress, strict_defect_parameters_sha256,
-    strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
+    RegisteredStackEstimator, RegisteredStackRequest, RegisteredStackSource,
+    RegisteredSupportMapOutput, RegisteredWeightSet, RegistrationPlanExecutionError,
+    RegistrationPlanExecutionRequest, RegistrationPlanSource, SIGMA_REJECTION_MAP_ALGORITHM_ID,
+    SPATIAL_ESD_REJECTION_MAP_ALGORITHM_ID, STRICT_DEFECT_CORRECTED_ALGORITHM_ID,
+    STRICT_DEFECT_MAP_ALGORITHM_ID, STRICT_LINEAR_DEFECT_CORRECTED_ALGORITHM_ID,
+    STRICT_LINEAR_DEFECT_MAP_ALGORITHM_ID, SigmaClipParameters, StrictDefectCorrectionRequest,
+    StrictDrizzleSource, StrictLinearDefectCorrectionRequest,
+    WINSORIZED_SIGMA_REJECTION_MAP_ALGORITHM_ID, estimate_local_normalization_memory,
+    run_calibrated_light_plan, run_demosaiced_light_plan, run_light_plan,
+    run_local_normalization_with_progress, run_master_plan, run_projective_registration_plan,
+    run_registered_stack, run_registration_plan, run_strict_defect_correction_with_progress,
+    run_strict_drizzle_output_with_progress, run_strict_linear_defect_correction_with_progress,
+    strict_defect_parameters_sha256, strict_drizzle_parameters_sha256, strict_drizzle_plan_sha256,
     strict_linear_defect_parameters_sha256,
 };
 use aether_session::{
@@ -572,6 +573,8 @@ struct RegisteredStackIntegrationSettings {
     minimum_retained_samples: u32,
     generate_rejection_maps: bool,
     #[serde(default)]
+    generate_support_map: bool,
+    #[serde(default)]
     large_scale_low_enabled: bool,
     #[serde(default)]
     large_scale_high_enabled: bool,
@@ -641,6 +644,8 @@ struct RegisteredStackResponse {
     low_rejection_map_path: Option<String>,
     high_rejection_map_path: Option<String>,
     rejection_map_samples_written: Option<u64>,
+    support_map_path: Option<String>,
+    support_map_samples_written: Option<u64>,
     source_dispositions: Vec<RegisteredSourceDispositionResponse>,
     spatial_promotions: Option<RegisteredSpatialPromotionResponse>,
     report_path: String,
@@ -4282,6 +4287,11 @@ where
         .generate_rejection_maps
         .then(|| rejection_map_paths(&output_path))
         .transpose()?;
+    let support_path = integration
+        .generate_support_map
+        .then(|| support_map_path(&output_path))
+        .transpose()?;
+    let output_parameters_sha256 = provenance.parameters_sha256().map(str::to_owned);
     let execution = match (plan, weight_set) {
         (DesktopRegistrationPlan::Affine(plan), Some(weights)) => {
             RegisteredStackRequest::new_weighted(
@@ -4366,6 +4376,29 @@ where
             ))
             .map_err(registered_stack_error)?;
     }
+    if let Some(support_path) = support_path.as_ref() {
+        let support_provenance = FitsOutputProvenance::new(
+            manifest_sha256.clone(),
+            "accepted-support",
+            ACCEPTED_SUPPORT_MAP_ALGORITHM_ID,
+            source_count,
+        )
+        .and_then(|value| value.with_plan_sha256(execution.plan_sha256()))
+        .and_then(|value| {
+            if let Some(parameters_sha256) = output_parameters_sha256.as_deref() {
+                value.with_parameters_sha256(parameters_sha256)
+            } else {
+                Ok(value)
+            }
+        })
+        .map_err(|_| registered_stack_configuration_error())?;
+        execution = execution
+            .with_support_map(RegisteredSupportMapOutput::new(
+                support_path.clone(),
+                support_provenance,
+            ))
+            .map_err(registered_stack_error)?;
+    }
     let result = run_registered_stack(&execution, cancellation, &memory, |event| {
         progress(RegisteredStackProgress {
             sequence: event.sequence(),
@@ -4386,6 +4419,7 @@ where
     let dimensions = result.dimensions();
     let summary = result.summary();
     let rejection_map_summary = result.rejection_map_summary();
+    let support_map_summary = result.support_map_summary();
     let source_dispositions = result
         .source_dispositions()
         .iter()
@@ -4443,6 +4477,10 @@ where
         .as_ref()
         .map(|(_, path)| unicode_registered_output_path(path))
         .transpose()?;
+    let support_map_path_string = support_path
+        .as_ref()
+        .map(|path| unicode_registered_output_path(path))
+        .transpose()?;
     let mut products = vec![registered_stack_report_product(
         "science",
         &output_path,
@@ -4488,6 +4526,9 @@ where
             published.push(low_path.as_path());
             published.push(high_path.as_path());
         }
+        if let Some(support_path) = support_path.as_ref() {
+            published.push(support_path.as_path());
+        }
         for path in published {
             let _ignored = fs::remove_file(path);
         }
@@ -4515,6 +4556,8 @@ where
             );
             value.low().samples_written()
         }),
+        support_map_path: support_map_path_string,
+        support_map_samples_written: support_map_summary.map(|value| value.samples_written()),
         source_dispositions,
         spatial_promotions,
         report_path,
@@ -4628,6 +4671,22 @@ fn rejection_map_paths(output: &Path) -> Result<(PathBuf, PathBuf), PreviewComma
         parent.join(name)
     };
     Ok((named("-rejection-low"), named("-rejection-high")))
+}
+
+fn support_map_path(output: &Path) -> Result<PathBuf, PreviewCommandError> {
+    let parent = output
+        .parent()
+        .ok_or_else(registered_stack_configuration_error)?;
+    let stem = output
+        .file_stem()
+        .ok_or_else(registered_stack_configuration_error)?;
+    let mut name = stem.to_os_string();
+    name.push("-support");
+    if let Some(extension) = output.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    Ok(parent.join(name))
 }
 
 fn registered_stack_report_path(output: &Path) -> Result<PathBuf, PreviewCommandError> {
@@ -5805,6 +5864,7 @@ fn registered_stack_error(error: RegisteredStackError) -> PreviewCommandError {
         | RegisteredStackError::EstimatorParameterProvenanceMismatch
         | RegisteredStackError::RejectionMapRequiresRejectingEstimator
         | RegisteredStackError::RejectionMapProvenanceMismatch
+        | RegisteredStackError::SupportMapProvenanceMismatch
         | RegisteredStackError::DuplicateOutputPath => registered_stack_configuration_error(),
         RegisteredStackError::Memory(_) | RegisteredStackError::AllocationFailed => {
             registered_stack_allocation_error()
