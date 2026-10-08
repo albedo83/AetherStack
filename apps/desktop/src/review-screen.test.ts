@@ -1906,6 +1906,7 @@ describe("frame review workspace", () => {
                 fileName: "registered-a.fits",
                 byteLength: 278_992_800,
                 sha256: "9".repeat(64),
+                spatialPromotions: null,
               },
             ],
             products: [
@@ -2519,12 +2520,14 @@ describe("frame review workspace", () => {
                 fileName: "m31-registered-001.fits",
                 byteLength: 278_992_800,
                 sha256: "d".repeat(64),
+                spatialPromotions: null,
               },
               {
                 frameId: "e".repeat(64),
                 fileName: "m31-registered-002.fits",
                 byteLength: 278_992_800,
                 sha256: "1".repeat(64),
+                spatialPromotions: null,
               },
             ],
             products: [
@@ -2700,6 +2703,7 @@ describe("frame review workspace", () => {
       fileName: `source-${index.toString().padStart(4, "0")}.fits`,
       byteLength: 23_397_120,
       sha256: "a".repeat(64),
+      spatialPromotions: null,
     }));
     const model: ReviewViewModel = {
       ...demoReviewModel,

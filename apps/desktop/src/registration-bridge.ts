@@ -371,6 +371,7 @@ export interface RegisteredStackReportSourceInspection {
   readonly fileName: string;
   readonly byteLength: number;
   readonly sha256: string;
+  readonly spatialPromotions: RegisteredSpatialPromotionCounts | null;
 }
 
 export interface RegisteredStackSourceVerificationResult {
