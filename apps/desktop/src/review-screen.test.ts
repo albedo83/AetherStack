@@ -240,7 +240,7 @@ describe("frame review workspace", () => {
       }),
     ).toBeTruthy();
     expect(run.querySelectorAll(".workflow-stage")).toHaveLength(6);
-    expect(run.textContent).toContain("native stages published");
+    expect(run.textContent).toContain("required stages published");
 
     fireEvent.click(getByRole(root, "button", { name: "Results" }));
     expect(actions.onSelectWorkspace).toHaveBeenCalledWith("results");
