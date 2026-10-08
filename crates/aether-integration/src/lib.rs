@@ -3710,6 +3710,65 @@ mod tests {
     }
 
     #[test]
+    fn materializes_exact_accepted_support_for_every_estimator_family() -> TestResult {
+        let dimensions = Dimensions::new(2, 1, 2)?;
+        let plain = [1, 2, 3, 4].map(|accepted| PixelSupport {
+            accepted,
+            masked: 0,
+            non_finite: 0,
+        });
+        let clipped = [4, 3, 2, 1].map(|accepted| ClippedPixelSupport {
+            accepted,
+            masked: 0,
+            non_finite: 0,
+            low_rejected: 1,
+            high_rejected: 1,
+        });
+
+        let plain_map = materialize_support_map(dimensions, &plain)?.into_image();
+        let clipped_map = materialize_clipped_support_map(dimensions, &clipped)?.into_image();
+
+        assert_eq!(plain_map.dimensions(), dimensions);
+        assert_eq!(plain_map.pixels(), &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(clipped_map.pixels(), &[4.0, 3.0, 2.0, 1.0]);
+        assert!(
+            plain_map
+                .mask()
+                .as_slice()
+                .iter()
+                .all(|flags| flags.is_clear())
+        );
+        assert!(
+            clipped_map
+                .mask()
+                .as_slice()
+                .iter()
+                .all(|flags| flags.is_clear())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn support_maps_require_one_record_per_output_sample() -> TestResult {
+        let dimensions = Dimensions::new(2, 1, 1)?;
+        assert_eq!(
+            materialize_support_map(dimensions, &[PixelSupport::default()]),
+            Err(IntegrationError::SupportLengthMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            materialize_clipped_support_map(dimensions, &[ClippedPixelSupport::default()]),
+            Err(IntegrationError::SupportLengthMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rejects_empty_and_mismatched_inputs() -> TestResult {
         assert_eq!(integrate_mean(&[]), Err(IntegrationError::NoInputImages));
 
