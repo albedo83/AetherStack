@@ -3230,6 +3230,8 @@ mod tests {
             run_registered_stack(&second, &CancellationToken::new(), &memory, |_| {})?;
 
         assert_eq!(result.dimensions(), Dimensions::new(12, 10, 3)?);
+        assert_eq!(result.spatial_promotions(), None);
+        assert_eq!(second_result.spatial_promotions(), None);
         assert_eq!(
             result.source_dispositions(),
             second_result.source_dispositions()
@@ -3304,6 +3306,16 @@ mod tests {
             first_result.source_dispositions(),
             second_result.source_dispositions()
         );
+        assert_eq!(
+            first_result.spatial_promotions(),
+            second_result.spatial_promotions()
+        );
+        let promotions = first_result
+            .spatial_promotions()
+            .expect("spatial ESD must report promoted rejections");
+        assert_eq!(promotions.low(), 0);
+        assert_eq!(promotions.high(), 126);
+        assert_eq!(promotions.total(), 126);
         let outlier = &first_result.source_dispositions()[15];
         assert_eq!(outlier.counts().rejected_high(), 150);
         assert_eq!(outlier.counts().accepted(), 210);
