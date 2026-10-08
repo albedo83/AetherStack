@@ -94,6 +94,7 @@ import {
   executeRegistrationPlan,
   executeRegisteredStack,
   inspectRegisteredStackReport,
+  previewAutomaticIntegration,
   previewRegisteredWeights,
   previewRegistrationPlan,
   selectDrizzleOutputDirectory,
@@ -423,19 +424,7 @@ const screen = mountReviewScreen(root, model, {
     });
   },
   onSetRegisteredStackMode(mode) {
-    if (isActiveExecutionState(model.registration.stack.state)) return;
-    update({
-      ...model,
-      registration: {
-        ...model.registration,
-        stack: {
-          ...model.registration.stack,
-          integrationMode: mode,
-          automaticPreviewState: "idle",
-          automaticPreview: null,
-        },
-      },
-    });
+    void setRegisteredStackMode(mode);
   },
   onSelectRegisteredStackProduct(product) {
     selectRegisteredStackProduct(product);
@@ -1839,6 +1828,111 @@ function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
     largeScaleLowGrowth: 2,
     largeScaleHighGrowth: 2,
   };
+}
+
+async function setRegisteredStackMode(
+  mode: "manual" | "automatic",
+): Promise<void> {
+  const stack = model.registration.stack;
+  if (isActiveExecutionState(stack.state)) return;
+  registeredStackPreviewTicket += 1;
+  stackPixelTicket += 1;
+  stackReportTicket += 1;
+  stackSourceVerificationTicket += 1;
+  clearRegisteredStackPreviewResources();
+
+  if (mode === "manual") {
+    registeredStackTicket += 1;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...idleRegisteredStack("Manual integration controls enabled"),
+          settings: stack.settings,
+          integrationMode: "manual",
+        },
+      },
+    });
+    return;
+  }
+
+  const plan = model.registration.plan;
+  if (model.registration.planState !== "ready" || plan === null) {
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...idleRegisteredStack(
+            "Seal a registration plan before requesting automatic integration",
+          ),
+          settings: stack.settings,
+          integrationMode: "automatic",
+          automaticPreviewState: "error",
+        },
+      },
+    });
+    return;
+  }
+
+  const ticket = ++registeredStackTicket;
+  update({
+    ...model,
+    registration: {
+      ...model.registration,
+      stack: {
+        ...idleRegisteredStack("Resolving the native automatic quality plan…"),
+        settings: stack.settings,
+        integrationMode: "automatic",
+        automaticPreviewState: "loading",
+      },
+    },
+  });
+  try {
+    const preview = await previewAutomaticIntegration(
+      plan.planSha256,
+      plan.frames.length,
+    );
+    if (
+      ticket !== registeredStackTicket ||
+      model.registration.plan?.planSha256 !== preview.registrationPlanSha256
+    ) {
+      return;
+    }
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...idleRegisteredStack(preview.rationale),
+          settings: {
+            ...preview.settings,
+            weightReferenceFrameId: null,
+          },
+          integrationMode: "automatic",
+          automaticPreviewState: "ready",
+          automaticPreview: preview,
+        },
+      },
+    });
+  } catch {
+    if (ticket !== registeredStackTicket) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...idleRegisteredStack(
+            "Automatic integration planning failed closed · choose Manual or retry",
+          ),
+          settings: stack.settings,
+          integrationMode: "automatic",
+          automaticPreviewState: "error",
+        },
+      },
+    });
+  }
 }
 
 function defaultDrizzleSettings(): DrizzleExecutionSettings {
