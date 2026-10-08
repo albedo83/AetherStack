@@ -193,6 +193,7 @@ dependencies = [
  "aether-core",
  "aether-drizzle",
  "aether-fits",
+ "aether-integration",
  "aether-localnorm",
  "aether-metadata",
  "aether-preview",
