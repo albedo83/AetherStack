@@ -21,6 +21,7 @@ aether-calibration = { path = "../../../crates/aether-calibration" }
 aether-core = { path = "../../../crates/aether-core" }
 aether-drizzle = { path = "../../../crates/aether-drizzle" }
 aether-fits = { path = "../../../crates/aether-fits" }
+aether-integration = { path = "../../../crates/aether-integration" }
 aether-localnorm = { path = "../../../crates/aether-localnorm" }
 aether-metadata = { path = "../../../crates/aether-metadata" }
 aether-preview = { path = "../../../crates/aether-preview" }

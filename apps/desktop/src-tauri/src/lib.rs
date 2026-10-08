@@ -28,6 +28,9 @@ use aether_fits::{
     FitsOutputProvenance, FitsWriteSummary, HduChecksumVerification, HeaderReadOptions,
     ImageRegion, PrimaryImageReader, SampleStatus, StoredSampleFormat, primary_image_statistics,
 };
+use aether_integration::{
+    AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID, AutomaticEstimator, AutomaticIntegrationPlan,
+};
 use aether_localnorm::{
     LOCAL_APPLICATION_ALGORITHM_ID, LocalFitError, LocalFitParameters,
     LocalNormalizationParameters, LocalNormalizationPlan, ProtectionParameters,
@@ -552,6 +555,26 @@ struct RegisteredWeightPreflightResponse {
 struct RegisteredWeightPreflightEntry {
     frame_id: String,
     weight: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutomaticIntegrationPreviewRequest {
+    expected_plan_sha256: String,
+    source_count: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomaticIntegrationPreviewResponse {
+    schema_version: u32,
+    registration_plan_sha256: String,
+    automatic_plan_sha256: String,
+    algorithm_id: &'static str,
+    source_count: u32,
+    population_tier: &'static str,
+    rationale: &'static str,
+    settings: RegisteredStackIntegrationSettings,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -2800,6 +2823,13 @@ fn preview_registered_weights(
 }
 
 #[tauri::command]
+fn preview_automatic_integration(
+    request: AutomaticIntegrationPreviewRequest,
+) -> Result<AutomaticIntegrationPreviewResponse, PreviewCommandError> {
+    preview_automatic_integration_sync(request)
+}
+
+#[tauri::command]
 async fn execute_registration_plan(
     request: RegistrationPlanExecutionCommandRequest,
     on_progress: tauri::ipc::Channel<RegistrationExecutionProgress>,
@@ -4611,6 +4641,52 @@ fn preview_registered_weights_sync(
         parameters_sha256: weight_set.sha256().to_owned(),
         reference_frame_id: reference_frame_id.as_str().to_owned(),
         weights,
+    })
+}
+
+fn preview_automatic_integration_sync(
+    request: AutomaticIntegrationPreviewRequest,
+) -> Result<AutomaticIntegrationPreviewResponse, PreviewCommandError> {
+    if !is_lower_sha256(&request.expected_plan_sha256) {
+        return Err(registered_stack_configuration_error());
+    }
+    let plan = AutomaticIntegrationPlan::resolve(request.source_count)
+        .map_err(|_| registered_stack_configuration_error())?;
+    let estimator = match plan.estimator() {
+        AutomaticEstimator::StrictMean => RegisteredStackEstimatorInput::StrictMean,
+        AutomaticEstimator::Median => RegisteredStackEstimatorInput::Median,
+        AutomaticEstimator::WinsorizedSigmaClipped => {
+            RegisteredStackEstimatorInput::WinsorizedSigmaClipped
+        }
+        AutomaticEstimator::GeneralizedEsd => RegisteredStackEstimatorInput::GeneralizedEsd,
+    };
+    Ok(AutomaticIntegrationPreviewResponse {
+        schema_version: 1,
+        registration_plan_sha256: request.expected_plan_sha256,
+        automatic_plan_sha256: plan.plan_sha256(),
+        algorithm_id: AUTOMATIC_INTEGRATION_PLAN_ALGORITHM_ID,
+        source_count: plan.source_count(),
+        population_tier: plan.tier().as_str(),
+        rationale: plan.rationale(),
+        settings: RegisteredStackIntegrationSettings {
+            estimator,
+            low_fraction: 0.20,
+            high_fraction: 0.10,
+            low_sigma: plan.low_sigma(),
+            high_sigma: plan.high_sigma(),
+            esd_outlier_fraction: plan.esd_outlier_fraction(),
+            esd_significance: plan.esd_significance(),
+            maximum_iterations: plan.maximum_iterations(),
+            minimum_retained_samples: plan.minimum_retained_samples(),
+            generate_rejection_maps: plan.generate_rejection_maps(),
+            generate_support_map: plan.generate_support_map(),
+            large_scale_low_enabled: false,
+            large_scale_high_enabled: false,
+            large_scale_low_layers: default_large_scale_layers(),
+            large_scale_high_layers: default_large_scale_layers(),
+            large_scale_low_growth: default_large_scale_growth(),
+            large_scale_high_growth: default_large_scale_growth(),
+        },
     })
 }
 
@@ -10576,6 +10652,7 @@ pub fn run() -> Result<(), tauri::Error> {
             preview_frame_selection,
             preview_defect_batch,
             preview_registration_plan,
+            preview_automatic_integration,
             preview_registered_weights,
             render_fits_preview,
             sort_review_frames,
