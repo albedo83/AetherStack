@@ -117,7 +117,7 @@ const QUALITY_EVIDENCE_CACHE_DOMAIN: &str = "frame-quality-evidence-v1";
 const MAX_QUALITY_EVIDENCE_BYTES: u64 = 64 * 1_024;
 const MAX_QUALITY_CACHE_MAINTENANCE_FILE_BYTES: u64 = 128 * 1_024;
 const REGISTERED_STACK_REPORT_ALGORITHM_ID: &str = "registered-stack-report-v1";
-const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 4;
+const REGISTERED_STACK_REPORT_SCHEMA_VERSION: u32 = 5;
 const MAX_REGISTERED_STACK_REPORT_BYTES: u64 = 4 * 1_024 * 1_024;
 const MAX_SESSION_DIAGNOSTICS_REPORT_BYTES: usize = 16 * 1_024 * 1_024;
 const QUALITY_CACHE_MAINTENANCE_ALGORITHM_ID: &str = "quality-cache-maintenance-preview-v1";
@@ -767,6 +767,8 @@ struct RegisteredStackReportSource {
     file_name: String,
     byte_length: u64,
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spatial_promotions: Option<RegisteredSpatialPromotionResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -4242,6 +4244,7 @@ where
             file_name,
             byte_length: fingerprint.byte_length(),
             sha256: fingerprint.sha256().to_owned(),
+            spatial_promotions: None,
         });
         sources.push(RegisteredStackSource::new(
             frame_id.clone(),
@@ -4413,6 +4416,24 @@ where
                 high: counts.high(),
                 total: counts.total(),
             });
+    if spatial_promotions.is_some() {
+        if report_sources.len() != result.source_dispositions().len() {
+            return Err(registered_stack_report_error());
+        }
+        for (report_source, source) in report_sources.iter_mut().zip(result.source_dispositions()) {
+            if report_source.frame_id != source.frame_id().as_str() {
+                return Err(registered_stack_report_error());
+            }
+            report_source.spatial_promotions =
+                source
+                    .spatial_promotions()
+                    .map(|promotions| RegisteredSpatialPromotionResponse {
+                        low: promotions.low(),
+                        high: promotions.high(),
+                        total: promotions.total(),
+                    });
+        }
+    }
     let low_rejection_map_path = rejection_paths
         .as_ref()
         .map(|(path, _)| unicode_registered_output_path(path))
@@ -4719,9 +4740,50 @@ fn inspect_registered_stack_report_sync_with_products(
             _ => false,
         }
     };
+    let source_promotion_schema_valid = if envelope.schema_version < 5 {
+        envelope
+            .report
+            .sources
+            .iter()
+            .all(|source| source.spatial_promotions.is_none())
+    } else if uses_spatial_rejection {
+        let Some(aggregate) = envelope.report.spatial_promotions else {
+            return Err(registered_stack_report_validation_error());
+        };
+        let source_total = envelope.report.sources.iter().try_fold(
+            RegisteredSpatialPromotionResponse {
+                low: 0,
+                high: 0,
+                total: 0,
+            },
+            |total, source| {
+                let counts = source.spatial_promotions?;
+                if counts.low.checked_add(counts.high) != Some(counts.total) {
+                    return None;
+                }
+                Some(RegisteredSpatialPromotionResponse {
+                    low: total.low.checked_add(counts.low)?,
+                    high: total.high.checked_add(counts.high)?,
+                    total: total.total.checked_add(counts.total)?,
+                })
+            },
+        );
+        source_total.is_some_and(|total| {
+            total.low == aggregate.low
+                && total.high == aggregate.high
+                && total.total == aggregate.total
+        })
+    } else {
+        envelope
+            .report
+            .sources
+            .iter()
+            .all(|source| source.spatial_promotions.is_none())
+    };
     if !geometry_schema_valid
         || !spatial_schema_valid
         || !promotion_schema_valid
+        || !source_promotion_schema_valid
         || !is_lower_sha256(&envelope.report_sha256)
         || envelope.report.algorithm_id != REGISTERED_STACK_REPORT_ALGORITHM_ID
         || !is_lower_sha256(&envelope.report.plan_sha256)
