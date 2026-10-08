@@ -3798,6 +3798,66 @@ mod tests {
     }
 
     #[test]
+    fn support_map_paths_and_provenance_fail_closed() -> TestResult {
+        let directory = TestDirectory::new()?;
+        let request = stack_request(&directory)?;
+        let valid = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "accepted-support",
+            ACCEPTED_SUPPORT_MAP_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(request.plan_sha256())?;
+        assert!(matches!(
+            request
+                .clone()
+                .with_support_map(RegisteredSupportMapOutput::new(
+                    request.output().to_owned(),
+                    valid.clone(),
+                )),
+            Err(RegisteredStackError::DuplicateOutputPath)
+        ));
+
+        let wrong_algorithm = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "accepted-support",
+            PERCENTILE_REJECTION_MAP_ALGORITHM_ID,
+            2,
+        )?
+        .with_plan_sha256(request.plan_sha256())?;
+        assert!(matches!(
+            request
+                .clone()
+                .with_support_map(RegisteredSupportMapOutput::new(
+                    directory.0.join("wrong-support.fits"),
+                    wrong_algorithm,
+                )),
+            Err(RegisteredStackError::SupportMapProvenanceMismatch)
+        ));
+
+        let rejecting_directory = TestDirectory::new()?;
+        let (rejecting, low, _) = percentile_stack_request(&rejecting_directory)?;
+        let rejecting_support = FitsOutputProvenance::new(
+            "a".repeat(64),
+            "accepted-support",
+            ACCEPTED_SUPPORT_MAP_ALGORITHM_ID,
+            5,
+        )?
+        .with_plan_sha256(rejecting.plan_sha256())?
+        .with_parameters_sha256(
+            rejecting
+                .estimator()
+                .parameters_sha256()
+                .ok_or("percentile parameters missing")?,
+        )?;
+        assert!(matches!(
+            rejecting.with_support_map(RegisteredSupportMapOutput::new(low, rejecting_support)),
+            Err(RegisteredStackError::DuplicateOutputPath)
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn cancellation_and_memory_failure_publish_nothing() -> TestResult {
         let directory = TestDirectory::new()?;
         let request = stack_request(&directory)?;
