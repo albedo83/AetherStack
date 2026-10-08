@@ -49,7 +49,7 @@ export type WorkspaceView =
 export type LightFrameView = "raw" | "calibrated";
 
 export type RegisteredStackProductView =
-  "science" | "rejection_low" | "rejection_high";
+  "science" | "rejection_low" | "rejection_high" | "support";
 
 export interface RejectionHistogramBin {
   readonly rejectedCount: number;

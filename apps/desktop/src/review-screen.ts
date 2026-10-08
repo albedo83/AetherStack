@@ -4478,6 +4478,7 @@ function registeredStackSettings(
         estimator === "linear_fit_clipped" ||
         estimator === "generalized_esd") &&
       elements.registeredStackRejectionMaps.checked,
+    generateSupportMap: false,
     largeScaleLowEnabled:
       estimator === "generalized_esd" &&
       elements.registeredStackLargeScaleLowEnabled.checked,
@@ -4546,6 +4547,8 @@ function formatRegisteredProductRole(
       return "Low rejection map";
     case "rejection_high":
       return "High rejection map";
+    case "support":
+      return "Accepted support map";
   }
 }
 

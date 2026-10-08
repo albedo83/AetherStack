@@ -171,6 +171,7 @@ export const demoReviewModel: ReviewViewModel = {
         maximumIterations: 8,
         minimumRetainedSamples: 3,
         generateRejectionMaps: false,
+        generateSupportMap: false,
         largeScaleLowEnabled: false,
         largeScaleHighEnabled: false,
         largeScaleLowLayers: 2,

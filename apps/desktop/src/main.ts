@@ -1813,6 +1813,7 @@ function defaultRegisteredStackSettings(): RegisteredStackIntegrationSettings {
     maximumIterations: 8,
     minimumRetainedSamples: 3,
     generateRejectionMaps: false,
+    generateSupportMap: false,
     largeScaleLowEnabled: false,
     largeScaleHighEnabled: false,
     largeScaleLowLayers: 2,
@@ -3388,6 +3389,8 @@ function registeredStackProductPath(
       return source.lowRejectionPath;
     case "rejection_high":
       return source.highRejectionPath;
+    case "support":
+      return source.supportPath;
   }
 }
 
@@ -3397,6 +3400,7 @@ interface RegisteredStackPreviewSource {
   readonly sciencePath: string;
   readonly lowRejectionPath: string | null;
   readonly highRejectionPath: string | null;
+  readonly supportPath: string | null;
 }
 
 function registeredStackPreviewSourceFromResult(
@@ -3408,6 +3412,7 @@ function registeredStackPreviewSourceFromResult(
     sciencePath: result.outputPath,
     lowRejectionPath: result.lowRejectionMapPath,
     highRejectionPath: result.highRejectionMapPath,
+    supportPath: result.supportMapPath,
   };
 }
 
@@ -3439,6 +3444,7 @@ function registeredStackPreviewSource(
     sciencePath,
     lowRejectionPath: verifiedPath("rejection_low"),
     highRejectionPath: verifiedPath("rejection_high"),
+    supportPath: verifiedPath("support"),
   };
 }
 

@@ -197,6 +197,8 @@ export interface RegisteredStackIntegrationSettings {
   readonly maximumIterations: number;
   readonly minimumRetainedSamples: number;
   readonly generateRejectionMaps: boolean;
+  /** Emits the exact number of accepted source samples for every output pixel. */
+  readonly generateSupportMap: boolean;
   readonly largeScaleLowEnabled: boolean;
   readonly largeScaleHighEnabled: boolean;
   readonly largeScaleLowLayers: number;
@@ -294,6 +296,8 @@ export interface RegisteredStackResult {
   readonly lowRejectionMapPath: string | null;
   readonly highRejectionMapPath: string | null;
   readonly rejectionMapSamplesWritten: number | null;
+  readonly supportMapPath: string | null;
+  readonly supportMapSamplesWritten: number | null;
   readonly sourceDispositions: readonly RegisteredSourceDisposition[];
   readonly spatialPromotions: RegisteredSpatialPromotionCounts | null;
   readonly reportPath: string;
@@ -408,7 +412,7 @@ export interface RegisteredStackSourceVerification {
 }
 
 export interface RegisteredStackReportProductInspection {
-  readonly role: "science" | "rejection_low" | "rejection_high";
+  readonly role: "science" | "rejection_low" | "rejection_high" | "support";
   readonly fileName: string;
   readonly path: string;
   readonly bytesWritten: number;
@@ -537,6 +541,7 @@ export function executeRegisteredStack(
     maximumIterations: settings.integration.maximumIterations,
     minimumRetainedSamples: settings.integration.minimumRetainedSamples,
     generateRejectionMaps: settings.integration.generateRejectionMaps,
+    generateSupportMap: settings.integration.generateSupportMap,
     largeScaleLowEnabled: settings.integration.largeScaleLowEnabled,
     largeScaleHighEnabled: settings.integration.largeScaleHighEnabled,
     largeScaleLowLayers: settings.integration.largeScaleLowLayers,
