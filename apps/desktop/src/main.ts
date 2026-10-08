@@ -422,6 +422,21 @@ const screen = mountReviewScreen(root, model, {
       },
     });
   },
+  onSetRegisteredStackMode(mode) {
+    if (isActiveExecutionState(model.registration.stack.state)) return;
+    update({
+      ...model,
+      registration: {
+        ...model.registration,
+        stack: {
+          ...model.registration.stack,
+          integrationMode: mode,
+          automaticPreviewState: "idle",
+          automaticPreview: null,
+        },
+      },
+    });
+  },
   onSelectRegisteredStackProduct(product) {
     selectRegisteredStackProduct(product);
   },
@@ -1789,6 +1804,9 @@ function idleRegisteredStack(
     pixelInspectionState: "idle",
     pixelInspection: null,
     weightPreflight: null,
+    integrationMode: "manual",
+    automaticPreviewState: "idle",
+    automaticPreview: null,
     reportInspectionState: "idle",
     reportInspection: null,
     reportInspectionPath: null,
@@ -2722,6 +2740,9 @@ async function executeStack(): Promise<void> {
         pixelInspectionState: "idle",
         pixelInspection: null,
         weightPreflight: model.registration.stack.weightPreflight,
+        integrationMode: stack.integrationMode,
+        automaticPreviewState: stack.automaticPreviewState,
+        automaticPreview: stack.automaticPreview,
         reportInspectionState: "idle",
         reportInspection: null,
         reportInspectionPath: null,
@@ -2815,6 +2836,9 @@ async function executeStack(): Promise<void> {
           pixelInspectionState: "idle",
           pixelInspection: null,
           weightPreflight: model.registration.stack.weightPreflight,
+          integrationMode: stack.integrationMode,
+          automaticPreviewState: stack.automaticPreviewState,
+          automaticPreview: stack.automaticPreview,
           reportInspectionState: "idle",
           reportInspection: null,
           reportInspectionPath: result.reportPath,

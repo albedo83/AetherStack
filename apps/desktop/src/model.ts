@@ -21,6 +21,7 @@ import type {
 } from "./local-normalization-bridge.ts";
 import type {
   DrizzleExecutionSettings,
+  AutomaticIntegrationPreview,
   DrizzleProgress,
   DrizzleResult,
   RegistrationDiagnostic,
@@ -338,6 +339,10 @@ export interface RegistrationViewModel {
     readonly pixelInspection: StackPixelInspection | null;
     /** Last native weight seal, retained only while its plan and settings remain current. */
     readonly weightPreflight: RegisteredWeightPreflight | null;
+    /** Manual controls or a native, sealed automatic recommendation. */
+    readonly integrationMode: "manual" | "automatic";
+    readonly automaticPreviewState: "idle" | "loading" | "ready" | "error";
+    readonly automaticPreview: AutomaticIntegrationPreview | null;
     readonly reportInspectionState: "idle" | "loading" | "ready" | "error";
     readonly reportInspection: RegisteredStackReportInspection | null;
     readonly reportInspectionPath: string | null;
@@ -494,6 +499,7 @@ export interface ReviewActions {
   readonly onUpdateRegisteredStackSettings: (
     settings: RegisteredStackIntegrationSettings,
   ) => void;
+  readonly onSetRegisteredStackMode: (mode: "manual" | "automatic") => void;
   readonly onSelectRegisteredStackProduct: (
     product: RegisteredStackProductView,
   ) => void;
