@@ -199,6 +199,7 @@ describe("native registration bridge", () => {
         outputPath: "/results/integrated.fits",
         bandHeight: 128,
         memoryLimitBytes: 1_073_741_824,
+        automaticPlanSha256: null,
         integration: {
           estimator: "percentile_clipped",
           lowFraction: 0.1,

@@ -13573,6 +13573,46 @@ mod tests {
     }
 
     #[test]
+    fn automatic_execution_accepts_only_the_exact_sealed_settings() -> TestResult {
+        let preview = preview_automatic_integration_sync(AutomaticIntegrationPreviewRequest {
+            expected_plan_sha256: "a".repeat(64),
+            source_count: 15,
+        })?;
+
+        validate_automatic_integration_execution(
+            Some(&preview.automatic_plan_sha256),
+            15,
+            preview.settings,
+        )?;
+
+        let altered = RegisteredStackIntegrationSettings {
+            esd_significance: 0.01,
+            ..preview.settings
+        };
+        assert!(
+            validate_automatic_integration_execution(
+                Some(&preview.automatic_plan_sha256),
+                15,
+                altered,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_automatic_integration_execution(
+                Some(&preview.automatic_plan_sha256),
+                14,
+                preview.settings,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_automatic_integration_execution(Some(&"f".repeat(64)), 15, preview.settings,)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn previews_canonical_registered_weights_before_execution() -> TestResult {
         let first = "1".repeat(64);
         let second = "2".repeat(64);
