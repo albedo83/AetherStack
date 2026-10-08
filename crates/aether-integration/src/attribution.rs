@@ -684,6 +684,13 @@ mod tests {
         assert_eq!(counts.high(), 1);
         assert_eq!(counts.total(), 2);
         assert!(!counts.is_empty());
+        let source_counts = expanded.source_promotions_from(&baseline)?;
+        assert_eq!(source_counts.len(), 3);
+        assert_eq!(source_counts[0].low(), 1);
+        assert_eq!(source_counts[0].high(), 0);
+        assert_eq!(source_counts[1].low(), 0);
+        assert_eq!(source_counts[1].high(), 1);
+        assert!(source_counts[2].is_empty());
         assert_eq!(
             counts
                 .checked_add(counts)
@@ -702,11 +709,19 @@ mod tests {
             baseline.promotions_from(&foreign),
             Err(RejectionAttributionError::CubeMismatch)
         );
+        assert_eq!(
+            baseline.source_promotions_from(&foreign),
+            Err(RejectionAttributionError::CubeMismatch)
+        );
 
         let mut changed = baseline.clone();
         changed.set_disposition(0, 0, SampleDisposition::Masked)?;
         assert!(matches!(
             changed.promotions_from(&baseline),
+            Err(RejectionAttributionError::UnexpectedDispositionTransition { .. })
+        ));
+        assert!(matches!(
+            changed.source_promotions_from(&baseline),
             Err(RejectionAttributionError::UnexpectedDispositionTransition { .. })
         ));
         Ok(())
