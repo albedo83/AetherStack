@@ -3051,6 +3051,8 @@ button:active:not(:disabled) {
 .master-rack {
   overflow: hidden;
   background:
+    radial-gradient(circle at 92% 4%, #654ee718, transparent 30%),
+    radial-gradient(circle at 8% 96%, #31c7a313, transparent 32%),
     linear-gradient(150deg, #1b2430, #10161e 42%, #0c1117), var(--surface-1);
   border: 1px solid #3c4959;
   border-radius: var(--radius-lg);
@@ -3074,7 +3076,9 @@ button:active:not(:disabled) {
 .master-rack > .panel-heading {
   min-height: 78px;
   padding: 16px 18px;
-  background: linear-gradient(180deg, #222d3a, #141b24);
+  background:
+    radial-gradient(circle at 82% 0%, #6b58dd24, transparent 38%),
+    linear-gradient(180deg, #253244, #151c27);
   border-bottom: 1px solid #3b4858;
   box-shadow:
     inset 0 1px #ffffff14,
@@ -3859,6 +3863,9 @@ button:active:not(:disabled) {
   min-height: 0;
   padding: 14px;
   overflow: auto;
+  background:
+    radial-gradient(circle at 96% 8%, #6c5ce71a, transparent 24%),
+    radial-gradient(circle at 4% 92%, #40c9a512, transparent 26%);
 }
 
 .light-association-panel {
@@ -4246,9 +4253,17 @@ tr[data-state="blocked"] .association-state {
 }
 
 .master-graph-card {
+  --kind-bright: #70bfff;
+  --kind-border: #3d7199;
+  --kind-soft: #162c40;
+  --kind-deep: #0c1723;
+  --kind-glow: #70bfff22;
+
   overflow: hidden;
-  background: linear-gradient(145deg, #1a222d, #0e141b);
-  border: 1px solid #354252;
+  background:
+    radial-gradient(circle at 93% 0%, var(--kind-glow), transparent 34%),
+    linear-gradient(145deg, #1a222d, #0e141b);
+  border: 1px solid var(--kind-border);
   border-radius: var(--radius-md);
   box-shadow:
     inset 0 1px #ffffff10,
@@ -4260,8 +4275,32 @@ tr[data-state="blocked"] .association-state {
     box-shadow 140ms ease;
 }
 
+.master-graph-card[data-kind="dark"] {
+  --kind-bright: #ad9cff;
+  --kind-border: #6253a2;
+  --kind-soft: #292346;
+  --kind-deep: #111126;
+  --kind-glow: #927bff2b;
+}
+
+.master-graph-card[data-kind="flat"] {
+  --kind-bright: #69e2c3;
+  --kind-border: #377e70;
+  --kind-soft: #153b36;
+  --kind-deep: #0a1d1b;
+  --kind-glow: #54d8b529;
+}
+
+.master-graph-card[data-status="unresolved"] {
+  --kind-bright: #f2c66d;
+  --kind-border: #81632b;
+  --kind-soft: #3a2d17;
+  --kind-deep: #1b150d;
+  --kind-glow: #efb94b24;
+}
+
 .master-graph-card:hover {
-  border-color: #52677e;
+  border-color: var(--kind-bright);
   transform: translateY(-1px);
   box-shadow:
     inset 0 1px #ffffff16,
@@ -4273,23 +4312,8 @@ tr[data-state="blocked"] .association-state {
   display: block;
   height: 3px;
   content: "";
-  background: #8aa7c5;
-  box-shadow: 0 0 10px #8aa7c566;
-}
-
-.master-graph-card[data-kind="dark"]::before {
-  background: #9386e7;
-  box-shadow: 0 0 10px #9386e766;
-}
-
-.master-graph-card[data-kind="flat"]::before {
-  background: #69ceb7;
-  box-shadow: 0 0 10px #69ceb766;
-}
-
-.master-graph-card[data-status="unresolved"]::before {
-  background: var(--warning);
-  box-shadow: 0 0 10px #f3c76f80;
+  background: linear-gradient(90deg, var(--kind-bright), transparent 88%);
+  box-shadow: 0 0 12px var(--kind-bright);
 }
 
 .master-graph-card > header {
@@ -4298,14 +4322,17 @@ tr[data-state="blocked"] .association-state {
   justify-content: space-between;
   gap: 12px;
   padding: 11px 14px;
-  background: linear-gradient(180deg, #202b38, #151d27);
-  border-bottom: 1px solid #344252;
+  background:
+    linear-gradient(90deg, var(--kind-glow), transparent 55%),
+    linear-gradient(180deg, #202b38, #151d27);
+  border-bottom: 1px solid var(--kind-border);
 }
 
 .master-graph-card h4 {
   margin: 0;
   color: var(--text);
   font-size: 13px;
+  text-shadow: 0 0 18px var(--kind-glow);
 }
 
 .master-graph-card__state {
@@ -4332,18 +4359,26 @@ tr[data-state="blocked"] .association-state {
   grid-template-columns: minmax(0, 1fr) minmax(74px, 0.34fr) minmax(0, 1fr);
   align-items: stretch;
   padding: 18px 16px 15px;
+  background: linear-gradient(
+    90deg,
+    var(--kind-glow),
+    transparent 42% 58%,
+    var(--kind-glow)
+  );
 }
 
 .master-graph-node {
+  position: relative;
   display: grid;
   align-content: center;
   min-width: 0;
   min-height: 96px;
   padding: 13px 14px;
   background:
-    radial-gradient(circle at 85% 12%, #ffffff0d, transparent 34%),
-    linear-gradient(145deg, #1d2936, #0c1219);
-  border: 1px solid #405064;
+    radial-gradient(circle at 85% 12%, #ffffff18, transparent 34%),
+    linear-gradient(145deg, var(--kind-soft), var(--kind-deep));
+  border: 1px solid var(--kind-border);
+  border-left: 3px solid var(--kind-bright);
   border-radius: 9px;
   box-shadow:
     inset 0 1px #ffffff14,
@@ -4352,21 +4387,45 @@ tr[data-state="blocked"] .association-state {
 }
 
 .master-graph-node--output {
-  border-color: #4a6e75;
+  background:
+    radial-gradient(circle at 84% 10%, #ffffff1c, transparent 32%),
+    linear-gradient(145deg, var(--kind-soft), var(--kind-deep));
+  border-color: var(--kind-border);
   box-shadow:
     inset 0 1px #ffffff18,
     inset 0 -3px 8px #0007,
-    0 0 0 1px #61cbb31a,
+    0 0 0 1px var(--kind-glow),
+    0 0 22px var(--kind-glow),
     0 8px 20px #0009;
 }
 
+.master-graph-node--output::after {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 20px;
+  height: 20px;
+  content: "";
+  background: radial-gradient(
+    circle,
+    var(--kind-bright) 0 2px,
+    transparent 3px
+  );
+  border: 1px solid var(--kind-bright);
+  border-radius: 50%;
+  box-shadow:
+    0 0 12px var(--kind-glow),
+    inset 0 0 8px var(--kind-glow);
+  opacity: 0.58;
+}
+
 .master-graph-card[data-status="unresolved"] .master-graph-node--source {
-  border-color: #806228;
-  background: linear-gradient(145deg, #302817, #15120d);
+  border-color: var(--kind-border);
+  background: linear-gradient(145deg, var(--kind-soft), var(--kind-deep));
 }
 
 .master-graph-node > span {
-  color: #8295aa;
+  color: var(--kind-bright);
   font-size: 8px;
   font-weight: 850;
   letter-spacing: 0.11em;
@@ -4402,8 +4461,8 @@ tr[data-state="blocked"] .association-state {
 .master-graph-connector::before {
   height: 2px;
   content: "";
-  background: linear-gradient(90deg, #52677e, #71d8ad);
-  box-shadow: 0 0 8px #71d8ad55;
+  background: linear-gradient(90deg, var(--kind-border), var(--kind-bright));
+  box-shadow: 0 0 9px var(--kind-glow);
 }
 
 .master-graph-connector::after {
@@ -4413,8 +4472,8 @@ tr[data-state="blocked"] .association-state {
   width: 8px;
   height: 8px;
   content: "";
-  border-top: 2px solid #71d8ad;
-  border-right: 2px solid #71d8ad;
+  border-top: 2px solid var(--kind-bright);
+  border-right: 2px solid var(--kind-bright);
   transform: rotate(45deg);
 }
 
@@ -4423,12 +4482,15 @@ tr[data-state="blocked"] .association-state {
   top: calc(50% - 20px);
   justify-self: center;
   padding: 2px 6px;
-  color: #8195a9;
+  color: var(--kind-bright);
   font-size: 8px;
   font-weight: 750;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: #111821;
+  background: #101720;
+  border: 1px solid var(--kind-border);
+  border-radius: 999px;
+  box-shadow: 0 0 10px var(--kind-glow);
 }
 
 .master-graph-card__summary {
@@ -4445,7 +4507,7 @@ tr[data-state="blocked"] .association-state {
 }
 
 .master-graph-card__summary strong {
-  color: var(--text-muted);
+  color: var(--kind-bright);
   font-size: 11px;
 }
 
@@ -6298,7 +6360,7 @@ tr[data-state="blocked"] .association-state {
     justify-self: center;
     width: 2px;
     height: 100%;
-    background: linear-gradient(180deg, #52677e, #71d8ad);
+    background: linear-gradient(180deg, var(--kind-border), var(--kind-bright));
   }
 
   .master-graph-connector::after {
