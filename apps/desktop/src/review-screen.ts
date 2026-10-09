@@ -5102,7 +5102,7 @@ function renderCalibration(
     : "PLAN —";
   elements.calibrationDigest.title = plan?.planSha256 ?? "No native plan yet";
 
-  const products = plan?.products ?? [];
+  const products = [...(plan?.products ?? [])].sort(compareMasterProducts);
   const nodes = products.map(masterProductCard);
   if (nodes.length === 0) {
     const empty = document.createElement("div");
@@ -5648,7 +5648,7 @@ function masterProductCard(product: MasterProductPlan): HTMLElement {
   const outputName = document.createElement("strong");
   outputName.textContent = masterKindLabel(product.kind);
   const outputDetail = document.createElement("small");
-  outputDetail.textContent = product.groupId;
+  outputDetail.textContent = masterOutputDetail(product);
   outputDetail.title = product.groupId;
   output.append(outputRole, outputName, outputDetail);
   rail.append(source, connector, output);
@@ -5678,6 +5678,7 @@ function masterProductCard(product: MasterProductPlan): HTMLElement {
     "Frames",
     `${formatCount(product.frameCount)} frame${product.frameCount === 1 ? "" : "s"}`,
   );
+  appendCompactMetric(metadata, "Group ID", product.groupId);
   appendCompactMetric(metadata, "Camera", product.camera ?? "Unresolved");
   appendCompactMetric(metadata, "Axes", product.axes.join(" × "));
   appendCompactMetric(
@@ -5726,7 +5727,16 @@ function masterSourceRole(product: MasterProductPlan): string {
 
 function masterSourceName(product: MasterProductPlan): string {
   if (product.kind === "flat") {
-    return product.pedestal.selectedGroupId ?? "No compatible source";
+    switch (product.pedestal.status) {
+      case "matched_dark":
+        return "Matched Master Dark";
+      case "bias":
+        return "Matched Master Bias";
+      case "unresolved":
+        return "No compatible source";
+      case "not_applicable":
+        return `${formatCount(product.frameCount)} Flat frames`;
+    }
   }
   return `${formatCount(product.frameCount)} ${humanize(product.kind)} frame${product.frameCount === 1 ? "" : "s"}`;
 }
@@ -5735,9 +5745,42 @@ function masterSourceDetail(product: MasterProductPlan): string {
   if (product.kind === "flat") {
     return product.pedestal.status === "unresolved"
       ? "Choose or import a matching Dark / Bias"
-      : "Subtracted before Flat integration";
+      : `Pedestal match · Δt ${formatDelta(product.pedestal.exposureDeltaSeconds, "s")} · ΔT ${formatDelta(product.pedestal.temperatureDeltaCelsius, "°C")}`;
   }
   return "Verified FITS source group";
+}
+
+function masterOutputDetail(product: MasterProductPlan): string {
+  const exposure =
+    product.exposureSeconds === null
+      ? "unknown exposure"
+      : `${formatCompactNumber(product.exposureSeconds)} s`;
+  const acquisition = product.filter ?? product.bayerPattern ?? "mono";
+  return `${formatCount(product.frameCount)} frames · ${exposure} · ${acquisition}`;
+}
+
+function formatDelta(value: number | null, unit: string): string {
+  return value === null ? `— ${unit}` : `${value.toFixed(2)} ${unit}`;
+}
+
+function formatCompactNumber(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2);
+}
+
+function compareMasterProducts(
+  left: MasterProductPlan,
+  right: MasterProductPlan,
+): number {
+  const kindRank: Record<MasterProductPlan["kind"], number> = {
+    bias: 0,
+    dark: 1,
+    flat: 2,
+  };
+  return (
+    kindRank[left.kind] - kindRank[right.kind] ||
+    (left.exposureSeconds ?? 0) - (right.exposureSeconds ?? 0) ||
+    left.groupId.localeCompare(right.groupId)
+  );
 }
 
 function masterFlowLabel(product: MasterProductPlan): string {
@@ -5824,7 +5867,9 @@ function pedestalDetail(product: MasterProductPlan): string {
       : "";
     return `${humanize(pedestal.blockingReason ?? "manual decision required")}${ambiguity}`;
   }
-  return `${pedestal.selectedGroupId ?? "Unknown group"} · Δt ${pedestal.exposureDeltaSeconds ?? 0} s · ΔT ${pedestal.temperatureDeltaCelsius ?? 0} °C`;
+  const temperatureBasis =
+    pedestal.temperatureBasis === "sensor" ? "sensor" : "set-point";
+  return `Matched by exposure and ${temperatureBasis} temperature · Δt ${formatDelta(pedestal.exposureDeltaSeconds, "s")} · ΔT ${formatDelta(pedestal.temperatureDeltaCelsius, "°C")}`;
 }
 
 function selectedFrame(model: ReviewViewModel): ReviewFrame | null {
