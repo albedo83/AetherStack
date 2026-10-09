@@ -5605,25 +5605,79 @@ function renderLightExecution(
 
 function masterProductCard(product: MasterProductPlan): HTMLElement {
   const card = document.createElement("article");
-  card.className = "master-card";
+  card.className = "master-graph-card";
   card.dataset.kind = product.kind;
   card.dataset.status = product.pedestal.status;
 
   const header = document.createElement("header");
-  const identity = document.createElement("div");
-  const role = document.createElement("span");
-  role.className = "master-card__role";
-  role.textContent = masterKindLabel(product.kind);
-  const name = document.createElement("h4");
-  name.textContent = product.groupId;
-  identity.append(role, name);
-  const count = document.createElement("span");
-  count.className = "master-card__count";
-  count.textContent = `${formatCount(product.frameCount)} frame${product.frameCount === 1 ? "" : "s"}`;
-  header.append(identity, count);
+  const heading = document.createElement("h4");
+  heading.textContent = masterKindLabel(product.kind);
+  const state = document.createElement("span");
+  state.className = "master-graph-card__state";
+  state.textContent =
+    product.pedestal.status === "unresolved" ? "Needs attention" : "Ready";
+  header.append(heading, state);
+
+  const rail = document.createElement("div");
+  rail.className = "master-graph-card__rail";
+  rail.setAttribute("role", "img");
+  rail.setAttribute("aria-label", masterFlowLabel(product));
+
+  const source = document.createElement("div");
+  source.className = "master-graph-node master-graph-node--source";
+  const sourceRole = document.createElement("span");
+  sourceRole.textContent = masterSourceRole(product);
+  const sourceName = document.createElement("strong");
+  sourceName.textContent = masterSourceName(product);
+  const sourceDetail = document.createElement("small");
+  sourceDetail.textContent = masterSourceDetail(product);
+  source.append(sourceRole, sourceName, sourceDetail);
+
+  const connector = document.createElement("div");
+  connector.className = "master-graph-connector";
+  connector.setAttribute("aria-hidden", "true");
+  const connectorLabel = document.createElement("span");
+  connectorLabel.textContent =
+    product.kind === "flat" ? "calibrates" : "integrates";
+  connector.append(connectorLabel);
+
+  const output = document.createElement("div");
+  output.className = "master-graph-node master-graph-node--output";
+  const outputRole = document.createElement("span");
+  outputRole.textContent = "Output";
+  const outputName = document.createElement("strong");
+  outputName.textContent = masterKindLabel(product.kind);
+  const outputDetail = document.createElement("small");
+  outputDetail.textContent = product.groupId;
+  outputDetail.title = product.groupId;
+  output.append(outputRole, outputName, outputDetail);
+  rail.append(source, connector, output);
+
+  const summary = document.createElement("div");
+  summary.className = "master-graph-card__summary";
+  const dependencyLight = document.createElement("span");
+  dependencyLight.className = "dependency-light";
+  dependencyLight.setAttribute("aria-hidden", "true");
+  const summaryText = document.createElement("div");
+  const summaryTitle = document.createElement("strong");
+  summaryTitle.textContent = pedestalTitle(product);
+  const summaryDetail = document.createElement("span");
+  summaryDetail.textContent = pedestalDetail(product);
+  summaryText.append(summaryTitle, summaryDetail);
+  summary.append(dependencyLight, summaryText);
+
+  const technicalDetails = document.createElement("details");
+  technicalDetails.className = "master-graph-card__details";
+  const technicalSummary = document.createElement("summary");
+  technicalSummary.textContent = "Technical details";
 
   const metadata = document.createElement("dl");
-  metadata.className = "master-card__metadata";
+  metadata.className = "master-graph-card__metadata";
+  appendCompactMetric(
+    metadata,
+    "Frames",
+    `${formatCount(product.frameCount)} frame${product.frameCount === 1 ? "" : "s"}`,
+  );
   appendCompactMetric(metadata, "Camera", product.camera ?? "Unresolved");
   appendCompactMetric(metadata, "Axes", product.axes.join(" × "));
   appendCompactMetric(
@@ -5648,25 +5702,46 @@ function masterProductCard(product: MasterProductPlan): HTMLElement {
     "Sampling",
     `${product.binning ? `${product.binning.x}×${product.binning.y}` : "—"} · ${product.bayerPattern ?? "Mono / unknown"}`,
   );
-
-  const dependency = document.createElement("div");
-  dependency.className = "master-card__dependency";
-  const dependencyLight = document.createElement("span");
-  dependencyLight.className = "dependency-light";
-  dependencyLight.setAttribute("aria-hidden", "true");
-  const dependencyText = document.createElement("div");
-  const dependencyTitle = document.createElement("strong");
-  dependencyTitle.textContent = pedestalTitle(product);
-  const dependencyDetail = document.createElement("span");
-  dependencyDetail.textContent = pedestalDetail(product);
-  dependencyText.append(dependencyTitle, dependencyDetail);
-  dependency.append(dependencyLight, dependencyText);
-
-  card.append(header, metadata, dependency);
+  technicalDetails.append(technicalSummary, metadata);
   if (product.kind === "flat" && product.candidates.length > 0) {
-    card.append(candidateDisclosure(product));
+    technicalDetails.append(candidateDisclosure(product));
   }
+  card.append(header, rail, summary, technicalDetails);
   return card;
+}
+
+function masterSourceRole(product: MasterProductPlan): string {
+  if (product.kind !== "flat") return "Input";
+  switch (product.pedestal.status) {
+    case "matched_dark":
+      return "Dark pedestal";
+    case "bias":
+      return "Bias pedestal";
+    case "unresolved":
+      return "Pedestal needed";
+    case "not_applicable":
+      return "Input";
+  }
+}
+
+function masterSourceName(product: MasterProductPlan): string {
+  if (product.kind === "flat") {
+    return product.pedestal.selectedGroupId ?? "No compatible source";
+  }
+  return `${formatCount(product.frameCount)} ${humanize(product.kind)} frame${product.frameCount === 1 ? "" : "s"}`;
+}
+
+function masterSourceDetail(product: MasterProductPlan): string {
+  if (product.kind === "flat") {
+    return product.pedestal.status === "unresolved"
+      ? "Choose or import a matching Dark / Bias"
+      : "Subtracted before Flat integration";
+  }
+  return "Verified FITS source group";
+}
+
+function masterFlowLabel(product: MasterProductPlan): string {
+  return `${masterSourceName(product)} ${product.kind === "flat" ? "calibrates" : "integrates into"} ${masterKindLabel(product.kind)} ${product.groupId}. ${pedestalTitle(product)}.`;
 }
 
 function appendCompactMetric(
@@ -6602,8 +6677,9 @@ function shellMarkup(): string {
             <section class="master-rack" aria-labelledby="master-rack-heading">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Native dependency graph</p>
-                  <h3 id="master-rack-heading">Planned masters</h3>
+                  <p class="eyebrow">Calibration map</p>
+                  <h3 id="master-rack-heading">How your masters are built</h3>
+                  <p class="master-rack__guide"><strong>Read left to right.</strong> Each line shows the input used to create one master.</p>
                 </div>
                 <code class="plan-digest" data-calibration-digest></code>
               </div>

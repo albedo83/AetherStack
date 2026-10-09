@@ -1153,6 +1153,21 @@ describe("frame review workspace", () => {
     expect(root.textContent).toContain("light-uvir-2s-g120-o30");
     expect(root.textContent).toContain("dark-2s-g120-o30");
     expect(root.textContent).toContain("1 Light group ready");
+    expect(
+      getByRole(root, "heading", { name: "How your masters are built" }),
+    ).not.toBeNull();
+    expect(root.textContent).toContain("Read left to right");
+    expect(root.querySelectorAll(".master-graph-card")).toHaveLength(2);
+    expect(root.querySelectorAll(".master-graph-connector")).toHaveLength(2);
+    expect(root.querySelectorAll(".master-graph-node")).toHaveLength(4);
+    expect(
+      root.querySelector(".master-graph-card__details")?.hasAttribute("open"),
+    ).toBe(false);
+    expect(
+      root
+        .querySelector('.master-graph-card[data-kind="flat"] [role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toContain("calibrates Master Flat");
   });
 
   it("presents explicit detector controls only after native artifacts exist", () => {
