@@ -395,7 +395,7 @@ impl LightCalibrationPlan {
             .iter()
             .filter(|group| group.key().frame_type() == &FrameType::Light)
         {
-            products.push(plan_light_product(light, &candidates, options)?);
+            products.push(plan_light_product(manifest, light, &candidates, options)?);
         }
 
         let mut plan = Self {
@@ -726,6 +726,7 @@ struct CandidateScore<'a> {
 }
 
 fn plan_light_product(
+    manifest: &SessionManifest,
     light: &ManifestGroup,
     candidates: &[(LightMasterKind, &ManifestGroup)],
     options: LightCalibrationPlanOptions,
@@ -740,8 +741,17 @@ fn plan_light_product(
         .map_err(|_| LightCalibrationPlanError::AllocationFailed)?;
 
     for (kind, candidate) in candidates {
-        let (compatibility, score) =
-            compare_candidate(light.key(), candidate.key(), *kind, options);
+        let candidate_sensor_temperature_c = manifest
+            .group_temperature_summary(candidate)
+            .map(|summary| summary.median_c)
+            .or_else(|| candidate.key().sensor_temperature_c());
+        let (compatibility, score) = compare_candidate(
+            light.key(),
+            candidate.key(),
+            candidate_sensor_temperature_c,
+            *kind,
+            options,
+        );
         if let Some((temperature_basis, temperature_delta_c)) = score {
             compatible.push(CandidateScore {
                 group_id: candidate.id(),
@@ -774,6 +784,7 @@ type CompatibilityScore = (Option<TemperatureBasis>, Option<f64>);
 fn compare_candidate(
     light: &StrictGroupingKey,
     candidate: &StrictGroupingKey,
+    candidate_sensor_temperature_c: Option<f64>,
     kind: LightMasterKind,
     options: LightCalibrationPlanOptions,
 ) -> (
@@ -824,6 +835,7 @@ fn compare_candidate(
             let (basis, delta) = compare_temperature(
                 light,
                 candidate,
+                candidate_sensor_temperature_c,
                 options.maximum_dark_temperature_delta_c,
                 &mut mismatches,
             );
@@ -920,13 +932,14 @@ fn compare_bayer(
 fn compare_temperature(
     light: &StrictGroupingKey,
     candidate: &StrictGroupingKey,
+    candidate_sensor_temperature_c: Option<f64>,
     tolerance: f64,
     mismatches: &mut Vec<LightMasterMismatch>,
 ) -> (Option<TemperatureBasis>, Option<f64>) {
     if light.sensor_temperature_c().is_some() {
         let delta = compare_tolerated(
             light.sensor_temperature_c(),
-            candidate.sensor_temperature_c(),
+            candidate_sensor_temperature_c,
             tolerance,
             LightMasterMatchField::SensorTemperature,
             mismatches,
@@ -1544,6 +1557,7 @@ mod tests {
         let mut closer = specs[1].clone();
         closer.id = "dark-60s-closer";
         closer.sensor_temperature_c = Some(-9.5);
+        closer.set_temperature_c = Some(-9.5);
         specs.push(closer);
         let session = manifest(&specs)?;
         let plan = LightCalibrationPlan::from_manifest_and_master_plan(
@@ -1674,6 +1688,7 @@ mod tests {
         let mut closer = specs[1].clone();
         closer.id = "dark-60s-closer";
         closer.sensor_temperature_c = Some(-9.5);
+        closer.set_temperature_c = Some(-9.5);
         specs.push(closer);
         let session = manifest(&specs)?;
         let plan = LightCalibrationPlan::from_manifest_and_master_plan(

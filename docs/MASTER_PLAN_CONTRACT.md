@@ -54,11 +54,19 @@ pattern must all be present and exactly equal. Filter is intentionally ignored
 for bias and dark matching. A dark exposure must lie inside the caller-supplied
 inclusive tolerance in seconds.
 
-Measured sensor temperature is used when the flat declares it. The candidate
-must then also declare a measured temperature; a set point is not silently
-substituted. When the flat has no measured temperature, both groups must have a
-set point. The absolute delta must lie inside the caller-supplied inclusive
-tolerance in degrees Celsius.
+Dark groups use exact exposure and acquisition settings plus the requested
+cooler set point. Instantaneous measured temperature is deliberately excluded
+from Dark group identity because normal cooler regulation drift must not split
+one capture run. Every member reading remains in the manifest; the deterministic
+group median is used as the Dark's measured temperature and its minimum and
+maximum remain available as diagnostic evidence.
+
+Measured sensor temperature is used when the flat declares it. A Dark candidate
+then supplies its group median; another candidate must declare a measured
+temperature directly. A set point is not silently substituted. When the flat
+has no measured temperature, both groups must have a set point. The absolute
+delta must lie inside the caller-supplied inclusive tolerance in degrees
+Celsius.
 
 Compatible darks are ranked first by absolute exposure delta and then by
 absolute temperature delta. Compatible biases are ranked by absolute

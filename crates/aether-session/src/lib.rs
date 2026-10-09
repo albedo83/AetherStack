@@ -43,8 +43,9 @@ pub use light_plan::{
     MAX_LIGHT_CALIBRATION_CANDIDATE_EVALUATIONS, MAX_LIGHT_CALIBRATION_PLAN_BYTES,
 };
 pub use manifest::{
-    MAX_SESSION_MANIFEST_BYTES, ManifestError, ManifestFile, ManifestGroup, ManifestValidationCode,
-    ManifestValidationError, SESSION_MANIFEST_SCHEMA_VERSION, SessionManifest, SourceFingerprint,
+    GroupTemperatureSummary, MAX_SESSION_MANIFEST_BYTES, ManifestError, ManifestFile,
+    ManifestGroup, ManifestValidationCode, ManifestValidationError,
+    SESSION_MANIFEST_SCHEMA_VERSION, SessionManifest, SourceFingerprint,
 };
 pub use master_plan::{
     FlatPedestalAssociation, FlatPedestalBlockingReason, FlatPedestalPolicy,

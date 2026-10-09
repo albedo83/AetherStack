@@ -9458,7 +9458,7 @@ fn master_plan_preview(
             .iter()
             .find(|group| group.id() == product.source_group_id())
             .ok_or_else(master_plan_generation_error)?;
-        products.push(master_product_preview(group, product)?);
+        products.push(master_product_preview(manifest, group, product)?);
     }
     let light_plan = if plan.is_ready() {
         let light_plan = build_light_plan(manifest, plan, maximum_light_dark_temperature_delta_c)?;
@@ -9612,6 +9612,7 @@ fn light_master_candidate_preview(
 }
 
 fn master_product_preview(
+    manifest: &SessionManifest,
     group: &ManifestGroup,
     product: &aether_session::MasterProductPlan,
 ) -> Result<MasterProductPreview, PreviewCommandError> {
@@ -9632,7 +9633,10 @@ fn master_product_preview(
             .map(|camera| camera.canonical_name().to_owned()),
         axes: key.axes().to_vec(),
         exposure_seconds: key.exposure_seconds(),
-        sensor_temperature_celsius: key.sensor_temperature_c(),
+        sensor_temperature_celsius: manifest
+            .group_temperature_summary(group)
+            .map(|summary| summary.median_c)
+            .or_else(|| key.sensor_temperature_c()),
         set_temperature_celsius: key.set_temperature_c(),
         gain: key.gain(),
         offset: key.offset(),
@@ -15277,7 +15281,26 @@ mod tests {
         let root = std::env::var_os("AETHERSTACK_TEST_SESSION")
             .ok_or("AETHERSTACK_TEST_SESSION is not configured")?;
 
-        let imported = import_session_directory_sync(Path::new(&root))?;
+        let bundle = scan_session_directory_sync(Path::new(&root))?;
+        let imported = &bundle.presentation;
+
+        // The representative ASI294MC Pro corpus contains fifty 2-second
+        // dark-flats and fifty 60-second darks. Cooler regulation drift must
+        // not manufacture additional master-Dark groups.
+        let mut dark_groups = bundle
+            .native
+            .manifest
+            .groups()
+            .iter()
+            .filter(|group| group.key().frame_type() == &FrameType::Dark)
+            .map(|group| (group.key().exposure_seconds(), group.files().len()))
+            .collect::<Vec<_>>();
+        dark_groups.sort_by(|left, right| {
+            left.0
+                .unwrap_or(f64::INFINITY)
+                .total_cmp(&right.0.unwrap_or(f64::INFINITY))
+        });
+        assert_eq!(dark_groups, vec![(Some(2.0), 50), (Some(60.0), 50)]);
 
         assert!(imported.files_considered > 0);
         assert!(!imported.frames.is_empty());

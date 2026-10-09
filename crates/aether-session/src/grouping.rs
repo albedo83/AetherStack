@@ -67,6 +67,23 @@ impl StrictGroupingKey {
         metadata: &CanonicalMetadata,
         axes: &[u64],
     ) -> Result<Self, GroupingKeyError> {
+        // A cooled camera regulates around a requested set point; its measured
+        // temperature naturally oscillates by a few tenths of a degree. Using
+        // every instantaneous reading in a Dark key would fragment one capture
+        // run into several scientifically equivalent master groups. Darks keep
+        // the stable set point in their key, while the manifest retains every
+        // measured value for representative-temperature matching downstream.
+        let sensor_temperature_c = if frame_type == FrameType::Dark {
+            None
+        } else {
+            exact_optional(
+                metadata
+                    .sensor_temperature_c
+                    .as_ref()
+                    .map(|value| *value.value()),
+                GroupingField::SensorTemperature,
+            )?
+        };
         Ok(Self {
             frame_type,
             camera: metadata.camera.as_ref().map(|value| value.value().clone()),
@@ -78,13 +95,7 @@ impl StrictGroupingKey {
                     .map(|value| *value.value()),
                 GroupingField::Exposure,
             )?,
-            sensor_temperature_c: exact_optional(
-                metadata
-                    .sensor_temperature_c
-                    .as_ref()
-                    .map(|value| *value.value()),
-                GroupingField::SensorTemperature,
-            )?,
+            sensor_temperature_c,
             set_temperature_c: exact_optional(
                 metadata
                     .set_temperature_c
@@ -187,7 +198,9 @@ impl StrictGroupingKey {
         if self.exposure_seconds.is_none() {
             fields.push(GroupingField::Exposure);
         }
-        if self.sensor_temperature_c.is_none() {
+        // Dark keys intentionally omit the fluctuating measured value. This is
+        // a grouping policy, not missing source metadata requiring acceptance.
+        if self.frame_type != FrameType::Dark && self.sensor_temperature_c.is_none() {
             fields.push(GroupingField::SensorTemperature);
         }
         if self.set_temperature_c.is_none() {
@@ -335,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_key_keeps_nearby_temperatures_distinct() {
+    fn dark_key_ignores_measured_drift_around_one_set_point() {
         let first = complete_metadata();
         let mut second = complete_metadata();
         second.sensor_temperature_c = Some(value(-9.9, "CCD-TEMP"));
@@ -343,6 +356,24 @@ mod tests {
         let first_key = StrictGroupingKey::from_metadata(FrameType::Dark, &first, &[3_840, 2_160]);
         let second_key =
             StrictGroupingKey::from_metadata(FrameType::Dark, &second, &[3_840, 2_160]);
+
+        assert_eq!(first_key, second_key);
+        assert_eq!(
+            first_key.ok().and_then(|key| key.sensor_temperature_c()),
+            None
+        );
+    }
+
+    #[test]
+    fn non_dark_key_keeps_nearby_temperatures_distinct() {
+        let mut first = complete_metadata();
+        first.frame_type = Some(value(FrameType::Light, "IMAGETYP"));
+        let mut second = first.clone();
+        second.sensor_temperature_c = Some(value(-9.9, "CCD-TEMP"));
+
+        let first_key = StrictGroupingKey::from_metadata(FrameType::Light, &first, &[3_840, 2_160]);
+        let second_key =
+            StrictGroupingKey::from_metadata(FrameType::Light, &second, &[3_840, 2_160]);
 
         assert_ne!(first_key, second_key);
     }

@@ -99,7 +99,7 @@ pub fn generate_manifest(
 
 fn stable_group_id(key: &StrictGroupingKey) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"aetherstack-grouping-key-v1\0");
+    hasher.update(b"aetherstack-grouping-key-v2\0");
     hash_frame_type(&mut hasher, key.frame_type());
     hash_optional_camera(&mut hasher, key.camera());
     hasher.update([key.axes().len() as u8]);
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(manifest.groups()[0].id().len(), 64);
         assert_eq!(
             manifest.groups()[0].id(),
-            "01b9785cbd3c4b867951adb3ccf5d892225cbfc8782079a915e9ff5df7385997"
+            "ddabc5f2ca19fd838bc9e9744f006d113181320b82a6a08605aa697f4e280eac"
         );
         assert_eq!(
             manifest.groups()[0].files(),
@@ -265,6 +265,63 @@ mod tests {
                 .files()
                 .iter()
                 .all(|path| path != "lights/frame_0003.fits")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn darks_group_by_exposure_without_splitting_on_cooler_drift() -> TestResult {
+        let mut files = Vec::new();
+        for (index, (exposure, temperature)) in
+            [(60.0, -5.3), (60.0, -4.9), (2.0, -5.2), (2.0, -4.8)]
+                .into_iter()
+                .enumerate()
+        {
+            let path = format!("darks/dark-{index}.fits");
+            let mut metadata = metadata(FrameType::Dark, true);
+            metadata.exposure_seconds = Some(value(exposure, "EXPTIME"));
+            metadata.sensor_temperature_c = Some(value(temperature, "CCD-TEMP"));
+            metadata.set_temperature_c = Some(value(-5.0, "SET-TEMP"));
+            let classification = classify_frame(Path::new(&path), &metadata);
+            files.push(ManifestFile::from_analysis(
+                &path,
+                SourceFingerprint::new(5_760, format!("{:x}", index + 1).repeat(64))?,
+                vec![4, 3],
+                metadata,
+                Vec::new(),
+                classification,
+                ClassificationPolicy::RequireAgreement,
+            )?);
+        }
+
+        let manifest = generate_manifest(
+            ValidationMode::Strict,
+            ClassificationPolicy::RequireAgreement,
+            files,
+        )?;
+
+        assert_eq!(manifest.groups().len(), 2);
+        let two_seconds = manifest
+            .groups()
+            .iter()
+            .find(|group| group.key().exposure_seconds() == Some(2.0))
+            .ok_or("2-second Dark group missing")?;
+        let sixty_seconds = manifest
+            .groups()
+            .iter()
+            .find(|group| group.key().exposure_seconds() == Some(60.0))
+            .ok_or("60-second Dark group missing")?;
+        assert_eq!(two_seconds.files().len(), 2);
+        assert_eq!(sixty_seconds.files().len(), 2);
+        assert_eq!(two_seconds.key().sensor_temperature_c(), None);
+        assert_eq!(sixty_seconds.key().sensor_temperature_c(), None);
+        assert_eq!(
+            manifest.group_temperature_summary(sixty_seconds),
+            Some(crate::GroupTemperatureSummary {
+                minimum_c: -5.3,
+                median_c: -5.1,
+                maximum_c: -4.9,
+            })
         );
         Ok(())
     }

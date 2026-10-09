@@ -68,7 +68,9 @@ Generated bundles are written below `target/release/bundle`. On macOS,
   processing provenance;
 - traceable camera and acquisition metadata normalization;
 - explainable frame classification with explicit conflict policies;
-- exact, hashable session-grouping keys with explicit missing-field reports;
+- exact, hashable session-grouping keys with exposure-first Dark grouping,
+  stable cooler-set-point separation, robust measured-temperature summaries,
+  and explicit missing-field reports;
 - versioned bias, dark, and flat master plans with exclusive short-dark-or-bias
   flat calibration, explicit tolerances, candidate diagnostics, and bounded
   deterministic serialization;

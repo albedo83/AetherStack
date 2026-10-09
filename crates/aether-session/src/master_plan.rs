@@ -419,7 +419,7 @@ impl MasterPlan {
                 FrameType::Dark => (MasterProductKind::Dark, None, Vec::new()),
                 FrameType::Flat => {
                     let (association, evaluations) =
-                        plan_flat_pedestal(group, &candidates, options)?;
+                        plan_flat_pedestal(manifest, group, &candidates, options)?;
                     (MasterProductKind::Flat, Some(association), evaluations)
                 }
                 FrameType::Light | FrameType::Other(_) => continue,
@@ -768,6 +768,7 @@ struct CompatibleScore<'a> {
 }
 
 fn plan_flat_pedestal(
+    manifest: &SessionManifest,
     flat: &ManifestGroup,
     candidates: &[&ManifestGroup],
     options: MasterPlanOptions,
@@ -788,8 +789,17 @@ fn plan_flat_pedestal(
             FrameType::Bias => PedestalSourceKind::Bias,
             FrameType::Flat | FrameType::Light | FrameType::Other(_) => continue,
         };
-        let (compatibility, score) =
-            compare_pedestal(flat.key(), candidate.key(), source_kind, options);
+        let candidate_sensor_temperature_c = manifest
+            .group_temperature_summary(candidate)
+            .map(|summary| summary.median_c)
+            .or_else(|| candidate.key().sensor_temperature_c());
+        let (compatibility, score) = compare_pedestal(
+            flat.key(),
+            candidate.key(),
+            candidate_sensor_temperature_c,
+            source_kind,
+            options,
+        );
         if let Some(score) = score {
             compatible.push(CompatibleScore {
                 group_id: candidate.id(),
@@ -831,6 +841,7 @@ struct ComparisonScore {
 fn compare_pedestal(
     flat: &StrictGroupingKey,
     candidate: &StrictGroupingKey,
+    candidate_sensor_temperature_c: Option<f64>,
     source_kind: PedestalSourceKind,
     options: MasterPlanOptions,
 ) -> (PedestalCandidateCompatibility, Option<ComparisonScore>) {
@@ -887,6 +898,7 @@ fn compare_pedestal(
     let (temperature_basis, temperature_delta_c) = compare_temperature(
         flat,
         candidate,
+        candidate_sensor_temperature_c,
         options.maximum_temperature_delta_c,
         &mut mismatches,
     );
@@ -936,13 +948,14 @@ fn rejected_missing_temperature(
 fn compare_temperature(
     flat: &StrictGroupingKey,
     candidate: &StrictGroupingKey,
+    candidate_sensor_temperature_c: Option<f64>,
     tolerance: f64,
     mismatches: &mut Vec<PedestalMismatch>,
 ) -> (Option<TemperatureBasis>, Option<f64>) {
     if flat.sensor_temperature_c().is_some() {
         let delta = compare_tolerated(
             flat.sensor_temperature_c(),
-            candidate.sensor_temperature_c(),
+            candidate_sensor_temperature_c,
             tolerance,
             PedestalMatchField::SensorTemperature,
             mismatches,

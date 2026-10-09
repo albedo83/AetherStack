@@ -16,6 +16,21 @@ pub const SESSION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Largest JSON manifest accepted by the in-memory decoder (128 MiB).
 pub const MAX_SESSION_MANIFEST_BYTES: usize = 128 * 1_024 * 1_024;
 
+/// Robust measured-temperature summary for every member of one session group.
+///
+/// Dark grouping deliberately excludes instantaneous sensor temperature. This
+/// summary preserves the actual capture conditions without letting harmless
+/// cooler regulation drift split a master-dark run into multiple groups.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupTemperatureSummary {
+    /// Lowest measured sensor temperature in degrees Celsius.
+    pub minimum_c: f64,
+    /// Median measured sensor temperature in degrees Celsius.
+    pub median_c: f64,
+    /// Highest measured sensor temperature in degrees Celsius.
+    pub maximum_c: f64,
+}
+
 /// Stable category of a session-manifest validation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ManifestValidationCode {
@@ -595,6 +610,49 @@ impl SessionManifest {
     #[must_use]
     pub fn groups(&self) -> &[ManifestGroup] {
         &self.groups
+    }
+
+    /// Summarizes finite measured sensor temperatures for a group's members.
+    ///
+    /// The median is preferred over the mean for matching because one transient
+    /// cooler reading cannot pull it away from the conditions of the full run.
+    /// `None` is returned when no member declares a measured temperature.
+    #[must_use]
+    pub fn group_temperature_summary(
+        &self,
+        group: &ManifestGroup,
+    ) -> Option<GroupTemperatureSummary> {
+        let mut values = Vec::with_capacity(group.files.len());
+        for path in &group.files {
+            let Ok(index) = self
+                .files
+                .binary_search_by(|file| file.relative_path.as_str().cmp(path.as_str()))
+            else {
+                continue;
+            };
+            if let Some(value) = self.files[index]
+                .metadata
+                .sensor_temperature_c
+                .as_ref()
+                .map(|value| *value.value())
+            {
+                values.push(value);
+            }
+        }
+        values.sort_by(f64::total_cmp);
+        let (&minimum_c, &maximum_c) = (values.first()?, values.last()?);
+        let middle = values.len() / 2;
+        let median_c = if values.len() % 2 == 0 {
+            let lower = values[middle - 1];
+            lower + (values[middle] - lower) / 2.0
+        } else {
+            values[middle]
+        };
+        Some(GroupTemperatureSummary {
+            minimum_c,
+            median_c,
+            maximum_c,
+        })
     }
 
     fn from_wire(wire: SessionManifestWire) -> Result<Self, ManifestValidationError> {
