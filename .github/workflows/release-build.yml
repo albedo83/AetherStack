@@ -77,7 +77,7 @@ jobs:
         run: node scripts/write-bundle-checksums.mjs ../../target/release/bundle
 
       - name: Upload unsigned bundles
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}-${{ github.ref_name }}
           path: target/release/bundle
